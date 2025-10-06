@@ -1,0 +1,66 @@
+PIE Execution Backlog — 2025-09-26
+
+Priority legend: P0 = immediate; P1 = next; P2 = later
+
+Legend: [ ] = open · [~] = in progress · [x] = done
+
+WP-AUDIO — Capture & Devices
+- [x] A1: `pie list` inventory of PulseAudio monitor/input sources with friendly labels (P0)
+- [x] A2: `pie record --system-only/--mic-only` pipelines writing WAV via hound (P0)
+- [x] A3: Device selection error paths and fallback logging for missing monitor names (P1)
+- [ ] A4: Hot-swap detection to refresh device cache without restarting CLI (P2)
+- [ ] A5: Volume level metering surfaced during recording sessions (P2)
+
+WP-WAKE — Wake Word & Daemon
+- [ ] W1: Background daemon streaming mic audio through Porcupine wake-word loop (P0)
+- [ ] W1a: Integrate real-time "Ok PIE" Porcupine model with <200 ms activation (P0)
+- [x] W2: Wake-word model download/config management for custom phrases (P1)
+- [ ] W3: Low-latency ring buffer feeding AI router after wake events (P1)
+- [ ] W4: Graceful daemon shutdown hooks for systemd service integration (P2)
+- [ ] W5: Concurrent multi-wake-word registration and detection with per-keyword thresholds (P0)
+
+WP-AI — Command Routing & Execution
+- [ ] I1: `ai_router` classification feeding command executor with structured intents (P0)
+- [ ] I2: Command allowlist/denylist config file with reload support (P1)
+- [ ] I3: Execution audit trail recording command, timestamp, and result (P1)
+- [ ] I4: Sandbox non-shell commands to prevent untrusted execution (P2)
+
+WP-CLI — UX & Observability
+- [x] C1: Clap-based CLI with `list` and `record` subcommands (P0)
+- [ ] C2: `pie status` command to query daemon health and last action (P1)
+- [x] C5: `pie server` foreground daemon bootstrap that loads command pipelines (P0)
+- [x] C6: `pie run <command>` client command sending pipeline requests to daemon (P0)
+- [ ] C3: Progress ticker showing elapsed/remaining time for timed recordings (P1)
+- [ ] C4: JSON logging mode for automation contexts (P2)
+
+WP-SPEECH — Push-to-Talk & Text Insertion
+- [x] S1: Listening toggle integrates with daemon/CLI and exposes push-to-talk hotkey support for start/stop capture (P0)
+- [ ] S2: STT pipeline using `ai-ox` converts captured audio to text with optional "improve" pass (P0)
+- [ ] S3: Optional translation stage before executing command or inserting text (P1)
+- [~] S4: Virtual keyboard injection types improved/translated text into the active window (Wayland + X11 backends landed; translation routing still pending) (P1)
+- [ ] S5: Per-command configuration for translation/improvement toggles (P2)
+
+WP-CMD — Command Pipelines
+- [x] CMD1: YAML loader for command pipeline definitions and validation schema (P0)
+- [x] CMD2: Pipeline execution runtime with stage graph execution and artifact passing (P0)
+- [ ] CMD3: Pipeline progress & diagnostics surfaced via daemon status / CLI (P0)
+- [ ] CMD4: Author CLI helper to scaffold new pipeline files with input/output templates (P1)
+- [x] CMD5: Virtual keyboard output executor with sandboxed Wayland integration (Wayland Enigo backend with capture-test path) (P1)
+- [x] CMD6: Capture configuration for pipelines (timed/silence/manual modes with thresholds) (P0)
+
+WP-RUNTIME — Async Architecture
+- [ ] R1: Eliminate blocking audio capture and use async streams for pipeline recording (P0)
+- [ ] R2: Move wake-word detector and pipeline tasks to structured async supervision (P0)
+- [ ] R3: Replace blocking file I/O in pipelines with async equivalents (P1)
+
+WP-QA — Testing & Quality
+- [ ] Q1: Integration harness in `tests/integration_tests.rs` covering record workflows (P0)
+- [ ] Q2: Headless tests mocking PulseAudio to exercise error states (P1)
+- [ ] Q3: Spec validation wired into CI after `cargo test` (P1)
+- [ ] Q4: Audio fixture generation script to seed regression tests (P2)
+
+WP-DOCS — Documentation & Onboarding
+- [x] D1: README outlining architecture, commands, and development workflow (P0)
+- [x] D2: SPEC and TODO migrated to repository root with current requirements (P0)
+- [ ] D3: Contributor onboarding guide for AI routing and daemon setup (P1)
+- [ ] D4: Operations note covering PulseAudio/PipeWire troubleshooting (P2)

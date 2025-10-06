@@ -1,0 +1,30 @@
+# Compiled output
+/target/
+/result
+/result-*/
+
+# Cargo / Rust tooling
+**/*.rs.bk
+
+# Nix build outputs
+*.drv
+.direnv/
+.cargo/
+
+# Logs & temp files
+*.log
+*.tmp
+*.swp
+*.swo
+*~
+
+# IDE / editor metadata
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Environment & secrets
+.env
+.env.*
+.cache/

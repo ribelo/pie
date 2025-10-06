@@ -1,0 +1,71 @@
+# PIE — Personal Intelligence Engine
+
+## Requirements
+- [REQ-PIE-OVERVIEW] The PIE assistant shall expose voice-driven command execution on Linux by combining audio capture, wake-word detection, and AI routing.
+- [REQ-PIE-SPEC-GUIDELINES] The PIE specification shall express requirements in `- [slug]` bullet form grouped under descriptive headings so future enhancements stay consistent.
+
+### Device Discovery & Selection
+- [REQ-PIE-DEVICE-LIST] When `pie list` runs, the CLI shall enumerate all PulseAudio/PipeWire sources with monitor/input classification and human-readable labels.
+- [REQ-PIE-DEVICE-NO-SOURCES] When no audio sources are available, the CLI shall return an actionable error advising how to enable PulseAudio/PipeWire access.
+- [REQ-PIE-DEVICE-SELECT] When `--system-device <name>` is supplied, the recorder shall target the matching monitor source or fail fast with a helpful message.
+
+### Recording Modes & Control
+- [REQ-PIE-RECORD-SYSTEM] When `pie record --system-only` runs, the recorder shall capture only monitor channels and exclude microphone input.
+- [REQ-PIE-RECORD-MIC] When `pie record --mic-only` runs, the recorder shall capture only microphone inputs and exclude system audio.
+- [REQ-PIE-RECORD-DURATION] When `--duration <seconds>` is provided, the recorder shall stop automatically at the requested time and close the WAV file cleanly.
+- [REQ-PIE-RECORD-INTERRUPT] When Ctrl+C is received, the recorder shall flush remaining buffers, finalize the file header, and emit a success notification.
+- [REQ-PIE-RECORD-CONTINUOUS] When no duration is supplied, the recorder shall continue until interrupted while streaming status updates to stdout.
+
+### Wake Word, Daemon, and Notifications
+- [REQ-PIE-WAKE-WORD] When Porcupine detects the "Ok PIE" wake word, the daemon shall transition from idle to command capture within 200 ms.
+- [REQ-PIE-DAEMON-START] When the daemon starts, it shall register with PulseAudio as `pie`, subscribe to default microphone input, and maintain a steady audio buffer loop.
+- [REQ-PIE-NOTIFY] When a command completes, the notification module shall publish a desktop notification summarizing the outcome or failure reason.
+- [REQ-PIE-WAKE-CONFIG] Wake-word detection shall be configurable via CLI flags (e.g., `--wake-model`, `--wake-keyword`, `--wake-sensitivity`) or environment variables, with CLI overriding env vars and sensible defaults when none are provided. PIE shall surface clear errors when required assets or access keys are missing.
+- [REQ-PIE-MULTI-WAKE] The daemon shall support registering and listening for multiple wake words simultaneously, each with independent model/keyword/sensitivity configuration.
+- [REQ-PIE-WAKE-PIPELINE] Command pipelines shall be able to declare wake-word capture settings that resolve Picovoice model/keyword assets; the daemon shall load the specified wake words at startup and block execution until one is detected.
+
+### AI Routing & Command Execution
+- [REQ-PIE-AI-ROUTER] When transcription text becomes available, the AI router shall classify the intent via `ai_router` and forward validated actions to the command executor.
+- [REQ-PIE-COMMAND-ALLOWLIST] When a routed command exceeds the allowlist, the executor shall reject it with an explicit "command not permitted" response.
+- [REQ-PIE-STATUS-QUERY] When `pie status` (future) runs, the daemon shall report wake word state, active recording, and last command result.
+
+### Audio Output & Persistence
+- [REQ-PIE-WAV-FORMAT] When recordings are persisted, they shall be encoded as stereo 48 kHz 32-bit float WAV files via the `hound` crate.
+- [REQ-PIE-OUTPUT-PATH] When `--output <file>` is supplied, the recorder shall create the file at the requested location or surface the OS error.
+- [REQ-PIE-FIXTURES] When sample WAV assets are needed for tests, contributors shall store them in the repository root with descriptive filenames and document their use in the backlog.
+
+### Quality Gates & Tooling
+- [REQ-PIE-ENV] When developers set up locally, they shall enter the Nix shell using `nix develop` (or `nix-shell`) before running builds.
+- [REQ-PIE-BUILD] When building, developers shall rely on `cargo build` for debug cycles and `cargo build --release` for optimized binaries.
+- [REQ-PIE-QUALITY] Before submitting changes, contributors shall run `cargo fmt`, `cargo clippy -- -D warnings`, `cargo test`, and update SPEC/TODO entries that document the work.
+- [REQ-PIE-SPECS] When new capabilities are added, contributors shall extend this SPEC and the TODO backlog to capture the requirement, status, and execution plan.
+
+### Resilience & Error Handling
+- [REQ-PIE-ERROR-AUDIO] When PulseAudio/PipeWire cannot be reached, the CLI shall exit with a clear diagnostic referencing user group membership or service state.
+- [REQ-PIE-ERROR-FLAGS] When conflicting CLI flags (e.g., `--mic-only` and `--system-only`) are supplied, the CLI shall fail validation without opening an audio stream.
+- [REQ-PIE-ERROR-WRITE] When the output file cannot be written, the recorder shall terminate recording and display the filesystem error without leaving partial files.
+
+### Speech Pipeline & Desktop Integration
+- [REQ-PIE-LISTEN-TOGGLE] PIE shall expose a `pie listen` CLI subcommand (and matching daemon control message) that toggles an active listening session, returning structured status suitable for UI surfacing (e.g., Waybar icons).
+- [REQ-PIE-PUSH-TO-TALK] The PIE daemon shall automatically monitor push-to-talk hotkeys defined in pipeline capture configuration and run the associated capture pipeline while the key is held.
+- [REQ-PIE-STT] Captured microphone audio shall flow through speech-to-text using `ai-ox` with Groq Whisper models, producing transcript text without requiring spoken feedback.
+- [REQ-PIE-SPEECH-IMPROVE] PIE shall offer an optional "improve" pass (grammar/tone adjustment) on transcripts before dispatching commands or text.
+- [REQ-PIE-SPEECH-TRANSLATE] PIE shall optionally translate transcripts into a target language before execution or text injection.
+- [REQ-PIE-TEXT-INJECT] PIE shall be able to insert improved/translated text into the active application via a virtual keyboard mechanism, enabling desktop automation (e.g., typing into Slack).
+
+### Command Pipelines
+- [REQ-PIE-CMD-YAML] Command handlers shall be defined as YAML pipeline files stored under `${XDG_CONFIG_HOME:-~/.config}/pie/commands`, with one file per command.
+- [REQ-PIE-CMD-STAGES] Each pipeline shall declare ordered stages that describe the linear narrative of the command while permitting fan-out/fan-in via explicit `after:` dependencies to support non-linear flows.
+- [REQ-PIE-CMD-INPUT] Every pipeline shall describe its inputs; for P0 the only supported input is captured microphone audio from `pie listen` sessions.
+- [REQ-PIE-CMD-AUDIO-SOURCE] Audio capture inputs shall support selecting between default microphone input and system output monitor sources, with the ability to override the device via CLI flags or pipeline configuration so that desktop calls (e.g., Zoom) can be transcribed.
+- [REQ-PIE-CMD-OUTPUT] Pipelines shall include an explicit terminal `output` stage that determines the artifact delivered (e.g., text, virtual keyboard injection, or `noop`).
+- [REQ-PIE-CMD-AIOX] Pipeline STT and LLM stages shall run through `ai-ox`, enabling Groq Whisper for transcription and Gemini-class models for translation or rewriting.
+- [REQ-PIE-CMD-WAKE-CAPTURE] Pipeline audio capture shall support a `wake_word` mode that references Picovoice keyword/model assets, waits for detection, and then records audio according to the pipeline configuration.
+- [REQ-PIE-CMD-SERVER] The CLI shall expose `pie server` which launches the daemon in the foreground, loading and validating all available pipeline definitions before accepting requests.
+- [REQ-PIE-CMD-RUN] The CLI shall expose `pie run <name>` which sends a pipeline execution request to the daemon and surfaces the terminal artifact (e.g., transcribed text) or actionable error output.
+- [REQ-PIE-KEYBOARD-ABSTRACTION] Pipeline outputs that require text injection shall dispatch through a display-aware keyboard backend (Wayland virtual-keyboard first, X11 as follow-up). The daemon shall fall back to a logging noop when no backend is available.
+- [REQ-PIE-ASYNC] Core daemon subsystems (wake word detection, audio capture, pipeline execution, and IPC) shall operate on non-blocking async primitives so multiple activities can proceed concurrently without blocking the main reactor.
+- [REQ-PIE-CAPTURE-MODES] Audio pipeline inputs shall support configurable capture modes (timed, silence-triggered, manual, and hybrid) with thresholds for maximum duration, minimum duration, and silence detection parameters.
+
+### Daemon Lifecycle
+- [REQ-PIE-CTRL-C] When `pie server` runs in the foreground, the daemon shall exit cleanly on SIGINT (Ctrl+C), cancelling outstanding pipeline captures without wedging the signal handler.

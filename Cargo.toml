@@ -1,0 +1,63 @@
+[package]
+name = "pie"
+version = "0.1.0"
+edition = "2021"
+description = "PIE - Personal Intelligence Engine: Voice-activated AI assistant"
+
+[features]
+default = []
+porcupine = ["porcupine-sys", "audio"]
+audio = ["libpulse-binding", "libpulse-simple-binding"]
+wayland = ["smithay-client-toolkit", "enigo"]
+
+[dependencies]
+# AI and voice processing
+ai-ox = { git = "https://github.com/ribelo/ai-ox.git", rev = "d3294f891c868dde6a3100f6fdb4a846fd3f0a67", features = [
+  "groq",
+  "gemini",
+] }
+gemini-ox = { git = "https://github.com/ribelo/ai-ox.git", rev = "d3294f891c868dde6a3100f6fdb4a846fd3f0a67" }
+porcupine-sys = { version = "0.0.4", optional = true }
+
+# Audio processing
+libpulse-binding = { version = "2.28", optional = true }
+libpulse-simple-binding = { version = "2.28", optional = true }
+hound = "3.5"
+base64 = "0.22"
+
+# System integration
+notify-rust = "4.11"
+daemonize = "0.5"
+ctrlc = "3.4"
+dirs = "5.0"
+nix = { version = "0.29", features = ["process", "signal"] }
+chrono = { version = "0.4", features = ["serde"] }
+notify = "6.1"
+evdev = { version = "0.12", features = ["tokio"] }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+async-trait = "0.1"
+smithay-client-toolkit = { version = "0.18", optional = true }
+enigo = { version = "0.6", default-features = false, features = [
+  "wayland",
+  "x11rb",
+], optional = true }
+
+# CLI and configuration
+clap = { version = "4.5", features = ["derive"] }
+anyhow = "1.0"
+
+# Serialization for structured commands
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+schemars = "1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+tempfile = "3"
