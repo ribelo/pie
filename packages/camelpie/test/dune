@@ -1,0 +1,7 @@
+(include_subdirs no)
+
+(test
+ (name test_camelpie)
+ (libraries camelpie alcotest)
+ (deps
+  (source_tree ../)))

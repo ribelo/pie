@@ -1,0 +1,6 @@
+(include_subdirs no)
+
+(executable
+ (public_name pie)
+ (name pie)
+ (libraries camelpie cmdliner eio_main))
