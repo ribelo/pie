@@ -300,12 +300,25 @@ let test_codex_realtime_resample () =
   Alcotest.(check int) "2 samples at 16k become 3 at 24k" 6 (Bytes.length output);
   Alcotest.(check int) "first sample" 0 (Bytes.get_int16_le output 0)
 
+let write_file path contents =
+  let oc = open_out_bin path in
+  Fun.protect
+    ~finally:(fun () -> close_out_noerr oc)
+    (fun () -> output_string oc contents)
+
+let temp_dir prefix =
+  let path = Filename.temp_file prefix "" in
+  Sys.remove path;
+  Unix.mkdir path 0o700;
+  path
+
 let test_assistant_focused_window_prompt_context () =
   let window : Camelpie.Niri.window_info =
     {
       id = 7;
       title = Some "  Project   notes\nDraft  ";
       app_id = Some "org.editor";
+      pid = None;
       workspace_id = None;
     }
   in
@@ -319,17 +332,98 @@ let test_assistant_focused_window_prompt_context () =
     "Transcribe in {{language}}.\n\nFocused window context:\n- app_id: org.editor\n- title: Project notes Draft\nUse this as context only when it helps disambiguate the audio."
     prompt
 
-let write_file path contents =
-  let oc = open_out_bin path in
-  Fun.protect
-    ~finally:(fun () -> close_out_noerr oc)
-    (fun () -> output_string oc contents)
+let test_assistant_project_context_prompt_context () =
+  let dir = temp_dir "camelpie-project-context" in
+  let project_dir = Filename.concat dir "project" in
+  let nested_dir = Filename.concat project_dir "src" in
+  let pie_dir = Filename.concat project_dir ".pie" in
+  Unix.mkdir project_dir 0o700;
+  Unix.mkdir nested_dir 0o700;
+  Unix.mkdir pie_dir 0o700;
+  write_file
+    (Filename.concat pie_dir "context.md")
+    "Use Eta for the internal effect library.\nGlossary: pie means push-to-talk assistant.";
+  let context = Camelpie.Context.Project.load_for_cwd nested_dir in
+  let prompt =
+    Camelpie.Context.Project.append_to_prompt
+      "Translate to {{target_language}}."
+      context
+  in
+  Alcotest.(check string)
+    "project context"
+    "Translate to {{target_language}}.\n\nProject context from .pie/context.md:\nUse Eta for the internal effect library.\nGlossary: pie means push-to-talk assistant."
+    prompt
 
-let temp_dir prefix =
-  let path = Filename.temp_file prefix "" in
-  Sys.remove path;
-  Unix.mkdir path 0o700;
-  path
+let test_assistant_project_context_missing_is_empty () =
+  let dir = temp_dir "camelpie-project-context" in
+  let context = Camelpie.Context.Project.load_for_cwd dir in
+  let prompt =
+    Camelpie.Context.Project.append_to_prompt
+      "Translate to {{target_language}}."
+      context
+  in
+  Alcotest.(check string)
+    "no project context placeholder"
+    "Translate to {{target_language}}."
+    prompt
+
+let test_assistant_project_context_empty_file_is_empty () =
+  let dir = temp_dir "camelpie-project-context" in
+  let pie_dir = Filename.concat dir ".pie" in
+  Unix.mkdir pie_dir 0o700;
+  write_file (Filename.concat pie_dir "context.md") "  \n\t  ";
+  let context = Camelpie.Context.Project.load_for_cwd dir in
+  let prompt =
+    Camelpie.Context.Project.append_to_prompt
+      "Translate to {{target_language}}."
+      context
+  in
+  Alcotest.(check string)
+    "empty project context"
+    "Translate to {{target_language}}."
+    prompt
+
+let process ?(ppid = 0) ?(pgrp = 0) ?(tty_nr = 0) ?(tpgid = 0) ?cwd pid =
+  {
+    Camelpie.Context.Project.pid;
+    ppid;
+    pgrp;
+    tty_nr;
+    tpgid;
+    depth = 0;
+    cwd;
+  }
+
+let test_project_context_prefers_foreground_terminal_cwd () =
+  let processes =
+    [
+      process 10 ~cwd:"/home/ribelo";
+      process 11 ~ppid:10 ~pgrp:11 ~tty_nr:34816 ~tpgid:12 ~cwd:"/home/ribelo/projects/camelpie";
+      process 12 ~ppid:11 ~pgrp:12 ~tty_nr:34816 ~tpgid:12 ~cwd:"/home/ribelo/projects/camelpie/subdir";
+    ]
+  in
+  Alcotest.(check (option string))
+    "foreground cwd"
+    (Some "/home/ribelo/projects/camelpie/subdir")
+    (Camelpie.Context.Project.cwd_from_processes
+       ~root_pid:10
+       ~root_cwd:(Some "/home/ribelo")
+       processes)
+
+let test_project_context_falls_back_to_root_cwd () =
+  let processes =
+    [
+      process 10 ~cwd:"/home/ribelo/projects/gui-app";
+      process 11 ~ppid:10;
+    ]
+  in
+  Alcotest.(check (option string))
+    "root cwd"
+    (Some "/home/ribelo/projects/gui-app")
+    (Camelpie.Context.Project.cwd_from_processes
+       ~root_pid:10
+       ~root_cwd:(Some "/home/ribelo/projects/gui-app")
+       processes)
 
 let test_stt_config_loads_toml_newline_rules () =
   let dir = temp_dir "camelpie-stt-config" in
@@ -406,6 +500,7 @@ let test_text_injection_newline_rule_regex () =
       id = 384;
       title = Some "Eta | codex | 019e6df3-3186-7a51-ba29-34d742378792";
       app_id = Some "Alacritty";
+      pid = None;
       workspace_id = Some 3;
     }
   in
@@ -1090,6 +1185,16 @@ let () =
        [
          Alcotest.test_case "focused window context" `Quick
            test_assistant_focused_window_prompt_context;
+         Alcotest.test_case "project context" `Quick
+           test_assistant_project_context_prompt_context;
+         Alcotest.test_case "missing project context is empty" `Quick
+           test_assistant_project_context_missing_is_empty;
+         Alcotest.test_case "empty project context is empty" `Quick
+           test_assistant_project_context_empty_file_is_empty;
+         Alcotest.test_case "foreground terminal cwd" `Quick
+           test_project_context_prefers_foreground_terminal_cwd;
+         Alcotest.test_case "root cwd fallback" `Quick
+           test_project_context_falls_back_to_root_cwd;
        ]);
       ("ptt_capture",
        [

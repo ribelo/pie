@@ -3,6 +3,7 @@ module Audio = Audio
 module Pulse = Pulse
 module Commands = Commands
 module Config = Config
+module Context = Context
 module Input = Input
 module Wayland = Wayland
 module X11 = X11

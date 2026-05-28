@@ -27,6 +27,7 @@ type window_info = {
   id : int;
   title : string option;
   app_id : string option;
+  pid : int option;
   workspace_id : int option;
 }
 
@@ -52,6 +53,7 @@ let focused_window ~process_mgr () =
         id = Option.value (find_int "id") ~default:0;
         title = find_string "title";
         app_id = find_string "app_id";
+        pid = find_int "pid";
         workspace_id = find_int "workspace_id";
       }
     | _ -> None)

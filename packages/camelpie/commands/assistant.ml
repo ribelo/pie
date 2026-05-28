@@ -98,7 +98,16 @@ let append_focused_window_context prompt_template focused_window =
 
 let prompt_with_focused_window_context ~process_mgr prompt_template =
   let* focused_window = Niri.focused_window ~process_mgr () in
-  Eta.Effect.pure (append_focused_window_context prompt_template focused_window)
+  Eta.Effect.sync (fun () ->
+    let prompt_template =
+      append_focused_window_context prompt_template focused_window
+    in
+    let project_context =
+      match Option.bind focused_window (fun window -> window.Niri.pid) with
+      | None -> None
+      | Some pid -> Context.Project.load_for_pid pid
+    in
+    Context.Project.append_to_prompt prompt_template project_context)
 
 let load_config () =
   Eta.Effect.sync (fun () ->
