@@ -356,6 +356,8 @@ wakeword_enabled = false
 wakeword_dictation_silence_seconds = 3.0
 wakeword_dictation_max_seconds = 120.0
 wakeword_dictation_speech_rms_threshold = 0.01
+ptt_min_capture_rms = 0.001
+ptt_min_capture_peak = 0.008
 
 [[newline_rules]]
 app_id = "Alacritty"
@@ -366,9 +368,11 @@ action = "ctrl-j"
 app_id = "Slack"
 action = "shift-enter"
 |toml};
-  let config = Camelpie.Config.Stt.load ~config_path () in
-  Alcotest.(check bool) "wakeword" false config.wakeword_enabled;
-  Alcotest.(check int) "newline rules" 2 (List.length config.newline_rules);
+	  let config = Camelpie.Config.Stt.load ~config_path () in
+	  Alcotest.(check bool) "wakeword" false config.wakeword_enabled;
+	  Alcotest.(check (float 0.00001)) "ptt rms" 0.001 config.ptt_min_capture_rms;
+	  Alcotest.(check (float 0.00001)) "ptt peak" 0.008 config.ptt_min_capture_peak;
+	  Alcotest.(check int) "newline rules" 2 (List.length config.newline_rules);
   match config.newline_rules with
   | first :: second :: [] ->
     Alcotest.(check (option string)) "first app" (Some "Alacritty") first.app_id;
@@ -471,8 +475,10 @@ let test_ptt_loop_continues_after_finish () =
                   Camelpie.Ptt_loop.Release "test"
                 else Press "test")
            else None);
-      min_duration_ms = 0;
-      log_prefix = (fun mode -> mode);
+	      min_duration_ms = 0;
+	      min_capture_rms = Camelpie.Audio.Pcm.ptt_min_capture_rms_for_stt;
+	      min_capture_peak = Camelpie.Audio.Pcm.ptt_min_capture_peak_for_stt;
+	      log_prefix = (fun mode -> mode);
       source = None;
       on_ready = Eta.Effect.unit;
       on_press =
@@ -545,8 +551,10 @@ let test_ptt_loop_post_roll_repress_continues_capture () =
                   Camelpie.Ptt_loop.Release "test"
                 else Press "test")
            else None);
-      min_duration_ms = 0;
-      log_prefix = (fun mode -> mode);
+	      min_duration_ms = 0;
+	      min_capture_rms = Camelpie.Audio.Pcm.ptt_min_capture_rms_for_stt;
+	      min_capture_peak = Camelpie.Audio.Pcm.ptt_min_capture_peak_for_stt;
+	      log_prefix = (fun mode -> mode);
       source = None;
       on_ready = Eta.Effect.unit;
       on_press =
@@ -612,8 +620,10 @@ let test_ptt_loop_scoped_handle_lifetime () =
                   Camelpie.Ptt_loop.Release "test"
                 else Press "test")
            else None);
-      min_duration_ms = 0;
-      log_prefix = (fun mode -> mode);
+	      min_duration_ms = 0;
+	      min_capture_rms = Camelpie.Audio.Pcm.ptt_min_capture_rms_for_stt;
+	      min_capture_peak = Camelpie.Audio.Pcm.ptt_min_capture_peak_for_stt;
+	      log_prefix = (fun mode -> mode);
       source = None;
       on_ready = Eta.Effect.unit;
       on_press =
@@ -645,6 +655,287 @@ let test_ptt_loop_scoped_handle_lifetime () =
   match result with
   | Error _ -> ()
   | Ok () -> Alcotest.fail "expected timeout after scoped capture returns to idle"
+
+let pcm_chunk sample samples =
+  let chunk = Bytes.create (samples * 2) in
+  for i = 0 to samples - 1 do
+    Bytes.set_int16_le chunk (i * 2) sample
+  done;
+  chunk
+
+let mostly_quiet_chunk ~peak_sample samples =
+  let chunk = Bytes.create (samples * 2) in
+  Bytes.set_int16_le chunk 0 peak_sample;
+  chunk
+
+let test_ptt_loop_ignores_short_capture_before_offering () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let clock = Eio.Stdenv.clock env in
+  let rt = Eta.Runtime.create ~sw ~clock () in
+  let keyboard = Camelpie.Keyboard.Monitor.create () in
+  let audio = Eio.Stream.create 16 in
+  let offers = ref 0 in
+  let finishes = ref 0 in
+  let cancels = ref 0 in
+  let key released =
+    Camelpie.Keyboard.Monitor.emit keyboard
+      { released; state = 0; keysym = 1; unichar = 0; keycode = 1 }
+  in
+  Eio.Fiber.fork ~sw (fun () ->
+    Eio.Time.sleep clock 0.05;
+    key false;
+    for _ = 1 to 3 do
+      Eio.Time.sleep clock 0.02;
+      Eio.Stream.add audio (pcm_chunk 12000 160)
+    done;
+    key true);
+  let handle =
+    {
+      Camelpie.Ptt_loop.offer =
+        (fun _ -> Eta.Effect.sync (fun () -> incr offers));
+      finish = (fun _ -> Eta.Effect.sync (fun () -> incr finishes));
+      cancel = Eta.Effect.sync (fun () -> incr cancels);
+    }
+  in
+  let config : Camelpie.Ptt_loop.config =
+    {
+      recognize =
+        (fun event ->
+           if event.Camelpie.Keyboard.Monitor.keysym = 1 then
+             Some
+               (if event.released then
+                  Camelpie.Ptt_loop.Release "test"
+                else Press "test")
+           else None);
+	      min_duration_ms = 1000;
+	      min_capture_rms = Camelpie.Audio.Pcm.ptt_min_capture_rms_for_stt;
+	      min_capture_peak = Camelpie.Audio.Pcm.ptt_min_capture_peak_for_stt;
+	      log_prefix = (fun mode -> mode);
+      source = None;
+      on_ready = Eta.Effect.unit;
+      on_press = (fun _ -> Eta.Effect.pure (Camelpie.Ptt_loop.Handle handle));
+      on_release = (fun _ -> Eta.Effect.unit);
+      on_abort = Eta.Effect.pure false;
+      on_dead_input = Eta.Effect.unit;
+    }
+  in
+  let recv () = Eta.Effect.sync (fun () -> Eio.Stream.take audio) in
+  let effect =
+    Camelpie.Ptt_loop.run ~keyboard ~recv config
+    |> Eta.Effect.timeout_as (Eta.Duration.seconds 4) ~on_timeout:(`Ptt_error "timeout")
+  in
+  let result = Eta.Runtime.run rt effect in
+  Alcotest.(check int) "offers" 0 !offers;
+  Alcotest.(check int) "finishes" 0 !finishes;
+  Alcotest.(check int) "cancels" 1 !cancels;
+  match result with
+  | Error _ -> ()
+  | Ok () -> Alcotest.fail "expected timeout after short capture returns to idle"
+
+let test_ptt_loop_ignores_low_rms_capture_before_offering () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let clock = Eio.Stdenv.clock env in
+  let rt = Eta.Runtime.create ~sw ~clock () in
+  let keyboard = Camelpie.Keyboard.Monitor.create () in
+  let audio = Eio.Stream.create 64 in
+  let offers = ref 0 in
+  let finishes = ref 0 in
+  let cancels = ref 0 in
+  let key released =
+    Camelpie.Keyboard.Monitor.emit keyboard
+      { released; state = 0; keysym = 1; unichar = 0; keycode = 1 }
+  in
+  Eio.Fiber.fork ~sw (fun () ->
+    Eio.Time.sleep clock 0.05;
+    key false;
+    for _ = 1 to 8 do
+      Eio.Time.sleep clock 0.05;
+      Eio.Stream.add audio (pcm_chunk 4 160)
+    done;
+    Eio.Time.sleep clock 0.05;
+    key true);
+  let handle =
+    {
+      Camelpie.Ptt_loop.offer =
+        (fun _ -> Eta.Effect.sync (fun () -> incr offers));
+      finish = (fun _ -> Eta.Effect.sync (fun () -> incr finishes));
+      cancel = Eta.Effect.sync (fun () -> incr cancels);
+    }
+  in
+  let config : Camelpie.Ptt_loop.config =
+    {
+      recognize =
+        (fun event ->
+           if event.Camelpie.Keyboard.Monitor.keysym = 1 then
+             Some
+               (if event.released then
+                  Camelpie.Ptt_loop.Release "test"
+                else Press "test")
+           else None);
+	      min_duration_ms = 300;
+	      min_capture_rms = Camelpie.Audio.Pcm.ptt_min_capture_rms_for_stt;
+	      min_capture_peak = Camelpie.Audio.Pcm.ptt_min_capture_peak_for_stt;
+	      log_prefix = (fun mode -> mode);
+      source = None;
+      on_ready = Eta.Effect.unit;
+      on_press = (fun _ -> Eta.Effect.pure (Camelpie.Ptt_loop.Handle handle));
+      on_release = (fun _ -> Eta.Effect.unit);
+      on_abort = Eta.Effect.pure false;
+      on_dead_input = Eta.Effect.unit;
+    }
+  in
+  let recv () = Eta.Effect.sync (fun () -> Eio.Stream.take audio) in
+  let effect =
+    Camelpie.Ptt_loop.run ~keyboard ~recv config
+    |> Eta.Effect.timeout_as (Eta.Duration.seconds 4) ~on_timeout:(`Ptt_error "timeout")
+  in
+  let result = Eta.Runtime.run rt effect in
+  Alcotest.(check int) "offers" 0 !offers;
+  Alcotest.(check int) "finishes" 0 !finishes;
+  Alcotest.(check int) "cancels" 1 !cancels;
+  match result with
+  | Error _ -> ()
+  | Ok () -> Alcotest.fail "expected timeout after low-rms capture returns to idle"
+
+let test_ptt_loop_accepts_peak_over_silence_threshold () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let clock = Eio.Stdenv.clock env in
+  let rt = Eta.Runtime.create ~sw ~clock () in
+  let keyboard = Camelpie.Keyboard.Monitor.create () in
+  let audio = Eio.Stream.create 64 in
+  let offers = ref 0 in
+  let finishes = ref 0 in
+  let cancels = ref 0 in
+  let key released =
+    Camelpie.Keyboard.Monitor.emit keyboard
+      { released; state = 0; keysym = 1; unichar = 0; keycode = 1 }
+  in
+  Eio.Fiber.fork ~sw (fun () ->
+    Eio.Time.sleep clock 0.05;
+    key false;
+    for _ = 1 to 8 do
+      Eio.Time.sleep clock 0.05;
+      Eio.Stream.add audio (mostly_quiet_chunk ~peak_sample:660 160)
+    done;
+    Eio.Time.sleep clock 0.05;
+    key true);
+  let handle =
+    {
+      Camelpie.Ptt_loop.offer =
+        (fun _ -> Eta.Effect.sync (fun () -> incr offers));
+      finish =
+        (fun _ ->
+           Eta.Effect.sync (fun () -> incr finishes)
+           |> Eta.Effect.bind (fun () -> Eta.Effect.fail (`Ptt_error "done")));
+      cancel = Eta.Effect.sync (fun () -> incr cancels);
+    }
+  in
+  let config : Camelpie.Ptt_loop.config =
+    {
+      recognize =
+        (fun event ->
+           if event.Camelpie.Keyboard.Monitor.keysym = 1 then
+             Some
+               (if event.released then
+                  Camelpie.Ptt_loop.Release "test"
+                else Press "test")
+           else None);
+	      min_duration_ms = 300;
+	      min_capture_rms = Camelpie.Audio.Pcm.ptt_min_capture_rms_for_stt;
+	      min_capture_peak = Camelpie.Audio.Pcm.ptt_min_capture_peak_for_stt;
+	      log_prefix = (fun mode -> mode);
+      source = None;
+      on_ready = Eta.Effect.unit;
+      on_press = (fun _ -> Eta.Effect.pure (Camelpie.Ptt_loop.Handle handle));
+      on_release = (fun _ -> Eta.Effect.unit);
+      on_abort = Eta.Effect.pure false;
+      on_dead_input = Eta.Effect.unit;
+    }
+  in
+  let recv () = Eta.Effect.sync (fun () -> Eio.Stream.take audio) in
+  let result =
+    Eta.Runtime.run rt
+      (Camelpie.Ptt_loop.run ~keyboard ~recv config
+       |> Eta.Effect.timeout_as (Eta.Duration.seconds 4) ~on_timeout:(`Ptt_error "timeout"))
+  in
+  Alcotest.(check bool) "offers" true (!offers > 0);
+  Alcotest.(check int) "finishes" 1 !finishes;
+  Alcotest.(check int) "cancels" 0 !cancels;
+  match result with
+  | Error _ -> ()
+  | Ok () -> Alcotest.fail "expected finish to stop the test loop"
+
+let test_ptt_loop_accepts_quiet_speech_over_rms_threshold () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let clock = Eio.Stdenv.clock env in
+  let rt = Eta.Runtime.create ~sw ~clock () in
+  let keyboard = Camelpie.Keyboard.Monitor.create () in
+  let audio = Eio.Stream.create 64 in
+  let offers = ref 0 in
+  let finishes = ref 0 in
+  let cancels = ref 0 in
+  let key released =
+    Camelpie.Keyboard.Monitor.emit keyboard
+      { released; state = 0; keysym = 1; unichar = 0; keycode = 1 }
+  in
+  Eio.Fiber.fork ~sw (fun () ->
+    Eio.Time.sleep clock 0.05;
+    key false;
+    for _ = 1 to 8 do
+      Eio.Time.sleep clock 0.05;
+      Eio.Stream.add audio (pcm_chunk 88 160)
+    done;
+    Eio.Time.sleep clock 0.05;
+    key true);
+  let handle =
+    {
+      Camelpie.Ptt_loop.offer =
+        (fun _ -> Eta.Effect.sync (fun () -> incr offers));
+      finish =
+        (fun _ ->
+           Eta.Effect.sync (fun () -> incr finishes)
+           |> Eta.Effect.bind (fun () -> Eta.Effect.fail (`Ptt_error "done")));
+      cancel = Eta.Effect.sync (fun () -> incr cancels);
+    }
+  in
+  let config : Camelpie.Ptt_loop.config =
+    {
+      recognize =
+        (fun event ->
+           if event.Camelpie.Keyboard.Monitor.keysym = 1 then
+             Some
+               (if event.released then
+                  Camelpie.Ptt_loop.Release "test"
+                else Press "test")
+           else None);
+	      min_duration_ms = 300;
+	      min_capture_rms = Camelpie.Audio.Pcm.ptt_min_capture_rms_for_stt;
+	      min_capture_peak = Camelpie.Audio.Pcm.ptt_min_capture_peak_for_stt;
+	      log_prefix = (fun mode -> mode);
+      source = None;
+      on_ready = Eta.Effect.unit;
+      on_press = (fun _ -> Eta.Effect.pure (Camelpie.Ptt_loop.Handle handle));
+      on_release = (fun _ -> Eta.Effect.unit);
+      on_abort = Eta.Effect.pure false;
+      on_dead_input = Eta.Effect.unit;
+    }
+  in
+  let recv () = Eta.Effect.sync (fun () -> Eio.Stream.take audio) in
+  let result =
+    Eta.Runtime.run rt
+      (Camelpie.Ptt_loop.run ~keyboard ~recv config
+       |> Eta.Effect.timeout_as (Eta.Duration.seconds 4) ~on_timeout:(`Ptt_error "timeout"))
+  in
+  Alcotest.(check bool) "offers" true (!offers > 0);
+  Alcotest.(check int) "finishes" 1 !finishes;
+  Alcotest.(check int) "cancels" 0 !cancels;
+  match result with
+  | Error _ -> ()
+  | Ok () -> Alcotest.fail "expected finish to stop the test loop"
 
 let test_ptt_loop_dead_input_cancels_active_capture () =
   Eio_main.run @@ fun env ->
@@ -688,8 +979,10 @@ let test_ptt_loop_dead_input_cancels_active_capture () =
                   Camelpie.Ptt_loop.Release "test"
                 else Press "test")
            else None);
-      min_duration_ms = 0;
-      log_prefix = (fun mode -> mode);
+	      min_duration_ms = 0;
+	      min_capture_rms = Camelpie.Audio.Pcm.ptt_min_capture_rms_for_stt;
+	      min_capture_peak = Camelpie.Audio.Pcm.ptt_min_capture_peak_for_stt;
+	      log_prefix = (fun mode -> mode);
       source = None;
       on_ready = Eta.Effect.unit;
       on_press = (fun _ -> Eta.Effect.pure (Camelpie.Ptt_loop.Handle handle));
@@ -815,6 +1108,14 @@ let () =
            test_ptt_loop_post_roll_repress_continues_capture;
          Alcotest.test_case "scoped handle lifetime" `Quick
            test_ptt_loop_scoped_handle_lifetime;
+         Alcotest.test_case "short capture ignored before offer" `Quick
+           test_ptt_loop_ignores_short_capture_before_offering;
+         Alcotest.test_case "low-rms capture ignored before offer" `Quick
+           test_ptt_loop_ignores_low_rms_capture_before_offering;
+         Alcotest.test_case "peak over silence threshold accepted" `Quick
+           test_ptt_loop_accepts_peak_over_silence_threshold;
+         Alcotest.test_case "quiet speech over RMS threshold accepted" `Quick
+           test_ptt_loop_accepts_quiet_speech_over_rms_threshold;
        ]);
       ("ptt_dead_input",
        [

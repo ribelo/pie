@@ -27,4 +27,8 @@ type normalization_result = {
 }
 
 val normalize_pcm_s16le_target_rms : normalization_config -> normalization_result
-val normalize_pcm_for_stt : bytes -> normalization_result
+val normalize_pcm_for_stt :
+  ?silence_rms_threshold:float ->
+  ?silence_peak_threshold:float ->
+  bytes ->
+  normalization_result

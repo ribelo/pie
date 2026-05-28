@@ -3,4 +3,4 @@
 (library
  (name camelpie)
  (public_name camelpie)
- (libraries eta eta.http eta.stream eio yojson toml re unix))
+ (libraries eta eta_http eta_stream eio yojson toml re unix))

@@ -13,6 +13,8 @@
   (ocaml-variants (= 5.2.0+ox))
   (dune (>= 3.0))
   (eta (>= 0.1.0))
+  eta_http
+  eta_stream
   (eio (>= 1.0))
   (yojson (>= 2.0))
   (toml (>= 7.0))

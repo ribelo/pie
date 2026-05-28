@@ -23,6 +23,8 @@ type press_result =
 type config = {
   recognize : Keyboard.Monitor.key_event -> trigger option;
   min_duration_ms : int;
+  min_capture_rms : float;
+  min_capture_peak : float;
   log_prefix : string -> string;
   source : string option;
   on_ready : (unit, error) Eta.Effect.t;
@@ -47,7 +49,7 @@ let log_info message fields =
   let json = Yojson.Safe.to_string (`Assoc fields) in
   Printf.eprintf "[%s] INFO: %s %s\n%!" (timestamp ()) message json
 
-let ptt_fields ?duration_ms ?bytes config mode =
+let ptt_fields ?duration_ms ?held_duration_ms ?bytes ?rms ?peak config mode =
   let base =
     [
       ("ptt.mode", `String mode);
@@ -65,9 +67,24 @@ let ptt_fields ?duration_ms ?bytes config mode =
     | Some duration_ms -> ("ptt.duration_ms", `Int duration_ms) :: base
   in
   let base =
+    match held_duration_ms with
+    | None -> base
+    | Some held_duration_ms -> ("ptt.held_duration_ms", `Int held_duration_ms) :: base
+  in
+  let base =
     match bytes with
     | None -> base
     | Some bytes -> ("ptt.bytes", `Int bytes) :: base
+  in
+  let base =
+    match rms with
+    | None -> base
+    | Some rms -> ("ptt.rms", `Float rms) :: base
+  in
+  let base =
+    match peak with
+    | None -> base
+    | Some peak -> ("ptt.peak", `Float peak) :: base
   in
   List.rev base
 
@@ -80,6 +97,23 @@ let concat_chunks chunks =
     Bytes.blit chunk 0 out !offset (Bytes.length chunk);
     offset := !offset + Bytes.length chunk) chunks;
   out
+
+let held_duration_ms started_at capture_state =
+  let end_at =
+    match capture_state with
+    | Ptt.Capture.PostRoll { release_at; _ } -> int_of_float release_at
+    | Ptt.Capture.Capturing _
+    | Ptt.Capture.Idle -> now_ms ()
+  in
+  max 0 (end_at - started_at)
+
+let capture_stats pcm_bytes =
+  Audio.Pcm.pcm_rms pcm_bytes, Audio.Pcm.pcm_peak pcm_bytes
+
+let capture_is_eligible ~min_duration_ms ~min_capture_rms ~min_capture_peak ~held_duration_ms ~pcm_bytes ~rms ~peak =
+  held_duration_ms >= min_duration_ms
+  && Bytes.length pcm_bytes > 0
+  && (rms >= min_capture_rms || peak >= min_capture_peak)
 
 let run ~(keyboard : Keyboard.Monitor.t) ~(recv : unit -> (bytes, [> `Closed ]) Eta.Effect.t) (config : config) =
   let keyboard_queue = Keyboard.Monitor.subscribe keyboard in
@@ -106,21 +140,56 @@ let run ~(keyboard : Keyboard.Monitor.t) ~(recv : unit -> (bytes, [> `Closed ]) 
     Eta.Effect.par (keyboard_loop ()) (recv_loop ()) |> Eta.Effect.map (fun _ -> ())
   in
   let state_loop () =
-  let finish_capture mode handle started_at chunks =
+  let offer_chunks handle chunks =
+    let rec loop = function
+      | [] -> Eta.Effect.unit
+      | chunk :: rest ->
+        let* () = handle.offer chunk in
+        loop rest
+    in
+    loop (List.rev chunks)
+  in
+  let finish_capture mode handle started_at capture_state offered chunks =
     let duration_ms = now_ms () - started_at in
+    let held_duration_ms = held_duration_ms started_at capture_state in
     let pcm_bytes = concat_chunks chunks in
-    if duration_ms < config.min_duration_ms || Bytes.length pcm_bytes = 0 then (
+    let rms, peak = capture_stats pcm_bytes in
+    if not (capture_is_eligible
+              ~min_duration_ms:config.min_duration_ms
+              ~min_capture_rms:config.min_capture_rms
+              ~min_capture_peak:config.min_capture_peak
+              ~held_duration_ms
+              ~pcm_bytes
+              ~rms
+              ~peak) then (
       log_info "PTT capture ignored"
-        (ptt_fields ~duration_ms ~bytes:(Bytes.length pcm_bytes) config mode);
+        (ptt_fields
+           ~duration_ms
+           ~held_duration_ms
+           ~bytes:(Bytes.length pcm_bytes)
+           ~rms
+           ~peak
+           config
+           mode);
       handle.cancel
     ) else (
+      let* () =
+        if offered then Eta.Effect.unit else offer_chunks handle chunks
+      in
       log_info "PTT capture stopped"
-        (ptt_fields ~duration_ms ~bytes:(Bytes.length pcm_bytes) config mode);
+        (ptt_fields
+           ~duration_ms
+           ~held_duration_ms
+           ~bytes:(Bytes.length pcm_bytes)
+           ~rms
+           ~peak
+           config
+           mode);
       handle.finish { duration_ms; pcm_bytes }
     )
   in
   let run_active mode started_at handle =
-    let rec loop capture_state dead_input chunks =
+    let rec loop capture_state dead_input offered chunks =
       let* abort = config.on_abort in
       if abort then handle.cancel
       else
@@ -129,7 +198,7 @@ let run ~(keyboard : Keyboard.Monitor.t) ~(recv : unit -> (bytes, [> `Closed ]) 
           let remaining =
             Ptt.Capture.post_roll_remaining_ms capture_state (float_of_int (now_ms ()))
           in
-          if remaining <= 0.0 then finish_capture mode handle started_at chunks
+          if remaining <= 0.0 then finish_capture mode handle started_at capture_state offered chunks
           else
             let timeout =
               Eta.Effect.delay (Eta.Duration.ms (int_of_float remaining)) Eta.Effect.unit
@@ -139,18 +208,18 @@ let run ~(keyboard : Keyboard.Monitor.t) ~(recv : unit -> (bytes, [> `Closed ]) 
               timeout;
               take_input;
             ] in
-            handle_active_event capture_state dead_input chunks next
+            handle_active_event capture_state dead_input offered chunks next
         | Ptt.Capture.Idle
         | Ptt.Capture.Capturing _ ->
           let* next = take_input in
-          handle_active_event capture_state dead_input chunks next
+          handle_active_event capture_state dead_input offered chunks next
 
-    and handle_active_event capture_state dead_input chunks = function
-      | `Timeout -> finish_capture mode handle started_at chunks
+    and handle_active_event capture_state dead_input offered chunks = function
+      | `Timeout -> finish_capture mode handle started_at capture_state offered chunks
       | `Chunk chunk ->
         let active = Ptt.Capture.is_accepting_chunks capture_state in
         let dead_input = Ptt.Dead_input.sync dead_input active in
-        if not active then loop capture_state dead_input chunks
+        if not active then loop capture_state dead_input offered chunks
         else
           let result = Ptt.Dead_input.process_chunk dead_input chunk in
           if result.dead then
@@ -163,10 +232,29 @@ let run ~(keyboard : Keyboard.Monitor.t) ~(recv : unit -> (bytes, [> `Closed ]) 
             config.on_dead_input
           else
             let chunks = chunk :: chunks in
-            let* () =
-              if result.has_input then handle.offer chunk else Eta.Effect.unit
+            let should_start_offering =
+              if offered || not result.has_input then false
+              else
+                let pcm_bytes = concat_chunks chunks in
+                let held_duration_ms = held_duration_ms started_at capture_state in
+                let rms, peak = capture_stats pcm_bytes in
+                capture_is_eligible
+                  ~min_duration_ms:config.min_duration_ms
+                  ~min_capture_rms:config.min_capture_rms
+                  ~min_capture_peak:config.min_capture_peak
+                  ~held_duration_ms
+                  ~pcm_bytes
+                  ~rms
+                  ~peak
             in
-            loop capture_state result.detector chunks
+            let* () =
+              if not result.has_input then Eta.Effect.unit
+              else if offered then handle.offer chunk
+              else if should_start_offering then offer_chunks handle chunks
+              else Eta.Effect.unit
+            in
+            let offered = offered || should_start_offering in
+            loop capture_state result.detector offered chunks
       | `Event event ->
         (match config.recognize event with
          | Some (Release release_mode) when release_mode = mode ->
@@ -174,8 +262,8 @@ let run ~(keyboard : Keyboard.Monitor.t) ~(recv : unit -> (bytes, [> `Closed ]) 
             | Ptt.Capture.Capturing _ ->
               let next = Ptt.Capture.release capture_state (float_of_int (now_ms ())) in
               let* () = config.on_release mode in
-              loop next dead_input chunks
-            | _ -> loop capture_state dead_input chunks)
+              loop next dead_input offered chunks
+            | _ -> loop capture_state dead_input offered chunks)
          | Some (Press press_mode) when press_mode = mode ->
            let next = Ptt.Capture.start capture_state (float_of_int (now_ms ())) in
            let* () =
@@ -186,10 +274,10 @@ let run ~(keyboard : Keyboard.Monitor.t) ~(recv : unit -> (bytes, [> `Closed ]) 
                    (ptt_fields config mode))
              | _ -> Eta.Effect.unit
            in
-           loop next dead_input chunks
-         | _ -> loop capture_state dead_input chunks)
+           loop next dead_input offered chunks
+         | _ -> loop capture_state dead_input offered chunks)
     in
-    loop (Ptt.Capture.start Ptt.Capture.idle (float_of_int started_at)) (Ptt.Dead_input.initial ()) []
+    loop (Ptt.Capture.start Ptt.Capture.idle (float_of_int started_at)) (Ptt.Dead_input.initial ()) false []
   in
   let rec idle_loop () =
     let* next = take_input in

@@ -41,8 +41,11 @@ let mode_of_name = function
   | "translate" -> Translate
   | mode -> invalid_arg ("unknown assistant PTT mode: " ^ mode)
 
-let normalize_for_stt pcm_bytes =
-  (Audio.Pcm.normalize_pcm_for_stt pcm_bytes).normalized_bytes
+let normalize_for_stt (config : Config.Stt.t) pcm_bytes =
+  (Audio.Pcm.normalize_pcm_for_stt
+     ~silence_rms_threshold:config.ptt_min_capture_rms
+     ~silence_peak_threshold:config.ptt_min_capture_peak
+     pcm_bytes).normalized_bytes
 
 let context_value_max_length = 200
 
@@ -114,7 +117,7 @@ let run_stt ~sw ~net ~process_mgr (config : Config.Stt.t) mode pcm_bytes =
   in
   match config.provider with
   | Codex_realtime ->
-    let pcm_bytes = normalize_for_stt pcm_bytes in
+    let pcm_bytes = normalize_for_stt config pcm_bytes in
     (match mode with
      | Transcribe ->
        Stt.Codex_realtime.transcribe_with_prompt
@@ -134,7 +137,7 @@ let run_stt ~sw ~net ~process_mgr (config : Config.Stt.t) mode pcm_bytes =
          ~prompt_template
          pcm_bytes)
   | Openrouter ->
-    let pcm_bytes = normalize_for_stt pcm_bytes in
+    let pcm_bytes = normalize_for_stt config pcm_bytes in
     (match mode with
      | Transcribe ->
        Stt.Openrouter.transcribe_with_prompt
@@ -349,6 +352,8 @@ let run
   let ptt_config : Ptt_loop.config = {
     recognize = recognize ~transcribe_keysym:ptt_transcribe_keysym ~translate_keysym:ptt_translate_keysym;
     min_duration_ms;
+    min_capture_rms = config.Config.Stt.ptt_min_capture_rms;
+    min_capture_peak = config.Config.Stt.ptt_min_capture_peak;
     log_prefix = (fun mode -> "assistant-ptt-" ^ mode);
     source = info.Pulse.Defs.source_name;
     on_ready = Eta.Effect.sync (fun () ->

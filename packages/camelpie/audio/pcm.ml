@@ -3,8 +3,8 @@ let default_auto_gain_max = 40.0
 let default_auto_gain_peak_limit = 0.95
 let min_gain_to_apply = 1.05
 
-let ptt_min_capture_rms_for_stt = 0.003
-let ptt_min_capture_peak_for_stt = 0.02
+let ptt_min_capture_rms_for_stt = 0.0015
+let ptt_min_capture_peak_for_stt = 0.01
 
 let build_pcm_wav_header ~(data_length : int) ~(sample_rate : int) : bytes =
   let header = Bytes.create 44 in
@@ -119,12 +119,15 @@ let normalize_pcm_s16le_target_rms (config : normalization_config) : normalizati
     { normalized_bytes = out; gain }
   end
 
-let normalize_pcm_for_stt (pcm_bytes : bytes) : normalization_result =
+let normalize_pcm_for_stt
+    ?(silence_rms_threshold = ptt_min_capture_rms_for_stt)
+    ?(silence_peak_threshold = ptt_min_capture_peak_for_stt)
+    (pcm_bytes : bytes) : normalization_result =
   normalize_pcm_s16le_target_rms {
     pcm_bytes;
     target_rms = default_auto_gain_target_rms;
     max_gain = default_auto_gain_max;
     peak_limit = default_auto_gain_peak_limit;
-    silence_rms_threshold = ptt_min_capture_rms_for_stt;
-    silence_peak_threshold = ptt_min_capture_peak_for_stt;
+    silence_rms_threshold;
+    silence_peak_threshold;
   }

@@ -23,6 +23,8 @@ type t = {
   wakeword_dictation_silence_seconds : float;
   wakeword_dictation_max_seconds : float;
   wakeword_dictation_speech_rms_threshold : float;
+  ptt_min_capture_rms : float;
+  ptt_min_capture_peak : float;
   transcription_prompt : string;
   translation_prompt : string;
   newline_rules : newline_rule list;
@@ -196,8 +198,9 @@ let load ?(config_path = Paths.stt_config_path) () : t =
     wakeword_dictation_silence_seconds = get_float table "wakeword_dictation_silence_seconds" 3.0;
     wakeword_dictation_max_seconds = get_float table "wakeword_dictation_max_seconds" 120.0;
     wakeword_dictation_speech_rms_threshold = get_float table "wakeword_dictation_speech_rms_threshold" 0.01;
+    ptt_min_capture_rms = get_float table "ptt_min_capture_rms" Audio.Pcm.ptt_min_capture_rms_for_stt;
+    ptt_min_capture_peak = get_float table "ptt_min_capture_peak" Audio.Pcm.ptt_min_capture_peak_for_stt;
     transcription_prompt;
     translation_prompt;
     newline_rules = parse_newline_rules table;
   }
-

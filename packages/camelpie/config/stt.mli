@@ -23,6 +23,8 @@ type t = {
   wakeword_dictation_silence_seconds : float;
   wakeword_dictation_max_seconds : float;
   wakeword_dictation_speech_rms_threshold : float;
+  ptt_min_capture_rms : float;
+  ptt_min_capture_peak : float;
   transcription_prompt : string;
   translation_prompt : string;
   newline_rules : newline_rule list;
@@ -35,4 +37,3 @@ val string_of_provider : provider -> string
 val newline_action_of_string : string -> newline_action
 val string_of_newline_action : newline_action -> string
 val load : ?config_path:string -> unit -> t
-
