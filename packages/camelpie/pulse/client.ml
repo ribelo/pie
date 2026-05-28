@@ -9,6 +9,16 @@ let error message ?code () = { message; code }
 
 let fail message ?code () = raise (Client_error { message; code })
 
+let debug_enabled =
+  match Sys.getenv_opt "CAMELPIE_PULSE_DEBUG" with
+  | Some ("1" | "true" | "yes") -> true
+  | _ -> false
+
+let debug fmt =
+  Printf.ksprintf
+    (fun msg -> if debug_enabled then Printf.eprintf "%s%!" msg)
+    fmt
+
 type t =
   | T : {
       socket : 'a Eio.Flow.two_way;
@@ -30,7 +40,9 @@ let load_cookie () =
     close_in ic;
     Some (Bytes.of_string buf)
   with
-  | Sys_error _ -> None
+  | Sys_error msg ->
+    debug "[pulse] cookie load failed: %s (tried %s)\n" msg Defs.pa_default_cookie_path;
+    None
 
 let process_incoming (T t) (chunk : bytes) : unit =
   let buffer = Bytes.create (Bytes.length t.remainder + Bytes.length chunk) in
@@ -58,9 +70,9 @@ let process_incoming (T t) (chunk : bytes) : unit =
           | Some resolver ->
             Hashtbl.remove t.pending envelope.tag;
             if envelope.packet_type = Defs.Pa_command.reply then
-              Eio.Promise.resolve_ok resolver payload
+              Eio.Promise.resolve_ok resolver envelope.body
             else if envelope.packet_type = Defs.Pa_command.error then
-              let code = Commands.parse_error_code payload in
+              let code = Commands.parse_error_code envelope.body in
               Eio.Promise.resolve_error resolver (error "PulseAudio command failed" ?code ())
             else
               Eio.Promise.resolve_error resolver (error (Printf.sprintf "unsupported response type: %d" envelope.packet_type) ())
@@ -79,19 +91,22 @@ let process_incoming (T t) (chunk : bytes) : unit =
     else Bytes.sub buffer !offset (Bytes.length buffer - !offset)
 
 let read_loop (T t) =
+  debug "[pulse] read loop started\n";
   let buf = Cstruct.create 8192 in
   try
     while true do
       let n = Eio.Flow.single_read t.socket buf in
+      debug "[pulse] read %d bytes\n" n;
       let chunk = Cstruct.to_bytes (Cstruct.sub buf 0 n) in
       process_incoming (T t) chunk
     done;
     `Stop_daemon
   with
-  | End_of_file -> `Stop_daemon
+  | End_of_file -> debug "[pulse] read loop: EOF\n"; `Stop_daemon
   | Client_error _ -> `Stop_daemon
-  | Eio.Cancel.Cancelled _ -> `Stop_daemon
+  | Eio.Cancel.Cancelled _ -> debug "[pulse] read loop: cancelled\n"; `Stop_daemon
   | exn ->
+    debug "[pulse] read loop error: %s\n" (Printexc.to_string exn);
     let err = error (Printf.sprintf "read loop error: %s" (Printexc.to_string exn)) () in
     (* B1: iteration is safe here because Eio fibers cannot preempt
        mid-statement, and await_reply only mutates pending on the
@@ -103,12 +118,17 @@ let await_reply (T t) (packet : Commands.command_packet) : (bytes, error) result
   let promise, resolver = Eio.Promise.create () in
   Hashtbl.add t.pending packet.tag resolver;
   let write_buf = Cstruct.of_bytes packet.bytes in
+  debug "[pulse] sending packet tag=%d len=%d\n" packet.tag (Bytes.length packet.bytes);
   Eio.Flow.write t.socket [write_buf];
+  debug "[pulse] packet sent, waiting for reply (timeout=%.1fs)\n" (Float.of_int t.request_timeout_ms /. 1000.0);
   let timeout_s = Float.of_int t.request_timeout_ms /. 1000.0 in
   try
-    Eio.Time.with_timeout_exn t.clock timeout_s (fun () -> Eio.Promise.await promise)
+    let result = Eio.Time.with_timeout_exn t.clock timeout_s (fun () -> Eio.Promise.await promise) in
+    debug "[pulse] reply received for tag=%d\n" packet.tag;
+    result
   with
   | Eio.Time.Timeout ->
+    debug "[pulse] timeout waiting for reply to tag=%d\n" packet.tag;
     Hashtbl.remove t.pending packet.tag;
     Error (error (Printf.sprintf "timed out waiting for response to tag %d" packet.tag) ())
 
@@ -117,46 +137,52 @@ let connect
     ?cookie
     ?(client_name = "pie")
     ?(protocol_version = Defs.pa_native_protocol_version)
-    ?(request_timeout_ms = 15000)
+    ?(request_timeout_ms = 3000)
     ~net ~clock ~sw () =
-  let socket = Eio.Net.connect ~sw net (`Unix socket_path) in
-  let t = T {
-    socket;
-    sw;
-    pending = Hashtbl.create 16;
-    record_queues = Hashtbl.create 4;
-    remainder = Bytes.empty;
-    next_tag = 0;
-    protocol_version = 0;
-    request_timeout_ms;
-    clock;
-  } in
-  let (T tr) = t in
-  Eio.Fiber.fork_daemon ~sw (fun () -> read_loop t);
-  let cookie =
-    match cookie with
-    | Some c -> c
-    | None ->
-      match load_cookie () with
+  try
+    let socket = Eio.Net.connect ~sw net (`Unix socket_path) in
+    let t = T {
+      socket;
+      sw;
+      pending = Hashtbl.create 16;
+      record_queues = Hashtbl.create 4;
+      remainder = Bytes.empty;
+      next_tag = 0;
+      protocol_version = 0;
+      request_timeout_ms;
+      clock;
+    } in
+    let (T tr) = t in
+    Eio.Fiber.fork_daemon ~sw (fun () -> read_loop t);
+    let cookie =
+      match cookie with
       | Some c -> c
-      | None -> fail "PulseAudio cookie not found" ()
-  in
-  let auth_packet =
-    match Commands.build_auth_command ~cookie ~protocol_version () with
-    | Ok pkt -> pkt
-    | Error msg -> fail msg ()
-  in
-  let auth_payload = await_reply t auth_packet in
-  match auth_payload with
-  | Error e -> fail e.message ?code:e.code ()
-  | Ok payload ->
-    let auth_version = Commands.parse_auth_response payload in
-    (match Commands.parse_protocol_compatibility auth_version with
-     | Error msg -> fail msg ()
-     | Ok () -> ());
-    tr.protocol_version <- auth_version;
-    let _ = await_reply t (Commands.build_set_client_name_command ~client_name_or_props:(`String client_name) ()) in
-    t
+      | None ->
+        match load_cookie () with
+        | Some c -> c
+        | None -> fail "PulseAudio cookie not found" ()
+    in
+    let auth_packet =
+      match Commands.build_auth_command ~cookie ~protocol_version () with
+      | Ok pkt -> pkt
+      | Error msg -> fail msg ()
+    in
+    let auth_payload = await_reply t auth_packet in
+    match auth_payload with
+    | Error e -> fail e.message ?code:e.code ()
+    | Ok payload ->
+      let auth_version = Commands.parse_auth_response payload in
+      (match Commands.parse_protocol_compatibility auth_version with
+       | Error msg -> fail msg ()
+       | Ok () -> ());
+      tr.protocol_version <- auth_version;
+      let _ = await_reply t (Commands.build_set_client_name_command ~client_name_or_props:(`String client_name) ()) in
+      t
+  with
+  | Client_error e ->
+    failwith (Printf.sprintf "PulseAudio: %s" e.message)
+  | exn ->
+    failwith (Printf.sprintf "PulseAudio connect failed: %s" (Printexc.to_string exn))
 
 let get_server_info_impl (T t) =
   match await_reply (T t) (Commands.build_get_server_info_command ()) with
@@ -180,18 +206,12 @@ let with_client ~sw ~net ~clock ?socket_path ?cookie ?client_name ?protocol_vers
   |> Eta.Effect.bind f
 
 let get_server_info client =
-  Eta.Effect.sync (fun () ->
-    match get_server_info_impl client with
-    | Ok info -> info
-    | Error (`Pulse_error msg) -> failwith msg)
-  |> Eta.Effect.catch (fun (`Pulse_error msg) -> Eta.Effect.fail (`Pulse_error msg))
+  Eta.Effect.sync (fun () -> get_server_info_impl client)
+  |> Eta.Effect.bind Eta.Effect.from_result
 
 let list_sources client =
-  Eta.Effect.sync (fun () ->
-    match list_sources_impl client with
-    | Ok sources -> sources
-    | Error (`Pulse_error msg) -> failwith msg)
-  |> Eta.Effect.catch (fun (`Pulse_error msg) -> Eta.Effect.fail (`Pulse_error msg))
+  Eta.Effect.sync (fun () -> list_sources_impl client)
+  |> Eta.Effect.bind Eta.Effect.from_result
 
 let with_record_stream (T t) ?(options : Defs.record_stream_options option) f =
   let acquire =

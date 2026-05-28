@@ -1,4 +1,4 @@
-let ( let* ) eff f = Eta.Effect.bind f eff
+open Eta.Syntax
 
 let run ~sw ~net ~clock ~output_path ~duration_sec ~raw () =
   Pulse.Client.with_client ~sw ~net ~clock @@ fun client ->

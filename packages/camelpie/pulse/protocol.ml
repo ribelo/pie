@@ -6,6 +6,10 @@ type packet_header = {
   flags : int;
 }
 
+let int_of_uint32_be buf offset =
+  let value = Int32.to_int (Bytes.get_int32_be buf offset) in
+  if value < 0 then value + 0x100000000 else value
+
 let encode_packet_header { length; channel; offset_hi; offset_lo; flags } =
   let buf = Bytes.create 20 in
   Bytes.set_int32_be buf 0 (Int32.of_int length);
@@ -19,11 +23,11 @@ let decode_packet_header (buf : bytes) : packet_header =
   if Bytes.length buf <> 20 then
     failwith "invalid packet header size";
   {
-    length = Int32.to_int (Bytes.get_int32_be buf 0);
-    channel = Int32.to_int (Bytes.get_int32_be buf 4);
-    offset_hi = Int32.to_int (Bytes.get_int32_be buf 8);
-    offset_lo = Int32.to_int (Bytes.get_int32_be buf 12);
-    flags = Int32.to_int (Bytes.get_int32_be buf 16);
+    length = int_of_uint32_be buf 0;
+    channel = int_of_uint32_be buf 4;
+    offset_hi = int_of_uint32_be buf 8;
+    offset_lo = int_of_uint32_be buf 12;
+    flags = int_of_uint32_be buf 16;
   }
 
 let frame_packet ?(channel = Defs.pa_no_index) ?(flags = 0) (payload : bytes) : bytes =

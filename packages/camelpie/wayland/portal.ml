@@ -1,6 +1,6 @@
 type error = [`Portal_error of string]
 
-let ( let* ) eff f = Eta.Effect.bind f eff
+open Eta.Syntax
 
 let busctl ~process_mgr args =
   Sh.run_capture ~process_mgr ~prog:"busctl" ~args:("--user" :: args)
@@ -46,5 +46,5 @@ let bind_shortcut ~process_mgr session_handle shortcut_id description preferred_
 let monitor ~process_mgr () =
   Sh.run ~process_mgr ~prog:"busctl"
     ~args:["--user"; "--no-pager"; "monitor"; "org.freedesktop.portal.Desktop"]
-  |> Eta.Effect.catch (fun (`Subprocess_error msg) ->
-    Eta.Effect.fail (`Portal_error ("busctl monitor failed: " ^ msg)))
+  |> Eta.Effect.map_error (fun (`Subprocess_error msg) ->
+    `Portal_error ("busctl monitor failed: " ^ msg))

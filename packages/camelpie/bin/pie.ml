@@ -1,24 +1,67 @@
 open Cmdliner
 
+let render_effect_error = function
+  | `Pulse_error msg
+  | `Ptt_error msg
+  | `Stt_error msg
+  | `Subprocess_error msg
+  | `Injection_error msg
+  | `Wtype_error msg
+  | `Xdotool_error msg
+  | `Niri_error msg
+  | `Notification_error msg
+  | `Portal_error msg
+  | `Daemon_error msg -> msg
+  | `Daemon_off -> "daemon is not running"
+  | `Closed -> "stream closed"
+  | `Timeout -> "operation timed out"
+
 let run_effect mk_eff =
-  Eio_main.run @@ fun env ->
-  Eio.Switch.run @@ fun sw ->
-  let rt =
-    Eta.Runtime.create
-      ~sw
-      ~clock:(Eio.Stdenv.clock env)
-      ~capture_backtrace:true
-      ()
-  in
-  match Eta.Runtime.run rt (mk_eff ~env ~sw) with
-  | Ok () -> ()
-  | Error cause ->
-      if Eta.Cause.is_interrupt_only cause then
-        exit 130
-      else
-        exit 1
+  try
+    Eio_main.run @@ fun env ->
+    Eio.Switch.run @@ fun sw ->
+    let rt =
+      Eta.Runtime.create
+        ~sw
+        ~clock:(Eio.Stdenv.clock env)
+        ~capture_backtrace:true
+        ()
+    in
+    match
+      mk_eff ~env ~sw
+      |> Eta.Effect.with_error_renderer render_effect_error
+      |> Eta.Runtime.run rt
+    with
+    | Ok () -> ()
+    | Error cause ->
+        let msg =
+          Format.asprintf "%a"
+            (Eta.Cause.pp (fun fmt err ->
+               Format.pp_print_string fmt (render_effect_error err)))
+            cause
+        in
+        if Eta.Cause.is_interrupt_only cause then (
+          Printf.eprintf "Interrupted\n%!";
+          exit 130)
+        else (
+          Printf.eprintf "Error: %s\n%!" msg;
+          exit 1)
+  with exn ->
+    Printf.eprintf "Fatal: %s\n%!" (Printexc.to_string exn);
+    exit 1
 
 let env_term = Term.const ()
+
+let render_recording_status (snap : Camelpie.Daemon.Contract.recording_snapshot) =
+  if not snap.enabled then "paused"
+  else if not snap.active then "armed"
+  else if snap.mode = "idle" then "stale"
+  else snap.mode
+
+let render_start_result = function
+  | Camelpie.Daemon.Contract.Started mode -> mode
+  | Busy mode -> "busy:" ^ mode
+  | Disabled -> "paused"
 
 let sources_cmd =
   let doc = "List PulseAudio capture sources" in
@@ -110,12 +153,7 @@ let status_cmd =
               | `Daemon_error msg ->
                 Eta.Effect.sync (fun () -> Printf.printf "error=%s\n%!" msg))
             (Eta.Effect.bind (fun (snap : Camelpie.Daemon.Contract.recording_snapshot) ->
-              Eta.Effect.sync (fun () ->
-                Printf.printf "active=%b enabled=%b mode=%s error=%s\n%!"
-                  snap.Camelpie.Daemon.Contract.active
-                  snap.Camelpie.Daemon.Contract.enabled
-                  (Option.value snap.Camelpie.Daemon.Contract.mode ~default:"none")
-                  (Option.value snap.Camelpie.Daemon.Contract.error ~default:"none"))
+              Eta.Effect.sync (fun () -> Printf.printf "%s\n%!" (render_recording_status snap))
             ) (Camelpie.Daemon.Client.status ~net ~sw ()))))
       $ env_term)
 
@@ -129,7 +167,7 @@ let toggle_cmd =
           let net = Eio.Stdenv.net env in
           Eta.Effect.bind (fun (result : bool) ->
             Eta.Effect.sync (fun () ->
-              Printf.printf "toggle=%b\n%!" result)
+              Printf.printf "%s\n%!" (if result then "armed" else "paused"))
           ) (Camelpie.Daemon.Client.toggle ~net ~sw ())))
       $ env_term)
 
@@ -165,9 +203,7 @@ let meeting_start_cmd =
           let net = Eio.Stdenv.net env in
           Eta.Effect.bind (fun (r : Camelpie.Daemon.Contract.meeting_start_result) ->
             Eta.Effect.sync (fun () ->
-              Printf.printf "result=%s active=%b\n%!"
-                r.Camelpie.Daemon.Contract.result
-                r.Camelpie.Daemon.Contract.snapshot.Camelpie.Daemon.Contract.active)
+              Printf.printf "%s\n%!" (render_start_result r.Camelpie.Daemon.Contract.result))
           ) (Camelpie.Daemon.Client.meeting_start ~net ~sw ())))
       $ env_term)
 
@@ -181,7 +217,7 @@ let meeting_stop_cmd =
           let net = Eio.Stdenv.net env in
           Eta.Effect.bind (fun (snap : Camelpie.Daemon.Contract.recording_snapshot) ->
             Eta.Effect.sync (fun () ->
-              Printf.printf "active=%b\n%!" snap.Camelpie.Daemon.Contract.active)
+              Printf.printf "%s\n%!" (render_recording_status snap))
           ) (Camelpie.Daemon.Client.meeting_stop ~net ~sw ())))
       $ env_term)
 
@@ -195,7 +231,7 @@ let meeting_toggle_cmd =
           let net = Eio.Stdenv.net env in
           Eta.Effect.bind (fun (snap : Camelpie.Daemon.Contract.recording_snapshot) ->
             Eta.Effect.sync (fun () ->
-              Printf.printf "active=%b\n%!" snap.Camelpie.Daemon.Contract.active)
+              Printf.printf "%s\n%!" (render_recording_status snap))
           ) (Camelpie.Daemon.Client.meeting_toggle ~net ~sw ())))
       $ env_term)
 
@@ -302,8 +338,18 @@ let wakeword_train_cmd =
     Term.(const (fun () -> run_effect (fun ~env ~sw -> Eta.Effect.sync (fun () -> Camelpie.Commands.Wakeword_train_cmd.run ()))) $ env_term)
 
 let assistant_term =
+  let transcribe_keysym_arg =
+    Arg.(value & opt int Camelpie.Commands.Assistant.default_transcribe_keysym
+         & info ["ptt-transcribe-keysym"] ~docv:"KEYSYM"
+             ~doc:"XKB keysym for PTT transcribe (default: F9 / 65478)")
+  in
+  let translate_keysym_arg =
+    Arg.(value & opt int Camelpie.Commands.Assistant.default_translate_keysym
+         & info ["ptt-translate-keysym"] ~docv:"KEYSYM"
+             ~doc:"XKB keysym for PTT translate (default: F10 / 65479)")
+  in
   Term.(
-    const (fun () ->
+    const (fun ptt_transcribe_keysym ptt_translate_keysym () ->
       run_effect (fun ~env ~sw ->
         Camelpie.Commands.Assistant.run
           ~sw
@@ -311,8 +357,10 @@ let assistant_term =
           ~clock:(Eio.Stdenv.clock env)
           ~process_mgr:(Eio.Stdenv.process_mgr env)
           ~stdin:(Eio.Stdenv.stdin env)
+          ~ptt_transcribe_keysym
+          ~ptt_translate_keysym
           ()))
-    $ env_term)
+    $ transcribe_keysym_arg $ translate_keysym_arg $ env_term)
 
 let assistant_cmd =
   let doc = "Combined assistant mode (PTT + STT + text injection)" in

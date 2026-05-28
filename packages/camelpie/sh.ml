@@ -22,9 +22,8 @@ let run ~process_mgr ~prog ~args =
     | Eio.Cancel.Cancelled _ as exn -> raise exn
     | exn ->
       Error (Printf.sprintf "%s failed: %s" prog (Printexc.to_string exn)))
-  |> Eta.Effect.bind (function
-    | Ok () -> Eta.Effect.unit
-    | Error msg -> Eta.Effect.fail (`Subprocess_error msg))
+  |> Eta.Effect.map (Result.map_error (fun msg -> `Subprocess_error msg))
+  |> Eta.Effect.bind Eta.Effect.from_result
 
 let run_capture ~process_mgr ~prog ~args =
   Eta.Effect.sync (fun () ->
@@ -34,6 +33,5 @@ let run_capture ~process_mgr ~prog ~args =
     | Eio.Cancel.Cancelled _ as exn -> raise exn
     | exn ->
       Error (Printf.sprintf "%s failed: %s" prog (Printexc.to_string exn)))
-  |> Eta.Effect.bind (function
-    | Ok out -> Eta.Effect.pure out
-    | Error msg -> Eta.Effect.fail (`Subprocess_error msg))
+  |> Eta.Effect.map (Result.map_error (fun msg -> `Subprocess_error msg))
+  |> Eta.Effect.bind Eta.Effect.from_result

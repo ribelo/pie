@@ -1,11 +1,15 @@
 type error = [`Niri_error of string]
 
-let ( let* ) eff f = Eta.Effect.bind f eff
+open Eta.Syntax
 
 let run_niri_json ~process_mgr args =
-  Sh.run_capture ~process_mgr ~prog:"niri" ~args:("--json" :: args)
-  |> Eta.Effect.catch (fun (`Subprocess_error msg) ->
-    Eta.Effect.fail (`Niri_error ("niri command failed: " ^ msg)))
+  (match args with
+   | "msg" :: rest ->
+     Sh.run_capture ~process_mgr ~prog:"niri" ~args:("msg" :: "--json" :: rest)
+  | _ ->
+     Sh.run_capture ~process_mgr ~prog:"niri" ~args)
+  |> Eta.Effect.map_error (fun (`Subprocess_error msg) ->
+    `Niri_error ("niri command failed: " ^ msg))
 
 let type_text ~process_mgr text =
   let normalized = String.trim text in
@@ -16,8 +20,8 @@ let type_text ~process_mgr text =
     | Some niri ->
       Sh.run ~process_mgr ~prog:niri
         ~args:["msg"; "action"; "spawn"; "--"; "wtype"; "--"; normalized]
-      |> Eta.Effect.catch (fun (`Subprocess_error msg) ->
-        Eta.Effect.fail (`Niri_error ("niri action failed: " ^ msg)))
+      |> Eta.Effect.map_error (fun (`Subprocess_error msg) ->
+        `Niri_error ("niri action failed: " ^ msg))
 
 type window_info = {
   id : int;

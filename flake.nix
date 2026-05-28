@@ -21,7 +21,7 @@
         let
           pkgs = import nixpkgs { inherit system; };
           oxCamlSwitch = "5.2.0+ox";
-          oxCamlOpamRoot = ".opam-oxcaml";
+          sharedOpamRoot = "$HOME/.cache/opam";
 
           oxCamlSetup = pkgs.writeShellApplication {
             name = "camelpie-oxcaml-init";
@@ -34,7 +34,7 @@
               repo_root="$(${pkgs.git}/bin/git rev-parse --show-toplevel 2>/dev/null || pwd)"
               cd "$repo_root"
 
-              export OPAMROOT="''${OPAMROOT:-$repo_root/${oxCamlOpamRoot}}"
+              export OPAMROOT="''${OPAMROOT:-${sharedOpamRoot}}"
               export OPAMYES=1
 
               if [ ! -d "$OPAMROOT" ]; then
@@ -50,6 +50,16 @@
 
               export OPAMSWITCH="$switch_name"
               eval "$(opam env --switch "$switch_name" --set-switch)"
+
+              eta_dir="$repo_root/.reference/Eta"
+              if [ -d "$eta_dir" ]; then
+                opam pin add eta "$eta_dir" --no-action --yes
+                opam pin add eta-sql "$eta_dir" --no-action --yes
+                opam pin add ppx_eta "$eta_dir" --no-action --yes
+              fi
+
+              # eio_linux.1.3+ox is not compatible with uring 2.x.
+              opam install 'uring=0.9' --assume-depexts --yes
               opam install . --deps-only --with-test --assume-depexts --yes
               opam install \
                 'dune=3.22.2+ox' \
@@ -60,6 +70,7 @@
                 --yes
 
               echo "OxCaml switch is ready: $switch_name"
+              echo "Shared OPAMROOT: $OPAMROOT"
               echo "Enter it with: nix develop .#oxcaml"
             '';
           };
@@ -74,7 +85,7 @@
               repo_root="$(${pkgs.git}/bin/git rev-parse --show-toplevel 2>/dev/null || pwd)"
               cd "$repo_root"
 
-              export OPAMROOT="''${OPAMROOT:-$repo_root/${oxCamlOpamRoot}}"
+              export OPAMROOT="''${OPAMROOT:-${sharedOpamRoot}}"
               export OPAMSWITCH="${oxCamlSwitch}"
               eval "$(opam env --switch "${oxCamlSwitch}" --set-switch)"
 
@@ -97,7 +108,7 @@
               repo_root="$(${pkgs.git}/bin/git rev-parse --show-toplevel 2>/dev/null || pwd)"
               cd "$repo_root"
 
-              export OPAMROOT="''${OPAMROOT:-$repo_root/${oxCamlOpamRoot}}"
+              export OPAMROOT="''${OPAMROOT:-${sharedOpamRoot}}"
               export OPAMSWITCH="$switch_name"
               eval "$(opam env --switch "$switch_name" --set-switch)"
 
@@ -127,49 +138,33 @@
               pkgs.gmp
               pkgs.libffi
               pkgs.openssl
+              pkgs.sqlite
               pkgs.zlib
             ];
+
+          shellHook = ''
+            export OPAMROOT="''${OPAMROOT:-${sharedOpamRoot}}"
+            if [ -d "$OPAMROOT/${oxCamlSwitch}" ]; then
+              export OPAMSWITCH="${oxCamlSwitch}"
+              eval "$(opam env --switch "${oxCamlSwitch}" --set-switch)"
+            fi
+            echo "Camelpie OxCaml shell (${oxCamlSwitch})"
+            echo "Shared OPAMROOT: $OPAMROOT"
+            echo "Run 'camelpie-oxcaml-init' once to create/update the shared switch."
+            echo "Run 'camelpie-oxcaml-test' after setup to build and test shipped packages."
+          '';
         in
         {
           default = pkgs.mkShell {
             packages = oxCamlHostPackages;
-
-            shellHook = ''
-              if repo_root="$(git rev-parse --show-toplevel 2>/dev/null)"; then
-                export OPAMROOT="''${OPAMROOT:-$repo_root/${oxCamlOpamRoot}}"
-              else
-                export OPAMROOT="''${OPAMROOT:-$PWD/${oxCamlOpamRoot}}"
-              fi
-              if [ -d "$OPAMROOT/${oxCamlSwitch}" ]; then
-                export OPAMSWITCH="${oxCamlSwitch}"
-                eval "$(opam env --switch "${oxCamlSwitch}" --set-switch)"
-              fi
-              echo "Camelpie OxCaml shell (${oxCamlSwitch})"
-              echo "Run 'camelpie-oxcaml-init' once to create the ${oxCamlSwitch} opam switch."
-              echo "Run 'camelpie-oxcaml-test' after setup to build and test shipped packages."
-            '';
+            inherit shellHook;
           };
 
           oxcaml = pkgs.mkShell {
             packages = oxCamlHostPackages;
-
-            shellHook = ''
-              if repo_root="$(git rev-parse --show-toplevel 2>/dev/null)"; then
-                export OPAMROOT="''${OPAMROOT:-$repo_root/${oxCamlOpamRoot}}"
-              else
-                export OPAMROOT="''${OPAMROOT:-$PWD/${oxCamlOpamRoot}}"
-              fi
-              if [ -d "$OPAMROOT/${oxCamlSwitch}" ]; then
-                export OPAMSWITCH="${oxCamlSwitch}"
-                eval "$(opam env --switch "${oxCamlSwitch}" --set-switch)"
-              fi
-              echo "Camelpie OxCaml shell (${oxCamlSwitch})"
-              echo "Run 'camelpie-oxcaml-init' once to create the ${oxCamlSwitch} opam switch."
-              echo "Run 'camelpie-oxcaml-test' after setup to build and test shipped packages."
-            '';
+            inherit shellHook;
           };
         }
       );
     };
 }
-

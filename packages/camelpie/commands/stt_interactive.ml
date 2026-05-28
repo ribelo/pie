@@ -1,4 +1,4 @@
-let ( let* ) eff f = Eta.Effect.bind f eff
+open Eta.Syntax
 
 let read_stdin_line ~stdin =
   Eta.Effect.sync (fun () ->

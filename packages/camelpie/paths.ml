@@ -26,14 +26,21 @@ let resolve_xdg_runtime_dir () =
 
 let xdg_runtime_dir = resolve_xdg_runtime_dir ()
 
+let resolve_runtime_dir () =
+  match Sys.getenv_opt "CAMELPIE_RUNTIME_DIR" with
+  | Some value when String.trim value <> "" -> String.trim value
+  | _ -> Filename.concat xdg_runtime_dir app_dir_name
+
 let data_dir = Filename.concat xdg_data_home app_dir_name
 let config_dir = Filename.concat xdg_config_home app_dir_name
-let runtime_dir = Filename.concat xdg_runtime_dir app_dir_name
+let runtime_dir = resolve_runtime_dir ()
 
 let openwakeword_data_dir = Filename.concat data_dir "openwakeword"
 let wakeword_config_dir = Filename.concat config_dir "wakeword"
 
 let daemon_socket_path = Filename.concat runtime_dir "control.sock"
+let recording_state_path = Filename.concat runtime_dir "recording.json"
+let meetings_dir = Filename.concat data_dir "meetings"
 
-let stt_config_path = Filename.concat config_dir "stt.json"
+let stt_config_path = Filename.concat config_dir "stt.toml"
 let prompts_dir = Filename.concat config_dir "prompts"

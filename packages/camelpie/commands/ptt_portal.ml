@@ -1,4 +1,4 @@
-let ( let* ) eff f = Eta.Effect.bind f eff
+open Eta.Syntax
 
 let run ~process_mgr () =
   let* session = Wayland.Portal.create_session ~process_mgr () in
