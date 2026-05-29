@@ -102,10 +102,19 @@ let prompt_with_focused_window_context ~process_mgr prompt_template =
     let prompt_template =
       append_focused_window_context prompt_template focused_window
     in
-    let project_context =
+    let project_cwd =
       match Option.bind focused_window (fun window -> window.Niri.pid) with
       | None -> None
-      | Some pid -> Context.Project.load_for_pid pid
+      | Some pid -> Context.Project.cwd_for_pid pid
+    in
+    let prompt_template =
+      project_cwd
+      |> Option.map Context.Metadata.load_for_cwd
+      |> Option.value ~default:[]
+      |> Context.Metadata.append_to_prompt prompt_template
+    in
+    let project_context =
+      Option.bind project_cwd Context.Project.load_for_cwd
     in
     Context.Project.append_to_prompt prompt_template project_context)
 

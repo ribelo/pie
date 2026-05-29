@@ -425,6 +425,124 @@ let test_project_context_falls_back_to_root_cwd () =
        ~root_cwd:(Some "/home/ribelo/projects/gui-app")
        processes)
 
+let test_project_metadata_package_json () =
+  let dir = temp_dir "camelpie-project-metadata" in
+  write_file
+    (Filename.concat dir "package.json")
+    {|{"name":"web-tool","description":"TypeScript UI tool"}|};
+  let prompt =
+    Camelpie.Context.Metadata.load_for_cwd dir
+    |> Camelpie.Context.Metadata.append_to_prompt "Base prompt."
+  in
+  Alcotest.(check string)
+    "package.json metadata"
+    "Base prompt.\n\nProject metadata:\n- manifest: package.json\n- language: TypeScript\n- package: web-tool\n- description: TypeScript UI tool"
+    prompt
+
+let test_project_metadata_cargo_toml () =
+  let dir = temp_dir "camelpie-project-metadata" in
+  write_file
+    (Filename.concat dir "Cargo.toml")
+    {toml|[package]
+name = "rust-tool"
+description = "Rust CLI"
+|toml};
+  let prompt =
+    Camelpie.Context.Metadata.load_for_cwd dir
+    |> Camelpie.Context.Metadata.append_to_prompt "Base prompt."
+  in
+  Alcotest.(check string)
+    "Cargo.toml metadata"
+    "Base prompt.\n\nProject metadata:\n- manifest: Cargo.toml\n- language: Rust\n- package: rust-tool\n- description: Rust CLI"
+    prompt
+
+let test_project_metadata_pyproject_toml () =
+  let dir = temp_dir "camelpie-project-metadata" in
+  write_file
+    (Filename.concat dir "pyproject.toml")
+    {toml|[project]
+name = "python-tool"
+description = "Python service"
+
+[tool.uv]
+|toml};
+  let prompt =
+    Camelpie.Context.Metadata.load_for_cwd dir
+    |> Camelpie.Context.Metadata.append_to_prompt "Base prompt."
+  in
+  Alcotest.(check string)
+    "pyproject.toml metadata"
+    "Base prompt.\n\nProject metadata:\n- manifest: pyproject.toml\n- language: Python\n- package: python-tool\n- description: Python service"
+    prompt
+
+let test_project_metadata_dune_project () =
+  let dir = temp_dir "camelpie-project-metadata" in
+  write_file
+    (Filename.concat dir "dune-project")
+    {|(lang dune 3.21)
+(name camelpie)
+(package
+ (name camelpie)
+ (synopsis "Camelpie")
+ (description "Camelpie OCaml library."))
+|};
+  let prompt =
+    Camelpie.Context.Metadata.load_for_cwd dir
+    |> Camelpie.Context.Metadata.append_to_prompt "Base prompt."
+  in
+  Alcotest.(check string)
+    "dune-project metadata"
+    "Base prompt.\n\nProject metadata:\n- manifest: dune-project\n- language: OCaml\n- package: camelpie\n- description: Camelpie OCaml library."
+    prompt
+
+let test_project_metadata_opam_without_dune_project () =
+  let dir = temp_dir "camelpie-project-metadata" in
+  write_file
+    (Filename.concat dir "sample.opam")
+    {|opam-version: "2.0"
+synopsis: "Sample"
+description: "Sample OCaml package"
+|};
+  let prompt =
+    Camelpie.Context.Metadata.load_for_cwd dir
+    |> Camelpie.Context.Metadata.append_to_prompt "Base prompt."
+  in
+  Alcotest.(check string)
+    "opam metadata"
+    "Base prompt.\n\nProject metadata:\n- manifest: sample.opam\n- language: OCaml\n- package: sample\n- description: Sample OCaml package"
+    prompt
+
+let test_project_metadata_exact_directory_only () =
+  let dir = temp_dir "camelpie-project-metadata" in
+  let child = Filename.concat dir "child" in
+  Unix.mkdir child 0o700;
+  write_file
+    (Filename.concat dir "package.json")
+    {|{"name":"parent","description":"Parent package"}|};
+  let prompt =
+    Camelpie.Context.Metadata.load_for_cwd child
+    |> Camelpie.Context.Metadata.append_to_prompt "Base prompt."
+  in
+  Alcotest.(check string)
+    "no parent metadata"
+    "Base prompt."
+    prompt
+
+let test_project_metadata_manifest_without_description () =
+  let dir = temp_dir "camelpie-project-metadata" in
+  write_file
+    (Filename.concat dir "pyproject.toml")
+    {toml|[tool.uv]
+|toml};
+  let prompt =
+    Camelpie.Context.Metadata.load_for_cwd dir
+    |> Camelpie.Context.Metadata.append_to_prompt "Base prompt."
+  in
+  Alcotest.(check string)
+    "language only"
+    "Base prompt.\n\nProject metadata:\n- manifest: pyproject.toml\n- language: Python"
+    prompt
+
 let test_stt_config_loads_toml_newline_rules () =
   let dir = temp_dir "camelpie-stt-config" in
   let prompts_dir = Filename.concat dir "prompts" in
@@ -1195,6 +1313,20 @@ let () =
            test_project_context_prefers_foreground_terminal_cwd;
          Alcotest.test_case "root cwd fallback" `Quick
            test_project_context_falls_back_to_root_cwd;
+         Alcotest.test_case "package.json metadata" `Quick
+           test_project_metadata_package_json;
+         Alcotest.test_case "Cargo.toml metadata" `Quick
+           test_project_metadata_cargo_toml;
+         Alcotest.test_case "pyproject.toml metadata" `Quick
+           test_project_metadata_pyproject_toml;
+         Alcotest.test_case "dune-project metadata" `Quick
+           test_project_metadata_dune_project;
+         Alcotest.test_case "opam metadata" `Quick
+           test_project_metadata_opam_without_dune_project;
+         Alcotest.test_case "metadata exact directory only" `Quick
+           test_project_metadata_exact_directory_only;
+         Alcotest.test_case "metadata without description" `Quick
+           test_project_metadata_manifest_without_description;
        ]);
       ("ptt_capture",
        [
