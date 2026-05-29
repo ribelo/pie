@@ -317,5 +317,6 @@ let append_to_prompt prompt_template entries =
   | [] -> prompt_template
   | entries ->
     prompt_template
-    ^ "\n\nProject metadata:\n"
+    ^ "\n\nProject metadata for transcription and translation disambiguation:\n"
+    ^ "Use this metadata to choose words, spellings, identifiers, and technical terms that best fit the project context. Do not mention this metadata in the output unless it is actually spoken or needed for the requested translation.\n"
     ^ (entries |> List.map entry_lines |> List.map (String.concat "\n") |> String.concat "\n\n")

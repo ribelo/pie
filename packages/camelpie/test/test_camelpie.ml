@@ -436,7 +436,7 @@ let test_project_metadata_package_json () =
   in
   Alcotest.(check string)
     "package.json metadata"
-    "Base prompt.\n\nProject metadata:\n- manifest: package.json\n- language: TypeScript\n- package: web-tool\n- description: TypeScript UI tool"
+    "Base prompt.\n\nProject metadata for transcription and translation disambiguation:\nUse this metadata to choose words, spellings, identifiers, and technical terms that best fit the project context. Do not mention this metadata in the output unless it is actually spoken or needed for the requested translation.\n- manifest: package.json\n- language: TypeScript\n- package: web-tool\n- description: TypeScript UI tool"
     prompt
 
 let test_project_metadata_cargo_toml () =
@@ -453,7 +453,7 @@ description = "Rust CLI"
   in
   Alcotest.(check string)
     "Cargo.toml metadata"
-    "Base prompt.\n\nProject metadata:\n- manifest: Cargo.toml\n- language: Rust\n- package: rust-tool\n- description: Rust CLI"
+    "Base prompt.\n\nProject metadata for transcription and translation disambiguation:\nUse this metadata to choose words, spellings, identifiers, and technical terms that best fit the project context. Do not mention this metadata in the output unless it is actually spoken or needed for the requested translation.\n- manifest: Cargo.toml\n- language: Rust\n- package: rust-tool\n- description: Rust CLI"
     prompt
 
 let test_project_metadata_pyproject_toml () =
@@ -472,7 +472,7 @@ description = "Python service"
   in
   Alcotest.(check string)
     "pyproject.toml metadata"
-    "Base prompt.\n\nProject metadata:\n- manifest: pyproject.toml\n- language: Python\n- package: python-tool\n- description: Python service"
+    "Base prompt.\n\nProject metadata for transcription and translation disambiguation:\nUse this metadata to choose words, spellings, identifiers, and technical terms that best fit the project context. Do not mention this metadata in the output unless it is actually spoken or needed for the requested translation.\n- manifest: pyproject.toml\n- language: Python\n- package: python-tool\n- description: Python service"
     prompt
 
 let test_project_metadata_dune_project () =
@@ -492,7 +492,7 @@ let test_project_metadata_dune_project () =
   in
   Alcotest.(check string)
     "dune-project metadata"
-    "Base prompt.\n\nProject metadata:\n- manifest: dune-project\n- language: OCaml\n- package: camelpie\n- description: Camelpie OCaml library."
+    "Base prompt.\n\nProject metadata for transcription and translation disambiguation:\nUse this metadata to choose words, spellings, identifiers, and technical terms that best fit the project context. Do not mention this metadata in the output unless it is actually spoken or needed for the requested translation.\n- manifest: dune-project\n- language: OCaml\n- package: camelpie\n- description: Camelpie OCaml library."
     prompt
 
 let test_project_metadata_opam_without_dune_project () =
@@ -509,7 +509,7 @@ description: "Sample OCaml package"
   in
   Alcotest.(check string)
     "opam metadata"
-    "Base prompt.\n\nProject metadata:\n- manifest: sample.opam\n- language: OCaml\n- package: sample\n- description: Sample OCaml package"
+    "Base prompt.\n\nProject metadata for transcription and translation disambiguation:\nUse this metadata to choose words, spellings, identifiers, and technical terms that best fit the project context. Do not mention this metadata in the output unless it is actually spoken or needed for the requested translation.\n- manifest: sample.opam\n- language: OCaml\n- package: sample\n- description: Sample OCaml package"
     prompt
 
 let test_project_metadata_exact_directory_only () =
@@ -540,7 +540,7 @@ let test_project_metadata_manifest_without_description () =
   in
   Alcotest.(check string)
     "language only"
-    "Base prompt.\n\nProject metadata:\n- manifest: pyproject.toml\n- language: Python"
+    "Base prompt.\n\nProject metadata for transcription and translation disambiguation:\nUse this metadata to choose words, spellings, identifiers, and technical terms that best fit the project context. Do not mention this metadata in the output unless it is actually spoken or needed for the requested translation.\n- manifest: pyproject.toml\n- language: Python"
     prompt
 
 let test_stt_config_loads_toml_newline_rules () =
