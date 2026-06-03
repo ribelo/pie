@@ -278,6 +278,17 @@ let test_codex_realtime_url_builders () =
     "wss://api.openai.com/v1/realtime/translations?model=gpt-realtime-translate"
     translate_url
 
+let test_codex_realtime_headers () =
+  let headers = Stt.Codex_realtime.realtime_header_pairs "token" in
+  Alcotest.(check (option string))
+    "authorization"
+    (Some "Bearer token")
+    (List.assoc_opt "Authorization" headers);
+  Alcotest.(check (option string))
+    "beta header"
+    (Some "realtime=v1")
+    (List.assoc_opt "OpenAI-Beta" headers)
+
 let test_codex_realtime_event_parser () =
   (match Stt.Codex_realtime.parse_event
            "{\"type\":\"response.output_text.delta\",\"delta\":\"he\"}" with
@@ -1296,6 +1307,7 @@ let () =
       ("stt_codex_realtime",
        [
          Alcotest.test_case "url builders" `Quick test_codex_realtime_url_builders;
+         Alcotest.test_case "headers" `Quick test_codex_realtime_headers;
          Alcotest.test_case "event parser" `Quick test_codex_realtime_event_parser;
          Alcotest.test_case "resample" `Quick test_codex_realtime_resample;
        ]);

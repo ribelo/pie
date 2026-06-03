@@ -272,6 +272,15 @@ let ws_error_message = function
 
 let headers pairs = Http.Core.Header.unsafe_of_list pairs
 
+let realtime_header_pairs access_token =
+  [
+    ("Authorization", "Bearer " ^ access_token);
+    ("OpenAI-Beta", "realtime=v1");
+  ]
+
+let realtime_headers access_token =
+  headers (realtime_header_pairs access_token)
+
 let read_response_body response =
   Http.Body.Stream.read_all response.Http.Response.body
   |> Eta.Effect.catch (fun error ->
@@ -284,6 +293,7 @@ let post_json client ~url ~bearer json =
     Http.Request.make
       ~headers:(headers [
         ("Authorization", "Bearer " ^ bearer);
+        ("OpenAI-Beta", "realtime=v1");
         ("Content-Type", "application/json");
         ("Accept", "application/json");
       ])
@@ -676,7 +686,7 @@ let run_realtime_session
   let pcm_bytes = resample_s16le_mono ~from_rate:input_sample_rate ~to_rate:realtime_sample_rate pcm_bytes in
   let* ws =
     Http.Ws.Client.connect
-      ~headers:(headers [("Authorization", "Bearer " ^ access_token)])
+      ~headers:(realtime_headers access_token)
       ~sw
       ~net
       url
@@ -718,7 +728,7 @@ let run_realtime_stream_session
     audio =
   let* ws =
     Http.Ws.Client.connect
-      ~headers:(headers [("Authorization", "Bearer " ^ access_token)])
+      ~headers:(realtime_headers access_token)
       ~sw
       ~net
       url
