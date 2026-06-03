@@ -622,12 +622,10 @@ let receive_should_stop ~mode = function
 let receive_result ~mode ws =
   let step state = function
     | `Binary _ ->
-      let* () = close_ws_ignore ws in
       Eta.Effect.pure { state with error = Some "Codex realtime sent a binary WebSocket message" }
     | `Text payload ->
       match parse_event payload with
       | Error (`Stt_error message) ->
-        let* () = close_ws_ignore ws in
         Eta.Effect.pure { state with error = Some ("Failed to parse Codex realtime event: " ^ message) }
       | Ok (Server_error { message; code }) ->
         let detail =
@@ -635,7 +633,6 @@ let receive_result ~mode ws =
           | None -> message
           | Some code -> message ^ " (" ^ code ^ ")"
         in
-        let* () = close_ws_ignore ws in
         Eta.Effect.pure { state with error = Some ("Codex realtime server error: " ^ detail) }
       | Ok (Transcript_delta delta) ->
         Eta.Effect.pure { state with deltas = delta :: state.deltas }

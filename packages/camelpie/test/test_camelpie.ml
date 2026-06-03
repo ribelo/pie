@@ -332,6 +332,229 @@ let test_codex_realtime_resample () =
   Alcotest.(check int) "2 samples at 16k become 3 at 24k" 6 (Bytes.length output);
   Alcotest.(check int) "first sample" 0 (Bytes.get_int16_le output 0)
 
+let tcp_port = function
+  | `Tcp (_, port) -> port
+  | `Unix _ -> Alcotest.fail "expected TCP listener"
+
+let request_target raw =
+  match String.split_on_char '\n' raw with
+  | request_line :: _ -> (
+      match String.split_on_char ' ' request_line with
+      | _method :: target :: _ -> Some target
+      | _ -> None)
+  | [] -> None
+
+let header_value name raw =
+  let expected = String.lowercase_ascii name in
+  raw
+  |> String.split_on_char '\n'
+  |> List.find_map (fun line ->
+       let line =
+         let len = String.length line in
+         if len > 0 && Char.equal line.[len - 1] '\r' then
+           String.sub line 0 (len - 1)
+         else
+           line
+       in
+       match String.index_opt line ':' with
+       | None -> None
+       | Some index ->
+         let actual =
+           String.sub line 0 index
+           |> String.trim
+           |> String.lowercase_ascii
+         in
+         if String.equal actual expected then
+           Some
+             (String.sub line (index + 1) (String.length line - index - 1)
+              |> String.trim)
+         else
+           None)
+
+let has_suffix suffix value =
+  let suffix_len = String.length suffix in
+  let value_len = String.length value in
+  value_len >= suffix_len
+  && String.equal suffix
+       (String.sub value (value_len - suffix_len) suffix_len)
+
+let read_http_head flow =
+  let scratch = Cstruct.create 1 in
+  let buffer = Buffer.create 512 in
+  let rec loop () =
+    let read = Eio.Flow.single_read flow scratch in
+    if read = 0 then raise End_of_file;
+    Buffer.add_char buffer (Cstruct.get_char scratch 0);
+    let contents = Buffer.contents buffer in
+    if has_suffix "\r\n\r\n" contents then contents else loop ()
+  in
+  loop ()
+
+let bytes_concat chunks =
+  let len = List.fold_left (fun acc chunk -> acc + Bytes.length chunk) 0 chunks in
+  let out = Bytes.create len in
+  let offset = ref 0 in
+  List.iter
+    (fun chunk ->
+       Bytes.blit chunk 0 out !offset (Bytes.length chunk);
+       offset := !offset + Bytes.length chunk)
+    chunks;
+  out
+
+let read_exact flow len =
+  let out = Cstruct.create len in
+  let rec loop offset =
+    if offset = len then
+      Cstruct.to_bytes out
+    else
+      let read =
+        Eio.Flow.single_read flow (Cstruct.sub out offset (len - offset))
+      in
+      if read = 0 then raise End_of_file else loop (offset + read)
+  in
+  loop 0
+
+let ws_payload_len header ext =
+  match Char.code (Bytes.get header 1) land 0x7f with
+  | value when value < 126 -> value
+  | 126 ->
+    (Char.code (Bytes.get ext 0) lsl 8) lor Char.code (Bytes.get ext 1)
+  | _ ->
+    let acc = ref 0L in
+    for index = 0 to 7 do
+      acc :=
+        Int64.logor
+          (Int64.shift_left !acc 8)
+          (Int64.of_int (Char.code (Bytes.get ext index)))
+    done;
+    Int64.to_int !acc
+
+let read_ws_frame ~masked flow =
+  let header = read_exact flow 2 in
+  let len_code = Char.code (Bytes.get header 1) land 0x7f in
+  let ext_len = if len_code < 126 then 0 else if len_code = 126 then 2 else 8 in
+  let ext = read_exact flow ext_len in
+  let mask_len = if Char.code (Bytes.get header 1) land 0x80 = 0 then 0 else 4 in
+  let mask = read_exact flow mask_len in
+  let payload = read_exact flow (ws_payload_len header ext) in
+  match Eta_http.Ws.Codec.decode ~masked (bytes_concat [ header; ext; mask; payload ]) with
+  | Ok (frame, _) -> frame
+  | Error error ->
+    Alcotest.failf
+      "WebSocket frame decode failed: %s"
+      (Eta_http.Ws.Codec.parse_error_to_string error)
+
+let write_ws_text flow payload =
+  Eta_http.Ws.Codec.encode
+    { fin = true; opcode = Text; payload = Bytes.of_string payload }
+  |> Bytes.to_string
+  |> fun encoded -> Eio.Flow.copy_string encoded flow
+
+let write_ws_switching_response flow key =
+  let response =
+    "HTTP/1.1 101 Switching Protocols\r\n"
+    ^ "Upgrade: websocket\r\n"
+    ^ "Connection: keep-alive, Upgrade\r\n"
+    ^ "Sec-WebSocket-Accept: "
+    ^ Eta_http.Ws.Codec.accept_key key
+    ^ "\r\n\r\n"
+  in
+  Eio.Flow.copy_string response flow
+
+let drain_client_ws_frames flow =
+  let rec loop remaining =
+    if remaining > 0 then
+      match (read_ws_frame ~masked:true flow).Eta_http.Ws.Codec.opcode with
+      | Close -> ()
+      | Text
+      | Binary
+      | Continuation
+      | Ping
+      | Pong -> loop (remaining - 1)
+  in
+  try loop 8 with End_of_file -> ()
+
+let run_realtime_error_ws_server flow =
+  let head = read_http_head flow in
+  Alcotest.(check (option string))
+    "request target"
+    (Some "/v1/realtime?model=gpt-realtime-2")
+    (request_target head);
+  Alcotest.(check (option string))
+    "beta header"
+    (Some "realtime=v1")
+    (header_value "OpenAI-Beta" head);
+  let key =
+    match header_value "Sec-WebSocket-Key" head with
+    | Some key -> key
+    | None -> Alcotest.fail "missing Sec-WebSocket-Key"
+  in
+  write_ws_switching_response flow key;
+  write_ws_text
+    flow
+    {|{"type":"error","error":{"message":"boom","code":"bad_request"}}|};
+  drain_client_ws_frames flow;
+  try Eio.Flow.shutdown flow `Send with _ -> ()
+
+let test_codex_realtime_stream_reports_server_error_e2e () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let socket =
+    Eio.Net.listen
+      ~sw
+      ~reuse_addr:true
+      ~backlog:1
+      (Eio.Stdenv.net env)
+      (`Tcp (Eio.Net.Ipaddr.V4.loopback, 0))
+  in
+  let port = tcp_port (Eio.Net.listening_addr socket) in
+  Eio.Fiber.fork ~sw (fun () ->
+    Eio.Switch.run @@ fun conn_sw ->
+    let flow, _addr = Eio.Net.accept ~sw:conn_sw socket in
+    run_realtime_error_ws_server flow);
+  let rt = Eta.Runtime.create ~sw ~clock:(Eio.Stdenv.clock env) () in
+  let url = Printf.sprintf "ws://127.0.0.1:%d/v1/realtime?model=gpt-realtime-2" port in
+  let open Eta.Syntax in
+  let prompt = "Translate." in
+  let effect =
+    Stt.Codex_realtime.with_stream_session
+      ~sw
+      ~net:(Eio.Stdenv.net env)
+      ~url
+      ~access_token:"test-token"
+      ~mode:Stt.Codex_realtime.Conversation
+      ~session_update:(Stt.Codex_realtime.build_conversation_translation_session_update
+                         ~model:"gpt-realtime-2"
+                         ~prompt)
+      ~response_create:(Stt.Codex_realtime.build_conversation_translation_response_create
+                          ~prompt)
+      ~sample_rate:16000
+      ~cancel_message:"cancelled"
+      (fun stream ->
+         let* () = Eta.Effect.delay (Eta.Duration.ms 100) Eta.Effect.unit in
+         let* () = stream.offer_chunk (Bytes.make 32000 '\001') in
+         stream.finish_stream ())
+    |> Eta.Effect.timeout_as
+         (Eta.Duration.seconds 5)
+         ~on_timeout:(`Stt_error "timeout")
+  in
+  let pp_stt_error fmt = function
+    | `Stt_error message -> Format.pp_print_string fmt message
+  in
+  match Eta.Runtime.run rt effect with
+  | Error (Eta.Cause.Fail (`Stt_error message)) ->
+    Alcotest.(check string)
+      "server error"
+      "Codex realtime server error: boom (bad_request)"
+      message
+  | Error cause ->
+    Alcotest.failf
+      "expected server error, got cause: %a"
+      (Eta.Cause.pp pp_stt_error)
+      cause
+  | Ok text ->
+    Alcotest.failf "expected server error, got success: %s" text
+
 let write_file path contents =
   let oc = open_out_bin path in
   Fun.protect
@@ -1333,6 +1556,8 @@ let () =
            test_codex_realtime_receive_stop_modes;
          Alcotest.test_case "event parser" `Quick test_codex_realtime_event_parser;
          Alcotest.test_case "resample" `Quick test_codex_realtime_resample;
+         Alcotest.test_case "stream server error e2e" `Quick
+           test_codex_realtime_stream_reports_server_error_e2e;
        ]);
       ("assistant_prompt",
        [

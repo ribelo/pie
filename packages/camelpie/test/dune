@@ -2,6 +2,6 @@
 
 (test
  (name test_camelpie)
- (libraries camelpie alcotest eio_main)
+ (libraries camelpie alcotest eio_main eta eta_http)
  (deps
   (source_tree ../)))
