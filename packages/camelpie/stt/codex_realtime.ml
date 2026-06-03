@@ -600,15 +600,26 @@ let empty_session_result = { final = None; deltas = []; error = None }
 let close_ws_ignore ws =
   Http.Ws.Client.close ws |> Eta.Effect.catch (fun _ -> Eta.Effect.unit)
 
-let receive_should_stop = function
+let event_should_stop ~mode = function
+  | Server_error _
+  | Response_done -> true
+  | Transcript_done _ ->
+    (match mode with
+     | Conversation -> false
+     | Transcription
+     | Translation -> true)
+  | Session _
+  | Transcript_delta _
+  | Other _ -> false
+
+let receive_should_stop ~mode = function
   | `Binary _ -> Eta.Effect.pure true
   | `Text payload ->
     match parse_event payload with
     | Error _ -> Eta.Effect.pure true
-    | Ok (Server_error _ | Transcript_done _ | Response_done) -> Eta.Effect.pure true
-    | Ok (Session _ | Transcript_delta _ | Other _) -> Eta.Effect.pure false
+    | Ok event -> Eta.Effect.pure (event_should_stop ~mode event)
 
-let receive_result ws =
+let receive_result ~mode ws =
   let step state = function
     | `Binary _ ->
       let* () = close_ws_ignore ws in
@@ -629,16 +640,14 @@ let receive_result ws =
       | Ok (Transcript_delta delta) ->
         Eta.Effect.pure { state with deltas = delta :: state.deltas }
       | Ok (Transcript_done transcript) ->
-        let* () = close_ws_ignore ws in
         Eta.Effect.pure { state with final = Some transcript }
       | Ok Response_done ->
-        let* () = close_ws_ignore ws in
         Eta.Effect.pure state
       | Ok (Session _ | Other _) ->
         Eta.Effect.pure state
   in
   Stream.run
-    (Http.Ws.Client.incoming ws |> Stream.Stream.take_until_effect receive_should_stop)
+    (Http.Ws.Client.incoming ws |> Stream.Stream.take_until_effect (receive_should_stop ~mode))
     (Stream.Sink.fold_effect step empty_session_result)
   |> Eta.Effect.catch (fun error ->
     stt_error ("Codex realtime WebSocket receive failed: " ^ ws_error_message error))
@@ -712,7 +721,8 @@ let run_realtime_session
        | None -> Eta.Effect.unit
        | Some json -> send_json ws json)
   in
-  let* result, () = Eta.Effect.par (receive_result ws) send in
+  let* result, () = Eta.Effect.par (receive_result ~mode ws) send in
+  let* () = close_ws_ignore ws in
   finish_result result
 
 let run_realtime_stream_session
@@ -764,7 +774,8 @@ let run_realtime_stream_session
        | None -> Eta.Effect.unit
        | Some json -> send_json ws json)
   in
-  let* result, () = Eta.Effect.par (receive_result ws) send in
+  let* result, () = Eta.Effect.par (receive_result ~mode ws) send in
+  let* () = close_ws_ignore ws in
   finish_result result
 
 type stream_handle = {

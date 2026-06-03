@@ -289,6 +289,27 @@ let test_codex_realtime_headers () =
     (Some "realtime=v1")
     (List.assoc_opt "OpenAI-Beta" headers)
 
+let test_codex_realtime_receive_stop_modes () =
+  let transcript_done = Stt.Codex_realtime.Transcript_done "text" in
+  Alcotest.(check bool)
+    "transcription stops on transcript"
+    true
+    (Stt.Codex_realtime.event_should_stop
+       ~mode:Stt.Codex_realtime.Transcription
+       transcript_done);
+  Alcotest.(check bool)
+    "conversation waits for response.done"
+    false
+    (Stt.Codex_realtime.event_should_stop
+       ~mode:Stt.Codex_realtime.Conversation
+       transcript_done);
+  Alcotest.(check bool)
+    "conversation stops on response.done"
+    true
+    (Stt.Codex_realtime.event_should_stop
+       ~mode:Stt.Codex_realtime.Conversation
+       Stt.Codex_realtime.Response_done)
+
 let test_codex_realtime_event_parser () =
   (match Stt.Codex_realtime.parse_event
            "{\"type\":\"response.output_text.delta\",\"delta\":\"he\"}" with
@@ -1308,6 +1329,8 @@ let () =
        [
          Alcotest.test_case "url builders" `Quick test_codex_realtime_url_builders;
          Alcotest.test_case "headers" `Quick test_codex_realtime_headers;
+         Alcotest.test_case "receive stop modes" `Quick
+           test_codex_realtime_receive_stop_modes;
          Alcotest.test_case "event parser" `Quick test_codex_realtime_event_parser;
          Alcotest.test_case "resample" `Quick test_codex_realtime_resample;
        ]);
