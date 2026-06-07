@@ -1032,6 +1032,33 @@ action = "ctrl-j"
   | exception Camelpie.Config.Stt.Config_error msg ->
     Alcotest.(check bool) "mentions title_regex" true (String.contains msg 'r')
 
+let test_stt_config_rejects_prompt_with_wrong_placeholder () =
+  let dir = temp_dir "camelpie-stt-config-prompt" in
+  let prompts_dir = Filename.concat dir "prompts" in
+  Unix.mkdir prompts_dir 0o700;
+  write_file
+    (Filename.concat prompts_dir "transcription.md")
+    "Transcribe the audio in {language}.";
+  write_file
+    (Filename.concat prompts_dir "translation.md")
+    "Translate from {{source_language}} to {{target_language}}.";
+  let config_path = Filename.concat dir "stt.toml" in
+  write_file
+    config_path
+    {toml|
+schema_version = 2
+|toml};
+  (* Bug: validate_transcription_prompt checks for any '{' character instead
+     of the required "{{language}}" placeholder. A prompt with "{language}"
+     passes validation but render_template won't substitute it, so the
+     language variable is silently omitted from the actual API request. *)
+  match Camelpie.Config.Stt.load ~config_path () with
+  | exception Camelpie.Config.Stt.Config_error msg ->
+    Alcotest.(check bool) "mentions language placeholder" true
+      (String.contains msg '{')
+  | _ ->
+    Alcotest.fail "expected Config_error for transcription prompt missing {{language}}"
+
 let test_stt_config_resolves_provider_qualified_model () =
   let open Camelpie.Config.Stt in
   let openrouter =
@@ -1707,6 +1734,24 @@ let test_ptt_loop_dead_input_cancels_active_capture () =
   | Error _ -> ()
   | Ok () -> Alcotest.fail "expected timeout after dead-input cancellation returns to idle"
 
+let test_wakeword_pipeline_smoothing_uses_threshold_not_history () =
+  let det = Camelpie.Wakeword.Pipeline.create_detector () in
+  let loud = Bytes.create 1600 in
+  for i = 0 to 799 do
+    Bytes.set_int16_le loud (i * 2) 32767
+  done;
+  let score1 = Camelpie.Wakeword.Pipeline.process det loud in
+  let score2 = Camelpie.Wakeword.Pipeline.process det loud in
+  (* Bug: process_frame blends the raw score toward model.threshold (0.5)
+     instead of toward the previous detector.score. With proper temporal
+     smoothing, score2 should be higher than score1 because the previous
+     score (0.85) would be blended in. The buggy formula always gives
+     the same result for identical frames because it ignores history. *)
+  Alcotest.(check bool)
+    "temporal smoothing should increase score on repeated identical loud frames"
+    true
+    (score2 > score1)
+
 let () =
   Alcotest.run "camelpie"
     [
@@ -1743,6 +1788,8 @@ let () =
            test_stt_config_loads_toml_newline_rules;
          Alcotest.test_case "reject invalid title regex" `Quick
            test_stt_config_rejects_bad_title_regex;
+         Alcotest.test_case "reject transcription prompt missing language placeholder" `Quick
+           test_stt_config_rejects_prompt_with_wrong_placeholder;
        ]);
       ("text_injection",
        [
@@ -1949,6 +1996,8 @@ let () =
            let score2 = Camelpie.Wakeword.Pipeline.process det silent in
            Alcotest.(check bool) "silence no trigger" false det.triggered;
            Alcotest.(check bool) "score low" true (score2 < 0.5));
+         Alcotest.test_case "smoothing ignores history" `Quick
+           test_wakeword_pipeline_smoothing_uses_threshold_not_history;
        ]);
       ("wayland_portal",
        [
@@ -1984,6 +2033,24 @@ let () =
                 parents like the mkdir_p in Recording.Coordinator and
                 Daemon.Server do. *)
              Alcotest.fail "mkdir_p raised ENOENT for nested path (bug: missing parent creation)"
+           | exn ->
+             Alcotest.failf "unexpected exception: %s" (Printexc.to_string exn));
+         Alcotest.test_case "mkdir_p should fail when path is an existing file" `Quick (fun () ->
+           let base = temp_dir "camelpie-fs-mkdir_p-file" in
+           let path = Filename.concat base "existing-file" in
+           write_file path "content";
+           try
+             Camelpie.Fs.mkdir_p path;
+             (* Bug: Fs.mkdir_p catches Unix.EEXIST and returns () even when the
+                path is a regular file, not a directory. The caller then assumes
+                the path is a directory and will fail later when trying to create
+                files inside it. mkdir_p should verify the path is a directory. *)
+             Alcotest.fail "mkdir_p should not silently succeed when path is an existing file"
+           with
+           | Unix.Unix_error (Unix.EEXIST, _, _) ->
+             (* This is the expected behavior: raise EEXIST when the path exists
+                but is not a directory. *)
+             ()
            | exn ->
              Alcotest.failf "unexpected exception: %s" (Printexc.to_string exn));
        ]);
