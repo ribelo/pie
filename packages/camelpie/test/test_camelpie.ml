@@ -162,6 +162,25 @@ let test_daemon_contract_request () =
       (request = Camelpie.Daemon.Contract.Status)
   | Error msg -> Alcotest.fail msg
 
+let test_daemon_contract_error_response_parsed_as_success () =
+  let error_json = `Assoc [("error", `String "server crashed")] in
+  let response =
+    Camelpie.Daemon.Contract.response_of_json
+      Camelpie.Daemon.Contract.Meeting_start
+      error_json
+  in
+  (* Bug: response_of_json for Meeting_start treats any JSON object as a valid
+     response, even if it contains {"error": ...}. It returns Disabled with a
+     default snapshot, making it impossible for the caller to know the server
+     sent an error. A robust client should check for the "error" field first. *)
+  match response with
+  | Camelpie.Daemon.Contract.Meeting_start_resp r ->
+    (match r.result with
+     | Camelpie.Daemon.Contract.Disabled ->
+       Alcotest.fail "error response was silently parsed as Disabled"
+     | _ -> ())
+  | _ -> Alcotest.fail "expected Meeting_start_resp"
+
 let test_daemon_contract_response () =
   let snap : Camelpie.Daemon.Contract.recording_snapshot =
     {
@@ -1749,6 +1768,8 @@ let () =
            test_daemon_contract_request;
          Alcotest.test_case "response roundtrip" `Quick
            test_daemon_contract_response;
+         Alcotest.test_case "error response parsed as success" `Quick
+           test_daemon_contract_error_response_parsed_as_success;
        ]);
       ("daemon_server",
        [
