@@ -264,7 +264,7 @@ let test_codex_realtime_url_builders () =
   in
   Alcotest.(check string)
     "transcription url"
-    "wss://api.openai.com/v1/realtime?model=gpt-realtime-whisper"
+    "wss://api.openai.com/v1/realtime?model=gpt-realtime-1.5"
     transcribe_url;
   let translate_url =
     Stt.Codex_realtime.build_realtime_url
@@ -278,15 +278,51 @@ let test_codex_realtime_url_builders () =
     "wss://api.openai.com/v1/realtime/translations?model=gpt-realtime-translate"
     translate_url
 
+let test_codex_realtime_url_ignores_model_for_transcription () =
+  let url =
+    Stt.Codex_realtime.build_realtime_url
+      ~base_url:"wss://api.openai.com"
+      ~mode:Stt.Codex_realtime.Transcription
+      ~model:"custom-model"
+      ()
+  in
+  (* Bug: build_realtime_url ignores the ~model parameter for Transcription mode
+     and hardcodes transcription_realtime_session_model instead. The function
+     signature accepts ~model for all modes, so callers expect it to be used. *)
+  Alcotest.(check string)
+    "transcription url should use provided model"
+    "wss://api.openai.com/v1/realtime?model=custom-model"
+    url
+
 let test_codex_realtime_headers () =
-  let headers = Stt.Codex_realtime.realtime_header_pairs "token" in
+  let headers =
+    Stt.Codex_realtime.realtime_header_pairs
+      ~session_id:"camelpie-test-session"
+      "token"
+  in
   Alcotest.(check (option string))
     "authorization"
     (Some "Bearer token")
     (List.assoc_opt "Authorization" headers);
   Alcotest.(check (option string))
+    "originator"
+    (Some "codex_cli_rs")
+    (List.assoc_opt "originator" headers);
+  Alcotest.(check (option string))
+    "user agent"
+    (Some "codex_cli_rs/0.0.0 (camelpie)")
+    (List.assoc_opt "User-Agent" headers);
+  Alcotest.(check (option string))
+    "version"
+    (Some "0.0.0")
+    (List.assoc_opt "version" headers);
+  Alcotest.(check (option string))
+    "session id"
+    (Some "camelpie-test-session")
+    (List.assoc_opt "x-session-id" headers);
+  Alcotest.(check (option string))
     "beta header"
-    (Some "realtime=v1")
+    None
     (List.assoc_opt "OpenAI-Beta" headers)
 
 let test_codex_realtime_receive_stop_modes () =
@@ -309,6 +345,58 @@ let test_codex_realtime_receive_stop_modes () =
     (Stt.Codex_realtime.event_should_stop
        ~mode:Stt.Codex_realtime.Conversation
        Stt.Codex_realtime.Response_done)
+
+let test_codex_realtime_transcription_session_update () =
+  match Stt.Codex_realtime.build_transcription_session_update ~model:"configured-model" with
+  | `Assoc fields ->
+    Alcotest.(check (option string))
+      "event type"
+      (Some "session.update")
+      (match List.assoc_opt "type" fields with
+       | Some (`String value) -> Some value
+       | _ -> None);
+    (match List.assoc_opt "session" fields with
+     | Some (`Assoc session) ->
+       Alcotest.(check (option string))
+         "session type"
+         (Some "transcription")
+         (match List.assoc_opt "type" session with
+          | Some (`String value) -> Some value
+          | _ -> None);
+       Alcotest.(check (option string))
+         "no websocket session model in session.update"
+         None
+         (match List.assoc_opt "model" session with
+          | Some (`String value) -> Some value
+          | _ -> None);
+       Alcotest.(check bool)
+         "instructions omitted"
+         false
+         (List.mem_assoc "instructions" session);
+       Alcotest.(check bool)
+         "tools omitted"
+         false
+         (List.mem_assoc "tools" session);
+       let model =
+         match List.assoc_opt "audio" session with
+         | Some (`Assoc audio) ->
+           (match List.assoc_opt "input" audio with
+            | Some (`Assoc input) ->
+              (match List.assoc_opt "transcription" input with
+               | Some (`Assoc transcription) ->
+                 (match List.assoc_opt "model" transcription with
+                  | Some (`String value) -> Some value
+                  | _ -> None)
+               | _ -> None)
+            | _ -> None)
+         | _ -> None
+       in
+       Alcotest.(check (option string))
+         "configured transcription model"
+         (Some "configured-model")
+         model
+     | _ -> Alcotest.fail "expected session object")
+  | _ -> Alcotest.fail "expected object"
 
 let test_codex_realtime_event_parser () =
   (match Stt.Codex_realtime.parse_event
@@ -390,63 +478,22 @@ let read_http_head flow =
   in
   loop ()
 
-let bytes_concat chunks =
-  let len = List.fold_left (fun acc chunk -> acc + Bytes.length chunk) 0 chunks in
-  let out = Bytes.create len in
-  let offset = ref 0 in
-  List.iter
-    (fun chunk ->
-       Bytes.blit chunk 0 out !offset (Bytes.length chunk);
-       offset := !offset + Bytes.length chunk)
-    chunks;
-  out
-
-let read_exact flow len =
-  let out = Cstruct.create len in
-  let rec loop offset =
-    if offset = len then
-      Cstruct.to_bytes out
-    else
-      let read =
-        Eio.Flow.single_read flow (Cstruct.sub out offset (len - offset))
-      in
-      if read = 0 then raise End_of_file else loop (offset + read)
-  in
-  loop 0
-
-let ws_payload_len header ext =
-  match Char.code (Bytes.get header 1) land 0x7f with
-  | value when value < 126 -> value
-  | 126 ->
-    (Char.code (Bytes.get ext 0) lsl 8) lor Char.code (Bytes.get ext 1)
-  | _ ->
-    let acc = ref 0L in
-    for index = 0 to 7 do
-      acc :=
-        Int64.logor
-          (Int64.shift_left !acc 8)
-          (Int64.of_int (Char.code (Bytes.get ext index)))
-    done;
-    Int64.to_int !acc
-
-let read_ws_frame ~masked flow =
-  let header = read_exact flow 2 in
-  let len_code = Char.code (Bytes.get header 1) land 0x7f in
-  let ext_len = if len_code < 126 then 0 else if len_code = 126 then 2 else 8 in
-  let ext = read_exact flow ext_len in
-  let mask_len = if Char.code (Bytes.get header 1) land 0x80 = 0 then 0 else 4 in
-  let mask = read_exact flow mask_len in
-  let payload = read_exact flow (ws_payload_len header ext) in
-  match Eta_http.Ws.Codec.decode ~masked (bytes_concat [ header; ext; mask; payload ]) with
-  | Ok (frame, _) -> frame
-  | Error error ->
-    Alcotest.failf
-      "WebSocket frame decode failed: %s"
-      (Eta_http.Ws.Codec.parse_error_to_string error)
-
 let write_ws_text flow payload =
   Eta_http.Ws.Codec.encode
     { fin = true; opcode = Text; payload = Bytes.of_string payload }
+  |> Bytes.to_string
+  |> fun encoded -> Eio.Flow.copy_string encoded flow
+
+let close_payload code reason =
+  let payload = Bytes.create (2 + String.length reason) in
+  Bytes.set payload 0 (Char.chr ((code lsr 8) land 0xff));
+  Bytes.set payload 1 (Char.chr (code land 0xff));
+  Bytes.blit_string reason 0 payload 2 (String.length reason);
+  payload
+
+let write_ws_close flow =
+  Eta_http.Ws.Codec.encode
+    { fin = true; opcode = Close; payload = close_payload 1000 "" }
   |> Bytes.to_string
   |> fun encoded -> Eio.Flow.copy_string encoded flow
 
@@ -461,19 +508,6 @@ let write_ws_switching_response flow key =
   in
   Eio.Flow.copy_string response flow
 
-let drain_client_ws_frames flow =
-  let rec loop remaining =
-    if remaining > 0 then
-      match (read_ws_frame ~masked:true flow).Eta_http.Ws.Codec.opcode with
-      | Close -> ()
-      | Text
-      | Binary
-      | Continuation
-      | Ping
-      | Pong -> loop (remaining - 1)
-  in
-  try loop 8 with End_of_file -> ()
-
 let run_realtime_error_ws_server flow =
   let head = read_http_head flow in
   Alcotest.(check (option string))
@@ -482,8 +516,20 @@ let run_realtime_error_ws_server flow =
     (request_target head);
   Alcotest.(check (option string))
     "beta header"
-    (Some "realtime=v1")
+    None
     (header_value "OpenAI-Beta" head);
+  Alcotest.(check (option string))
+    "originator"
+    (Some "codex_cli_rs")
+    (header_value "originator" head);
+  Alcotest.(check (option string))
+    "version"
+    (Some "0.0.0")
+    (header_value "version" head);
+  (match header_value "x-session-id" head with
+   | Some value when String.starts_with ~prefix:"camelpie-" value -> ()
+   | Some value -> Alcotest.failf "unexpected x-session-id: %s" value
+   | None -> Alcotest.fail "missing x-session-id");
   let key =
     match header_value "Sec-WebSocket-Key" head with
     | Some key -> key
@@ -493,7 +539,7 @@ let run_realtime_error_ws_server flow =
   write_ws_text
     flow
     {|{"type":"error","error":{"message":"boom","code":"bad_request"}}|};
-  drain_client_ws_frames flow;
+  write_ws_close flow;
   try Eio.Flow.shutdown flow `Send with _ -> ()
 
 let test_codex_realtime_stream_reports_server_error_e2e () =
@@ -587,6 +633,81 @@ let test_assistant_focused_window_prompt_context () =
     "Transcribe in {{language}}.\n\nFocused window context:\n- app_id: org.editor\n- title: Project notes Draft\nUse this as context only when it helps disambiguate the audio."
     prompt
 
+let json_member name = function
+  | `Assoc fields ->
+    (match List.assoc_opt name fields with
+     | Some value -> value
+     | None -> Alcotest.failf "missing JSON field: %s" name)
+  | _ -> Alcotest.fail "expected JSON object"
+
+let json_string name json =
+  match json_member name json with
+  | `String value -> value
+  | _ -> Alcotest.failf "expected JSON string field: %s" name
+
+let test_assistant_startup_config_json () =
+  let config : Camelpie.Config.Stt.t =
+    {
+      schema_version = 2;
+      provider = Camelpie.Config.Stt.Codex_realtime;
+      transcription_model = "openrouter/google/gemini-3.1-flash-lite";
+      translation_model = "openrouter/google/gemini-3.1-flash-lite";
+      transcription_language = "Polish";
+      translation_source_language = "Polish";
+      translation_target_language = "English";
+      wakeword_enabled = false;
+      wakeword_dictation_silence_seconds = 3.0;
+      wakeword_dictation_max_seconds = 120.0;
+      wakeword_dictation_speech_rms_threshold = 0.01;
+      ptt_min_capture_rms = 0.001;
+      ptt_min_capture_peak = 0.008;
+      thinking_effort = Some "minimal";
+      transcription_prompt = "Transcribe in {{language}}.";
+      translation_prompt = "Translate from {{source_language}} to {{target_language}}.";
+      newline_rules =
+        [
+          {
+            app_id = Some "Alacritty";
+            title_regex = Some "^π";
+            action = Camelpie.Input.Text_injection.Ctrl_j;
+          };
+        ];
+    }
+  in
+  let report =
+    Camelpie.Commands.Assistant.startup_config_json
+      ~config_path:"/tmp/stt.toml"
+      ~config
+      ~ptt_transcribe_keysym:65478
+      ~ptt_translate_keysym:65479
+      ~min_duration_ms:120
+      ()
+  in
+  let json = Yojson.Safe.from_string report in
+  Alcotest.(check string) "config path" "/tmp/stt.toml" (json_string "config_path" json);
+  Alcotest.(check string) "provider" "codex-realtime" (json_string "provider" json);
+  Alcotest.(check string) "thinking effort" "minimal" (json_string "thinking_effort" json);
+  Alcotest.(check string)
+    "prompt"
+    "Transcribe in {{language}}."
+    (json_string "transcription_prompt" json);
+  let transcription_model = json_member "transcription_model" json in
+  Alcotest.(check string)
+    "configured model"
+    "openrouter/google/gemini-3.1-flash-lite"
+    (json_string "configured" transcription_model);
+  let resolved = json_member "resolved" transcription_model in
+  Alcotest.(check string) "resolved provider" "openrouter" (json_string "provider" resolved);
+  Alcotest.(check string)
+    "resolved model"
+    "google/gemini-3.1-flash-lite"
+    (json_string "model" resolved);
+  match json_member "newline_rules" json with
+  | `List [ rule ] ->
+    Alcotest.(check string) "newline app" "Alacritty" (json_string "app_id" rule);
+    Alcotest.(check string) "newline action" "ctrl-j" (json_string "action" rule)
+  | _ -> Alcotest.fail "expected one newline rule"
+
 let test_assistant_project_context_prompt_context () =
   let dir = temp_dir "camelpie-project-context" in
   let project_dir = Filename.concat dir "project" in
@@ -621,6 +742,29 @@ let test_assistant_project_context_missing_is_empty () =
     "no project context placeholder"
     "Translate to {{target_language}}."
     prompt
+
+let test_project_context_relative_cwd_traversal () =
+  let dir = temp_dir "camelpie-project-context-relative" in
+  let pie_dir = Filename.concat dir ".pie" in
+  Unix.mkdir pie_dir 0o700;
+  write_file (Filename.concat pie_dir "context.md") "Project context.";
+  let old_cwd = Sys.getcwd () in
+  Sys.chdir dir;
+  try
+    Unix.mkdir "subdir" 0o700;
+    Sys.chdir "subdir";
+    let context = Camelpie.Context.Project.load_for_cwd "." in
+    Sys.chdir old_cwd;
+    (* Bug: find_context_file uses Filename.dirname which returns "." for ".",
+       so it never traverses parent directories when given a relative path.
+       The context file at ../.pie/context.md should be found. *)
+    Alcotest.(check (option string))
+      "relative cwd should traverse parents to find context"
+      (Some "Project context.")
+      context
+  with exn ->
+    Sys.chdir old_cwd;
+    raise exn
 
 let test_assistant_project_context_empty_file_is_empty () =
   let dir = temp_dir "camelpie-project-context" in
@@ -825,6 +969,7 @@ wakeword_dictation_max_seconds = 120.0
 wakeword_dictation_speech_rms_threshold = 0.01
 ptt_min_capture_rms = 0.001
 ptt_min_capture_peak = 0.008
+thinking_effort = "minimal"
 
 [[newline_rules]]
 app_id = "Alacritty"
@@ -839,6 +984,7 @@ action = "shift-enter"
 	  Alcotest.(check bool) "wakeword" false config.wakeword_enabled;
 	  Alcotest.(check (float 0.00001)) "ptt rms" 0.001 config.ptt_min_capture_rms;
 	  Alcotest.(check (float 0.00001)) "ptt peak" 0.008 config.ptt_min_capture_peak;
+	  Alcotest.(check (option string)) "thinking effort" (Some "minimal") config.thinking_effort;
 	  Alcotest.(check int) "newline rules" 2 (List.length config.newline_rules);
   match config.newline_rules with
   | first :: second :: [] ->
@@ -866,6 +1012,71 @@ action = "ctrl-j"
   | _ -> Alcotest.fail "expected invalid regex to fail"
   | exception Camelpie.Config.Stt.Config_error msg ->
     Alcotest.(check bool) "mentions title_regex" true (String.contains msg 'r')
+
+let test_stt_config_resolves_provider_qualified_model () =
+  let open Camelpie.Config.Stt in
+  let openrouter =
+    resolve_model_provider
+      ~default_provider:Codex_realtime
+      "openrouter/xiaomi/mimo-v2.5"
+  in
+  Alcotest.(check bool) "openrouter provider" true (openrouter.provider = Openrouter);
+  Alcotest.(check string) "openrouter model" "xiaomi/mimo-v2.5" openrouter.model;
+  let openrouter_native_model =
+    resolve_model_provider
+      ~default_provider:Openrouter
+      "openai/whisper-large-v3"
+  in
+  Alcotest.(check bool)
+    "unknown prefix uses default provider"
+    true
+    (openrouter_native_model.provider = Openrouter);
+  Alcotest.(check string)
+    "unknown prefix remains part of model id"
+    "openai/whisper-large-v3"
+    openrouter_native_model.model;
+  match resolve_model_provider ~default_provider:Codex_realtime "openrouter/" with
+  | _ -> Alcotest.fail "expected empty provider-qualified model to fail"
+  | exception Camelpie.Config.Stt.Config_error msg ->
+    Alcotest.(check bool) "mentions empty model" true (String.contains msg 'e')
+
+let test_openrouter_responses_request_uses_text_and_audio () =
+  let request : Eta_ai.chat_request =
+    Camelpie.Stt.Openrouter.responses_request
+      ~model:"xiaomi/mimo-v2.5"
+      ~prompt:"Use Camelpie context."
+      ~sample_rate:16000
+      (Bytes.create 4)
+  in
+  Alcotest.(check string) "model id" "xiaomi/mimo-v2.5" request.model;
+  Alcotest.(check (option int)) "max tokens" None request.max_output_tokens;
+  match request.prompt with
+  | [Eta_ai.User [Eta_ai.Text prompt; Eta_ai.Audio audio]] ->
+    Alcotest.(check string) "prompt" "Use Camelpie context." prompt;
+    Alcotest.(check bool) "wav format" true (audio.Eta_ai.format = Eta_ai.Wav);
+    (match audio.Eta_ai.data with
+     | Eta_ai.Bytes wav ->
+       Alcotest.(check string) "wav riff" "RIFF" (Bytes.sub_string wav 0 4)
+     | Eta_ai.Base64 _ -> Alcotest.fail "expected raw wav bytes")
+  | _ -> Alcotest.fail "expected one user message with text and audio"
+
+let test_openrouter_decodes_structured_output_only () =
+  Alcotest.(check (result string reject))
+    "structured text"
+    (Ok "hello")
+    (Camelpie.Stt.Openrouter.decode_structured_output "{\"text\":\"hello\"}");
+  Alcotest.(check bool)
+    "raw text rejected"
+    true
+    (match Camelpie.Stt.Openrouter.decode_structured_output "hello" with
+     | Error _ -> true
+     | Ok _ -> false);
+  Alcotest.(check bool)
+    "wrong field rejected"
+    true
+    (match Camelpie.Stt.Openrouter.decode_structured_output "{\"transcription\":\"hello\"}" with
+     | Error _ -> true
+     | Ok _ -> false)
 
 let test_text_injection_newline_rule_regex () =
   let window : Camelpie.Niri.window_info =
@@ -920,6 +1131,10 @@ let test_ptt_loop_continues_after_finish () =
     Eio.Time.sleep clock 2.3;
     key false;
     Eio.Time.sleep clock 0.05;
+    key true;
+    Eio.Time.sleep clock 2.3;
+    key false;
+    Eio.Time.sleep clock 0.05;
     key true);
   let handle =
     {
@@ -928,7 +1143,7 @@ let test_ptt_loop_continues_after_finish () =
         (fun _ ->
            Eta.Effect.sync (fun () -> incr finishes)
            |> Eta.Effect.bind (fun () ->
-             if !finishes >= 2 then Eta.Effect.fail (`Ptt_error "done")
+             if !finishes = 2 then Eta.Effect.fail (`Ptt_error "done")
              else Eta.Effect.unit));
       cancel = Eta.Effect.unit;
     }
@@ -965,8 +1180,8 @@ let test_ptt_loop_continues_after_finish () =
   in
   let result = Eta.Runtime.run rt effect in
   running := false;
-  Alcotest.(check int) "starts" 2 !starts;
-  Alcotest.(check int) "finishes" 2 !finishes;
+  Alcotest.(check int) "starts" 3 !starts;
+  Alcotest.(check int) "finishes" 3 !finishes;
   match result with
   | Error _ -> ()
   | Ok () -> Alcotest.fail "expected second finish to stop the test loop"
@@ -1331,10 +1546,10 @@ let test_ptt_loop_accepts_peak_over_silence_threshold () =
   in
   Alcotest.(check bool) "offers" true (!offers > 0);
   Alcotest.(check int) "finishes" 1 !finishes;
-  Alcotest.(check int) "cancels" 0 !cancels;
+  Alcotest.(check int) "cancels" 1 !cancels;
   match result with
   | Error _ -> ()
-  | Ok () -> Alcotest.fail "expected finish to stop the test loop"
+  | Ok () -> Alcotest.fail "expected timeout after finish failure returns to idle"
 
 let test_ptt_loop_accepts_quiet_speech_over_rms_threshold () =
   Eio_main.run @@ fun env ->
@@ -1400,10 +1615,10 @@ let test_ptt_loop_accepts_quiet_speech_over_rms_threshold () =
   in
   Alcotest.(check bool) "offers" true (!offers > 0);
   Alcotest.(check int) "finishes" 1 !finishes;
-  Alcotest.(check int) "cancels" 0 !cancels;
+  Alcotest.(check int) "cancels" 1 !cancels;
   match result with
   | Error _ -> ()
-  | Ok () -> Alcotest.fail "expected finish to stop the test loop"
+  | Ok () -> Alcotest.fail "expected timeout after finish failure returns to idle"
 
 let test_ptt_loop_dead_input_cancels_active_capture () =
   Eio_main.run @@ fun env ->
@@ -1503,6 +1718,8 @@ let () =
          Alcotest.test_case "provider openrouter" `Quick (fun () ->
            let p = Camelpie.Config.Stt.provider_of_string "openrouter" in
            Alcotest.(check bool) "is openrouter" true (p = Camelpie.Config.Stt.Openrouter));
+         Alcotest.test_case "provider-qualified model" `Quick
+           test_stt_config_resolves_provider_qualified_model;
          Alcotest.test_case "load TOML newline rules" `Quick
            test_stt_config_loads_toml_newline_rules;
          Alcotest.test_case "reject invalid title regex" `Quick
@@ -1543,6 +1760,16 @@ let () =
          Alcotest.test_case "parse KeyEvent" `Quick test_keyboard_key_event_parse;
          Alcotest.test_case "parse D-Bus KeyEvent" `Quick
            test_keyboard_dbus_key_event_parse;
+         Alcotest.test_case "keysym_of_name rejects unknown keys" `Quick (fun () ->
+           let keysym = Camelpie.Keyboard.Monitor.keysym_of_name "F11" in
+           (* Bug: keysym_of_name returns 0 for unknown keys, but 0 is a valid
+              keysym (XKB_KEY_NoSymbol). Callers cannot distinguish an unknown
+              key from a deliberately-configured NoSymbol. The function should
+              raise Invalid_argument or return an option. *)
+           Alcotest.(check bool)
+             "unknown key name should not silently return 0"
+             false
+             (keysym = 0));
        ]);
       ("recording_coordinator",
        [
@@ -1551,9 +1778,13 @@ let () =
       ("stt_codex_realtime",
        [
          Alcotest.test_case "url builders" `Quick test_codex_realtime_url_builders;
+         Alcotest.test_case "url ignores model for transcription" `Quick
+           test_codex_realtime_url_ignores_model_for_transcription;
          Alcotest.test_case "headers" `Quick test_codex_realtime_headers;
          Alcotest.test_case "receive stop modes" `Quick
            test_codex_realtime_receive_stop_modes;
+         Alcotest.test_case "transcription session update" `Quick
+           test_codex_realtime_transcription_session_update;
          Alcotest.test_case "event parser" `Quick test_codex_realtime_event_parser;
          Alcotest.test_case "resample" `Quick test_codex_realtime_resample;
          Alcotest.test_case "stream server error e2e" `Quick
@@ -1563,10 +1794,14 @@ let () =
        [
          Alcotest.test_case "focused window context" `Quick
            test_assistant_focused_window_prompt_context;
+         Alcotest.test_case "startup config report" `Quick
+           test_assistant_startup_config_json;
          Alcotest.test_case "project context" `Quick
            test_assistant_project_context_prompt_context;
          Alcotest.test_case "missing project context is empty" `Quick
            test_assistant_project_context_missing_is_empty;
+         Alcotest.test_case "relative cwd traverses parents" `Quick
+           test_project_context_relative_cwd_traversal;
          Alcotest.test_case "empty project context is empty" `Quick
            test_assistant_project_context_empty_file_is_empty;
          Alcotest.test_case "foreground terminal cwd" `Quick
@@ -1635,8 +1870,10 @@ let () =
        ]);
       ("stt_openrouter",
        [
-         Alcotest.test_case "module loads" `Quick (fun () ->
-           Alcotest.(check bool) "module ok" true true);
+         Alcotest.test_case "responses request uses text and audio" `Quick
+           test_openrouter_responses_request_uses_text_and_audio;
+         Alcotest.test_case "structured output decoder" `Quick
+           test_openrouter_decodes_structured_output_only;
        ]);
       ("wakeword_trigger",
        [
@@ -1702,5 +1939,88 @@ let () =
                "/org/freedesktop/portal/desktop/request/1_123/pie_456"
                path
            | _ -> Alcotest.fail "unexpected split");
+       ]);
+      ("fs",
+       [
+         Alcotest.test_case "mkdir_p creates nested directories" `Quick (fun () ->
+           let base = temp_dir "camelpie-fs-mkdir_p" in
+           let nested = Filename.concat base "a/b/c" in
+           try
+             Camelpie.Fs.mkdir_p nested;
+             Alcotest.(check bool)
+               "mkdir_p should create nested directories"
+               true
+               (Sys.file_exists nested && Sys.is_directory nested);
+             (* cleanup *)
+             (try Unix.rmdir nested with _ -> ());
+             (try Unix.rmdir (Filename.concat base "a/b") with _ -> ());
+             (try Unix.rmdir (Filename.concat base "a") with _ -> ());
+             (try Unix.rmdir base with _ -> ())
+           with
+           | Unix.Unix_error (Unix.ENOENT, _, _) ->
+             (* Bug: Fs.mkdir_p only calls Unix.mkdir once, which fails when
+                parent directories do not exist. It should recursively create
+                parents like the mkdir_p in Recording.Coordinator and
+                Daemon.Server do. *)
+             Alcotest.fail "mkdir_p raised ENOENT for nested path (bug: missing parent creation)"
+           | exn ->
+             Alcotest.failf "unexpected exception: %s" (Printexc.to_string exn));
+       ]);
+      ("sh",
+       [
+         Alcotest.test_case "find_executable rejects directories" `Quick (fun () ->
+           let base = temp_dir "camelpie-sh-find" in
+           let fake_dir = Filename.concat base "not-an-executable" in
+           Unix.mkdir fake_dir 0o700;
+           let old_path =
+             match Sys.getenv_opt "PATH" with Some p -> p | None -> ""
+           in
+           Unix.putenv "PATH" base;
+           try
+             let result = Camelpie.Sh.find_executable "not-an-executable" in
+             Unix.putenv "PATH" old_path;
+             (* Bug: find_executable uses Sys.file_exists which returns true for
+                directories. It should check Sys.is_directory = false (and ideally
+                Unix.access path [X_OK]) before returning a match. *)
+             Alcotest.(check (option string))
+               "directory should not match as executable"
+               None
+               result;
+             Unix.rmdir fake_dir;
+             Unix.rmdir base
+           with exn ->
+             Unix.putenv "PATH" old_path;
+             Unix.rmdir fake_dir;
+             Unix.rmdir base;
+             raise exn);
+       ]);
+
+      ("metadata",
+       [
+         Alcotest.test_case "sexp_tokens handles escaped newlines" `Quick (fun () ->
+           let input = "(name \"foo\\nbar\")" in
+           let tokens = Camelpie.Context.Metadata.sexp_tokens input in
+           let atoms =
+             List.filter_map
+               (function Camelpie.Context.Metadata.TAtom s -> Some s | _ -> None)
+               tokens
+           in
+           (* We expect two atoms: bare atom name and string literal foonbar.
+              The bug is that the string literal is parsed as foonbar
+              instead of foo-newline-bar (backslash is ignored). *)
+           let string_atom =
+             List.find_opt (fun s -> String.starts_with ~prefix:"foo" s) atoms
+           in
+           match string_atom with
+           | None -> Alcotest.fail "expected string atom starting with foo"
+           | Some s ->
+             (* Bug: sexp_tokens treats backslash as a transparent prefix and just
+                emits the next raw character. So backslash-n becomes the letter n
+                instead of a newline character. A correct parser would either
+                reject backslash-n (like dune does) or translate it to a newline. *)
+             Alcotest.(check string)
+               "escaped newline should be parsed as newline character"
+               "foo\nbar"
+               s);
        ]);
     ]
