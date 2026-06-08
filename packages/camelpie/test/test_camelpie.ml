@@ -851,6 +851,44 @@ let test_recording_coordinator_persist_error_swallowed () =
     Alcotest.fail "create should raise when it cannot persist initial state"
   | exception _ -> ()
 
+let test_daemon_server_mkdir_p_silently_accepts_file () =
+  let base = temp_dir "camelpie-daemon-mkdir_p" in
+  let file_path = Filename.concat base "not-a-dir" in
+  write_file file_path "block";
+  (* Bug: Daemon.Server.mkdir_p is a duplicate of the old buggy mkdir_p that
+     checks Sys.file_exists without Sys.is_directory. When called on an
+     existing regular file it silently returns () instead of raising EEXIST.
+     Fs.mkdir_p was fixed but this copy was missed. *)
+  try
+    Camelpie.Daemon.Server.mkdir_p file_path;
+    Alcotest.fail
+      "mkdir_p should raise EEXIST for an existing file, not silently return"
+  with
+  | Unix.Unix_error (Unix.EEXIST, _, _) -> ()
+  | exn -> Alcotest.failf "unexpected exception: %s" (Printexc.to_string exn)
+
+let test_assistant_prompt_value_utf8_truncation () =
+  (* Build a 201-byte string: 199 ASCII chars followed by a 2-byte
+     UTF-8 character 'e' (C3 A9).  prompt_value caps at 200 bytes via
+     String.sub, which slices at a byte index.  When that index falls
+     inside a multi-byte UTF-8 sequence the truncated string ends with
+     an incomplete encoding, which can produce garbage or cause the
+     receiving API to reject the entire request. *)
+  let prefix = String.make 199 'x' in
+  let input = prefix ^ "\195\169" in (* 'e' = two bytes *)
+  match Camelpie.Commands.Assistant.prompt_value (Some input) with
+  | None -> Alcotest.fail "prompt_value returned None"
+  | Some truncated ->
+    Alcotest.(check int) "truncated to 200 bytes" 200
+      (String.length truncated);
+    let last_byte = Char.code truncated.[199] in
+    (* The last byte is 0xC3, the start byte of 'e'.  An ASCII-safe
+       truncation would ensure the last byte is < 128. *)
+    Alcotest.(check bool)
+      "truncation should not split a UTF-8 character"
+      true
+      (last_byte < 128)
+
 let test_assistant_focused_window_prompt_context () =
   let window : Camelpie.Niri.window_info =
     {
@@ -2052,6 +2090,8 @@ let () =
            test_daemon_server_state;
          Alcotest.test_case "meeting stop no failure signal" `Quick
            test_daemon_server_meeting_stop_no_failure_signal;
+         Alcotest.test_case "mkdir_p silent on existing file" `Quick
+           test_daemon_server_mkdir_p_silently_accepts_file;
        ]);
       ("keyboard",
        [
@@ -2122,6 +2162,8 @@ let () =
            test_project_metadata_exact_directory_only;
          Alcotest.test_case "metadata without description" `Quick
            test_project_metadata_manifest_without_description;
+         Alcotest.test_case "prompt value utf8 truncation" `Quick
+           test_assistant_prompt_value_utf8_truncation;
        ]);
       ("ptt_capture",
        [
