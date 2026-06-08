@@ -36,6 +36,7 @@ type response =
   | Meeting_start_resp of meeting_start_result
   | Meeting_stop_resp of recording_snapshot
   | Meeting_toggle_resp of recording_snapshot
+  | Error_resp of string
 
 let tag_of_request = function
   | Status -> "Status"
@@ -158,44 +159,50 @@ let response_to_json = function
     ]
   | Meeting_stop_resp snap -> json_of_snapshot snap
   | Meeting_toggle_resp snap -> json_of_snapshot snap
+  | Error_resp message -> `Assoc [("error", `String message)]
+
+let error_message_of_json = function
+  | `Assoc fields ->
+    (match List.assoc_opt "error" fields with
+     | Some (`String s) -> Some s
+     | Some other -> Some (Yojson.Safe.to_string other)
+     | None -> None)
+  | _ -> None
 
 let response_of_json req json =
-  match req with
-  | Status -> Status_resp (snapshot_of_json json)
-  | Pause -> Pause_resp
-  | Resume -> Resume_resp
-  | Toggle ->
-    (match json with
-     | `Assoc fields ->
-       (match List.assoc_opt "value" fields with
-        | Some (`Bool b) -> Toggle_resp b
+  match error_message_of_json json, req with
+  | Some message, Meeting_start ->
+    (* Meeting_start carries a snapshot alongside its result, so its error is
+       represented inside the start_result rather than as a bare Error_resp. *)
+    Meeting_start_resp
+      { result = Error message; snapshot = snapshot_of_json json }
+  | Some message, _ -> Error_resp message
+  | None, _ ->
+    (match req with
+     | Status -> Status_resp (snapshot_of_json json)
+     | Pause -> Pause_resp
+     | Resume -> Resume_resp
+     | Toggle ->
+       (match json with
+        | `Assoc fields ->
+          (match List.assoc_opt "value" fields with
+           | Some (`Bool b) -> Toggle_resp b
+           | _ -> Toggle_resp false)
         | _ -> Toggle_resp false)
-     | _ -> Toggle_resp false)
-  | Meeting_start ->
-    (match json with
-     | `Assoc fields when List.mem_assoc "error" fields ->
-       (* The server signalled a failure. Surface it as an explicit error so
-          callers can distinguish it from a genuine Disabled state. *)
-       let message =
-         match List.assoc_opt "error" fields with
-         | Some (`String s) -> s
-         | Some other -> Yojson.Safe.to_string other
-         | None -> "unknown error"
-       in
-       Meeting_start_resp
-         { result = Error message; snapshot = snapshot_of_json json }
-     | `Assoc fields ->
-       let result =
-         match List.assoc_opt "result" fields with
-         | Some j -> start_result_of_json j
-         | _ -> Disabled
-       in
-       let snapshot =
-         match List.assoc_opt "snapshot" fields with
-         | Some j -> snapshot_of_json j
-         | None -> snapshot_of_json (`Assoc [])
-       in
-       Meeting_start_resp { result; snapshot }
-     | _ -> Meeting_start_resp { result = Disabled; snapshot = snapshot_of_json (`Assoc []) })
-  | Meeting_stop -> Meeting_stop_resp (snapshot_of_json json)
-  | Meeting_toggle -> Meeting_toggle_resp (snapshot_of_json json)
+     | Meeting_start ->
+       (match json with
+        | `Assoc fields ->
+          let result =
+            match List.assoc_opt "result" fields with
+            | Some j -> start_result_of_json j
+            | _ -> Disabled
+          in
+          let snapshot =
+            match List.assoc_opt "snapshot" fields with
+            | Some j -> snapshot_of_json j
+            | None -> snapshot_of_json (`Assoc [])
+          in
+          Meeting_start_resp { result; snapshot }
+        | _ -> Meeting_start_resp { result = Disabled; snapshot = snapshot_of_json (`Assoc []) })
+     | Meeting_stop -> Meeting_stop_resp (snapshot_of_json json)
+     | Meeting_toggle -> Meeting_toggle_resp (snapshot_of_json json))

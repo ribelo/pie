@@ -176,7 +176,13 @@ let connect
        | Error msg -> fail msg ()
        | Ok () -> ());
       tr.protocol_version <- auth_version;
-      let _ = await_reply t (Commands.build_set_client_name_command ~client_name_or_props:(`String client_name) ()) in
+      (match
+         await_reply t
+           (Commands.build_set_client_name_command
+              ~client_name_or_props:(`String client_name) ())
+       with
+       | Error e -> fail e.message ?code:e.code ()
+       | Ok _ -> ());
       t
   with
   | Client_error e ->

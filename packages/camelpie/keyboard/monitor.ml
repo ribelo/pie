@@ -112,14 +112,19 @@ let session_bus_path () =
     | hd :: _ -> hd
     | [] -> address
   in
-  let prefix = "unix:path=" in
-  if String.length first >= String.length prefix
-     && String.sub first 0 (String.length prefix) = prefix then
-    percent_decode
-      (String.sub first (String.length prefix)
-         (String.length first - String.length prefix))
-  else
-    invalid_arg ("unsupported DBUS_SESSION_BUS_ADDRESS: " ^ address)
+  let strip_prefix prefix s =
+    let pl = String.length prefix in
+    if String.length s >= pl && String.sub s 0 pl = prefix then
+      Some (String.sub s pl (String.length s - pl))
+    else
+      None
+  in
+  match strip_prefix "unix:path=" first with
+  | Some path -> percent_decode path
+  | None ->
+    (match strip_prefix "unix:abstract=" first with
+     | Some path -> percent_decode path
+     | None -> invalid_arg ("unsupported DBUS_SESSION_BUS_ADDRESS: " ^ address))
 
 let write flow s = Eio.Flow.write flow [Cstruct.of_string s]
 
