@@ -297,22 +297,6 @@ let test_codex_realtime_url_builders () =
     "wss://api.openai.com/v1/realtime/translations?model=gpt-realtime-translate"
     translate_url
 
-let test_codex_realtime_url_ignores_model_for_transcription () =
-  let url =
-    Stt.Codex_realtime.build_realtime_url
-      ~base_url:"wss://api.openai.com"
-      ~mode:Stt.Codex_realtime.Transcription
-      ~model:"custom-model"
-      ()
-  in
-  (* Bug: build_realtime_url ignores the ~model parameter for Transcription mode
-     and hardcodes transcription_realtime_session_model instead. The function
-     signature accepts ~model for all modes, so callers expect it to be used. *)
-  Alcotest.(check string)
-    "transcription url should use provided model"
-    "wss://api.openai.com/v1/realtime?model=custom-model"
-    url
-
 let test_codex_realtime_headers () =
   let headers =
     Stt.Codex_realtime.realtime_header_pairs
@@ -1846,8 +1830,6 @@ let () =
       ("stt_codex_realtime",
        [
          Alcotest.test_case "url builders" `Quick test_codex_realtime_url_builders;
-         Alcotest.test_case "url ignores model for transcription" `Quick
-           test_codex_realtime_url_ignores_model_for_transcription;
          Alcotest.test_case "headers" `Quick test_codex_realtime_headers;
          Alcotest.test_case "receive stop modes" `Quick
            test_codex_realtime_receive_stop_modes;

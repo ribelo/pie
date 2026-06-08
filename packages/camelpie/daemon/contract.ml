@@ -21,6 +21,7 @@ type start_result =
   | Started of string
   | Busy of string
   | Disabled
+  | Error of string
 
 type meeting_start_result = {
   result : start_result;
@@ -129,6 +130,10 @@ let start_result_of_json = function
        in
        Busy mode
      | Some (`String "Disabled") -> Disabled
+     | Some (`String "Error") ->
+       (match List.assoc_opt "message" fields with
+        | Some (`String s) -> Error s
+        | _ -> Error "unknown error")
      | _ -> Disabled)
   | `String "Started" -> Started "meeting-transcribe"
   | `String "Busy" -> Busy "meeting-transcribe"
@@ -138,6 +143,8 @@ let json_of_start_result = function
   | Started mode -> `Assoc [("_tag", `String "Started"); ("mode", `String mode)]
   | Busy mode -> `Assoc [("_tag", `String "Busy"); ("activeMode", `String mode)]
   | Disabled -> `Assoc [("_tag", `String "Disabled")]
+  | Error message ->
+    `Assoc [("_tag", `String "Error"); ("message", `String message)]
 
 let response_to_json = function
   | Status_resp snap -> json_of_snapshot snap
@@ -166,6 +173,17 @@ let response_of_json req json =
      | _ -> Toggle_resp false)
   | Meeting_start ->
     (match json with
+     | `Assoc fields when List.mem_assoc "error" fields ->
+       (* The server signalled a failure. Surface it as an explicit error so
+          callers can distinguish it from a genuine Disabled state. *)
+       let message =
+         match List.assoc_opt "error" fields with
+         | Some (`String s) -> s
+         | Some other -> Yojson.Safe.to_string other
+         | None -> "unknown error"
+       in
+       Meeting_start_resp
+         { result = Error message; snapshot = snapshot_of_json json }
      | `Assoc fields ->
        let result =
          match List.assoc_opt "result" fields with

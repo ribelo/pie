@@ -144,6 +144,16 @@ let rec find_context_file dir =
     let parent = Filename.dirname dir in
     if parent = dir then None else find_context_file parent
 
+let find_context_file dir =
+  (* Resolve relative paths (e.g. ".") against the current working directory so
+     that parent traversal can actually climb above the starting directory.
+     [Filename.dirname "."] is ".", which would otherwise stop traversal at the
+     starting directory. *)
+  let absolute =
+    if Filename.is_relative dir then Filename.concat (Sys.getcwd ()) dir else dir
+  in
+  find_context_file absolute
+
 let read_file path =
   let ic = open_in_bin path in
   Fun.protect

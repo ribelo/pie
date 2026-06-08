@@ -137,7 +137,15 @@ let sexp_tokens input =
       match input.[i] with
       | '"' -> i + 1
       | '\\' when i + 1 < len ->
-        Buffer.add_char buf input.[i + 1];
+        Buffer.add_char buf
+          (match input.[i + 1] with
+           | 'n' -> '
+'
+           | 't' -> '	'
+           | 'r' -> '
+'
+           | 'b' -> ''
+           | c -> c);
         read_string (i + 2)
       | c ->
         Buffer.add_char buf c;

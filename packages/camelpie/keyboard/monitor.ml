@@ -19,9 +19,22 @@ let emit t event =
   Eio.Stream.add t.queue event
 
 let keysym_of_name = function
+  | "F1" -> 65470
+  | "F2" -> 65471
+  | "F3" -> 65472
+  | "F4" -> 65473
+  | "F5" -> 65474
+  | "F6" -> 65475
+  | "F7" -> 65476
+  | "F8" -> 65477
   | "F9" -> 65478
   | "F10" -> 65479
-  | _ -> 0
+  | "F11" -> 65480
+  | "F12" -> 65481
+  | name ->
+    (* 0 is XKB_KEY_NoSymbol, a valid keysym, so it cannot be used as an
+       "unknown" sentinel. Fail loudly instead of silently returning it. *)
+    invalid_arg (Printf.sprintf "keysym_of_name: unknown key name %S" name)
 
 let a11y_service = "org.freedesktop.a11y.Manager"
 let a11y_path = "/org/freedesktop/a11y/Manager"

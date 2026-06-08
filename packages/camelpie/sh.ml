@@ -8,8 +8,16 @@ let find_executable name =
     | [] -> None
     | dir :: rest ->
       let path = Filename.concat dir name in
-      if Sys.file_exists path then Some path
-      else search rest
+      let is_executable_file =
+        match Unix.stat path with
+        | { Unix.st_kind = Unix.S_REG; _ } ->
+          (match Unix.access path [ Unix.X_OK ] with
+           | () -> true
+           | exception Unix.Unix_error _ -> false)
+        | _ -> false
+        | exception Unix.Unix_error _ -> false
+      in
+      if is_executable_file then Some path else search rest
   in
   search paths
 

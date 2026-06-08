@@ -62,6 +62,7 @@ let render_start_result = function
   | Camelpie.Daemon.Contract.Started mode -> mode
   | Busy mode -> "busy:" ^ mode
   | Disabled -> "paused"
+  | Error message -> "error:" ^ message
 
 let sources_cmd =
   let doc = "List PulseAudio capture sources" in

@@ -63,19 +63,38 @@ let load_prompt path =
   with Sys_error msg ->
     raise (Config_error (Printf.sprintf "failed to read prompt %s: %s" path msg))
 
+let contains_substring ~needle haystack =
+  let needle_len = String.length needle in
+  let haystack_len = String.length haystack in
+  if needle_len = 0 then true
+  else if needle_len > haystack_len then false
+  else begin
+    let rec scan i =
+      if i > haystack_len - needle_len then false
+      else if String.sub haystack i needle_len = needle then true
+      else scan (i + 1)
+    in
+    scan 0
+  end
+
 let validate_transcription_prompt content =
   let trimmed = String.trim content in
   if String.length trimmed = 0 then
     raise (Config_error "transcription prompt is empty");
-  if not (String.contains trimmed '{') then
+  if not (contains_substring ~needle:"{{language}}" trimmed) then
     raise (Config_error "transcription prompt missing required placeholder {{language}}")
 
 let validate_translation_prompt content =
   let trimmed = String.trim content in
   if String.length trimmed = 0 then
     raise (Config_error "translation prompt is empty");
-  if not (String.contains trimmed '{') then
-    raise (Config_error "translation prompt missing required placeholders")
+  if not
+       (contains_substring ~needle:"{{source_language}}" trimmed
+        && contains_substring ~needle:"{{target_language}}" trimmed)
+  then
+    raise
+      (Config_error
+         "translation prompt missing required placeholders {{source_language}} and {{target_language}}")
 
 module TT = Toml.Types
 
