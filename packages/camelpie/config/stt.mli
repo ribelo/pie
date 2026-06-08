@@ -25,6 +25,7 @@ type t = {
   wakeword_dictation_speech_rms_threshold : float;
   ptt_min_capture_rms : float;
   ptt_min_capture_peak : float;
+  thinking_effort : string option;
   transcription_prompt : string;
   translation_prompt : string;
   newline_rules : newline_rule list;
@@ -32,8 +33,14 @@ type t = {
 
 exception Config_error of string
 
+type resolved_model = {
+  provider : provider;
+  model : string;
+}
+
 val provider_of_string : string -> provider
 val string_of_provider : provider -> string
+val resolve_model_provider : default_provider:provider -> string -> resolved_model
 val newline_action_of_string : string -> newline_action
 val string_of_newline_action : newline_action -> string
 val load : ?config_path:string -> unit -> t

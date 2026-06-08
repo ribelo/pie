@@ -25,12 +25,18 @@ type t = {
   wakeword_dictation_speech_rms_threshold : float;
   ptt_min_capture_rms : float;
   ptt_min_capture_peak : float;
+  thinking_effort : string option;
   transcription_prompt : string;
   translation_prompt : string;
   newline_rules : newline_rule list;
 }
 
 exception Config_error of string
+
+type resolved_model = {
+  provider : provider;
+  model : string;
+}
 
 let provider_of_string = function
   | "codex-realtime" -> Codex_realtime
@@ -40,6 +46,29 @@ let provider_of_string = function
 let string_of_provider = function
   | Codex_realtime -> "codex-realtime"
   | Openrouter -> "openrouter"
+
+let split_first_slash value =
+  match String.index_opt value '/' with
+  | None -> None
+  | Some index ->
+    let prefix = String.sub value 0 index in
+    let suffix = String.sub value (index + 1) (String.length value - index - 1) in
+    Some (prefix, suffix)
+
+let provider_of_string_opt value =
+  try Some (provider_of_string value) with Config_error _ -> None
+
+let resolve_model_provider ~default_provider model =
+  match split_first_slash model with
+  | Some (prefix, model) ->
+    (match provider_of_string_opt prefix with
+     | Some provider when String.trim model = "" ->
+       raise
+         (Config_error
+            (Printf.sprintf "model for provider %s is empty" prefix))
+     | Some provider -> { provider; model }
+     | None -> { provider = default_provider; model = prefix ^ "/" ^ model })
+  | None -> { provider = default_provider; model }
 
 let newline_action_of_string = function
   | "collapse"
@@ -136,6 +165,24 @@ let get_optional_string table key =
   | Some _ -> type_error key "a string"
   | None -> None
 
+let parse_thinking_effort table =
+  match get_optional_string table "thinking_effort" with
+  | None -> None
+  | Some value ->
+    (match String.lowercase_ascii (String.trim value) with
+     | "" -> raise (Config_error "thinking_effort must not be empty")
+     | "minimal"
+     | "low"
+     | "medium"
+     | "high"
+     | "xhigh" as effort -> Some effort
+     | effort ->
+       raise
+         (Config_error
+            (Printf.sprintf
+               "thinking_effort must be minimal, low, medium, high, or xhigh; got %s"
+               effort)))
+
 let validate_title_regex index = function
   | None -> ()
   | Some pattern ->
@@ -192,6 +239,12 @@ let load ?(config_path = Paths.stt_config_path) () : t =
   let schema_version = get_required_int table "schema_version" in
   if schema_version <> 2 then
     raise (Config_error "schema_version must be 2");
+  let provider = provider_of_string (get_string table "provider" "codex-realtime") in
+  let default_model = "openrouter/xiaomi/mimo-v2.5" in
+  let transcription_model = get_string table "transcription_model" default_model in
+  let translation_model = get_string table "translation_model" default_model in
+  ignore (resolve_model_provider ~default_provider:provider transcription_model);
+  ignore (resolve_model_provider ~default_provider:provider translation_model);
   let prompts_dir = Filename.concat (Filename.dirname config_path) "prompts" in
   let transcription_prompt_path = Filename.concat prompts_dir "transcription.md" in
   let translation_prompt_path = Filename.concat prompts_dir "translation.md" in
@@ -207,9 +260,9 @@ let load ?(config_path = Paths.stt_config_path) () : t =
   validate_translation_prompt translation_prompt;
   {
     schema_version;
-    provider = provider_of_string (get_string table "provider" "codex-realtime");
-    transcription_model = get_string table "transcription_model" "gpt-realtime-whisper";
-    translation_model = get_string table "translation_model" "gpt-realtime-2";
+    provider;
+    transcription_model;
+    translation_model;
     transcription_language = get_string table "transcription_language" "English";
     translation_source_language = get_string table "translation_source_language" "English";
     translation_target_language = get_string table "translation_target_language" "English";
@@ -219,6 +272,7 @@ let load ?(config_path = Paths.stt_config_path) () : t =
     wakeword_dictation_speech_rms_threshold = get_float table "wakeword_dictation_speech_rms_threshold" 0.01;
     ptt_min_capture_rms = get_float table "ptt_min_capture_rms" Audio.Pcm.ptt_min_capture_rms_for_stt;
     ptt_min_capture_peak = get_float table "ptt_min_capture_peak" Audio.Pcm.ptt_min_capture_peak_for_stt;
+    thinking_effort = parse_thinking_effort table;
     transcription_prompt;
     translation_prompt;
     newline_rules = parse_newline_rules table;

@@ -2,6 +2,18 @@
 
 (test
  (name test_camelpie)
- (libraries camelpie alcotest eio_main eta eta_http)
+ (libraries camelpie alcotest eio_main eta eta_ai eta_http)
  (deps
   (source_tree ../)))
+
+(executable
+ (name live_codex_transcribe)
+ (libraries camelpie eio_main eta))
+
+(executable
+ (name live_openrouter_transcribe)
+ (libraries camelpie eio_main eta))
+
+(executable
+ (name live_openrouter_translate)
+ (libraries camelpie eio_main eta))

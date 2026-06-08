@@ -13,6 +13,8 @@
   (ocaml-variants (= 5.2.0+ox))
   (dune (>= 3.0))
   (eta (>= 0.1.0))
+  eta_ai
+  eta_ai_openrouter
   eta_http
   eta_stream
   (eio (>= 1.0))

@@ -49,6 +49,10 @@ let log_info message fields =
   let json = Yojson.Safe.to_string (`Assoc fields) in
   Printf.eprintf "[%s] INFO: %s %s\n%!" (timestamp ()) message json
 
+let log_error message fields =
+  let json = Yojson.Safe.to_string (`Assoc fields) in
+  Printf.eprintf "[%s] ERROR: %s %s\n%!" (timestamp ()) message json
+
 let ptt_fields ?duration_ms ?held_duration_ms ?bytes ?rms ?peak config mode =
   let base =
     [
@@ -280,6 +284,18 @@ let run ~(keyboard : Keyboard.Monitor.t) ~(recv : unit -> (bytes, [> `Closed ]) 
     loop (Ptt.Capture.start Ptt.Capture.idle (float_of_int started_at)) (Ptt.Dead_input.initial ()) false []
   in
   let rec idle_loop () =
+    let capture_failed mode message =
+      Eta.Effect.sync (fun () ->
+        log_error "PTT capture failed"
+          (("ptt.error", `String message) :: ptt_fields config mode))
+    in
+    let run_capture mode handle run =
+      run
+      |> Eta.Effect.catch (fun (`Ptt_error message) ->
+        let* () = handle.cancel |> Eta.Effect.catch (fun _ -> Eta.Effect.unit) in
+        let* () = capture_failed mode message in
+        Eta.Effect.unit)
+    in
     let* next = take_input in
     match next with
     | `Timeout -> idle_loop ()
@@ -296,7 +312,7 @@ let run ~(keyboard : Keyboard.Monitor.t) ~(recv : unit -> (bytes, [> `Closed ]) 
               Eta.Effect.sync (fun () ->
                 log_info "PTT capture started" (ptt_fields config mode))
             in
-            let* () = run_active mode started_at handle in
+            let* () = run_capture mode handle (run_active mode started_at handle) in
             idle_loop ()
           | Scoped with_handle ->
             let started_at = now_ms () in
@@ -304,7 +320,10 @@ let run ~(keyboard : Keyboard.Monitor.t) ~(recv : unit -> (bytes, [> `Closed ]) 
               Eta.Effect.sync (fun () ->
                 log_info "PTT capture started" (ptt_fields config mode))
             in
-            let* () = with_handle (fun handle -> run_active mode started_at handle) in
+            let* () =
+              with_handle (fun handle ->
+                run_capture mode handle (run_active mode started_at handle))
+            in
             idle_loop ())
        | _ -> idle_loop ())
   in

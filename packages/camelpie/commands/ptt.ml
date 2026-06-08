@@ -49,7 +49,15 @@ let run ~sw ~net ~clock ~process_mgr ~stdin ~mode () =
     | Some k -> k
     | None -> failwith "OPENROUTER_API_KEY not set"
   in
-  let* text = Stt.Openrouter.transcribe ~process_mgr ~api_key ~model:"whisper-1" ~language:"en" pcm_bytes in
+  let* text =
+    Stt.Openrouter.transcribe
+      ~sw
+      ~net
+      ~api_key
+      ~model:"whisper-1"
+      ~language:"en"
+      pcm_bytes
+  in
   let* result = Input.Text_injection.inject ~process_mgr text in
   Eta.Effect.sync (fun () ->
     Printf.printf "Transcript: %s\n%!" text;

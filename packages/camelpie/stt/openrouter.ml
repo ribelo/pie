@@ -1,72 +1,51 @@
 type error = [`Stt_error of string]
 
+module A = Eta_ai
+module Http = Eta_http
+module Openrouter = Eta_ai_openrouter
+
 open Eta.Syntax
-
-let api_url = "https://openrouter.ai/api/v1/audio/transcriptions"
-
-let transcribe_file_impl ~process_mgr ~api_key ~model ~language file_path =
-  let args = [
-    "-s"; "-X"; "POST"; api_url;
-    "-H"; "Authorization: Bearer " ^ api_key;
-    "-F"; "file=@" ^ file_path;
-    "-F"; "model=" ^ model;
-    "-F"; "language=" ^ language;
-    "-F"; "response_format=json"
-  ] in
-  let* raw = Sh.run_capture ~process_mgr ~prog:"curl" ~args in
-  Eta.Effect.sync (fun () ->
-    let json = Yojson.Safe.from_string raw in
-    match json with
-    | `Assoc fields ->
-      (match List.assoc_opt "text" fields with
-       | Some (`String text) -> Ok text
-       | _ ->
-         (match List.assoc_opt "error" fields with
-          | Some (`Assoc err_fields) ->
-            let msg = match List.assoc_opt "message" err_fields with
-              | Some (`String m) -> m
-              | _ -> "unknown OpenRouter error"
-            in
-            Error (`Stt_error msg)
-          | _ -> Error (`Stt_error "unexpected response format")))
-    | _ -> Error (`Stt_error "unexpected response format"))
-  |> Eta.Effect.bind Eta.Effect.from_result
-
-let transcribe ~process_mgr ~api_key ~model ~language pcm_bytes =
-  let* tmp_wav =
-    Eta.Effect.sync (fun () ->
-      let tmp = Filename.temp_file "pie_stt" ".wav" in
-      let header = Audio.Pcm.build_pcm_wav_header ~data_length:(Bytes.length pcm_bytes) ~sample_rate:16000 in
-      let oc = open_out_bin tmp in
-      output_bytes oc header;
-      output_bytes oc pcm_bytes;
-      close_out oc;
-      tmp)
-  in
-  transcribe_file_impl ~process_mgr ~api_key ~model ~language tmp_wav
-  |> Eta.Effect.finally
-       (Eta.Effect.sync (fun () -> try Sys.remove tmp_wav with _ -> ()))
-
-let chat_api_url () =
-  let base =
-    match Sys.getenv_opt "ERG_OPENROUTER_BASE_URL", Sys.getenv_opt "OPENROUTER_BASE_URL" with
-    | Some v, _ when String.trim v <> "" -> String.trim v
-    | _, Some v when String.trim v <> "" -> String.trim v
-    | _ -> "https://openrouter.ai/api/v1"
-  in
-  let base =
-    if String.length base > 0 && base.[String.length base - 1] = '/' then
-      String.sub base 0 (String.length base - 1)
-    else
-      base
-  in
-  base ^ "/chat/completions"
 
 let resolve_api_key () =
   match Sys.getenv_opt "ERG_OPENROUTER_API_KEY", Sys.getenv_opt "OPENROUTER_API_KEY" with
-  | Some v, _ when String.trim v <> "" -> Some (String.trim v)
-  | _, Some v when String.trim v <> "" -> Some (String.trim v)
+  | Some value, _ when String.trim value <> "" -> Some (String.trim value)
+  | _, Some value when String.trim value <> "" -> Some (String.trim value)
   | _ -> None
+
+let provider () =
+  match Sys.getenv_opt "ERG_OPENROUTER_BASE_URL", Sys.getenv_opt "OPENROUTER_BASE_URL" with
+  | Some value, _ when String.trim value <> "" ->
+    Openrouter.provider ~base_url:(String.trim value) ()
+  | _, Some value when String.trim value <> "" ->
+    Openrouter.provider ~base_url:(String.trim value) ()
+  | _ -> Openrouter.provider ()
+
+let http_client ~sw ~net =
+  Http.Client.make_h1_direct ~sw ~net ()
+
+let ai_error_message = function
+  | A.Eta_http_error error -> Http.Error.to_string error
+  | Provider_error { provider; status; code; message; _ } ->
+    let status =
+      match status with
+      | None -> ""
+      | Some status -> Printf.sprintf " HTTP %d" status
+    in
+    let code =
+      match code with
+      | None -> ""
+      | Some code -> " (" ^ code ^ ")"
+    in
+    Printf.sprintf "%s provider error%s%s: %s" provider status code message
+  | Decode_error { provider; message; _ } ->
+    Printf.sprintf "%s decode error: %s" provider message
+  | Invalid_tool { name; message } ->
+    Printf.sprintf "invalid tool %s: %s" name message
+  | Unsupported { provider; feature } ->
+    Printf.sprintf "%s unsupported feature: %s" provider feature
+
+let stt_error_of_ai error =
+  `Stt_error ("OpenRouter request failed: " ^ ai_error_message error)
 
 let base64_table = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 
@@ -118,122 +97,194 @@ let wav_bytes ~sample_rate pcm_bytes =
   Bytes.blit pcm_bytes 0 wav (Bytes.length header) (Bytes.length pcm_bytes);
   wav
 
+let output_text_field = "text"
+
+let structured_output task =
+  let schema =
+    `Assoc [
+      ("type", `String "object");
+      ("properties", `Assoc [(output_text_field, `Assoc [("type", `String "string")])]);
+      ("required", `List [`String output_text_field]);
+      ("additionalProperties", `Bool false);
+    ]
+    |> Yojson.Safe.to_string
+  in
+  match
+    Openrouter.structured_output
+      ~name:(task ^ "_response")
+      ~schema_json:schema
+      ~strict:true
+      ()
+  with
+  | Ok output -> Eta.Effect.pure output
+  | Error error -> Eta.Effect.fail (stt_error_of_ai error)
+
+let reasoning_for_effort = function
+  | None -> Eta.Effect.pure None
+  | Some effort ->
+    (match Openrouter.reasoning ~effort () with
+     | Ok reasoning -> Eta.Effect.pure (Some reasoning)
+     | Error error -> Eta.Effect.fail (stt_error_of_ai error))
+
 let extract_message_content = function
-  | `String s -> Some s
-  | `List items ->
+  | A.Assistant { content; _ }
+  | A.User content
+  | A.Tool { content; _ } ->
     let parts =
       List.filter_map
         (function
-          | `Assoc fields ->
-            (match List.assoc_opt "text" fields with
-             | Some (`String s) -> Some s
-             | _ -> None)
-          | _ -> None)
-        items
+          | A.Text text
+          | A.Json text -> Some text
+          | A.Image _
+          | A.Audio _
+          | A.Video _ -> None)
+        content
     in
-    if parts = [] then None else Some (String.concat "" parts)
-  | _ -> None
+    String.concat "" parts
+  | A.System text -> text
 
-let decode_structured_field field raw =
+let decode_structured_output raw =
   let trimmed = String.trim raw in
   try
     match Yojson.Safe.from_string trimmed with
     | `Assoc fields ->
-      (match List.assoc_opt field fields with
-       | Some (`String s) when String.trim s <> "" -> Ok (String.trim s)
-       | _ -> Error (`Stt_error ("OpenRouter response missing " ^ field)))
+      (match List.assoc_opt output_text_field fields with
+       | Some (`String text) when String.trim text <> "" -> Ok (String.trim text)
+       | _ -> Error (`Stt_error "OpenRouter structured response missing text"))
     | _ -> Error (`Stt_error "OpenRouter structured response must be an object")
   with _ ->
-    if trimmed <> "" then Ok trimmed else Error (`Stt_error "OpenRouter response was empty")
+    Error (`Stt_error "OpenRouter structured response was not valid JSON")
 
-let run_audio_chat ~process_mgr ~model ~prompt ~sample_rate ~field pcm_bytes =
-  match resolve_api_key () with
-  | None -> Eta.Effect.fail (`Stt_error "Missing OpenRouter API key. Set ERG_OPENROUTER_API_KEY or OPENROUTER_API_KEY.")
-  | Some api_key ->
-    let wav_data = wav_bytes ~sample_rate pcm_bytes |> base64_encode in
-    let schema =
-      `Assoc [
-        ("type", `String "object");
-        ("properties", `Assoc [(field, `Assoc [("type", `String "string")])]);
-        ("required", `List [`String field]);
-        ("additionalProperties", `Bool false);
-      ]
+let debug_response_content content raw =
+  match Sys.getenv_opt "CAMELPIE_OPENROUTER_DEBUG" with
+  | Some value when String.trim value <> "" ->
+    let truncate value =
+      if String.length value <= 1000 then value
+      else String.sub value 0 1000 ^ "...<truncated>"
     in
-    let body =
-      `Assoc [
-        ("model", `String model);
-        ("temperature", `Int 0);
-        ("messages", `List [
-          `Assoc [
-            ("role", `String "user");
-            ("content", `List [
-              `Assoc [("type", `String "text"); ("text", `String prompt)];
-              `Assoc [
-                ("type", `String "input_audio");
-                ("input_audio", `Assoc [
-                  ("data", `String wav_data);
-                  ("format", `String "wav");
-                ]);
-              ];
-            ]);
+    Printf.eprintf "openrouter responses content: %s\n%!" (truncate content);
+    Option.iter
+      (fun raw -> Printf.eprintf "openrouter responses raw: %s\n%!" (truncate raw))
+      raw
+  | _ -> ()
+
+let responses_request ~model ~prompt ~sample_rate pcm_bytes : A.chat_request =
+  {
+    model;
+    prompt =
+      [
+        A.User
+          [
+            A.Text prompt;
+            A.Audio
+              {
+                data = A.Bytes (wav_bytes ~sample_rate pcm_bytes);
+                format = A.Wav;
+                transcript = None;
+              };
           ];
-        ]);
-        ("response_format", `Assoc [
-          ("type", `String "json_schema");
-          ("json_schema", `Assoc [
-            ("name", `String (field ^ "_response"));
-            ("strict", `Bool true);
-            ("schema", schema);
-          ]);
-        ]);
-        ("stream", `Bool false);
-      ]
-    in
-    let args = [
-      "-sS"; "-f"; "-X"; "POST"; chat_api_url ();
-      "-H"; "Authorization: Bearer " ^ api_key;
-      "-H"; "Content-Type: application/json";
-      "-d"; Yojson.Safe.to_string body;
-    ] in
-    let* raw = Sh.run_capture ~process_mgr ~prog:"curl" ~args in
-    Eta.Effect.sync (fun () ->
-      try
-        match Yojson.Safe.from_string raw with
-        | `Assoc fields ->
-          (match List.assoc_opt "choices" fields with
-           | Some (`List (`Assoc choice_fields :: _)) ->
-             (match List.assoc_opt "message" choice_fields with
-              | Some (`Assoc message_fields) ->
-                (match List.assoc_opt "content" message_fields with
-                 | Some content ->
-                   (match extract_message_content content with
-                    | Some content -> decode_structured_field field content
-                    | None -> Error (`Stt_error "OpenRouter response did not contain message content"))
-                 | None -> Error (`Stt_error "OpenRouter response missing message content"))
-              | _ -> Error (`Stt_error "OpenRouter response missing message"))
-           | _ ->
-             (match List.assoc_opt "error" fields with
-              | Some (`Assoc err_fields) ->
-                let msg =
-                  match List.assoc_opt "message" err_fields with
-                  | Some (`String s) -> s
-                  | _ -> "unknown OpenRouter error"
-                in
-                Error (`Stt_error msg)
-              | _ -> Error (`Stt_error "OpenRouter response missing choices")))
-        | _ -> Error (`Stt_error "OpenRouter response must be an object")
-      with exn -> Error (`Stt_error ("OpenRouter response parse failed: " ^ Printexc.to_string exn)))
-    |> Eta.Effect.bind Eta.Effect.from_result
+      ];
+    tools = [];
+    temperature = Some 0.0;
+    max_output_tokens = None;
+    stream = false;
+  }
 
-let transcribe_with_prompt ~process_mgr ~model ~language ~prompt_template ?(sample_rate = 16000) pcm_bytes =
+let run_audio_responses ~sw ~net ~model ~prompt ~sample_rate ~task ?thinking_effort pcm_bytes =
+  match resolve_api_key () with
+  | None ->
+    Eta.Effect.fail
+      (`Stt_error "Missing OpenRouter API key. Set ERG_OPENROUTER_API_KEY or OPENROUTER_API_KEY.")
+  | Some api_key ->
+    let client = http_client ~sw ~net in
+    let* structured_output = structured_output task in
+    let* reasoning = reasoning_for_effort thinking_effort in
+    let request = responses_request ~model ~prompt ~sample_rate pcm_bytes in
+    Openrouter.responses
+      ~provider:(provider ())
+      ~structured_output
+      ?reasoning
+      client
+      ~api_key:(A.api_key api_key)
+      request
+    |> Eta.Effect.map_error stt_error_of_ai
+    |> Eta.Effect.map (fun response ->
+      let content = extract_message_content response.A.message in
+      debug_response_content content response.raw;
+      content)
+    |> Eta.Effect.bind (fun raw -> Eta.Effect.from_result (decode_structured_output raw))
+
+let transcribe ~sw ~net ~api_key ~model ~language ?(sample_rate = 16000) pcm_bytes =
+  let client = http_client ~sw ~net in
+  let request : A.Transcription.request =
+    {
+      model;
+      file =
+        {
+          filename = "camelpie.wav";
+          content_type = "audio/wav";
+          data = wav_bytes ~sample_rate pcm_bytes;
+        };
+      language = Some language;
+      prompt = None;
+      response_format = None;
+      temperature = Some 0.0;
+      extra_fields = [];
+    }
+  in
+  Openrouter.transcription
+    ~provider:(provider ())
+    client
+    ~api_key:(A.api_key api_key)
+    request
+  |> Eta.Effect.map_error stt_error_of_ai
+  |> Eta.Effect.bind (fun response ->
+    match response.A.Transcription.text with
+    | Some text when String.trim text <> "" -> Eta.Effect.pure (String.trim text)
+    | _ -> Eta.Effect.fail (`Stt_error "OpenRouter transcription response was empty"))
+
+let transcribe_with_prompt
+    ~sw
+    ~net
+    ~model
+    ~language
+    ~prompt_template
+    ?thinking_effort
+    ?(sample_rate = 16000)
+    pcm_bytes =
   let prompt = render_template prompt_template [("language", language)] in
-  run_audio_chat ~process_mgr ~model ~prompt ~sample_rate ~field:"transcription" pcm_bytes
+  run_audio_responses
+    ~sw
+    ~net
+    ~model
+    ~prompt
+    ~sample_rate
+    ~task:"transcription"
+    ?thinking_effort
+    pcm_bytes
 
-let translate_with_prompt ~process_mgr ~model ~source_language ~target_language ~prompt_template ?(sample_rate = 16000) pcm_bytes =
+let translate_with_prompt
+    ~sw
+    ~net
+    ~model
+    ~source_language
+    ~target_language
+    ~prompt_template
+    ?thinking_effort
+    ?(sample_rate = 16000)
+    pcm_bytes =
   let prompt =
     render_template prompt_template [
       ("source_language", source_language);
       ("target_language", target_language);
     ]
   in
-  run_audio_chat ~process_mgr ~model ~prompt ~sample_rate ~field:"translation" pcm_bytes
+  run_audio_responses
+    ~sw
+    ~net
+    ~model
+    ~prompt
+    ~sample_rate
+    ~task:"translation"
+    ?thinking_effort
+    pcm_bytes

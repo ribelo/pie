@@ -47,6 +47,73 @@ let normalize_for_stt (config : Config.Stt.t) pcm_bytes =
      ~silence_peak_threshold:config.ptt_min_capture_peak
      pcm_bytes).normalized_bytes
 
+let config_model (config : Config.Stt.t) = function
+  | Transcribe -> config.transcription_model
+  | Translate -> config.translation_model
+
+let resolved_model_for_mode (config : Config.Stt.t) mode =
+  Config.Stt.resolve_model_provider
+    ~default_provider:config.provider
+    (config_model config mode)
+
+let option_json f = function
+  | None -> `Null
+  | Some value -> f value
+
+let resolved_model_json (resolved : Config.Stt.resolved_model) =
+  `Assoc [
+    ("provider", `String (Config.Stt.string_of_provider resolved.provider));
+    ("model", `String resolved.model);
+  ]
+
+let configured_model_json config mode =
+  let configured = config_model config mode in
+  let resolved = resolved_model_for_mode config mode in
+  `Assoc [
+    ("configured", `String configured);
+    ("resolved", resolved_model_json resolved);
+  ]
+
+let newline_rule_json index (rule : Config.Stt.newline_rule) =
+  `Assoc [
+    ("index", `Int index);
+    ("app_id", option_json (fun value -> `String value) rule.app_id);
+    ("title_regex", option_json (fun value -> `String value) rule.title_regex);
+    ("action", `String (Config.Stt.string_of_newline_action rule.action));
+  ]
+
+let startup_config_json
+    ?(config_path = Paths.stt_config_path)
+    ~(config : Config.Stt.t)
+    ~ptt_transcribe_keysym
+    ~ptt_translate_keysym
+    ~min_duration_ms
+    () =
+  `Assoc [
+    ("config_path", `String config_path);
+    ("schema_version", `Int config.schema_version);
+    ("provider", `String (Config.Stt.string_of_provider config.provider));
+    ("transcription_model", configured_model_json config Transcribe);
+    ("translation_model", configured_model_json config Translate);
+    ("thinking_effort", option_json (fun value -> `String value) config.thinking_effort);
+    ("transcription_language", `String config.transcription_language);
+    ("translation_source_language", `String config.translation_source_language);
+    ("translation_target_language", `String config.translation_target_language);
+    ("wakeword_enabled", `Bool config.wakeword_enabled);
+    ("wakeword_dictation_silence_seconds", `Float config.wakeword_dictation_silence_seconds);
+    ("wakeword_dictation_max_seconds", `Float config.wakeword_dictation_max_seconds);
+    ("wakeword_dictation_speech_rms_threshold", `Float config.wakeword_dictation_speech_rms_threshold);
+    ("ptt_min_duration_ms", `Int min_duration_ms);
+    ("ptt_min_capture_rms", `Float config.ptt_min_capture_rms);
+    ("ptt_min_capture_peak", `Float config.ptt_min_capture_peak);
+    ("ptt_transcribe_keysym", `Int ptt_transcribe_keysym);
+    ("ptt_translate_keysym", `Int ptt_translate_keysym);
+    ("transcription_prompt", `String config.transcription_prompt);
+    ("translation_prompt", `String config.translation_prompt);
+    ("newline_rules", `List (List.mapi newline_rule_json config.newline_rules));
+  ]
+  |> Yojson.Safe.pretty_to_string
+
 let context_value_max_length = 200
 
 let normalize_space value =
@@ -133,7 +200,8 @@ let run_stt ~sw ~net ~process_mgr (config : Config.Stt.t) mode pcm_bytes =
     | Translate ->
       prompt_with_focused_window_context ~process_mgr config.translation_prompt
   in
-  match config.provider with
+  let resolved_model = resolved_model_for_mode config mode in
+  match resolved_model.provider with
   | Codex_realtime ->
     let pcm_bytes = normalize_for_stt config pcm_bytes in
     (match mode with
@@ -141,7 +209,7 @@ let run_stt ~sw ~net ~process_mgr (config : Config.Stt.t) mode pcm_bytes =
        Stt.Codex_realtime.transcribe_with_prompt
          ~sw
          ~net
-         ~model:config.transcription_model
+         ~model:resolved_model.model
          ~language:config.transcription_language
          ~prompt_template
          pcm_bytes
@@ -149,7 +217,7 @@ let run_stt ~sw ~net ~process_mgr (config : Config.Stt.t) mode pcm_bytes =
        Stt.Codex_realtime.translate_with_prompt
          ~sw
          ~net
-         ~model:config.translation_model
+         ~model:resolved_model.model
          ~source_language:config.translation_source_language
          ~target_language:config.translation_target_language
          ~prompt_template
@@ -159,18 +227,22 @@ let run_stt ~sw ~net ~process_mgr (config : Config.Stt.t) mode pcm_bytes =
     (match mode with
      | Transcribe ->
        Stt.Openrouter.transcribe_with_prompt
-         ~process_mgr
-         ~model:config.transcription_model
+         ~sw
+         ~net
+         ~model:resolved_model.model
          ~language:config.transcription_language
          ~prompt_template
+         ?thinking_effort:config.thinking_effort
          pcm_bytes
      | Translate ->
        Stt.Openrouter.translate_with_prompt
-         ~process_mgr
-         ~model:config.translation_model
+         ~sw
+         ~net
+         ~model:resolved_model.model
          ~source_language:config.translation_source_language
          ~target_language:config.translation_target_language
          ~prompt_template
+         ?thinking_effort:config.thinking_effort
          pcm_bytes)
 
 let inject_and_report ~process_mgr ~newline_rules mode text =
@@ -220,6 +292,7 @@ let make_clip_handle ~sw ~net ~process_mgr ~coordinator ~config mode =
 
 let make_streaming_transcribe_handle ~sw ~net ~process_mgr ~coordinator ~config =
   let recording_mode = recording_mode Transcribe in
+  let model = (resolved_model_for_mode config Transcribe).model in
   Eta.Effect.pure
     (Ptt_loop.Scoped
        (fun use ->
@@ -230,7 +303,7 @@ let make_streaming_transcribe_handle ~sw ~net ~process_mgr ~coordinator ~config 
           Stt.Codex_realtime.with_transcription_stream
             ~sw
             ~net
-            ~model:config.transcription_model
+            ~model
             ~language:config.transcription_language
             ~prompt_template
             (fun stream ->
@@ -270,6 +343,7 @@ let make_streaming_transcribe_handle ~sw ~net ~process_mgr ~coordinator ~config 
 
 let make_streaming_translate_handle ~sw ~net ~process_mgr ~coordinator ~config =
   let recording_mode = recording_mode Translate in
+  let model = (resolved_model_for_mode config Translate).model in
   Eta.Effect.pure
     (Ptt_loop.Scoped
        (fun use ->
@@ -280,7 +354,7 @@ let make_streaming_translate_handle ~sw ~net ~process_mgr ~coordinator ~config =
           Stt.Codex_realtime.with_translation_stream
             ~sw
             ~net
-            ~model:config.translation_model
+            ~model
             ~source_language:config.translation_source_language
             ~target_language:config.translation_target_language
             ~prompt_template
@@ -320,7 +394,7 @@ let make_streaming_translate_handle ~sw ~net ~process_mgr ~coordinator ~config =
           |> Eta.Effect.map_error ptt_of_stt))
 
 let make_handle ~sw ~net ~process_mgr ~coordinator ~config mode =
-  match config.Config.Stt.provider, mode with
+  match (resolved_model_for_mode config mode).provider, mode with
   | Codex_realtime, Transcribe ->
     make_streaming_transcribe_handle ~sw ~net ~process_mgr ~coordinator ~config
   | Codex_realtime, Translate ->
@@ -359,10 +433,19 @@ let run
     () =
   let* config = load_config () in
   let coordinator = Recording.Coordinator.create () in
-  let* () = Eta.Effect.sync (fun () ->
-    Daemon.Server.start ~sw ~net coordinator;
-    Printf.printf
-      "pie assistant mode: hold F9 to transcribe, F10 to translate (Ctrl-C to exit)\n%!")
+  let* () =
+    Eta.Effect.sync (fun () ->
+      Daemon.Server.start ~sw ~net coordinator;
+      Printf.printf
+        "pie assistant mode: hold F9 to transcribe, F10 to translate (Ctrl-C to exit)\n%!";
+      Printf.printf
+        "pie config:\n%s\n%!"
+        (startup_config_json
+           ~config
+           ~ptt_transcribe_keysym
+           ~ptt_translate_keysym
+           ~min_duration_ms
+           ()))
   in
   Pulse.Client.with_client ~sw ~net ~clock @@ fun client ->
   Pulse.Client.with_record_stream client @@ fun info recv ->

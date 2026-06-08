@@ -5,6 +5,10 @@ module Stream = Eta_stream
 
 open Eta.Syntax
 
+(* Codex realtime is currently broken for ChatGPT/OAuth auth. Keep this path in
+   place, but prefer provider-backed models such as OpenRouter until Codex shows
+   how realtime STT should be authenticated through OAuth. *)
+
 type mode =
   | Transcription
   | Translation
@@ -20,6 +24,8 @@ type event =
 
 let realtime_sample_rate = 24_000
 let default_base_url = "wss://api.openai.com"
+let transcription_realtime_session_model = "gpt-realtime-1.5"
+let realtime_version = "0.0.0"
 let conversation_translation_model = "gpt-realtime-2"
 
 let transcription_delta_types = [
@@ -67,25 +73,17 @@ let resolve_base_url () =
   | Some value when String.trim value <> "" -> strip_trailing_slashes (String.trim value)
   | _ -> default_base_url
 
-let realtime_rest_base_url base_url =
-  let base = strip_trailing_slashes base_url in
-  if String.length base >= 4 && String.sub base 0 4 = "wss:" then
-    "https:" ^ String.sub base 4 (String.length base - 4)
-  else if String.length base >= 3 && String.sub base 0 3 = "ws:" then
-    "http:" ^ String.sub base 3 (String.length base - 3)
-  else
-    base
-
 let path_for_mode = function
   | Translation -> "/v1/realtime/translations"
   | Transcription
   | Conversation -> "/v1/realtime"
 
 let build_realtime_url ?(base_url = resolve_base_url ()) ~mode ~model () =
-  strip_trailing_slashes base_url ^ path_for_mode mode ^ "?model=" ^ model
-
-let build_realtime_transcription_url ?(base_url = resolve_base_url ()) () =
-  strip_trailing_slashes base_url ^ "/v1/realtime"
+  let path = strip_trailing_slashes base_url ^ path_for_mode mode in
+  match mode with
+  | Transcription -> path ^ "?model=" ^ transcription_realtime_session_model
+  | Translation
+  | Conversation -> path ^ "?model=" ^ model
 
 let render_template template variables =
   List.fold_left
@@ -126,26 +124,13 @@ let build_audio_commit () =
 
 let build_transcription_session_update ~model =
   `Assoc [
-    ("type", `String "transcription_session.update");
-    ("session", `Assoc [
-      ("audio", `Assoc [
-        ("input", `Assoc [
-          ("format", `Assoc [("type", `String "audio/pcm"); ("rate", `Int realtime_sample_rate)]);
-          ("transcription", `Assoc [("model", `String model)]);
-        ]);
-      ]);
-    ]);
-  ]
-
-let build_transcription_client_secret_request ~model =
-  `Assoc [
+    ("type", `String "session.update");
     ("session", `Assoc [
       ("type", `String "transcription");
       ("audio", `Assoc [
         ("input", `Assoc [
           ("format", `Assoc [("type", `String "audio/pcm"); ("rate", `Int realtime_sample_rate)]);
           ("transcription", `Assoc [("model", `String model)]);
-          ("turn_detection", `Null);
         ]);
       ]);
     ]);
@@ -272,67 +257,35 @@ let ws_error_message = function
 
 let headers pairs = Http.Core.Header.unsafe_of_list pairs
 
-let realtime_header_pairs access_token =
-  [
-    ("Authorization", "Bearer " ^ access_token);
-    ("OpenAI-Beta", "realtime=v1");
-  ]
+let make_realtime_session_id () =
+  Printf.sprintf
+    "camelpie-%Lx-%06x"
+    (Int64.of_float (Unix.gettimeofday () *. 1000.))
+    (Random.bits () land 0xffffff)
 
-let realtime_headers access_token =
-  headers (realtime_header_pairs access_token)
+let realtime_header_pairs ?session_id access_token =
+  let pairs = [
+    ("Authorization", "Bearer " ^ access_token);
+    ("originator", "codex_cli_rs");
+    ("User-Agent", "codex_cli_rs/0.0.0 (camelpie)");
+    ("version", realtime_version);
+  ] in
+  match session_id with
+  | Some session_id when String.trim session_id <> "" ->
+    ("x-session-id", session_id) :: pairs
+  | _ -> pairs
+
+let realtime_headers ?session_id access_token =
+  headers (realtime_header_pairs ?session_id access_token)
+
+let realtime_rest_client ~sw ~net =
+  Http.Client.make_h1_direct ~sw ~net ()
 
 let read_response_body response =
   Http.Body.Stream.read_all response.Http.Response.body
   |> Eta.Effect.catch (fun error ->
     stt_error (http_error_message "failed to read Codex HTTP response body" error))
   |> Eta.Effect.map Bytes.to_string
-
-let post_json client ~url ~bearer json =
-  let body = Yojson.Safe.to_string json in
-  let request =
-    Http.Request.make
-      ~headers:(headers [
-        ("Authorization", "Bearer " ^ bearer);
-        ("OpenAI-Beta", "realtime=v1");
-        ("Content-Type", "application/json");
-        ("Accept", "application/json");
-      ])
-      ~body:(Http.Request.Fixed [Bytes.of_string body])
-      "POST"
-      url
-  in
-  Http.request client request
-  |> Eta.Effect.catch (fun error ->
-    stt_error (http_error_message ("Codex HTTP POST " ^ url) error))
-
-let json_string_field field = function
-  | `Assoc fields ->
-    (match List.assoc_opt field fields with
-     | Some (`String value) when String.trim value <> "" -> Ok value
-     | _ -> Error ("missing " ^ field))
-  | _ -> Error "expected JSON object"
-
-let create_transcription_client_secret ~client ~access_token ~model =
-  let url = realtime_rest_base_url (resolve_base_url ()) ^ "/v1/realtime/client_secrets" in
-  let* response =
-    post_json client ~url ~bearer:access_token
-      (build_transcription_client_secret_request ~model)
-  in
-  let* raw = read_response_body response in
-  if response.Http.Response.status >= 200 && response.status < 300 then
-    Eta.Effect.sync (fun () ->
-      try
-        match json_string_field "value" (Yojson.Safe.from_string raw) with
-        | Ok value -> Ok value
-        | Error message -> Error (`Stt_error ("Codex realtime client secret response " ^ message))
-      with Yojson.Json_error message ->
-        Error (`Stt_error ("Codex realtime client secret response is not valid JSON: " ^ message)))
-    |> Eta.Effect.bind Eta.Effect.from_result
-  else
-    stt_error
-      (Printf.sprintf
-         "Failed to create Codex realtime transcription session: HTTP %d: %s"
-         response.status raw)
 
 module Codex_auth = struct
   type tokens = {
@@ -589,16 +542,36 @@ module Codex_auth = struct
            ^ " is expired and no refresh_token is stored. Run 'codex login'.")
 end
 
+let realtime_access_token ~client () =
+  match Sys.getenv_opt "OPENAI_API_KEY" with
+  | Some value when String.trim value <> "" ->
+    Eta.Effect.pure (String.trim value)
+  | _ -> Codex_auth.access_token ~client ()
+
 type session_result = {
   final : string option;
   deltas : string list;
   error : string option;
+  session_seen : bool;
 }
 
-let empty_session_result = { final = None; deltas = []; error = None }
+let empty_session_result = { final = None; deltas = []; error = None; session_seen = false }
 
 let close_ws_ignore ws =
   Http.Ws.Client.close ws |> Eta.Effect.catch (fun _ -> Eta.Effect.unit)
+
+let debug_realtime_payload direction payload =
+  match Sys.getenv_opt "CAMELPIE_CODEX_REALTIME_DEBUG" with
+  | Some value when String.trim value <> "" ->
+    let payload =
+      if String.length payload <= 2_000 then
+        payload
+      else
+        String.sub payload 0 2_000
+        ^ Printf.sprintf "... <truncated %d bytes>" (String.length payload)
+    in
+    Printf.eprintf "codex realtime %s: %s\n%!" direction payload
+  | _ -> ()
 
 let event_should_stop ~mode = function
   | Server_error _
@@ -624,6 +597,7 @@ let receive_result ~mode ws =
     | `Binary _ ->
       Eta.Effect.pure { state with error = Some "Codex realtime sent a binary WebSocket message" }
     | `Text payload ->
+      debug_realtime_payload "recv" payload;
       match parse_event payload with
       | Error (`Stt_error message) ->
         Eta.Effect.pure { state with error = Some ("Failed to parse Codex realtime event: " ^ message) }
@@ -649,24 +623,84 @@ let receive_result ~mode ws =
   |> Eta.Effect.catch (fun error ->
     stt_error ("Codex realtime WebSocket receive failed: " ^ ws_error_message error))
 
-let send_text ws payload =
+let initial_receive_should_stop = function
+  | `Binary _ -> Eta.Effect.pure true
+  | `Text payload ->
+    match parse_event payload with
+    | Error _ -> Eta.Effect.pure true
+    | Ok (Server_error _ | Session _) -> Eta.Effect.pure true
+    | Ok (Transcript_delta _ | Transcript_done _ | Response_done | Other _) ->
+      Eta.Effect.pure false
+
+let await_session_ready ws =
+  let step state = function
+    | `Binary _ ->
+      Eta.Effect.pure { state with error = Some "Codex realtime sent a binary WebSocket message" }
+    | `Text payload ->
+      debug_realtime_payload "recv" payload;
+      match parse_event payload with
+      | Error (`Stt_error message) ->
+        Eta.Effect.pure { state with error = Some ("Failed to parse Codex realtime event: " ^ message) }
+      | Ok (Server_error { message; code }) ->
+        let detail =
+          match code with
+          | None -> message
+          | Some code -> message ^ " (" ^ code ^ ")"
+        in
+        Eta.Effect.pure { state with error = Some ("Codex realtime server error: " ^ detail) }
+      | Ok (Session _) -> Eta.Effect.pure { state with session_seen = true }
+      | Ok (Transcript_delta _ | Transcript_done _ | Response_done | Other _) ->
+        Eta.Effect.pure state
+  in
+  Stream.run
+    (Http.Ws.Client.incoming ws |> Stream.Stream.take_until_effect initial_receive_should_stop)
+    (Stream.Sink.fold_effect step empty_session_result)
+  |> Eta.Effect.catch (fun error ->
+    stt_error ("Codex realtime WebSocket receive failed: " ^ ws_error_message error))
+  |> Eta.Effect.bind (fun result ->
+    match result.error with
+    | Some message -> stt_error message
+    | None when result.session_seen -> Eta.Effect.unit
+    | None -> stt_error "Codex realtime WebSocket closed before session.updated")
+
+let send_text ?(ignore_closing = fun () -> false) ws payload =
+  debug_realtime_payload "send" payload;
   Http.Ws.Client.send_text ws payload
   |> Eta.Effect.catch (fun error ->
-    stt_error ("Codex realtime WebSocket send failed: " ^ ws_error_message error))
+    match error with
+    | `Closed _ when ignore_closing () ->
+      Eta.Effect.unit
+    | _ ->
+      stt_error ("Codex realtime WebSocket send failed: " ^ ws_error_message error))
 
-let send_json ws json = send_text ws (Yojson.Safe.to_string json)
+let send_json ?ignore_closing ws json =
+  send_text ?ignore_closing ws (Yojson.Safe.to_string json)
 
-let send_audio_chunks ws ~mode pcm_bytes =
+let send_audio_chunks ?ignore_closing ws ~mode pcm_bytes =
   let len = Bytes.length pcm_bytes in
   let rec loop offset =
     if offset >= len then Eta.Effect.unit
     else
       let chunk_len = min 32_000 (len - offset) in
       let chunk = Bytes.sub pcm_bytes offset chunk_len in
-      let* () = send_json ws (build_audio_append ~mode chunk) in
+      let* () = send_json ?ignore_closing ws (build_audio_append ~mode chunk) in
       loop (offset + chunk_len)
   in
   loop 0
+
+let receive_result_marking_done ~mode ws receive_done =
+  let mark_done =
+    Eta.Effect.sync (fun () -> Atomic.set receive_done true)
+  in
+  receive_result ~mode ws
+  |> Eta.Effect.bind (fun result ->
+    let* () = mark_done in
+    let* () = close_ws_ignore ws in
+    Eta.Effect.pure result)
+  |> Eta.Effect.catch (fun error ->
+    let* () = mark_done in
+    let* () = close_ws_ignore ws in
+    Eta.Effect.fail error)
 
 let finish_result result =
   match result.error with
@@ -690,22 +724,27 @@ let run_realtime_session
     ~input_sample_rate
     pcm_bytes =
   let pcm_bytes = resample_s16le_mono ~from_rate:input_sample_rate ~to_rate:realtime_sample_rate pcm_bytes in
+  let session_id = make_realtime_session_id () in
   let* ws =
     Http.Ws.Client.connect
-      ~headers:(realtime_headers access_token)
+      ~headers:(realtime_headers ~session_id access_token)
       ~sw
       ~net
       url
     |> Eta.Effect.catch (fun error ->
       stt_error ("Codex realtime WebSocket connect failed: " ^ ws_error_message error))
   in
+  let receive_done = Atomic.make false in
+  let ignore_closing () = Atomic.get receive_done in
+  let* () =
+    match session_update with
+    | None -> Eta.Effect.unit
+    | Some json ->
+      let* () = send_json ~ignore_closing:(fun () -> true) ws json in
+      await_session_ready ws
+  in
   let send =
-    let* () =
-      match session_update with
-      | None -> Eta.Effect.unit
-      | Some json -> send_json ws json
-    in
-    let* () = send_audio_chunks ws ~mode pcm_bytes in
+    let* () = send_audio_chunks ~ignore_closing ws ~mode pcm_bytes in
     match mode with
     | Translation ->
       Eta.Effect.delay
@@ -713,12 +752,13 @@ let run_realtime_session
         (close_ws_ignore ws)
     | Transcription
     | Conversation ->
-      let* () = send_json ws (build_audio_commit ()) in
+      let* () = send_json ~ignore_closing ws (build_audio_commit ()) in
       (match response_create with
        | None -> Eta.Effect.unit
-       | Some json -> send_json ws json)
+       | Some json -> send_json ~ignore_closing ws json)
   in
-  let* result, () = Eta.Effect.par (receive_result ~mode ws) send in
+  let receive = receive_result_marking_done ~mode ws receive_done in
+  let* result, () = Eta.Effect.par receive send in
   let* () = close_ws_ignore ws in
   finish_result result
 
@@ -733,14 +773,24 @@ let run_realtime_stream_session
     ?(translation_output_drain_ms = 2_000)
     ~input_sample_rate
     audio =
+  let session_id = make_realtime_session_id () in
   let* ws =
     Http.Ws.Client.connect
-      ~headers:(realtime_headers access_token)
+      ~headers:(realtime_headers ~session_id access_token)
       ~sw
       ~net
       url
     |> Eta.Effect.catch (fun error ->
       stt_error ("Codex realtime WebSocket connect failed: " ^ ws_error_message error))
+  in
+  let receive_done = Atomic.make false in
+  let ignore_closing () = Atomic.get receive_done in
+  let* () =
+    match session_update with
+    | None -> Eta.Effect.unit
+    | Some json ->
+      let* () = send_json ~ignore_closing:(fun () -> true) ws json in
+      await_session_ready ws
   in
   let send_chunk () chunk =
     let chunk =
@@ -749,15 +799,10 @@ let run_realtime_stream_session
         ~to_rate:realtime_sample_rate
         chunk
     in
-    let* () = send_audio_chunks ws ~mode chunk in
+    let* () = send_audio_chunks ~ignore_closing ws ~mode chunk in
     Eta.Effect.pure ()
   in
   let send =
-    let* () =
-      match session_update with
-      | None -> Eta.Effect.unit
-      | Some json -> send_json ws json
-    in
     let* () = Stream.run audio (Stream.Sink.fold_effect send_chunk ()) in
     match mode with
     | Translation ->
@@ -766,12 +811,13 @@ let run_realtime_stream_session
         (close_ws_ignore ws)
     | Transcription
     | Conversation ->
-      let* () = send_json ws (build_audio_commit ()) in
+      let* () = send_json ~ignore_closing ws (build_audio_commit ()) in
       (match response_create with
        | None -> Eta.Effect.unit
-       | Some json -> send_json ws json)
+       | Some json -> send_json ~ignore_closing ws json)
   in
-  let* result, () = Eta.Effect.par (receive_result ~mode ws) send in
+  let receive = receive_result_marking_done ~mode ws receive_done in
+  let* result, () = Eta.Effect.par receive send in
   let* () = close_ws_ignore ws in
   finish_result result
 
@@ -842,17 +888,15 @@ let with_transcription_stream
     ~prompt_template:_
     ?(sample_rate = 16000)
     use =
-  let client = Http.Client.make ~sw ~net () in
-  let* access_token = Codex_auth.access_token ~client () in
-  let* transcription_access_token =
-    create_transcription_client_secret ~client ~access_token ~model
-  in
+  let client = realtime_rest_client ~sw ~net in
+  let* access_token = realtime_access_token ~client () in
   with_stream_session
     ~sw
     ~net
-    ~url:(build_realtime_transcription_url ())
-    ~access_token:transcription_access_token
+    ~url:(build_realtime_url ~mode:Transcription ~model ())
+    ~access_token
     ~mode:Transcription
+    ~session_update:(build_transcription_session_update ~model)
     ~sample_rate
     ~cancel_message:"Codex realtime transcription cancelled"
     use
@@ -866,8 +910,8 @@ let with_translation_stream
     ~prompt_template
     ?(sample_rate = 16000)
     use =
-  let client = Http.Client.make ~sw ~net () in
-  let* access_token = Codex_auth.access_token ~client () in
+  let client = realtime_rest_client ~sw ~net in
+  let* access_token = realtime_access_token ~client () in
   let prompt =
     render_template prompt_template [
       ("source_language", source_language);
@@ -899,17 +943,15 @@ let with_translation_stream
       use
 
 let transcribe_with_prompt ~sw ~net ~model ~language:_ ~prompt_template:_ ?(sample_rate = 16000) pcm_bytes =
-  let client = Http.Client.make ~sw ~net () in
-  let* access_token = Codex_auth.access_token ~client () in
-  let* transcription_access_token =
-    create_transcription_client_secret ~client ~access_token ~model
-  in
+  let client = realtime_rest_client ~sw ~net in
+  let* access_token = realtime_access_token ~client () in
   run_realtime_session
     ~sw
     ~net
-    ~url:(build_realtime_transcription_url ())
-    ~access_token:transcription_access_token
+    ~url:(build_realtime_url ~mode:Transcription ~model ())
+    ~access_token
     ~mode:Transcription
+    ~session_update:(build_transcription_session_update ~model)
     ~input_sample_rate:sample_rate
     pcm_bytes
 
@@ -922,8 +964,8 @@ let translate_with_prompt
     ~prompt_template
     ?(sample_rate = 16000)
     pcm_bytes =
-  let client = Http.Client.make ~sw ~net () in
-  let* access_token = Codex_auth.access_token ~client () in
+  let client = realtime_rest_client ~sw ~net in
+  let* access_token = realtime_access_token ~client () in
   let prompt =
     render_template prompt_template [
       ("source_language", source_language);
