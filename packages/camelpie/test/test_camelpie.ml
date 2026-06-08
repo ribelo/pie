@@ -89,6 +89,30 @@ let test_server_info_command () =
   let pkt = Pulse.Commands.build_get_server_info_command () in
   Alcotest.(check bool) "server info tag > 0" true (pkt.tag > 0)
 
+let restore_dbus_env old =
+  match old with
+  | Some v -> Unix.putenv "DBUS_SESSION_BUS_ADDRESS" v
+  | None -> Unix.putenv "DBUS_SESSION_BUS_ADDRESS" ""
+
+let test_keyboard_monitor_session_bus_path_abstract_socket () =
+  let old = Sys.getenv_opt "DBUS_SESSION_BUS_ADDRESS" in
+  Unix.putenv "DBUS_SESSION_BUS_ADDRESS" "unix:abstract=/tmp/dbus-abstract";
+  try
+    let path = Camelpie.Keyboard.Monitor.session_bus_path () in
+    restore_dbus_env old;
+    (* If we get here, the abstract socket was accepted. *)
+    Alcotest.(check string) "abstract path" "/tmp/dbus-abstract" path
+  with
+  | Invalid_argument msg ->
+    restore_dbus_env old;
+    (* Bug: session_bus_path only recognizes unix:path= and raises
+       invalid_arg for unix:abstract=, which is a valid D-Bus transport
+       on Linux (used by some distributions and container setups). *)
+    Alcotest.fail ("unix:abstract= socket should be supported: " ^ msg)
+  | exn ->
+    restore_dbus_env old;
+    raise exn
+
 let test_keyboard_key_event_parse () =
   let line =
     "{\"type\":\"signal\",\"interface\":\"org.freedesktop.a11y.KeyboardMonitor\",\"member\":\"KeyEvent\",\"payload\":{\"type\":\"buuuq\",\"data\":[false,0,65478,0,75]}}"
@@ -180,6 +204,131 @@ let test_daemon_contract_error_response_parsed_as_success () =
        Alcotest.fail "error response was silently parsed as Disabled"
      | _ -> ())
   | _ -> Alcotest.fail "expected Meeting_start_resp"
+
+let test_daemon_contract_status_error_swallowed () =
+  let error_json = `Assoc [("error", `String "server crashed")] in
+  let response =
+    Camelpie.Daemon.Contract.response_of_json
+      Camelpie.Daemon.Contract.Status
+      error_json
+  in
+  (* Bug: response_of_json for Status treats any JSON object as a valid status
+     snapshot. A server error like {"error": "..."} becomes a bogus
+     Status_resp with active=false, enabled=false, mode="idle", so the client
+     thinks the daemon is paused when it actually crashed. *)
+  match response with
+  | Camelpie.Daemon.Contract.Status_resp _ ->
+    Alcotest.fail "status error response was silently parsed as a snapshot"
+  | _ -> ()
+
+let test_daemon_contract_pause_error_swallowed () =
+  let error_json = `Assoc [("error", `String "server crashed")] in
+  let response =
+    Camelpie.Daemon.Contract.response_of_json
+      Camelpie.Daemon.Contract.Pause
+      error_json
+  in
+  (* Bug: response_of_json for Pause/Resume always returns Pause_resp or
+     Resume_resp regardless of the JSON content. A server error is therefore
+     indistinguishable from a successful call. *)
+  match response with
+  | Camelpie.Daemon.Contract.Pause_resp ->
+    Alcotest.fail "pause error response was silently parsed as success"
+  | _ -> ()
+
+let pulse_command_packet packet_type tag body_bytes =
+  let envelope_writer = Pulse.Protocol.Tag_struct_writer.create () in
+  Pulse.Protocol.Tag_struct_writer.add_u32 envelope_writer packet_type;
+  Pulse.Protocol.Tag_struct_writer.add_u32 envelope_writer tag;
+  let envelope = Pulse.Protocol.Tag_struct_writer.finalize envelope_writer in
+  let payload = Bytes.create (Bytes.length envelope + Bytes.length body_bytes) in
+  Bytes.blit envelope 0 payload 0 (Bytes.length envelope);
+  Bytes.blit body_bytes 0 payload (Bytes.length envelope) (Bytes.length body_bytes);
+  Pulse.Protocol.frame_packet payload
+
+let pulse_read_exact flow len =
+  let buffer = Cstruct.create len in
+  let rec loop off =
+    if off = len then Cstruct.to_bytes buffer
+    else
+      let cs = Cstruct.sub buffer off (len - off) in
+      match Eio.Flow.single_read flow cs with
+      | 0 -> raise End_of_file
+      | n -> loop (off + n)
+  in
+  loop 0
+
+let pulse_read_command flow =
+  let header = pulse_read_exact flow Pulse.Defs.pa_stream_descriptor_size in
+  let hdr = Pulse.Protocol.decode_packet_header header in
+  let payload = pulse_read_exact flow hdr.length in
+  Pulse.Commands.parse_command_envelope payload
+
+let test_pulse_client_set_client_name_error_ignored () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let socket_path =
+    Filename.concat
+      (Filename.get_temp_dir_name ())
+      (Printf.sprintf "camelpie-pulse-%d.sock" (Unix.getpid ()))
+  in
+  (try Sys.remove socket_path with Sys_error _ -> ());
+  let socket =
+    Eio.Net.listen
+      ~sw
+      ~reuse_addr:true
+      ~backlog:1
+      (Eio.Stdenv.net env)
+      (`Unix socket_path)
+  in
+  Eio.Fiber.fork ~sw (fun () ->
+    Eio.Switch.run @@ fun conn_sw ->
+    let flow, _addr = Eio.Net.accept ~sw:conn_sw socket in
+    let auth_env = pulse_read_command flow in
+    let auth_reply_body =
+      let w = Pulse.Protocol.Tag_struct_writer.create () in
+      Pulse.Protocol.Tag_struct_writer.add_u32 w Pulse.Defs.pa_native_protocol_version;
+      Pulse.Protocol.Tag_struct_writer.finalize w
+    in
+    let auth_reply =
+      pulse_command_packet
+        Pulse.Defs.Pa_command.reply
+        auth_env.Pulse.Commands.tag
+        auth_reply_body
+    in
+    Eio.Flow.write flow [Cstruct.of_bytes auth_reply];
+    let name_env = pulse_read_command flow in
+    let err_body =
+      let w = Pulse.Protocol.Tag_struct_writer.create () in
+      Pulse.Protocol.Tag_struct_writer.add_u32 w 1;
+      Pulse.Protocol.Tag_struct_writer.finalize w
+    in
+    let err_reply =
+      pulse_command_packet
+        Pulse.Defs.Pa_command.error
+        name_env.Pulse.Commands.tag
+        err_body
+    in
+    Eio.Flow.write flow [Cstruct.of_bytes err_reply];
+    try Eio.Flow.shutdown flow `Send with _ -> ());
+  let rt = Eta.Runtime.create ~sw ~clock:(Eio.Stdenv.clock env) () in
+  let effect =
+    Pulse.Client.with_client
+      ~sw
+      ~net:(Eio.Stdenv.net env)
+      ~clock:(Eio.Stdenv.clock env)
+      ~socket_path
+      ~cookie:(Bytes.make Pulse.Defs.pa_native_cookie_length '\x00')
+      (fun _client -> Eta.Effect.pure ())
+  in
+  (* Bug: Pulse.Client.connect receives the result of set_client_name but
+     discards it with [let _ = ...]. A server error reply should be
+     propagated to the caller instead of being silently swallowed. *)
+  match Eta.Runtime.run rt effect with
+  | Ok () ->
+    Alcotest.fail
+      "expected set_client_name error to propagate, but connect succeeded"
+  | Error _ -> ()
 
 let test_daemon_contract_response () =
   let snap : Camelpie.Daemon.Contract.recording_snapshot =
@@ -1758,6 +1907,11 @@ let () =
          Alcotest.test_case "auth command" `Quick test_auth_command;
          Alcotest.test_case "server info command" `Quick test_server_info_command;
        ]);
+      ("pulse_client",
+       [
+         Alcotest.test_case "set_client_name error ignored" `Quick
+           test_pulse_client_set_client_name_error_ignored;
+       ]);
       ("config",
        [
          Alcotest.test_case "provider codex-realtime" `Quick (fun () ->
@@ -1801,6 +1955,10 @@ let () =
            test_daemon_contract_response;
          Alcotest.test_case "error response parsed as success" `Quick
            test_daemon_contract_error_response_parsed_as_success;
+         Alcotest.test_case "status error swallowed" `Quick
+           test_daemon_contract_status_error_swallowed;
+         Alcotest.test_case "pause error swallowed" `Quick
+           test_daemon_contract_pause_error_swallowed;
        ]);
       ("daemon_server",
        [
@@ -1812,6 +1970,8 @@ let () =
          Alcotest.test_case "parse KeyEvent" `Quick test_keyboard_key_event_parse;
          Alcotest.test_case "parse D-Bus KeyEvent" `Quick
            test_keyboard_dbus_key_event_parse;
+         Alcotest.test_case "session bus path rejects abstract" `Quick
+           test_keyboard_monitor_session_bus_path_abstract_socket;
          Alcotest.test_case "keysym_of_name rejects unknown keys" `Quick (fun () ->
            let keysym = Camelpie.Keyboard.Monitor.keysym_of_name "F11" in
            (* Bug: keysym_of_name returns 0 for unknown keys, but 0 is a valid
