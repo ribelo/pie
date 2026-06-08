@@ -422,6 +422,78 @@ let test_daemon_server_state () =
    | _ -> Alcotest.fail "meeting value must be object");
   (try Sys.remove persist_path with Sys_error _ -> ())
 
+let test_daemon_server_meeting_stop_no_failure_signal () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let socket_path =
+    Filename.concat
+      (Filename.get_temp_dir_name ())
+      (Printf.sprintf "camelpie-daemon-%d.sock" (Unix.getpid ()))
+  in
+  let persist_path =
+    Filename.concat
+      (Filename.get_temp_dir_name ())
+      (Printf.sprintf "camelpie-daemon-%d.json" (Unix.getpid ()))
+  in
+  (try Sys.remove socket_path with Sys_error _ -> ());
+  (try Sys.remove persist_path with Sys_error _ -> ());
+  let coordinator =
+    Camelpie.Recording.Coordinator.create ~persist_path ()
+  in
+  (* Start PTT transcribe mode *)
+  ignore
+    (Camelpie.Recording.Coordinator.try_start
+       coordinator
+       Camelpie.Recording.Coordinator.Ptt_transcribe
+       ());
+  Camelpie.Daemon.Server.start
+    ~sw
+    ~net:(Eio.Stdenv.net env)
+    ~socket_path
+    coordinator;
+  let send method_str =
+    let flow =
+      Eio.Net.connect
+        ~sw
+        (Eio.Stdenv.net env)
+        (`Unix socket_path)
+    in
+    Fun.protect
+      ~finally:(fun () -> Eio.Flow.close flow)
+      (fun () ->
+         let payload =
+           Yojson.Safe.to_string (`Assoc [("method", `String method_str)])
+           ^ "\n"
+         in
+         Eio.Flow.write flow [Cstruct.of_string payload];
+         let reader = Eio.Buf_read.of_flow ~max_size:65536 flow in
+         Yojson.Safe.from_string (Eio.Buf_read.line reader))
+  in
+  (match send "MeetingStop" with
+   | `Assoc fields ->
+     let active =
+       match List.assoc_opt "active" fields with
+       | Some (`Bool b) -> b
+       | _ -> false
+     in
+     let mode =
+       match List.assoc_opt "mode" fields with
+       | Some (`String s) -> s
+       | _ -> ""
+     in
+     (* The coordinator is in PTT_transcribe mode, so Meeting_stop returns
+        false internally but the server ignores this and returns a snapshot
+        showing the current state. The client has no way to know the stop
+        had no effect because there's no success/failure indicator. *)
+     Alcotest.(check bool) "still active" true active;
+     Alcotest.(check string) "still ptt-transcribe" "ptt-transcribe" mode;
+     Alcotest.(check bool)
+       "MeetingStop response should indicate when no meeting was active"
+       true
+       (List.mem_assoc "stopped" fields)
+   | _ -> Alcotest.fail "expected JSON object");
+  (try Sys.remove persist_path with Sys_error _ -> ())
+
 let test_codex_realtime_url_builders () =
   let transcribe_url =
     Stt.Codex_realtime.build_realtime_url
@@ -764,6 +836,27 @@ let temp_dir prefix =
   Sys.remove path;
   Unix.mkdir path 0o700;
   path
+
+let test_recording_coordinator_persist_error_swallowed () =
+  let base = temp_dir "camelpie-coordinator-persist" in
+  let path = Filename.concat base "recording.json" in
+  write_file path "not a directory";
+  let persist_path = Filename.concat path "nested.json" in
+  (* Bug: Recording.Coordinator.create calls persist which catches ALL
+     exceptions internally and prints to stderr. The caller receives a
+     valid coordinator even though the state file was never written.
+     There is no way for the caller to know persistence failed. *)
+  let coordinator =
+    Recording.Coordinator.create ~persist_path ()
+  in
+  let snap = Recording.Coordinator.snapshot coordinator in
+  Alcotest.(check bool) "coordinator created" true snap.enabled;
+  (* The real bug: create should have raised, but it returned successfully
+     while silently failing to write the state file. *)
+  Alcotest.(check bool)
+    "state file should exist after create"
+    true
+    (Sys.file_exists persist_path)
 
 let test_assistant_focused_window_prompt_context () =
   let window : Camelpie.Niri.window_info =
@@ -1964,6 +2057,8 @@ let () =
        [
          Alcotest.test_case "socket state" `Quick
            test_daemon_server_state;
+         Alcotest.test_case "meeting stop no failure signal" `Quick
+           test_daemon_server_meeting_stop_no_failure_signal;
        ]);
       ("keyboard",
        [
@@ -1986,6 +2081,8 @@ let () =
       ("recording_coordinator",
        [
          Alcotest.test_case "transitions" `Quick test_recording_coordinator_transitions;
+         Alcotest.test_case "persist error swallowed" `Quick
+           test_recording_coordinator_persist_error_swallowed;
        ]);
       ("stt_codex_realtime",
        [
