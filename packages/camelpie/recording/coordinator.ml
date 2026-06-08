@@ -100,14 +100,21 @@ let rec mkdir_p dir =
     Unix.mkdir dir 0o755
   end
 
-let persist t =
+let write_state t =
   let snapshot = snapshot_of_state !(t.state) in
-  try
-    mkdir_p (Filename.dirname t.persist_path);
-    let oc = open_out_bin t.persist_path in
-    output_string oc (Yojson.Safe.pretty_to_string (json_of_snapshot snapshot));
-    output_char oc '\n';
-    close_out oc
+  mkdir_p (Filename.dirname t.persist_path);
+  let oc = open_out_bin t.persist_path in
+  Fun.protect
+    ~finally:(fun () -> close_out_noerr oc)
+    (fun () ->
+       output_string oc (Yojson.Safe.pretty_to_string (json_of_snapshot snapshot));
+       output_char oc '\n')
+
+(* Best-effort persistence used on every state mutation: the in-memory state
+   is authoritative, so a transient write failure is logged rather than
+   crashing the daemon's hot path. *)
+let persist t =
+  try write_state t
   with exn ->
     Printf.eprintf "Failed to write recording state at %s: %s\n%!"
       t.persist_path (Printexc.to_string exn)
@@ -115,7 +122,9 @@ let persist t =
 let create ?(persist_path = Paths.recording_state_path) () =
   let now = Unix.gettimeofday () in
   let t = { persist_path; state = ref (initial_state now) } in
-  persist t;
+  (* Fail fast at startup: if we cannot write the initial state file, the
+     caller must know rather than run with a phantom persistence path. *)
+  write_state t;
   t
 
 let snapshot t = snapshot_of_state !(t.state)

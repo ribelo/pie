@@ -842,21 +842,14 @@ let test_recording_coordinator_persist_error_swallowed () =
   let path = Filename.concat base "recording.json" in
   write_file path "not a directory";
   let persist_path = Filename.concat path "nested.json" in
-  (* Bug: Recording.Coordinator.create calls persist which catches ALL
-     exceptions internally and prints to stderr. The caller receives a
-     valid coordinator even though the state file was never written.
-     There is no way for the caller to know persistence failed. *)
-  let coordinator =
-    Recording.Coordinator.create ~persist_path ()
-  in
-  let snap = Recording.Coordinator.snapshot coordinator in
-  Alcotest.(check bool) "coordinator created" true snap.enabled;
-  (* The real bug: create should have raised, but it returned successfully
-     while silently failing to write the state file. *)
-  Alcotest.(check bool)
-    "state file should exist after create"
-    true
-    (Sys.file_exists persist_path)
+  (* create persists its initial state. When the target is unwritable (here the
+     parent component is a regular file, not a directory), create must fail
+     loudly instead of silently swallowing the error and handing back a
+     coordinator whose state file was never written. *)
+  match Recording.Coordinator.create ~persist_path () with
+  | _coordinator ->
+    Alcotest.fail "create should raise when it cannot persist initial state"
+  | exception _ -> ()
 
 let test_assistant_focused_window_prompt_context () =
   let window : Camelpie.Niri.window_info =
