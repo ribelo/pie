@@ -43,8 +43,11 @@ let handle_request coordinator = function
     in
     Contract.Meeting_start_resp { result; snapshot = snapshot_of_coordinator coordinator }
   | Contract.Meeting_stop ->
-    ignore (Recording.Coordinator.stop coordinator Recording.Coordinator.Meeting_transcribe);
-    Contract.Meeting_stop_resp (snapshot_of_coordinator coordinator)
+    let stopped =
+      Recording.Coordinator.stop coordinator Recording.Coordinator.Meeting_transcribe
+    in
+    Contract.Meeting_stop_resp
+      { stopped; snapshot = snapshot_of_coordinator coordinator }
   | Contract.Meeting_toggle ->
     let snap = Recording.Coordinator.toggle_meeting coordinator in
     Contract.Meeting_toggle_resp {

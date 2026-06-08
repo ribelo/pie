@@ -28,13 +28,18 @@ type meeting_start_result = {
   snapshot : recording_snapshot;
 }
 
+type meeting_stop_result = {
+  stopped : bool;
+  snapshot : recording_snapshot;
+}
+
 type response =
   | Status_resp of recording_snapshot
   | Pause_resp
   | Resume_resp
   | Toggle_resp of bool
   | Meeting_start_resp of meeting_start_result
-  | Meeting_stop_resp of recording_snapshot
+  | Meeting_stop_resp of meeting_stop_result
   | Meeting_toggle_resp of recording_snapshot
   | Error_resp of string
 
@@ -157,7 +162,10 @@ let response_to_json = function
       ("result", json_of_start_result r.result);
       ("snapshot", json_of_snapshot r.snapshot);
     ]
-  | Meeting_stop_resp snap -> json_of_snapshot snap
+  | Meeting_stop_resp r ->
+    (match json_of_snapshot r.snapshot with
+     | `Assoc fields -> `Assoc (fields @ [("stopped", `Bool r.stopped)])
+     | other -> other)
   | Meeting_toggle_resp snap -> json_of_snapshot snap
   | Error_resp message -> `Assoc [("error", `String message)]
 
@@ -204,5 +212,14 @@ let response_of_json req json =
           in
           Meeting_start_resp { result; snapshot }
         | _ -> Meeting_start_resp { result = Disabled; snapshot = snapshot_of_json (`Assoc []) })
-     | Meeting_stop -> Meeting_stop_resp (snapshot_of_json json)
+     | Meeting_stop ->
+       let stopped =
+         match json with
+         | `Assoc fields ->
+           (match List.assoc_opt "stopped" fields with
+            | Some (`Bool b) -> b
+            | _ -> false)
+         | _ -> false
+       in
+       Meeting_stop_resp { stopped; snapshot = snapshot_of_json json }
      | Meeting_toggle -> Meeting_toggle_resp (snapshot_of_json json))

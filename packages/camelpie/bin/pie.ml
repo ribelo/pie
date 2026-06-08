@@ -216,9 +216,11 @@ let meeting_stop_cmd =
       const (fun () ->
         run_effect (fun ~env ~sw ->
           let net = Eio.Stdenv.net env in
-          Eta.Effect.bind (fun (snap : Camelpie.Daemon.Contract.recording_snapshot) ->
+          Eta.Effect.bind (fun (r : Camelpie.Daemon.Contract.meeting_stop_result) ->
             Eta.Effect.sync (fun () ->
-              Printf.printf "%s\n%!" (render_recording_status snap))
+              if not r.stopped then
+                Printf.printf "no meeting transcription was active\n%!";
+              Printf.printf "%s\n%!" (render_recording_status r.snapshot))
           ) (Camelpie.Daemon.Client.meeting_stop ~net ~sw ())))
       $ env_term)
 

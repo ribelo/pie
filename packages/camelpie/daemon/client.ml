@@ -62,7 +62,7 @@ let meeting_start ~net ~sw () =
 let meeting_stop ~net ~sw () =
   let* resp = call ~net ~sw Meeting_stop in
   match resp with
-  | Meeting_stop_resp snap -> Eta.Effect.pure snap
+  | Meeting_stop_resp r -> Eta.Effect.pure r
   | _ -> Eta.Effect.fail (`Daemon_error "unexpected response for MeetingStop")
 
 let meeting_toggle ~net ~sw () =
