@@ -1080,6 +1080,24 @@ let test_pulse_parse_error_code_short_payload () =
     Alcotest.fail
       ("parse_error_code crashed on short payload: " ^ msg)
 
+let test_pulse_default_record_stream_options_mismatched_channel_map () =
+  let default = Camelpie.Pulse.Defs.default_record_stream_options () in
+  let overrides = { default with
+    sample_spec = { format = Camelpie.Pulse.Defs.Pa_sample_format.s16le;
+                    channels = 2; rate = 16000 };
+    channel_map = [];
+  } in
+  let options =
+    Camelpie.Pulse.Defs.default_record_stream_options ~overrides ()
+  in
+  (* Bug: default_record_stream_options uses the override's channel_map
+     without validating that its length matches sample_spec.channels.
+     PulseAudio requires one channel_map entry per channel. *)
+  Alcotest.(check int)
+    "channel map length must match channel count"
+    options.sample_spec.channels
+    (List.length options.channel_map)
+
 let test_pulse_parse_command_envelope_short_payload () =
   (* Bug: parse_command_envelope calls get_u32 twice (needs 8 bytes).
      A payload shorter than 8 bytes causes a Failure crash that kills the
@@ -2310,6 +2328,11 @@ let () =
            test_pulse_parse_error_code_short_payload;
          Alcotest.test_case "parse command envelope short payload" `Quick
            test_pulse_parse_command_envelope_short_payload;
+       ]);
+      ("pulse_defs",
+       [
+         Alcotest.test_case "default record stream mismatched channel map" `Quick
+           test_pulse_default_record_stream_options_mismatched_channel_map;
        ]);
       ("pulse_client",
        [
