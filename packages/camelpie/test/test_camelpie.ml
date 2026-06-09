@@ -846,6 +846,62 @@ let test_codex_realtime_transcribe_with_prompt_ignores_language_e2e () =
      | _ -> Alcotest.fail "expected session object")
   | _ -> Alcotest.fail "expected JSON object"
 
+let test_codex_realtime_translate_nonconv_drops_prompt_e2e () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let socket =
+    Eio.Net.listen
+      ~sw ~reuse_addr:true ~backlog:1
+      (Eio.Stdenv.net env)
+      (`Tcp (Eio.Net.Ipaddr.V4.loopback, 0))
+  in
+  let port = tcp_port (Eio.Net.listening_addr socket) in
+  let captured = ref `Null in
+  Eio.Fiber.fork ~sw (fun () ->
+    Eio.Switch.run @@ fun conn_sw ->
+    let flow, _addr = Eio.Net.accept ~sw:conn_sw socket in
+    run_realtime_capture_session_update flow captured);
+  let rt = Eta.Runtime.create ~sw ~clock:(Eio.Stdenv.clock env) () in
+  let old_url = Sys.getenv_opt "CODEX_REALTIME_BASE_URL_OVERRIDE" in
+  Unix.putenv "CODEX_REALTIME_BASE_URL_OVERRIDE"
+    (Printf.sprintf "ws://127.0.0.1:%d" port);
+  Unix.putenv "OPENAI_API_KEY" "test-token";
+  let cleanup_env () =
+    match old_url with
+    | Some v -> Unix.putenv "CODEX_REALTIME_BASE_URL_OVERRIDE" v
+    | None -> Unix.putenv "CODEX_REALTIME_BASE_URL_OVERRIDE" ""
+  in
+  let pcm = Bytes.make 3200 '\x00' in
+  let effect =
+    Stt.Codex_realtime.translate_with_prompt
+      ~sw ~net:(Eio.Stdenv.net env)
+      ~model:"not-the-conversation-model"
+      ~source_language:"pl" ~target_language:"en"
+      ~prompt_template:"Translate from {{source_language}} to {{target_language}}."
+      ~sample_rate:16000
+      pcm
+    |> Eta.Effect.timeout_as
+         (Eta.Duration.seconds 5)
+         ~on_timeout:(`Stt_error "timeout")
+  in
+  (match Eta.Runtime.run rt effect with Ok _ | Error _ -> ());
+  cleanup_env ();
+  match !captured with
+  | `Null -> Alcotest.fail "did not capture session.update"
+  | `Assoc fields ->
+    (match List.assoc_opt "session" fields with
+     | Some (`Assoc session) ->
+       (* Bug: For non-conversation translation, translate_with_prompt renders
+          the prompt template but build_translation_session_update has no
+          prompt/instructions parameter. The rendered prompt is silently
+          dropped from the session.update. *)
+       Alcotest.(check bool)
+         "non-conversation translation should include instructions"
+         true
+         (List.mem_assoc "instructions" session)
+     | _ -> Alcotest.fail "expected session object")
+  | _ -> Alcotest.fail "expected JSON object"
+
 let run_realtime_error_ws_server flow =
   let head = read_http_head flow in
   Alcotest.(check (option string))
@@ -2361,6 +2417,8 @@ let () =
            test_codex_realtime_translation_ignores_prompt;
          Alcotest.test_case "transcribe ignores language e2e" `Quick
            test_codex_realtime_transcribe_with_prompt_ignores_language_e2e;
+         Alcotest.test_case "translate non-conv drops prompt e2e" `Quick
+           test_codex_realtime_translate_nonconv_drops_prompt_e2e;
        ]);
       ("assistant_prompt",
        [
