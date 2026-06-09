@@ -868,26 +868,30 @@ let test_daemon_server_mkdir_p_silently_accepts_file () =
   | exn -> Alcotest.failf "unexpected exception: %s" (Printexc.to_string exn)
 
 let test_assistant_prompt_value_utf8_truncation () =
-  (* Build a 201-byte string: 199 ASCII chars followed by a 2-byte
-     UTF-8 character 'e' (C3 A9).  prompt_value caps at 200 bytes via
-     String.sub, which slices at a byte index.  When that index falls
-     inside a multi-byte UTF-8 sequence the truncated string ends with
-     an incomplete encoding, which can produce garbage or cause the
-     receiving API to reject the entire request. *)
+  (* Build a 201-byte string: 199 ASCII chars followed by a 2-byte UTF-8
+     character 'e' (C3 A9). A naive String.sub cap at 200 bytes slices inside
+     that 2-byte sequence, leaving a dangling C3 lead byte and producing an
+     invalid encoding the receiving API may reject. A correct truncation backs
+     off to the character boundary, dropping the split character entirely, so
+     the result is a valid UTF-8 string of at most 200 bytes (here 199). *)
   let prefix = String.make 199 'x' in
   let input = prefix ^ "\195\169" in (* 'e' = two bytes *)
   match Camelpie.Commands.Assistant.prompt_value (Some input) with
   | None -> Alcotest.fail "prompt_value returned None"
   | Some truncated ->
-    Alcotest.(check int) "truncated to 200 bytes" 200
-      (String.length truncated);
-    let last_byte = Char.code truncated.[199] in
-    (* The last byte is 0xC3, the start byte of 'e'.  An ASCII-safe
-       truncation would ensure the last byte is < 128. *)
+    Alcotest.(check bool) "at most 200 bytes" true
+      (String.length truncated <= 200);
+    Alcotest.(check bool) "actually truncated" true
+      (String.length truncated < String.length input);
+    let last_byte = Char.code truncated.[String.length truncated - 1] in
+    (* The result must not end inside a multi-byte UTF-8 sequence: the final
+       byte is neither a lead byte (>= 0xC0) nor a continuation byte
+       (0x80..0xBF). For this input it is the ASCII 'x'. *)
     Alcotest.(check bool)
       "truncation should not split a UTF-8 character"
       true
-      (last_byte < 128)
+      (last_byte < 128);
+    Alcotest.(check string) "keeps the complete leading run" prefix truncated
 
 let test_assistant_focused_window_prompt_context () =
   let window : Camelpie.Niri.window_info =

@@ -92,13 +92,7 @@ let json_of_snapshot (snapshot : snapshot) =
     ("lastError", (match snapshot.last_error with Some s -> `String s | None -> `Null));
   ]
 
-let rec mkdir_p dir =
-  if dir = "" || dir = Filename.dirname dir then ()
-  else if Sys.file_exists dir then ()
-  else begin
-    mkdir_p (Filename.dirname dir);
-    Unix.mkdir dir 0o755
-  end
+let mkdir_p = Fs.mkdir_p
 
 let write_state t =
   let snapshot = snapshot_of_state !(t.state) in

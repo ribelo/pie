@@ -1,10 +1,4 @@
-let rec mkdir_p dir =
-  if dir = "" || dir = Filename.dirname dir then ()
-  else if Sys.file_exists dir then ()
-  else begin
-    mkdir_p (Filename.dirname dir);
-    Unix.mkdir dir 0o755
-  end
+let mkdir_p = Fs.mkdir_p
 
 let snapshot_of_coordinator coordinator =
   let snap = Recording.Coordinator.snapshot coordinator in

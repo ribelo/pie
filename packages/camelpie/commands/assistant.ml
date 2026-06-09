@@ -116,6 +116,20 @@ let startup_config_json
 
 let context_value_max_length = 200
 
+(* Truncate [s] to at most [max_bytes] bytes without splitting a multi-byte
+   UTF-8 sequence. If the byte at the cut point is a UTF-8 continuation byte
+   (0b10xxxxxx), back off to the start of that character so the result is
+   always a valid encoding. *)
+let truncate_utf8 s max_bytes =
+  if String.length s <= max_bytes then s
+  else begin
+    let i = ref max_bytes in
+    while !i > 0 && Char.code s.[!i] land 0xC0 = 0x80 do
+      decr i
+    done;
+    String.sub s 0 !i
+  end
+
 let normalize_space value =
   let buf = Buffer.create (String.length value) in
   let pending_space = ref false in
@@ -138,7 +152,7 @@ let prompt_value = function
     let normalized = normalize_space value in
     if normalized = "" then None
     else if String.length normalized > context_value_max_length then
-      Some (String.sub normalized 0 context_value_max_length)
+      Some (truncate_utf8 normalized context_value_max_length)
     else Some normalized
 
 let append_focused_window_context prompt_template focused_window =
