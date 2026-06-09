@@ -161,7 +161,10 @@ let get_float table key default_val =
 
 let get_optional_string table key =
   match toml_find table key with
-  | Some (TT.TString value) -> Some value
+  | Some (TT.TString value) ->
+    (match String.trim value with
+     | "" -> None
+     | trimmed -> Some trimmed)
   | Some _ -> type_error key "a string"
   | None -> None
 

@@ -9,7 +9,7 @@ type parsed_command_envelope = {
   body : bytes;
 }
 
-val parse_command_envelope : bytes -> parsed_command_envelope
+val parse_command_envelope : bytes -> parsed_command_envelope option
 val parse_error_code : bytes -> int option
 
 val build_auth_command :

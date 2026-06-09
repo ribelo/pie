@@ -26,20 +26,33 @@ let command_packet command build =
     bytes = Protocol.frame_packet (Protocol.Tag_struct_writer.finalize writer) ~channel:Defs.pa_no_index;
   }
 
-let parse_command_envelope (payload : bytes) : parsed_command_envelope =
+let parse_command_envelope (payload : bytes) : parsed_command_envelope option =
   let reader = Protocol.Tag_struct_reader.create payload in
-  let packet_type = Protocol.Tag_struct_reader.get_u32 reader in
-  let tag = Protocol.Tag_struct_reader.get_u32 reader in
-  {
-    packet_type;
-    tag;
-    body = Protocol.Tag_struct_reader.remaining_bytes reader;
-  }
+  (* Every incoming packet starts with two u32 tag-struct values (10 bytes).
+     A truncated/malformed packet must not crash the read loop, so report it
+     as unparseable instead of raising. *)
+  match
+    let packet_type = Protocol.Tag_struct_reader.get_u32 reader in
+    let tag = Protocol.Tag_struct_reader.get_u32 reader in
+    (packet_type, tag)
+  with
+  | exception Failure _ -> None
+  | packet_type, tag ->
+    Some
+      {
+        packet_type;
+        tag;
+        body = Protocol.Tag_struct_reader.remaining_bytes reader;
+      }
 
 let parse_error_code (payload : bytes) : int option =
   let reader = Protocol.Tag_struct_reader.create payload in
   if not (Protocol.Tag_struct_reader.has_remaining reader) then None
-  else Some (Protocol.Tag_struct_reader.get_u32 reader)
+  else
+    (* A malformed/short error payload must not crash the read loop; treat it
+       as an unknown error code. *)
+    try Some (Protocol.Tag_struct_reader.get_u32 reader)
+    with Failure _ -> None
 
 let build_auth_command ?(cookie : bytes option) ?(protocol_version = Defs.pa_native_protocol_version) () : (command_packet, string) result =
   let auth_cookie =

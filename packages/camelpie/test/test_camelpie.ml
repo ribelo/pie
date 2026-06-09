@@ -262,7 +262,9 @@ let pulse_read_command flow =
   let header = pulse_read_exact flow Pulse.Defs.pa_stream_descriptor_size in
   let hdr = Pulse.Protocol.decode_packet_header header in
   let payload = pulse_read_exact flow hdr.length in
-  Pulse.Commands.parse_command_envelope payload
+  match Pulse.Commands.parse_command_envelope payload with
+  | Some envelope -> envelope
+  | None -> Alcotest.fail "could not parse command envelope"
 
 let test_pulse_client_set_client_name_error_ignored () =
   Eio_main.run @@ fun env ->
@@ -571,7 +573,7 @@ let test_codex_realtime_receive_stop_modes () =
        Stt.Codex_realtime.Response_done)
 
 let test_codex_realtime_transcription_session_update () =
-  match Stt.Codex_realtime.build_transcription_session_update ~model:"configured-model" with
+  match Stt.Codex_realtime.build_transcription_session_update ~model:"configured-model" () with
   | `Assoc fields ->
     Alcotest.(check (option string))
       "event type"
@@ -709,41 +711,42 @@ let write_ws_text flow payload =
   |> fun encoded -> Eio.Flow.copy_string encoded flow
 
 let read_ws_text flow =
-  let buf = Bytes.create 8 in
-  let cs = Cstruct.of_bytes buf in
-  let _ = Eio.Flow.single_read flow (Cstruct.sub cs 0 2) in
-  let _opcode = Cstruct.get_uint8 cs 0 land 0x0f in
-  let masked = (Cstruct.get_uint8 cs 1 land 0x80) <> 0 in
-  let payload_len = Cstruct.get_uint8 cs 1 land 0x7f in
+  let read_exact len =
+    let cs = Cstruct.create len in
+    let rec loop off =
+      if off < len then
+        match Eio.Flow.single_read flow (Cstruct.sub cs off (len - off)) with
+        | 0 -> raise End_of_file
+        | n -> loop (off + n)
+    in
+    loop 0;
+    Cstruct.to_bytes cs
+  in
+  let header = read_exact 2 in
+  let masked = (Char.code (Bytes.get header 1) land 0x80) <> 0 in
+  let len0 = Char.code (Bytes.get header 1) land 0x7f in
   let payload_len =
-    if payload_len = 126 then
-      let _ = Eio.Flow.single_read flow (Cstruct.sub cs 0 2) in
-      Cstruct.BE.get_uint16 cs 0
-    else if payload_len = 127 then
-      let _ = Eio.Flow.single_read flow (Cstruct.sub cs 0 8) in
-      Int64.to_int (Cstruct.BE.get_uint64 cs 0)
-    else payload_len
+    if len0 = 126 then
+      let ext = read_exact 2 in
+      (Char.code (Bytes.get ext 0) lsl 8) lor Char.code (Bytes.get ext 1)
+    else if len0 = 127 then begin
+      let ext = read_exact 8 in
+      let v = ref 0 in
+      for i = 0 to 7 do
+        v := (!v lsl 8) lor Char.code (Bytes.get ext i)
+      done;
+      !v
+    end
+    else len0
   in
-  let mask_key =
-    if masked then
-      let mk = Bytes.create 4 in
-      let _ = Eio.Flow.single_read flow (Cstruct.of_bytes mk) in
-      Some mk
-    else None
-  in
-  let payload = Bytes.create payload_len in
-  let payload_cs = Cstruct.of_bytes payload in
-  let rec read_all off =
-    if off < payload_len then
-      let n = Eio.Flow.single_read flow (Cstruct.sub payload_cs off (payload_len - off)) in
-      read_all (off + n)
-  in
-  read_all 0;
+  let mask_key = if masked then Some (read_exact 4) else None in
+  let payload = read_exact payload_len in
   (match mask_key with
    | Some key ->
      for i = 0 to payload_len - 1 do
-       let b = Char.code (Bytes.get payload i) lxor
-               Char.code (Bytes.get key (i mod 4)) in
+       let b =
+         Char.code (Bytes.get payload i) lxor Char.code (Bytes.get key (i mod 4))
+       in
        Bytes.set payload i (Char.chr b)
      done
    | None -> ());
@@ -834,15 +837,39 @@ let test_codex_realtime_transcribe_with_prompt_ignores_language_e2e () =
   | `Assoc fields ->
     (match List.assoc_opt "session" fields with
      | Some (`Assoc session) ->
-       (* Bug: transcribe_with_prompt accepts ~language and ~prompt_template
-          but ignores both (uses _ patterns). The actual session.update sent
-          to the API does not include the user's language or prompt context.
-          It should include at minimum the language the user configured. *)
+       (* transcribe_with_prompt must render ~prompt_template (with ~language
+          substituted) into the session.update. Per the realtime transcription
+          schema the prompt belongs under audio.input.transcription.prompt, not
+          at the session top level, so check it there and confirm the language
+          made it into the rendered text. *)
+       let transcription =
+         match List.assoc_opt "audio" session with
+         | Some (`Assoc audio) ->
+           (match List.assoc_opt "input" audio with
+            | Some (`Assoc input) ->
+              (match List.assoc_opt "transcription" input with
+               | Some (`Assoc transcription) -> transcription
+               | _ -> Alcotest.fail "expected transcription object")
+            | _ -> Alcotest.fail "expected input object")
+         | _ -> Alcotest.fail "expected audio object"
+       in
+       let prompt =
+         match List.assoc_opt "prompt" transcription with
+         | Some (`String value) -> value
+         | _ -> Alcotest.fail "transcription should include the rendered prompt"
+       in
        Alcotest.(check bool)
-         "transcription session should include language or instructions"
+         "rendered prompt should include the configured language"
          true
-         (List.mem_assoc "language" session
-          || List.mem_assoc "instructions" session)
+         (let needle = "pl" in
+          let nlen = String.length needle in
+          let plen = String.length prompt in
+          let rec scan i =
+            if i + nlen > plen then false
+            else if String.sub prompt i nlen = needle then true
+            else scan (i + 1)
+          in
+          scan 0)
      | _ -> Alcotest.fail "expected session object")
   | _ -> Alcotest.fail "expected JSON object"
 
@@ -1133,20 +1160,14 @@ let test_pulse_default_record_stream_options_mismatched_channel_map () =
     (List.length options.channel_map)
 
 let test_pulse_parse_command_envelope_short_payload () =
-  (* Bug: parse_command_envelope calls get_u32 twice (needs 8 bytes).
-     A payload shorter than 8 bytes causes a Failure crash that kills the
-     read_loop. This is the very first function called for every incoming
-     packet, so a single malformed packet takes down the whole session. *)
-  try
-    let result =
-      Camelpie.Pulse.Commands.parse_command_envelope (Bytes.make 3 '\x00')
-    in
-    ignore result;
-    Alcotest.fail
-      "parse_command_envelope should not crash but should handle it gracefully"
-  with Failure msg ->
-    Alcotest.fail
-      ("parse_command_envelope crashed on short payload: " ^ msg)
+  (* parse_command_envelope reads two u32 tag-struct values (10 bytes). It is
+     the very first function called for every incoming packet, so a malformed
+     short payload must be handled gracefully (return None) rather than raising
+     a Failure that tears down the whole read loop. *)
+  Alcotest.(check bool)
+    "short payload returns None instead of crashing"
+    true
+    (Camelpie.Pulse.Commands.parse_command_envelope (Bytes.make 3 '\x00') = None)
 
 let test_daemon_contract_meeting_toggle_no_indicator () =
   let snap : Camelpie.Daemon.Contract.recording_snapshot =
@@ -1203,19 +1224,14 @@ schema_version = 2
 app_id = "   "
 action = "ctrl-j"
 |toml};
-  let config = Camelpie.Config.Stt.load ~config_path () in
-  match config.Camelpie.Config.Stt.newline_rules with
-  | [ rule ] ->
-    (* Bug: get_optional_string does not trim the TOML value, so a
-       whitespace-only app_id like "   " is Some "   " instead of None.
-       The rule will never match any window because window.app_id is never
-       whitespace-only, yet the rule passes the "must set app_id or
-       title_regex" validation. *)
-    Alcotest.(check (option string))
-      "whitespace-only app_id should be None"
-      None
-      rule.app_id
-  | _ -> Alcotest.fail "expected one newline rule"
+  (* A whitespace-only app_id is not a real matcher. get_optional_string trims
+     it to None, leaving a rule with neither app_id nor title_regex. Such a
+     matcher-less rule would match every window (a catch-all), so it must be
+     rejected at load time rather than silently accepted. *)
+  match Camelpie.Config.Stt.load ~config_path () with
+  | _ ->
+    Alcotest.fail "whitespace-only app_id should be rejected, not loaded"
+  | exception Camelpie.Config.Stt.Config_error _ -> ()
 
 let test_assistant_focused_window_prompt_context () =
   let window : Camelpie.Niri.window_info =

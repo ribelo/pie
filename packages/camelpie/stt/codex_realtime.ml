@@ -122,7 +122,11 @@ let build_audio_append ?(mode = Transcription) pcm_bytes =
 let build_audio_commit () =
   `Assoc [("type", `String "input_audio_buffer.commit")]
 
-let build_transcription_session_update ~model =
+let build_transcription_session_update ?prompt ~model () =
+  let transcription_fields =
+    [("model", `String model)]
+    @ (match prompt with Some p -> [("prompt", `String p)] | None -> [])
+  in
   `Assoc [
     ("type", `String "session.update");
     ("session", `Assoc [
@@ -130,24 +134,31 @@ let build_transcription_session_update ~model =
       ("audio", `Assoc [
         ("input", `Assoc [
           ("format", `Assoc [("type", `String "audio/pcm"); ("rate", `Int realtime_sample_rate)]);
-          ("transcription", `Assoc [("model", `String model)]);
+          ("transcription", `Assoc transcription_fields);
         ]);
       ]);
     ]);
   ]
 
-let build_translation_session_update ?target_language () =
-  let session =
-    match target_language with
-    | None -> `Assoc []
-    | Some language ->
-      `Assoc [
-        ("audio", `Assoc [
-          ("output", `Assoc [("language", `String language)]);
-        ]);
-      ]
+let build_translation_session_update ?prompt ?target_language () =
+  let instructions =
+    match prompt with
+    | Some p -> Some p
+    | None ->
+      Option.map
+        (fun lang -> Printf.sprintf "Translate the spoken audio into %s." lang)
+        target_language
   in
-  `Assoc [("type", `String "session.update"); ("session", session)]
+  let session_fields =
+    (match instructions with
+     | Some i -> [("instructions", `String i)]
+     | None -> [])
+    @ (match target_language with
+       | None -> []
+       | Some language ->
+         [("audio", `Assoc [("output", `Assoc [("language", `String language)])])])
+  in
+  `Assoc [("type", `String "session.update"); ("session", `Assoc session_fields)]
 
 let build_conversation_translation_session_update ~model ~prompt =
   `Assoc [
@@ -884,19 +895,20 @@ let with_transcription_stream
     ~sw
     ~net
     ~model
-    ~language:_
-    ~prompt_template:_
+    ~language
+    ~prompt_template
     ?(sample_rate = 16000)
     use =
   let client = realtime_rest_client ~sw ~net in
   let* access_token = realtime_access_token ~client () in
+  let prompt = render_template prompt_template [ ("language", language) ] in
   with_stream_session
     ~sw
     ~net
     ~url:(build_realtime_url ~mode:Transcription ~model ())
     ~access_token
     ~mode:Transcription
-    ~session_update:(build_transcription_session_update ~model)
+    ~session_update:(build_transcription_session_update ~model ~prompt ())
     ~sample_rate
     ~cancel_message:"Codex realtime transcription cancelled"
     use
@@ -937,21 +949,22 @@ let with_translation_stream
       ~url:(build_realtime_url ~mode:Translation ~model ())
       ~access_token
       ~mode:Translation
-      ~session_update:(build_translation_session_update ~target_language ())
+      ~session_update:(build_translation_session_update ~prompt ~target_language ())
       ~sample_rate
       ~cancel_message:"Codex realtime translation cancelled"
       use
 
-let transcribe_with_prompt ~sw ~net ~model ~language:_ ~prompt_template:_ ?(sample_rate = 16000) pcm_bytes =
+let transcribe_with_prompt ~sw ~net ~model ~language ~prompt_template ?(sample_rate = 16000) pcm_bytes =
   let client = realtime_rest_client ~sw ~net in
   let* access_token = realtime_access_token ~client () in
+  let prompt = render_template prompt_template [ ("language", language) ] in
   run_realtime_session
     ~sw
     ~net
     ~url:(build_realtime_url ~mode:Transcription ~model ())
     ~access_token
     ~mode:Transcription
-    ~session_update:(build_transcription_session_update ~model)
+    ~session_update:(build_transcription_session_update ~model ~prompt ())
     ~input_sample_rate:sample_rate
     pcm_bytes
 
@@ -990,6 +1003,6 @@ let translate_with_prompt
       ~url:(build_realtime_url ~mode:Translation ~model ())
       ~access_token
       ~mode:Translation
-      ~session_update:(build_translation_session_update ~target_language ())
+      ~session_update:(build_translation_session_update ~prompt ~target_language ())
       ~input_sample_rate:sample_rate
       pcm_bytes

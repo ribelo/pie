@@ -179,9 +179,13 @@ let default_record_stream_options ?(overrides : record_stream_options option) ()
     | None -> { format = Pa_sample_format.s16le; channels = 1; rate = 16000 }
   in
   let channel_map =
+    let default_map = List.init sample_spec.channels (fun i -> i + 1) in
     match overrides with
-    | Some o -> o.channel_map
-    | None -> List.init sample_spec.channels (fun i -> i + 1)
+    | Some o when List.length o.channel_map = sample_spec.channels -> o.channel_map
+    | _ ->
+      (* PulseAudio requires exactly one channel-map entry per channel. Ignore
+         an override map whose length does not match and derive a default. *)
+      default_map
   in
   let default_volume = List.init sample_spec.channels (fun _ -> pa_volume_norm) in
   {

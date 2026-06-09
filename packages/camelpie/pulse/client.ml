@@ -65,18 +65,22 @@ let process_incoming (T t) (chunk : bytes) : unit =
       else begin
         let payload = Bytes.sub buffer (!offset + Defs.pa_stream_descriptor_size) header.length in
         if header.channel = Defs.pa_no_index then begin
-          let envelope = Commands.parse_command_envelope payload in
-          match Hashtbl.find_opt t.pending envelope.tag with
-          | Some resolver ->
-            Hashtbl.remove t.pending envelope.tag;
-            if envelope.packet_type = Defs.Pa_command.reply then
-              Eio.Promise.resolve_ok resolver envelope.body
-            else if envelope.packet_type = Defs.Pa_command.error then
-              let code = Commands.parse_error_code envelope.body in
-              Eio.Promise.resolve_error resolver (error "PulseAudio command failed" ?code ())
-            else
-              Eio.Promise.resolve_error resolver (error (Printf.sprintf "unsupported response type: %d" envelope.packet_type) ())
-          | None -> ()
+          match Commands.parse_command_envelope payload with
+          | None ->
+            debug "[pulse] skipping unparseable command packet (%d bytes)\n"
+              (Bytes.length payload)
+          | Some envelope ->
+            (match Hashtbl.find_opt t.pending envelope.tag with
+             | Some resolver ->
+               Hashtbl.remove t.pending envelope.tag;
+               if envelope.packet_type = Defs.Pa_command.reply then
+                 Eio.Promise.resolve_ok resolver envelope.body
+               else if envelope.packet_type = Defs.Pa_command.error then
+                 let code = Commands.parse_error_code envelope.body in
+                 Eio.Promise.resolve_error resolver (error "PulseAudio command failed" ?code ())
+               else
+                 Eio.Promise.resolve_error resolver (error (Printf.sprintf "unsupported response type: %d" envelope.packet_type) ())
+             | None -> ())
         end else begin
           match Hashtbl.find_opt t.record_queues header.channel with
           | Some queue -> Eio.Stream.add queue payload

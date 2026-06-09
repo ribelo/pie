@@ -157,7 +157,7 @@ let stop t mode =
         mode = None;
         started_at = None;
         transcript_path = None;
-        last_error = None;
+        last_error = current.last_error;
         updated_at = now;
       })
     | _ -> (false, current))

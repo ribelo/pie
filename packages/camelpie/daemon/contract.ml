@@ -166,7 +166,16 @@ let response_to_json = function
     (match json_of_snapshot r.snapshot with
      | `Assoc fields -> `Assoc (fields @ [("stopped", `Bool r.stopped)])
      | other -> other)
-  | Meeting_toggle_resp snap -> json_of_snapshot snap
+  | Meeting_toggle_resp snap ->
+    (* Mirror Meeting_stop's "stopped" indicator: expose whether meeting
+       transcription is active after the toggle so callers can tell the
+       resulting state programmatically. *)
+    (match json_of_snapshot snap with
+     | `Assoc fields ->
+       `Assoc
+         (fields
+          @ [("toggled", `Bool (snap.active && snap.mode = "meeting-transcribe"))])
+     | other -> other)
   | Error_resp message -> `Assoc [("error", `String message)]
 
 let error_message_of_json = function
