@@ -1021,6 +1021,40 @@ let test_recording_coordinator_persist_error_swallowed () =
     Alcotest.fail "create should raise when it cannot persist initial state"
   | exception _ -> ()
 
+let test_recording_coordinator_stop_clears_error () =
+  let path = Filename.temp_file "camelpie-recording" ".json" in
+  let coordinator =
+    Recording.Coordinator.create ~persist_path:path ()
+  in
+  (* Start a meeting, set an error, then stop via toggle_meeting *)
+  ignore
+    (Recording.Coordinator.try_start
+       coordinator Recording.Coordinator.Meeting_transcribe ());
+  Recording.Coordinator.set_error coordinator "toggle-stops-meeting";
+  let snap_toggle = Recording.Coordinator.toggle_meeting coordinator in
+  (* toggle_meeting preserves last_error when stopping *)
+  Alcotest.(check (option string))
+    "toggle_meeting preserves last_error"
+    (Some "toggle-stops-meeting")
+    snap_toggle.Recording.Coordinator.last_error;
+  (* Now start fresh and stop via stop *)
+  ignore
+    (Recording.Coordinator.try_start
+       coordinator Recording.Coordinator.Meeting_transcribe ());
+  Recording.Coordinator.set_error coordinator "stop-clears-it";
+  ignore
+    (Recording.Coordinator.stop
+       coordinator Recording.Coordinator.Meeting_transcribe);
+  let snap_stop = Recording.Coordinator.snapshot coordinator in
+  (* Bug: stop clears last_error, but toggle_meeting preserves it.
+     The behavior should be consistent — either both should clear or
+     both should preserve the error on stop. *)
+  Alcotest.(check (option string))
+    "stop should also preserve last_error"
+    (Some "stop-clears-it")
+    snap_stop.Recording.Coordinator.last_error;
+  Sys.remove path
+
 let test_daemon_server_mkdir_p_silently_accepts_file () =
   let base = temp_dir "camelpie-daemon-mkdir_p" in
   let file_path = Filename.concat base "not-a-dir" in
@@ -2423,6 +2457,8 @@ let () =
          Alcotest.test_case "transitions" `Quick test_recording_coordinator_transitions;
          Alcotest.test_case "persist error swallowed" `Quick
            test_recording_coordinator_persist_error_swallowed;
+         Alcotest.test_case "stop clears error inconsistently" `Quick
+           test_recording_coordinator_stop_clears_error;
        ]);
       ("stt_codex_realtime",
        [
