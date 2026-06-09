@@ -893,6 +893,23 @@ let test_assistant_prompt_value_utf8_truncation () =
       (last_byte < 128);
     Alcotest.(check string) "keeps the complete leading run" prefix truncated
 
+let test_pulse_parse_error_code_short_payload () =
+  (* Bug: parse_error_code calls Protocol.Tag_struct_reader.get_u32 without
+     checking whether the payload has at least 4 bytes. A malformed 1-byte
+     error response from the PulseAudio server causes a Failure crash that
+     terminates the read_loop and kills the entire connection. *)
+  try
+    let result =
+      Camelpie.Pulse.Commands.parse_error_code (Bytes.make 1 '\x00')
+    in
+    Alcotest.(check (option int))
+      "short error code payload should return None"
+      None
+      result
+  with Failure msg ->
+    Alcotest.fail
+      ("parse_error_code crashed on short payload: " ^ msg)
+
 let test_codex_realtime_translation_ignores_prompt () =
   let update =
     Stt.Codex_realtime.build_translation_session_update ~target_language:"pl" ()
@@ -2081,6 +2098,8 @@ let () =
        [
          Alcotest.test_case "auth command" `Quick test_auth_command;
          Alcotest.test_case "server info command" `Quick test_server_info_command;
+         Alcotest.test_case "parse error code short payload" `Quick
+           test_pulse_parse_error_code_short_payload;
        ]);
       ("pulse_client",
        [
