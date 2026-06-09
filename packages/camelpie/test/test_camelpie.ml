@@ -708,6 +708,47 @@ let write_ws_text flow payload =
   |> Bytes.to_string
   |> fun encoded -> Eio.Flow.copy_string encoded flow
 
+let read_ws_text flow =
+  let buf = Bytes.create 8 in
+  let cs = Cstruct.of_bytes buf in
+  let _ = Eio.Flow.single_read flow (Cstruct.sub cs 0 2) in
+  let _opcode = Cstruct.get_uint8 cs 0 land 0x0f in
+  let masked = (Cstruct.get_uint8 cs 1 land 0x80) <> 0 in
+  let payload_len = Cstruct.get_uint8 cs 1 land 0x7f in
+  let payload_len =
+    if payload_len = 126 then
+      let _ = Eio.Flow.single_read flow (Cstruct.sub cs 0 2) in
+      Cstruct.BE.get_uint16 cs 0
+    else if payload_len = 127 then
+      let _ = Eio.Flow.single_read flow (Cstruct.sub cs 0 8) in
+      Int64.to_int (Cstruct.BE.get_uint64 cs 0)
+    else payload_len
+  in
+  let mask_key =
+    if masked then
+      let mk = Bytes.create 4 in
+      let _ = Eio.Flow.single_read flow (Cstruct.of_bytes mk) in
+      Some mk
+    else None
+  in
+  let payload = Bytes.create payload_len in
+  let payload_cs = Cstruct.of_bytes payload in
+  let rec read_all off =
+    if off < payload_len then
+      let n = Eio.Flow.single_read flow (Cstruct.sub payload_cs off (payload_len - off)) in
+      read_all (off + n)
+  in
+  read_all 0;
+  (match mask_key with
+   | Some key ->
+     for i = 0 to payload_len - 1 do
+       let b = Char.code (Bytes.get payload i) lxor
+               Char.code (Bytes.get key (i mod 4)) in
+       Bytes.set payload i (Char.chr b)
+     done
+   | None -> ());
+  Bytes.to_string payload
+
 let close_payload code reason =
   let payload = Bytes.create (2 + String.length reason) in
   Bytes.set payload 0 (Char.chr ((code lsr 8) land 0xff));
@@ -731,6 +772,79 @@ let write_ws_switching_response flow key =
     ^ "\r\n\r\n"
   in
   Eio.Flow.copy_string response flow
+
+let run_realtime_capture_session_update flow captured =
+  let head = read_http_head flow in
+  let key =
+    match header_value "Sec-WebSocket-Key" head with
+    | Some k -> k
+    | None -> Alcotest.fail "missing Sec-WebSocket-Key"
+  in
+  write_ws_switching_response flow key;
+  let update_json = read_ws_text flow in
+  (match Yojson.Safe.from_string update_json with
+   | exception _ -> ()
+   | json -> captured := json);
+  write_ws_text flow {|{"type":"session.updated"}|};
+  write_ws_close flow;
+  try Eio.Flow.shutdown flow `Send with _ -> ()
+
+let test_codex_realtime_transcribe_with_prompt_ignores_language_e2e () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let socket =
+    Eio.Net.listen
+      ~sw ~reuse_addr:true ~backlog:1
+      (Eio.Stdenv.net env)
+      (`Tcp (Eio.Net.Ipaddr.V4.loopback, 0))
+  in
+  let port = tcp_port (Eio.Net.listening_addr socket) in
+  let captured = ref `Null in
+  Eio.Fiber.fork ~sw (fun () ->
+    Eio.Switch.run @@ fun conn_sw ->
+    let flow, _addr = Eio.Net.accept ~sw:conn_sw socket in
+    run_realtime_capture_session_update flow captured);
+  let rt = Eta.Runtime.create ~sw ~clock:(Eio.Stdenv.clock env) () in
+  let old_url = Sys.getenv_opt "CODEX_REALTIME_BASE_URL_OVERRIDE" in
+  Unix.putenv "CODEX_REALTIME_BASE_URL_OVERRIDE"
+    (Printf.sprintf "ws://127.0.0.1:%d" port);
+  Unix.putenv "OPENAI_API_KEY" "test-token";
+  let cleanup_env () =
+    match old_url with
+    | Some v -> Unix.putenv "CODEX_REALTIME_BASE_URL_OVERRIDE" v
+    | None -> Unix.putenv "CODEX_REALTIME_BASE_URL_OVERRIDE" ""
+  in
+  let pcm = Bytes.make 3200 '\x00' in
+  let effect =
+    Stt.Codex_realtime.transcribe_with_prompt
+      ~sw ~net:(Eio.Stdenv.net env)
+      ~model:"m"
+      ~language:"pl"
+      ~prompt_template:"Transcribe in {{language}}."
+      ~sample_rate:16000
+      pcm
+    |> Eta.Effect.timeout_as
+         (Eta.Duration.seconds 5)
+         ~on_timeout:(`Stt_error "timeout")
+  in
+  (match Eta.Runtime.run rt effect with Ok _ | Error _ -> ());
+  cleanup_env ();
+  match !captured with
+  | `Null -> Alcotest.fail "did not capture session.update message"
+  | `Assoc fields ->
+    (match List.assoc_opt "session" fields with
+     | Some (`Assoc session) ->
+       (* Bug: transcribe_with_prompt accepts ~language and ~prompt_template
+          but ignores both (uses _ patterns). The actual session.update sent
+          to the API does not include the user's language or prompt context.
+          It should include at minimum the language the user configured. *)
+       Alcotest.(check bool)
+         "transcription session should include language or instructions"
+         true
+         (List.mem_assoc "language" session
+          || List.mem_assoc "instructions" session)
+     | _ -> Alcotest.fail "expected session object")
+  | _ -> Alcotest.fail "expected JSON object"
 
 let run_realtime_error_ws_server flow =
   let head = read_http_head flow in
@@ -2245,6 +2359,8 @@ let () =
            test_codex_realtime_stream_reports_server_error_e2e;
          Alcotest.test_case "translation ignores prompt" `Quick
            test_codex_realtime_translation_ignores_prompt;
+         Alcotest.test_case "transcribe ignores language e2e" `Quick
+           test_codex_realtime_transcribe_with_prompt_ignores_language_e2e;
        ]);
       ("assistant_prompt",
        [
