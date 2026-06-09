@@ -893,6 +893,53 @@ let test_assistant_prompt_value_utf8_truncation () =
       (last_byte < 128);
     Alcotest.(check string) "keeps the complete leading run" prefix truncated
 
+let test_codex_realtime_translation_ignores_prompt () =
+  let update =
+    Stt.Codex_realtime.build_translation_session_update ~target_language:"pl" ()
+  in
+  match update with
+  | `Assoc fields ->
+    (match List.assoc_opt "session" fields with
+     | Some (`Assoc session) ->
+       (* Bug: translate_with_prompt renders the prompt template into a
+          usable prompt, but the non-conversation translation path calls
+          build_translation_session_update which has no ~prompt parameter
+          and includes no instructions. The rendered prompt is silently
+          dropped. The conversation translation path does include
+          instructions via build_conversation_translation_session_update. *)
+       Alcotest.(check bool)
+         "translation session should include instructions"
+         true
+         (List.mem_assoc "instructions" session)
+     | _ -> Alcotest.fail "expected session object")
+  | _ -> Alcotest.fail "expected JSON object"
+
+let test_stt_config_whitespace_app_id_not_trimmed () =
+  let dir = temp_dir "camelpie-stt-config-whitespace" in
+  let config_path = Filename.concat dir "stt.toml" in
+  write_file
+    config_path
+    {toml|
+schema_version = 2
+
+[[newline_rules]]
+app_id = "   "
+action = "ctrl-j"
+|toml};
+  let config = Camelpie.Config.Stt.load ~config_path () in
+  match config.Camelpie.Config.Stt.newline_rules with
+  | [ rule ] ->
+    (* Bug: get_optional_string does not trim the TOML value, so a
+       whitespace-only app_id like "   " is Some "   " instead of None.
+       The rule will never match any window because window.app_id is never
+       whitespace-only, yet the rule passes the "must set app_id or
+       title_regex" validation. *)
+    Alcotest.(check (option string))
+      "whitespace-only app_id should be None"
+      None
+      rule.app_id
+  | _ -> Alcotest.fail "expected one newline rule"
+
 let test_assistant_focused_window_prompt_context () =
   let window : Camelpie.Niri.window_info =
     {
@@ -2056,6 +2103,8 @@ let () =
            test_stt_config_rejects_bad_title_regex;
          Alcotest.test_case "reject transcription prompt missing language placeholder" `Quick
            test_stt_config_rejects_prompt_with_wrong_placeholder;
+         Alcotest.test_case "whitespace app_id not trimmed" `Quick
+           test_stt_config_whitespace_app_id_not_trimmed;
        ]);
       ("text_injection",
        [
@@ -2133,6 +2182,8 @@ let () =
          Alcotest.test_case "resample" `Quick test_codex_realtime_resample;
          Alcotest.test_case "stream server error e2e" `Quick
            test_codex_realtime_stream_reports_server_error_e2e;
+         Alcotest.test_case "translation ignores prompt" `Quick
+           test_codex_realtime_translation_ignores_prompt;
        ]);
       ("assistant_prompt",
        [
