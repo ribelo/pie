@@ -926,6 +926,28 @@ let test_pulse_parse_command_envelope_short_payload () =
     Alcotest.fail
       ("parse_command_envelope crashed on short payload: " ^ msg)
 
+let test_daemon_contract_meeting_toggle_no_indicator () =
+  let snap : Camelpie.Daemon.Contract.recording_snapshot =
+    { active = true; mode = "ptt-transcribe"; enabled = true;
+      started_at = None; updated_at = None; transcript_path = None;
+      last_error = None; }
+  in
+  let json =
+    Camelpie.Daemon.Contract.response_to_json
+      (Camelpie.Daemon.Contract.Meeting_toggle_resp snap)
+  in
+  match json with
+  | `Assoc fields ->
+    (* Bug: Meeting_stop_resp now includes a "stopped" boolean so callers
+       can tell whether the stop had any effect. Meeting_toggle_resp only
+       carries a snapshot with no "toggled" or success indicator. The
+       caller has no programmatic way to know if toggle changed anything. *)
+    Alcotest.(check bool)
+      "meeting toggle response should include a success indicator"
+      true
+      (List.mem_assoc "toggled" fields || List.mem_assoc "changed" fields)
+  | _ -> Alcotest.fail "expected JSON object"
+
 let test_codex_realtime_translation_ignores_prompt () =
   let update =
     Stt.Codex_realtime.build_translation_session_update ~target_language:"pl" ()
@@ -2173,6 +2195,8 @@ let () =
            test_daemon_contract_status_error_swallowed;
          Alcotest.test_case "pause error swallowed" `Quick
            test_daemon_contract_pause_error_swallowed;
+         Alcotest.test_case "meeting toggle missing indicator" `Quick
+           test_daemon_contract_meeting_toggle_no_indicator;
        ]);
       ("daemon_server",
        [
