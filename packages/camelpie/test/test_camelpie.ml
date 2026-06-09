@@ -910,6 +910,22 @@ let test_pulse_parse_error_code_short_payload () =
     Alcotest.fail
       ("parse_error_code crashed on short payload: " ^ msg)
 
+let test_pulse_parse_command_envelope_short_payload () =
+  (* Bug: parse_command_envelope calls get_u32 twice (needs 8 bytes).
+     A payload shorter than 8 bytes causes a Failure crash that kills the
+     read_loop. This is the very first function called for every incoming
+     packet, so a single malformed packet takes down the whole session. *)
+  try
+    let result =
+      Camelpie.Pulse.Commands.parse_command_envelope (Bytes.make 3 '\x00')
+    in
+    ignore result;
+    Alcotest.fail
+      "parse_command_envelope should not crash but should handle it gracefully"
+  with Failure msg ->
+    Alcotest.fail
+      ("parse_command_envelope crashed on short payload: " ^ msg)
+
 let test_codex_realtime_translation_ignores_prompt () =
   let update =
     Stt.Codex_realtime.build_translation_session_update ~target_language:"pl" ()
@@ -2100,6 +2116,8 @@ let () =
          Alcotest.test_case "server info command" `Quick test_server_info_command;
          Alcotest.test_case "parse error code short payload" `Quick
            test_pulse_parse_error_code_short_payload;
+         Alcotest.test_case "parse command envelope short payload" `Quick
+           test_pulse_parse_command_envelope_short_payload;
        ]);
       ("pulse_client",
        [
