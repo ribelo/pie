@@ -27,7 +27,7 @@ val with_record_stream :
   ?options:Defs.record_stream_options ->
   (Defs.record_stream_info ->
    (unit -> (bytes, [> `Closed ]) Eta.Effect.t) ->
-   ('a, 'err) Eta.Effect.t) ->
+   ('a, [> `Pulse_error of string ] as 'err) Eta.Effect.t) ->
   ('a, 'err) Eta.Effect.t
 
 val get_server_info :

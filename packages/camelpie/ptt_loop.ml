@@ -292,7 +292,7 @@ let run ~(keyboard : Keyboard.Monitor.t) ~(recv : unit -> (bytes, [> `Closed ]) 
     let run_capture mode handle run =
       run
       |> Eta.Effect.catch (fun (`Ptt_error message) ->
-        let* () = handle.cancel |> Eta.Effect.catch (fun _ -> Eta.Effect.unit) in
+        let* () = handle.cancel |> Eta.Effect.ignore_errors in
         let* () = capture_failed mode message in
         Eta.Effect.unit)
     in

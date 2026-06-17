@@ -19,12 +19,13 @@ let send_request ~net ~sw (req : Contract.request) : (Contract.response, error) 
   | exn -> Error (`Daemon_error (Printexc.to_string exn))
 
 let call ~net ~sw req =
-  Eta.Effect.sync (fun () -> send_request ~net ~sw req)
-  |> Eta.Effect.bind Eta.Effect.from_result
-  |> Eta.Effect.bind (fun resp ->
-       match resp with
-       | Contract.Error_resp message -> Eta.Effect.fail (`Daemon_error message)
-       | other -> Eta.Effect.pure other)
+  (let* resp =
+     Eta.Effect.sync (fun () -> send_request ~net ~sw req)
+     |> Eta.Effect.flatten_result
+   in
+   match resp with
+   | Contract.Error_resp message -> Eta.Effect.fail (`Daemon_error message)
+   | other -> Eta.Effect.pure other)
   |> Eta.Effect.timeout_as
        (Eta.Duration.seconds 1)
        ~on_timeout:(`Daemon_error "daemon RPC timed out")

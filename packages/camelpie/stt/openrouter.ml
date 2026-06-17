@@ -2,6 +2,7 @@ type error = [`Stt_error of string]
 
 module A = Eta_ai
 module Http = Eta_http
+module Http_eio = Eta_http_eio
 module Openrouter = Eta_ai_openrouter
 
 open Eta.Syntax
@@ -21,7 +22,7 @@ let provider () =
   | _ -> Openrouter.provider ()
 
 let http_client ~sw ~net =
-  Http.Client.make_h1_direct ~sw ~net ()
+  Http_eio.Client.make_h1_direct ~sw ~net ()
 
 let ai_error_message = function
   | A.Eta_http_error error -> Http.Error.to_string error
@@ -200,19 +201,21 @@ let run_audio_responses ~sw ~net ~model ~prompt ~sample_rate ~task ?thinking_eff
     let* structured_output = structured_output task in
     let* reasoning = reasoning_for_effort thinking_effort in
     let request = responses_request ~model ~prompt ~sample_rate pcm_bytes in
-    Openrouter.responses
+    let* raw =
+      Openrouter.responses
       ~provider:(provider ())
       ~structured_output
       ?reasoning
       client
       ~api_key:(A.api_key api_key)
       request
-    |> Eta.Effect.map_error stt_error_of_ai
-    |> Eta.Effect.map (fun response ->
-      let content = extract_message_content response.A.message in
-      debug_response_content content response.raw;
-      content)
-    |> Eta.Effect.bind (fun raw -> Eta.Effect.from_result (decode_structured_output raw))
+      |> Eta.Effect.map_error stt_error_of_ai
+      |> Eta.Effect.map (fun response ->
+        let content = extract_message_content response.A.message in
+        debug_response_content content response.raw;
+        content)
+    in
+    Eta.Effect.from_result (decode_structured_output raw)
 
 let transcribe ~sw ~net ~api_key ~model ~language ?(sample_rate = 16000) pcm_bytes =
   let client = http_client ~sw ~net in
@@ -232,16 +235,17 @@ let transcribe ~sw ~net ~api_key ~model ~language ?(sample_rate = 16000) pcm_byt
       extra_fields = [];
     }
   in
-  Openrouter.transcription
+  let* response =
+    Openrouter.transcription
     ~provider:(provider ())
     client
     ~api_key:(A.api_key api_key)
     request
-  |> Eta.Effect.map_error stt_error_of_ai
-  |> Eta.Effect.bind (fun response ->
-    match response.A.Transcription.text with
-    | Some text when String.trim text <> "" -> Eta.Effect.pure (String.trim text)
-    | _ -> Eta.Effect.fail (`Stt_error "OpenRouter transcription response was empty"))
+    |> Eta.Effect.map_error stt_error_of_ai
+  in
+  match response.A.Transcription.text with
+  | Some text when String.trim text <> "" -> Eta.Effect.pure (String.trim text)
+  | _ -> Eta.Effect.fail (`Stt_error "OpenRouter transcription response was empty")
 
 let transcribe_with_prompt
     ~sw

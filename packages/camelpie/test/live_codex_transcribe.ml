@@ -38,7 +38,7 @@ let () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let rt =
-    Eta.Runtime.create
+    Eta_eio.Runtime.create
       ~sw
       ~clock:(Eio.Stdenv.clock env)
       ~capture_backtrace:true
@@ -57,7 +57,7 @@ let () =
          (Eta.Duration.seconds 45)
          ~on_timeout:(`Stt_error "live transcription timed out")
   in
-  match Eta.Runtime.run rt effect with
+  match Eta_eio.Runtime.run rt effect with
   | Ok transcript ->
     let expected_normalized = normalize expected in
     let transcript_normalized = normalize transcript in

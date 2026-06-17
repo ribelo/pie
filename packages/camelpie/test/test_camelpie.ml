@@ -1,4 +1,5 @@
 open Camelpie
+open Eta.Syntax
 
 let test_pcm_rms () =
   let chunk = Bytes.create 4 in
@@ -313,7 +314,7 @@ let test_pulse_client_set_client_name_error_ignored () =
     in
     Eio.Flow.write flow [Cstruct.of_bytes err_reply];
     try Eio.Flow.shutdown flow `Send with _ -> ());
-  let rt = Eta.Runtime.create ~sw ~clock:(Eio.Stdenv.clock env) () in
+  let rt = Eta_eio.Runtime.create ~sw ~clock:(Eio.Stdenv.clock env) () in
   let effect =
     Pulse.Client.with_client
       ~sw
@@ -326,7 +327,7 @@ let test_pulse_client_set_client_name_error_ignored () =
   (* Bug: Pulse.Client.connect receives the result of set_client_name but
      discards it with [let _ = ...]. A server error reply should be
      propagated to the caller instead of being silently swallowed. *)
-  match Eta.Runtime.run rt effect with
+  match Eta_eio.Runtime.run rt effect with
   | Ok () ->
     Alcotest.fail
       "expected set_client_name error to propagate, but connect succeeded"
@@ -807,7 +808,7 @@ let test_codex_realtime_transcribe_with_prompt_ignores_language_e2e () =
     Eio.Switch.run @@ fun conn_sw ->
     let flow, _addr = Eio.Net.accept ~sw:conn_sw socket in
     run_realtime_capture_session_update flow captured);
-  let rt = Eta.Runtime.create ~sw ~clock:(Eio.Stdenv.clock env) () in
+  let rt = Eta_eio.Runtime.create ~sw ~clock:(Eio.Stdenv.clock env) () in
   let old_url = Sys.getenv_opt "CODEX_REALTIME_BASE_URL_OVERRIDE" in
   Unix.putenv "CODEX_REALTIME_BASE_URL_OVERRIDE"
     (Printf.sprintf "ws://127.0.0.1:%d" port);
@@ -830,7 +831,7 @@ let test_codex_realtime_transcribe_with_prompt_ignores_language_e2e () =
          (Eta.Duration.seconds 5)
          ~on_timeout:(`Stt_error "timeout")
   in
-  (match Eta.Runtime.run rt effect with Ok _ | Error _ -> ());
+  (match Eta_eio.Runtime.run rt effect with Ok _ | Error _ -> ());
   cleanup_env ();
   match !captured with
   | `Null -> Alcotest.fail "did not capture session.update message"
@@ -888,7 +889,7 @@ let test_codex_realtime_translate_nonconv_drops_prompt_e2e () =
     Eio.Switch.run @@ fun conn_sw ->
     let flow, _addr = Eio.Net.accept ~sw:conn_sw socket in
     run_realtime_capture_session_update flow captured);
-  let rt = Eta.Runtime.create ~sw ~clock:(Eio.Stdenv.clock env) () in
+  let rt = Eta_eio.Runtime.create ~sw ~clock:(Eio.Stdenv.clock env) () in
   let old_url = Sys.getenv_opt "CODEX_REALTIME_BASE_URL_OVERRIDE" in
   Unix.putenv "CODEX_REALTIME_BASE_URL_OVERRIDE"
     (Printf.sprintf "ws://127.0.0.1:%d" port);
@@ -911,7 +912,7 @@ let test_codex_realtime_translate_nonconv_drops_prompt_e2e () =
          (Eta.Duration.seconds 5)
          ~on_timeout:(`Stt_error "timeout")
   in
-  (match Eta.Runtime.run rt effect with Ok _ | Error _ -> ());
+  (match Eta_eio.Runtime.run rt effect with Ok _ | Error _ -> ());
   cleanup_env ();
   match !captured with
   | `Null -> Alcotest.fail "did not capture session.update"
@@ -979,7 +980,7 @@ let test_codex_realtime_stream_reports_server_error_e2e () =
     Eio.Switch.run @@ fun conn_sw ->
     let flow, _addr = Eio.Net.accept ~sw:conn_sw socket in
     run_realtime_error_ws_server flow);
-  let rt = Eta.Runtime.create ~sw ~clock:(Eio.Stdenv.clock env) () in
+  let rt = Eta_eio.Runtime.create ~sw ~clock:(Eio.Stdenv.clock env) () in
   let url = Printf.sprintf "ws://127.0.0.1:%d/v1/realtime?model=gpt-realtime-2" port in
   let open Eta.Syntax in
   let prompt = "Translate." in
@@ -1008,7 +1009,7 @@ let test_codex_realtime_stream_reports_server_error_e2e () =
   let pp_stt_error fmt = function
     | `Stt_error message -> Format.pp_print_string fmt message
   in
-  match Eta.Runtime.run rt effect with
+  match Eta_eio.Runtime.run rt effect with
   | Error (Eta.Cause.Fail (`Stt_error message)) ->
     Alcotest.(check string)
       "server error"
@@ -1754,7 +1755,7 @@ let test_ptt_loop_continues_after_finish () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
-  let rt = Eta.Runtime.create ~sw ~clock () in
+  let rt = Eta_eio.Runtime.create ~sw ~clock () in
   let keyboard = Camelpie.Keyboard.Monitor.create () in
   let audio = Eio.Stream.create 16 in
   let running = ref true in
@@ -1788,10 +1789,9 @@ let test_ptt_loop_continues_after_finish () =
       Camelpie.Ptt_loop.offer = (fun _ -> Eta.Effect.unit);
       finish =
         (fun _ ->
-           Eta.Effect.sync (fun () -> incr finishes)
-           |> Eta.Effect.bind (fun () ->
-             if !finishes = 2 then Eta.Effect.fail (`Ptt_error "done")
-             else Eta.Effect.unit));
+           let* () = Eta.Effect.sync (fun () -> incr finishes) in
+           if !finishes = 2 then Eta.Effect.fail (`Ptt_error "done")
+           else Eta.Effect.unit);
       cancel = Eta.Effect.unit;
     }
   in
@@ -1825,7 +1825,7 @@ let test_ptt_loop_continues_after_finish () =
     Camelpie.Ptt_loop.run ~keyboard ~recv config
     |> Eta.Effect.timeout_as (Eta.Duration.seconds 7) ~on_timeout:(`Ptt_error "timeout")
   in
-  let result = Eta.Runtime.run rt effect in
+  let result = Eta_eio.Runtime.run rt effect in
   running := false;
   Alcotest.(check int) "starts" 3 !starts;
   Alcotest.(check int) "finishes" 3 !finishes;
@@ -1837,7 +1837,7 @@ let test_ptt_loop_post_roll_repress_continues_capture () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
-  let rt = Eta.Runtime.create ~sw ~clock () in
+  let rt = Eta_eio.Runtime.create ~sw ~clock () in
   let keyboard = Camelpie.Keyboard.Monitor.create () in
   let audio = Eio.Stream.create 16 in
   let starts = ref 0 in
@@ -1866,8 +1866,8 @@ let test_ptt_loop_post_roll_repress_continues_capture () =
              offered := Bytes.to_string chunk :: !offered));
       finish =
         (fun _ ->
-           Eta.Effect.sync (fun () -> incr finishes)
-           |> Eta.Effect.bind (fun () -> Eta.Effect.fail (`Ptt_error "done")));
+           let* () = Eta.Effect.sync (fun () -> incr finishes) in
+           Eta.Effect.fail (`Ptt_error "done"));
       cancel = Eta.Effect.unit;
     }
   in
@@ -1898,7 +1898,7 @@ let test_ptt_loop_post_roll_repress_continues_capture () =
   in
   let recv () = Eta.Effect.sync (fun () -> Eio.Stream.take audio) in
   let result =
-    Eta.Runtime.run rt
+    Eta_eio.Runtime.run rt
       (Camelpie.Ptt_loop.run ~keyboard ~recv config
        |> Eta.Effect.timeout_as (Eta.Duration.seconds 5) ~on_timeout:(`Ptt_error "timeout"))
   in
@@ -1913,7 +1913,7 @@ let test_ptt_loop_scoped_handle_lifetime () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
-  let rt = Eta.Runtime.create ~sw ~clock () in
+  let rt = Eta_eio.Runtime.create ~sw ~clock () in
   let keyboard = Camelpie.Keyboard.Monitor.create () in
   let audio = Eio.Stream.create 16 in
   let scope_entries = ref 0 in
@@ -1961,11 +1961,9 @@ let test_ptt_loop_scoped_handle_lifetime () =
            Eta.Effect.pure
              (Camelpie.Ptt_loop.Scoped
                 (fun use ->
-                   Eta.Effect.sync (fun () -> incr scope_entries)
-                   |> Eta.Effect.bind (fun () ->
-                     use handle)
-                   |> Eta.Effect.bind (fun () ->
-                     Eta.Effect.sync (fun () -> incr scope_exits)))));
+                   let* () = Eta.Effect.sync (fun () -> incr scope_entries) in
+                   let* () = use handle in
+                   Eta.Effect.sync (fun () -> incr scope_exits))));
       on_release = (fun _ -> Eta.Effect.unit);
       on_abort = Eta.Effect.pure false;
       on_dead_input = Eta.Effect.unit;
@@ -1976,7 +1974,7 @@ let test_ptt_loop_scoped_handle_lifetime () =
     Camelpie.Ptt_loop.run ~keyboard ~recv config
     |> Eta.Effect.timeout_as (Eta.Duration.seconds 5) ~on_timeout:(`Ptt_error "timeout")
   in
-  let result = Eta.Runtime.run rt effect in
+  let result = Eta_eio.Runtime.run rt effect in
   Alcotest.(check int) "scope entered" 1 !scope_entries;
   Alcotest.(check int) "scope exited" 1 !scope_exits;
   Alcotest.(check int) "offers" 1 !offers;
@@ -2002,7 +2000,7 @@ let test_ptt_loop_ignores_short_capture_before_offering () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
-  let rt = Eta.Runtime.create ~sw ~clock () in
+  let rt = Eta_eio.Runtime.create ~sw ~clock () in
   let keyboard = Camelpie.Keyboard.Monitor.create () in
   let audio = Eio.Stream.create 16 in
   let offers = ref 0 in
@@ -2055,7 +2053,7 @@ let test_ptt_loop_ignores_short_capture_before_offering () =
     Camelpie.Ptt_loop.run ~keyboard ~recv config
     |> Eta.Effect.timeout_as (Eta.Duration.seconds 4) ~on_timeout:(`Ptt_error "timeout")
   in
-  let result = Eta.Runtime.run rt effect in
+  let result = Eta_eio.Runtime.run rt effect in
   Alcotest.(check int) "offers" 0 !offers;
   Alcotest.(check int) "finishes" 0 !finishes;
   Alcotest.(check int) "cancels" 1 !cancels;
@@ -2067,7 +2065,7 @@ let test_ptt_loop_ignores_low_rms_capture_before_offering () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
-  let rt = Eta.Runtime.create ~sw ~clock () in
+  let rt = Eta_eio.Runtime.create ~sw ~clock () in
   let keyboard = Camelpie.Keyboard.Monitor.create () in
   let audio = Eio.Stream.create 64 in
   let offers = ref 0 in
@@ -2121,7 +2119,7 @@ let test_ptt_loop_ignores_low_rms_capture_before_offering () =
     Camelpie.Ptt_loop.run ~keyboard ~recv config
     |> Eta.Effect.timeout_as (Eta.Duration.seconds 4) ~on_timeout:(`Ptt_error "timeout")
   in
-  let result = Eta.Runtime.run rt effect in
+  let result = Eta_eio.Runtime.run rt effect in
   Alcotest.(check int) "offers" 0 !offers;
   Alcotest.(check int) "finishes" 0 !finishes;
   Alcotest.(check int) "cancels" 1 !cancels;
@@ -2133,7 +2131,7 @@ let test_ptt_loop_accepts_peak_over_silence_threshold () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
-  let rt = Eta.Runtime.create ~sw ~clock () in
+  let rt = Eta_eio.Runtime.create ~sw ~clock () in
   let keyboard = Camelpie.Keyboard.Monitor.create () in
   let audio = Eio.Stream.create 64 in
   let offers = ref 0 in
@@ -2158,8 +2156,8 @@ let test_ptt_loop_accepts_peak_over_silence_threshold () =
         (fun _ -> Eta.Effect.sync (fun () -> incr offers));
       finish =
         (fun _ ->
-           Eta.Effect.sync (fun () -> incr finishes)
-           |> Eta.Effect.bind (fun () -> Eta.Effect.fail (`Ptt_error "done")));
+           let* () = Eta.Effect.sync (fun () -> incr finishes) in
+           Eta.Effect.fail (`Ptt_error "done"));
       cancel = Eta.Effect.sync (fun () -> incr cancels);
     }
   in
@@ -2187,7 +2185,7 @@ let test_ptt_loop_accepts_peak_over_silence_threshold () =
   in
   let recv () = Eta.Effect.sync (fun () -> Eio.Stream.take audio) in
   let result =
-    Eta.Runtime.run rt
+    Eta_eio.Runtime.run rt
       (Camelpie.Ptt_loop.run ~keyboard ~recv config
        |> Eta.Effect.timeout_as (Eta.Duration.seconds 4) ~on_timeout:(`Ptt_error "timeout"))
   in
@@ -2202,7 +2200,7 @@ let test_ptt_loop_accepts_quiet_speech_over_rms_threshold () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
-  let rt = Eta.Runtime.create ~sw ~clock () in
+  let rt = Eta_eio.Runtime.create ~sw ~clock () in
   let keyboard = Camelpie.Keyboard.Monitor.create () in
   let audio = Eio.Stream.create 64 in
   let offers = ref 0 in
@@ -2227,8 +2225,8 @@ let test_ptt_loop_accepts_quiet_speech_over_rms_threshold () =
         (fun _ -> Eta.Effect.sync (fun () -> incr offers));
       finish =
         (fun _ ->
-           Eta.Effect.sync (fun () -> incr finishes)
-           |> Eta.Effect.bind (fun () -> Eta.Effect.fail (`Ptt_error "done")));
+           let* () = Eta.Effect.sync (fun () -> incr finishes) in
+           Eta.Effect.fail (`Ptt_error "done"));
       cancel = Eta.Effect.sync (fun () -> incr cancels);
     }
   in
@@ -2256,7 +2254,7 @@ let test_ptt_loop_accepts_quiet_speech_over_rms_threshold () =
   in
   let recv () = Eta.Effect.sync (fun () -> Eio.Stream.take audio) in
   let result =
-    Eta.Runtime.run rt
+    Eta_eio.Runtime.run rt
       (Camelpie.Ptt_loop.run ~keyboard ~recv config
        |> Eta.Effect.timeout_as (Eta.Duration.seconds 4) ~on_timeout:(`Ptt_error "timeout"))
   in
@@ -2271,7 +2269,7 @@ let test_ptt_loop_dead_input_cancels_active_capture () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
-  let rt = Eta.Runtime.create ~sw ~clock () in
+  let rt = Eta_eio.Runtime.create ~sw ~clock () in
   let keyboard = Camelpie.Keyboard.Monitor.create () in
   let audio = Eio.Stream.create 16 in
   let offers = ref 0 in
@@ -2326,7 +2324,7 @@ let test_ptt_loop_dead_input_cancels_active_capture () =
     Camelpie.Ptt_loop.run ~keyboard ~recv config
     |> Eta.Effect.timeout_as (Eta.Duration.seconds 3) ~on_timeout:(`Ptt_error "timeout")
   in
-  let result = Eta.Runtime.run rt effect in
+  let result = Eta_eio.Runtime.run rt effect in
   Alcotest.(check int) "offers" 0 !offers;
   Alcotest.(check int) "finishes" 0 !finishes;
   Alcotest.(check int) "cancels" 1 !cancels;

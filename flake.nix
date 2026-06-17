@@ -28,6 +28,7 @@
             runtimeInputs = [
               pkgs.git
               pkgs.opam
+              pkgs.rsync
             ];
             text = ''
               switch_name="''${1:-${oxCamlSwitch}}"
@@ -52,10 +53,38 @@
               eval "$(opam env --switch "$switch_name" --set-switch)"
 
               eta_dir="$repo_root/.reference/Eta"
+              eta_pin_dir="$repo_root/.opam-eta-src"
               if [ -d "$eta_dir" ]; then
-                opam pin add eta "$eta_dir" --no-action --yes
-                opam pin add eta-sql "$eta_dir" --no-action --yes
-                opam pin add ppx_eta "$eta_dir" --no-action --yes
+                mkdir -p "$eta_pin_dir"
+                rsync -aL --delete \
+                  --exclude '.git' \
+                  --exclude '_build' \
+                  --exclude '_build_*' \
+                  --exclude '_opam*' \
+                  --exclude '.opam-oxcaml' \
+                  --exclude '.hill-climbing' \
+                  --exclude '.motel-data' \
+                  --exclude '.reference' \
+                  --exclude '.scratch' \
+                  --exclude 'bench' \
+                  --exclude 'http-testsuite/results' \
+                  "$eta_dir"/ "$eta_pin_dir"/
+
+                opam pin add --kind=path eta "$eta_pin_dir" --no-action --yes
+                for package in \
+                  eta_ai \
+                  eta_ai_openai_codec \
+                  eta_ai_openrouter \
+                  eta_blocking \
+                  eta_eio \
+                  eta_http \
+                  eta_http_eio \
+                  eta_http_h2 \
+                  eta_redacted \
+                  eta_stream
+                do
+                  opam pin add --kind=path "$package" "$eta_pin_dir" --no-action --yes
+                done
               fi
 
               # eio_linux.1.3+ox is not compatible with uring 2.x.

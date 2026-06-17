@@ -21,7 +21,7 @@ let run_effect mk_eff =
     Eio_main.run @@ fun env ->
     Eio.Switch.run @@ fun sw ->
     let rt =
-      Eta.Runtime.create
+      Eta_eio.Runtime.create
         ~sw
         ~clock:(Eio.Stdenv.clock env)
         ~capture_backtrace:true
@@ -30,7 +30,7 @@ let run_effect mk_eff =
     match
       mk_eff ~env ~sw
       |> Eta.Effect.with_error_renderer render_effect_error
-      |> Eta.Runtime.run rt
+      |> Eta_eio.Runtime.run rt
     with
     | Ok () -> ()
     | Error cause ->
@@ -129,13 +129,15 @@ let type_cmd =
       const (fun text () ->
         run_effect (fun ~env ~sw ->
           let process_mgr = Eio.Stdenv.process_mgr env in
-          Eta.Effect.bind (fun (result : Camelpie.Input.Text_injection.result) ->
-            Eta.Effect.sync (fun () ->
-              Printf.printf "Typed %d chars via %s (%s)\n%!"
-                (String.length result.text)
-                (match result.backend with | Wtype -> "wtype" | Xdotool -> "xdotool")
-                (match result.session_type with | Wayland -> "Wayland" | X11 -> "X11"))
-          ) (Camelpie.Input.Text_injection.inject ~process_mgr text)))
+          let open Eta.Syntax in
+          let* (result : Camelpie.Input.Text_injection.result) =
+            Camelpie.Input.Text_injection.inject ~process_mgr text
+          in
+          Eta.Effect.sync (fun () ->
+            Printf.printf "Typed %d chars via %s (%s)\n%!"
+              (String.length result.text)
+              (match result.backend with | Wtype -> "wtype" | Xdotool -> "xdotool")
+              (match result.session_type with | Wayland -> "Wayland" | X11 -> "X11"))))
       $ text_arg $ env_term)
 
 let status_cmd =
@@ -146,6 +148,14 @@ let status_cmd =
       const (fun () ->
         run_effect (fun ~env ~sw ->
           let net = Eio.Stdenv.net env in
+          let status =
+            let open Eta.Syntax in
+            let* (snap : Camelpie.Daemon.Contract.recording_snapshot) =
+              Camelpie.Daemon.Client.status ~net ~sw ()
+            in
+            Eta.Effect.sync (fun () ->
+              Printf.printf "%s\n%!" (render_recording_status snap))
+          in
           Eta.Effect.catch
             (fun e ->
               match e with
@@ -153,9 +163,7 @@ let status_cmd =
                 Eta.Effect.sync (fun () -> Printf.printf "off\n%!")
               | `Daemon_error msg ->
                 Eta.Effect.sync (fun () -> Printf.printf "error=%s\n%!" msg))
-            (Eta.Effect.bind (fun (snap : Camelpie.Daemon.Contract.recording_snapshot) ->
-              Eta.Effect.sync (fun () -> Printf.printf "%s\n%!" (render_recording_status snap))
-            ) (Camelpie.Daemon.Client.status ~net ~sw ()))))
+            status))
       $ env_term)
 
 let toggle_cmd =
@@ -166,10 +174,10 @@ let toggle_cmd =
       const (fun () ->
         run_effect (fun ~env ~sw ->
           let net = Eio.Stdenv.net env in
-          Eta.Effect.bind (fun (result : bool) ->
-            Eta.Effect.sync (fun () ->
-              Printf.printf "%s\n%!" (if result then "armed" else "paused"))
-          ) (Camelpie.Daemon.Client.toggle ~net ~sw ())))
+          let open Eta.Syntax in
+          let* (result : bool) = Camelpie.Daemon.Client.toggle ~net ~sw () in
+          Eta.Effect.sync (fun () ->
+            Printf.printf "%s\n%!" (if result then "armed" else "paused"))))
       $ env_term)
 
 let pause_cmd =
@@ -202,10 +210,12 @@ let meeting_start_cmd =
       const (fun () ->
         run_effect (fun ~env ~sw ->
           let net = Eio.Stdenv.net env in
-          Eta.Effect.bind (fun (r : Camelpie.Daemon.Contract.meeting_start_result) ->
-            Eta.Effect.sync (fun () ->
-              Printf.printf "%s\n%!" (render_start_result r.Camelpie.Daemon.Contract.result))
-          ) (Camelpie.Daemon.Client.meeting_start ~net ~sw ())))
+          let open Eta.Syntax in
+          let* (r : Camelpie.Daemon.Contract.meeting_start_result) =
+            Camelpie.Daemon.Client.meeting_start ~net ~sw ()
+          in
+          Eta.Effect.sync (fun () ->
+            Printf.printf "%s\n%!" (render_start_result r.Camelpie.Daemon.Contract.result))))
       $ env_term)
 
 let meeting_stop_cmd =
@@ -216,12 +226,14 @@ let meeting_stop_cmd =
       const (fun () ->
         run_effect (fun ~env ~sw ->
           let net = Eio.Stdenv.net env in
-          Eta.Effect.bind (fun (r : Camelpie.Daemon.Contract.meeting_stop_result) ->
-            Eta.Effect.sync (fun () ->
-              if not r.stopped then
-                Printf.printf "no meeting transcription was active\n%!";
-              Printf.printf "%s\n%!" (render_recording_status r.snapshot))
-          ) (Camelpie.Daemon.Client.meeting_stop ~net ~sw ())))
+          let open Eta.Syntax in
+          let* (r : Camelpie.Daemon.Contract.meeting_stop_result) =
+            Camelpie.Daemon.Client.meeting_stop ~net ~sw ()
+          in
+          Eta.Effect.sync (fun () ->
+            if not r.stopped then
+              Printf.printf "no meeting transcription was active\n%!";
+            Printf.printf "%s\n%!" (render_recording_status r.snapshot))))
       $ env_term)
 
 let meeting_toggle_cmd =
@@ -232,10 +244,12 @@ let meeting_toggle_cmd =
       const (fun () ->
         run_effect (fun ~env ~sw ->
           let net = Eio.Stdenv.net env in
-          Eta.Effect.bind (fun (snap : Camelpie.Daemon.Contract.recording_snapshot) ->
-            Eta.Effect.sync (fun () ->
-              Printf.printf "%s\n%!" (render_recording_status snap))
-          ) (Camelpie.Daemon.Client.meeting_toggle ~net ~sw ())))
+          let open Eta.Syntax in
+          let* (snap : Camelpie.Daemon.Contract.recording_snapshot) =
+            Camelpie.Daemon.Client.meeting_toggle ~net ~sw ()
+          in
+          Eta.Effect.sync (fun () ->
+            Printf.printf "%s\n%!" (render_recording_status snap))))
       $ env_term)
 
 let ptt_portal_cmd =

@@ -1,6 +1,7 @@
 type error = [`Stt_error of string]
 
 module Http = Eta_http
+module Http_eio = Eta_http_eio
 module Stream = Eta_stream
 
 open Eta.Syntax
@@ -290,7 +291,7 @@ let realtime_headers ?session_id access_token =
   headers (realtime_header_pairs ?session_id access_token)
 
 let realtime_rest_client ~sw ~net =
-  Http.Client.make_h1_direct ~sw ~net ()
+  Http_eio.Client.make_h1_direct ~sw ~net ()
 
 let read_response_body response =
   Http.Body.Stream.read_all response.Http.Response.body
@@ -335,40 +336,40 @@ module Codex_auth = struct
 
   let load ?(path = auth_path ()) () =
     Eta.Effect.sync (fun () ->
-      try
-        let raw = read_file path in
-        match Yojson.Safe.from_string raw with
-        | `Assoc fields as json ->
-          (match List.assoc_opt "tokens" fields with
-           | Some (`Assoc token_fields) ->
-             (match string_member "access_token" token_fields with
-              | Some access_token when String.trim access_token <> "" ->
-                Ok {
-                  path;
-                  json;
-                  tokens = {
-                    access_token;
-                    refresh_token = string_member "refresh_token" token_fields;
-                    id_token = string_member "id_token" token_fields;
-                  };
-                }
-              | _ ->
-                Error (`Stt_error
-                         ("Codex auth.json at " ^ path
-                          ^ " is malformed or missing tokens.access_token. Run 'codex login' to recreate it.")))
-           | _ ->
-             Error (`Stt_error
-                      ("Codex auth.json at " ^ path
-                       ^ " is malformed or missing tokens. Run 'codex login' to recreate it.")))
-        | _ -> Error (`Stt_error ("Codex auth.json at " ^ path ^ " must be a JSON object."))
-      with
-      | Sys_error message ->
-        Error (`Stt_error
-                 ("Codex auth.json not found/readable at " ^ path
-                  ^ ": " ^ message ^ ". Run 'codex login' or set CODEX_HOME."))
-      | Yojson.Json_error message ->
-        Error (`Stt_error ("Codex auth.json at " ^ path ^ " is not valid JSON: " ^ message)))
-    |> Eta.Effect.bind Eta.Effect.from_result
+        try
+          let raw = read_file path in
+          match Yojson.Safe.from_string raw with
+          | `Assoc fields as json ->
+            (match List.assoc_opt "tokens" fields with
+             | Some (`Assoc token_fields) ->
+               (match string_member "access_token" token_fields with
+                | Some access_token when String.trim access_token <> "" ->
+                  Ok {
+                    path;
+                    json;
+                    tokens = {
+                      access_token;
+                      refresh_token = string_member "refresh_token" token_fields;
+                      id_token = string_member "id_token" token_fields;
+                    };
+                  }
+                | _ ->
+                  Error (`Stt_error
+                           ("Codex auth.json at " ^ path
+                            ^ " is malformed or missing tokens.access_token. Run 'codex login' to recreate it.")))
+             | _ ->
+               Error (`Stt_error
+                        ("Codex auth.json at " ^ path
+                         ^ " is malformed or missing tokens. Run 'codex login' to recreate it.")))
+          | _ -> Error (`Stt_error ("Codex auth.json at " ^ path ^ " must be a JSON object."))
+        with
+        | Sys_error message ->
+          Error (`Stt_error
+                   ("Codex auth.json not found/readable at " ^ path
+                    ^ ": " ^ message ^ ". Run 'codex login' or set CODEX_HOME."))
+        | Yojson.Json_error message ->
+          Error (`Stt_error ("Codex auth.json at " ^ path ^ " is not valid JSON: " ^ message)))
+    |> Eta.Effect.flatten_result
 
   let base64_value = function
     | 'A' .. 'Z' as c -> Some (Char.code c - Char.code 'A')
@@ -462,22 +463,22 @@ module Codex_auth = struct
 
   let write auth refreshed =
     Eta.Effect.sync (fun () ->
-      try
-        let oc =
-          open_out_gen
-            [Open_wronly; Open_creat; Open_trunc; Open_binary]
-            0o600
-            auth.path
-        in
-        Fun.protect
-          ~finally:(fun () -> close_out_noerr oc)
-          (fun () ->
-             output_string oc (Yojson.Safe.pretty_to_string (persisted_json auth refreshed));
-             output_char oc '\n';
-             Ok ())
-      with Sys_error message ->
-        Error (`Stt_error ("Failed to persist refreshed Codex auth at " ^ auth.path ^ ": " ^ message)))
-    |> Eta.Effect.bind Eta.Effect.from_result
+        try
+          let oc =
+            open_out_gen
+              [Open_wronly; Open_creat; Open_trunc; Open_binary]
+              0o600
+              auth.path
+          in
+          Fun.protect
+            ~finally:(fun () -> close_out_noerr oc)
+            (fun () ->
+               output_string oc (Yojson.Safe.pretty_to_string (persisted_json auth refreshed));
+               output_char oc '\n';
+               Ok ())
+        with Sys_error message ->
+          Error (`Stt_error ("Failed to persist refreshed Codex auth at " ^ auth.path ^ ": " ^ message)))
+    |> Eta.Effect.flatten_result
 
   let refresh_endpoint () =
     match Sys.getenv_opt "CODEX_REFRESH_TOKEN_URL_OVERRIDE" with
@@ -519,21 +520,21 @@ module Codex_auth = struct
     else
       let* tokens =
         Eta.Effect.sync (fun () ->
-        try
-          match Yojson.Safe.from_string raw with
-          | `Assoc fields ->
-            (match string_member "access_token" fields with
-             | Some access_token when String.trim access_token <> "" ->
-               Ok {
-                 access_token;
-                 refresh_token = string_member "refresh_token" fields;
-                 id_token = string_member "id_token" fields;
-               }
-             | _ -> Error (`Stt_error "Codex token refresh response missing access_token"))
-          | _ -> Error (`Stt_error "Codex token refresh response must be a JSON object")
-        with Yojson.Json_error message ->
-          Error (`Stt_error ("Codex token refresh response was not valid JSON: " ^ message)))
-        |> Eta.Effect.bind Eta.Effect.from_result
+            try
+              match Yojson.Safe.from_string raw with
+              | `Assoc fields ->
+                (match string_member "access_token" fields with
+                 | Some access_token when String.trim access_token <> "" ->
+                   Ok {
+                     access_token;
+                     refresh_token = string_member "refresh_token" fields;
+                     id_token = string_member "id_token" fields;
+                   }
+                 | _ -> Error (`Stt_error "Codex token refresh response missing access_token"))
+              | _ -> Error (`Stt_error "Codex token refresh response must be a JSON object")
+            with Yojson.Json_error message ->
+              Error (`Stt_error ("Codex token refresh response was not valid JSON: " ^ message)))
+        |> Eta.Effect.flatten_result
       in
       let* () = write auth tokens in
       Eta.Effect.pure tokens.access_token
@@ -569,7 +570,7 @@ type session_result = {
 let empty_session_result = { final = None; deltas = []; error = None; session_seen = false }
 
 let close_ws_ignore ws =
-  Http.Ws.Client.close ws |> Eta.Effect.catch (fun _ -> Eta.Effect.unit)
+  Http_eio.Ws.Client.close ws |> Eta.Effect.ignore_errors
 
 let debug_realtime_payload direction payload =
   match Sys.getenv_opt "CAMELPIE_CODEX_REALTIME_DEBUG" with
@@ -629,7 +630,7 @@ let receive_result ~mode ws =
         Eta.Effect.pure state
   in
   Stream.run
-    (Http.Ws.Client.incoming ws |> Stream.Stream.take_until_effect (receive_should_stop ~mode))
+    (Http_eio.Ws.Client.incoming ws |> Stream.Stream.take_until_effect (receive_should_stop ~mode))
     (Stream.Sink.fold_effect step empty_session_result)
   |> Eta.Effect.catch (fun error ->
     stt_error ("Codex realtime WebSocket receive failed: " ^ ws_error_message error))
@@ -663,20 +664,22 @@ let await_session_ready ws =
       | Ok (Transcript_delta _ | Transcript_done _ | Response_done | Other _) ->
         Eta.Effect.pure state
   in
-  Stream.run
-    (Http.Ws.Client.incoming ws |> Stream.Stream.take_until_effect initial_receive_should_stop)
-    (Stream.Sink.fold_effect step empty_session_result)
-  |> Eta.Effect.catch (fun error ->
-    stt_error ("Codex realtime WebSocket receive failed: " ^ ws_error_message error))
-  |> Eta.Effect.bind (fun result ->
-    match result.error with
-    | Some message -> stt_error message
-    | None when result.session_seen -> Eta.Effect.unit
-    | None -> stt_error "Codex realtime WebSocket closed before session.updated")
+  let receive =
+    Stream.run
+      (Http_eio.Ws.Client.incoming ws |> Stream.Stream.take_until_effect initial_receive_should_stop)
+      (Stream.Sink.fold_effect step empty_session_result)
+    |> Eta.Effect.catch (fun error ->
+      stt_error ("Codex realtime WebSocket receive failed: " ^ ws_error_message error))
+  in
+  let* result = receive in
+  match result.error with
+  | Some message -> stt_error message
+  | None when result.session_seen -> Eta.Effect.unit
+  | None -> stt_error "Codex realtime WebSocket closed before session.updated"
 
 let send_text ?(ignore_closing = fun () -> false) ws payload =
   debug_realtime_payload "send" payload;
-  Http.Ws.Client.send_text ws payload
+  Http_eio.Ws.Client.send_text ws payload
   |> Eta.Effect.catch (fun error ->
     match error with
     | `Closed _ when ignore_closing () ->
@@ -703,15 +706,11 @@ let receive_result_marking_done ~mode ws receive_done =
   let mark_done =
     Eta.Effect.sync (fun () -> Atomic.set receive_done true)
   in
-  receive_result ~mode ws
-  |> Eta.Effect.bind (fun result ->
+  let cleanup =
     let* () = mark_done in
-    let* () = close_ws_ignore ws in
-    Eta.Effect.pure result)
-  |> Eta.Effect.catch (fun error ->
-    let* () = mark_done in
-    let* () = close_ws_ignore ws in
-    Eta.Effect.fail error)
+    close_ws_ignore ws
+  in
+  receive_result ~mode ws |> Eta.Effect.finally cleanup
 
 let finish_result result =
   match result.error with
@@ -737,7 +736,7 @@ let run_realtime_session
   let pcm_bytes = resample_s16le_mono ~from_rate:input_sample_rate ~to_rate:realtime_sample_rate pcm_bytes in
   let session_id = make_realtime_session_id () in
   let* ws =
-    Http.Ws.Client.connect
+    Http_eio.Ws.Client.connect
       ~headers:(realtime_headers ~session_id access_token)
       ~sw
       ~net
@@ -786,7 +785,7 @@ let run_realtime_stream_session
     audio =
   let session_id = make_realtime_session_id () in
   let* ws =
-    Http.Ws.Client.connect
+    Http_eio.Ws.Client.connect
       ~headers:(realtime_headers ~session_id access_token)
       ~sw
       ~net
@@ -856,37 +855,34 @@ let with_stream_session
   in
   let audio = Stream.Stream.from_queue queue in
   let session =
-    run_realtime_stream_session
-      ~sw
-      ~net
-      ~url
-      ~access_token
-      ~mode
-      ?session_update
-      ?response_create
-      ~input_sample_rate:sample_rate
-      audio
-    |> Eta.Effect.map (fun text -> Ok text)
-    |> Eta.Effect.catch (fun error -> Eta.Effect.pure (Error error))
-    |> Eta.Effect.bind publish
+    let* result =
+      run_realtime_stream_session
+        ~sw
+        ~net
+        ~url
+        ~access_token
+        ~mode
+        ?session_update
+        ?response_create
+        ~input_sample_rate:sample_rate
+        audio
+      |> Eta.Effect.result
+    in
+    publish result
   in
   let handle =
     {
       offer_chunk =
         (fun chunk ->
            Eta.Queue.send queue chunk
-           |> Eta.Effect.catch (function
-             | `Closed
-             | `Closed_with_error _ -> Eta.Effect.unit));
+           |> Eta.Effect.ignore_errors);
       finish_stream =
         (fun () ->
-           Eta.Effect.sync (fun () -> Eta.Queue.close queue)
-           |> Eta.Effect.bind (fun () ->
-             Eta.Effect.sync (fun () -> Eio.Promise.await promise))
-           |> Eta.Effect.bind Eta.Effect.from_result);
+           let* () = Eta.Queue.close_effect queue in
+           Eta.Effect.sync (fun () -> Eio.Promise.await promise)
+           |> Eta.Effect.flatten_result);
       cancel_stream =
-        Eta.Effect.sync (fun () ->
-          Eta.Queue.close_with_error queue (`Stt_error cancel_message));
+        Eta.Queue.close_with_error_effect queue (`Stt_error cancel_message);
     }
   in
   Eta.Effect.with_background ~name:"codex.realtime.stream" session (fun () -> use handle)

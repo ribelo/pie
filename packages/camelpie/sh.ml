@@ -23,23 +23,21 @@ let find_executable name =
 
 let run ~process_mgr ~prog ~args =
   Eta.Effect.sync (fun () ->
-    try
-      Eio.Process.run process_mgr (prog :: args);
-      Ok ()
-    with
-    | Eio.Cancel.Cancelled _ as exn -> raise exn
-    | exn ->
-      Error (Printf.sprintf "%s failed: %s" prog (Printexc.to_string exn)))
-  |> Eta.Effect.map (Result.map_error (fun msg -> `Subprocess_error msg))
-  |> Eta.Effect.bind Eta.Effect.from_result
+      try
+        Eio.Process.run process_mgr (prog :: args);
+        Ok ()
+      with
+      | Eio.Cancel.Cancelled _ as exn -> raise exn
+      | exn ->
+        Error (`Subprocess_error (Printf.sprintf "%s failed: %s" prog (Printexc.to_string exn))))
+  |> Eta.Effect.flatten_result
 
 let run_capture ~process_mgr ~prog ~args =
   Eta.Effect.sync (fun () ->
-    try
-      Ok (Eio.Process.parse_out process_mgr Eio.Buf_read.take_all (prog :: args))
-    with
-    | Eio.Cancel.Cancelled _ as exn -> raise exn
-    | exn ->
-      Error (Printf.sprintf "%s failed: %s" prog (Printexc.to_string exn)))
-  |> Eta.Effect.map (Result.map_error (fun msg -> `Subprocess_error msg))
-  |> Eta.Effect.bind Eta.Effect.from_result
+      try
+        Ok (Eio.Process.parse_out process_mgr Eio.Buf_read.take_all (prog :: args))
+      with
+      | Eio.Cancel.Cancelled _ as exn -> raise exn
+      | exn ->
+        Error (`Subprocess_error (Printf.sprintf "%s failed: %s" prog (Printexc.to_string exn))))
+  |> Eta.Effect.flatten_result

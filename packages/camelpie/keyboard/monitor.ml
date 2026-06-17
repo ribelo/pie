@@ -421,13 +421,13 @@ let read_loop flow t =
   | exn -> Printf.eprintf "keyboard monitor stopped: %s\n%!" (Printexc.to_string exn)
 
 let with_monitor ~sw ~net ~process_mgr:_ f =
-  Eta.Effect.acquire_release
+  Eta.Effect.with_resource
     ~acquire:(Eta.Effect.sync (fun () ->
       let t = create () in
       let flow = connect_and_watch ~sw ~net in
       t, flow))
     ~release:(fun (_t, flow) -> Eta.Effect.sync (fun () -> unwatch_and_close flow))
-  |> Eta.Effect.bind (fun (t, flow) ->
+    (fun (t, flow) ->
     Eta.Effect.with_background
       ~name:"keyboard.monitor"
       (Eta.Effect.sync (fun () -> read_loop flow t))

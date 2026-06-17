@@ -187,12 +187,13 @@ let connect
        with
        | Error e -> fail e.message ?code:e.code ()
        | Ok _ -> ());
-      t
+      Ok t
   with
+  | Eio.Cancel.Cancelled _ as exn -> raise exn
   | Client_error e ->
-    failwith (Printf.sprintf "PulseAudio: %s" e.message)
+    Error (`Pulse_error (Printf.sprintf "PulseAudio: %s" e.message))
   | exn ->
-    failwith (Printf.sprintf "PulseAudio connect failed: %s" (Printexc.to_string exn))
+    Error (`Pulse_error (Printf.sprintf "PulseAudio connect failed: %s" (Printexc.to_string exn)))
 
 let get_server_info_impl (T t) =
   match await_reply (T t) (Commands.build_get_server_info_command ()) with
@@ -205,35 +206,39 @@ let list_sources_impl (T t) =
   | Ok payload -> Ok (Commands.parse_source_list_response payload)
 
 let with_client ~sw ~net ~clock ?socket_path ?cookie ?client_name ?protocol_version ?request_timeout_ms f =
-  Eta.Effect.acquire_release
-    ~acquire:(Eta.Effect.sync (fun () ->
-      connect ~net ~clock ~sw ?socket_path ?cookie ?client_name ?protocol_version ?request_timeout_ms ()))
+  Eta.Effect.with_resource
+    ~acquire:
+      (Eta.Effect.sync (fun () ->
+         connect ~net ~clock ~sw ?socket_path ?cookie ?client_name
+           ?protocol_version ?request_timeout_ms ())
+       |> Eta.Effect.flatten_result)
     ~release:(fun (T t) -> Eta.Effect.sync (fun () ->
       Hashtbl.iter (fun _ resolver ->
         Eio.Promise.resolve_error resolver (error "client released" ())
       ) t.pending;
       Hashtbl.clear t.pending))
-  |> Eta.Effect.bind f
+    f
 
 let get_server_info client =
   Eta.Effect.sync (fun () -> get_server_info_impl client)
-  |> Eta.Effect.bind Eta.Effect.from_result
+  |> Eta.Effect.flatten_result
 
 let list_sources client =
   Eta.Effect.sync (fun () -> list_sources_impl client)
-  |> Eta.Effect.bind Eta.Effect.from_result
+  |> Eta.Effect.flatten_result
 
 let with_record_stream (T t) ?(options : Defs.record_stream_options option) f =
   let acquire =
     Eta.Effect.sync (fun () ->
-      let packet = Commands.build_create_record_stream_command ?options () in
-      match await_reply (T t) packet with
-      | Error e -> fail e.message ?code:e.code ()
-      | Ok payload ->
-        let info = Commands.parse_create_record_stream_response payload in
-        let queue = Eio.Stream.create 64 in
-        Hashtbl.add t.record_queues info.Defs.stream_index queue;
-        info)
+        let packet = Commands.build_create_record_stream_command ?options () in
+        match await_reply (T t) packet with
+        | Error e -> Error (`Pulse_error e.message)
+        | Ok payload ->
+          let info = Commands.parse_create_record_stream_response payload in
+          let queue = Eio.Stream.create 64 in
+          Hashtbl.add t.record_queues info.Defs.stream_index queue;
+          Ok info)
+    |> Eta.Effect.flatten_result
   in
   let release (info : Defs.record_stream_info) =
     Eta.Effect.sync (fun () ->
@@ -241,8 +246,7 @@ let with_record_stream (T t) ?(options : Defs.record_stream_options option) f =
       let packet = Commands.build_delete_record_stream_command info.stream_index in
       try ignore (await_reply (T t) packet) with _ -> ())
   in
-  Eta.Effect.acquire_release ~acquire ~release
-  |> Eta.Effect.bind (fun info ->
+  Eta.Effect.with_resource ~acquire ~release (fun info ->
     let recv () =
       match Hashtbl.find_opt t.record_queues info.Defs.stream_index with
       | None -> Eta.Effect.fail `Closed

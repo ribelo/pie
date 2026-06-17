@@ -21,7 +21,8 @@ val normalize_text : string -> string
 val collapse_line_breaks : string -> string
 val newline_action_for_window : newline_rule list -> Niri.window_info option -> newline_action
 val choose_backend : session_type -> backend
-val detect_session : unit -> session_type
+val detect_session :
+  unit -> (session_type, [> `Injection_error of string ] as 'err) Eta.Effect.t
 
 val type_text :
   ?newline_action:newline_action ->

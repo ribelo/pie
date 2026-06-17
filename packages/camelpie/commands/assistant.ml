@@ -201,10 +201,10 @@ let prompt_with_focused_window_context ~process_mgr prompt_template =
 
 let load_config () =
   Eta.Effect.sync (fun () ->
-    try Ok (Config.Stt.load ())
-    with Config.Stt.Config_error msg -> Error ("Failed to load STT config: " ^ msg))
-  |> Eta.Effect.map (Result.map_error (fun msg -> `Pulse_error msg))
-  |> Eta.Effect.bind Eta.Effect.from_result
+      try Ok (Config.Stt.load ())
+      with Config.Stt.Config_error msg ->
+        Error (`Pulse_error ("Failed to load STT config: " ^ msg)))
+  |> Eta.Effect.flatten_result
 
 let run_stt ~sw ~net ~process_mgr (config : Config.Stt.t) mode pcm_bytes =
   let* prompt_template =
@@ -267,7 +267,7 @@ let inject_and_report ~process_mgr ~newline_rules mode text =
         ~process_mgr
         "pie: no transcript"
         "Speech-to-text produced no transcript text. Try speaking louder or checking microphone input."
-      |> Eta.Effect.catch (fun _ -> Eta.Effect.unit)
+      |> Eta.Effect.ignore_errors
     in
     Eta.Effect.sync (fun () ->
       Printf.printf "%s: <empty>\n%!"

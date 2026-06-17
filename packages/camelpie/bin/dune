@@ -3,4 +3,4 @@
 (executable
  (public_name pie)
  (name pie)
- (libraries camelpie cmdliner eio_main))
+ (libraries camelpie cmdliner eio_main eta_eio))

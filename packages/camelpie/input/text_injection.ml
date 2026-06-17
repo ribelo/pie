@@ -84,12 +84,12 @@ let choose_backend = function
 
 let detect_session () =
   match Sys.getenv_opt "XDG_SESSION_TYPE" with
-  | Some "wayland" -> Wayland
-  | Some "x11" -> X11
+  | Some "wayland" -> Eta.Effect.pure Wayland
+  | Some "x11" -> Eta.Effect.pure X11
   | _ ->
-    if Sys.getenv_opt "WAYLAND_DISPLAY" <> None then Wayland
-    else if Sys.getenv_opt "DISPLAY" <> None then X11
-    else failwith "could not detect graphical session"
+    if Sys.getenv_opt "WAYLAND_DISPLAY" <> None then Eta.Effect.pure Wayland
+    else if Sys.getenv_opt "DISPLAY" <> None then Eta.Effect.pure X11
+    else Eta.Effect.fail (`Injection_error "could not detect graphical session")
 
 let press_newline ~process_mgr ~backend action =
   match backend, action with
@@ -111,14 +111,14 @@ let type_segment ~process_mgr ~backend segment =
     | Xdotool -> X11.Xdotool.type_text ~process_mgr segment
 
 let type_lines ~process_mgr ~backend ~newline_action text =
+  let open Eta.Syntax in
   let rec loop = function
     | [] -> Eta.Effect.unit
     | [segment] -> type_segment ~process_mgr ~backend segment
     | segment :: rest ->
-      type_segment ~process_mgr ~backend segment
-      |> Eta.Effect.bind (fun () ->
-        press_newline ~process_mgr ~backend newline_action
-        |> Eta.Effect.bind (fun () -> loop rest))
+      let* () = type_segment ~process_mgr ~backend segment in
+      let* () = press_newline ~process_mgr ~backend newline_action in
+      loop rest
   in
   loop (split_line_breaks text)
 
@@ -146,13 +146,11 @@ let focused_window_for_rules ~process_mgr rules =
   else Niri.focused_window ~process_mgr () |> Eta.Effect.catch (fun _ -> Eta.Effect.pure None)
 
 let inject ?(newline_rules = []) ~process_mgr text =
-  Eta.Effect.sync (fun () -> detect_session ())
-  |> Eta.Effect.bind (fun session ->
-    let backend = choose_backend session in
-    focused_window_for_rules ~process_mgr newline_rules
-    |> Eta.Effect.bind (fun focused_window ->
-      let newline_action = newline_action_for_window newline_rules focused_window in
-      let typed = normalize_for_action newline_action (normalize_text text) in
-      type_text ~newline_action ~process_mgr ~backend typed
-      |> Eta.Effect.map (fun () ->
-        { session_type = session; backend; text = typed })))
+  let open Eta.Syntax in
+  let* session = detect_session () in
+  let backend = choose_backend session in
+  let* focused_window = focused_window_for_rules ~process_mgr newline_rules in
+  let newline_action = newline_action_for_window newline_rules focused_window in
+  let typed = normalize_for_action newline_action (normalize_text text) in
+  let+ () = type_text ~newline_action ~process_mgr ~backend typed in
+  { session_type = session; backend; text = typed }
