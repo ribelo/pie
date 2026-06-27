@@ -435,6 +435,87 @@ let on_press ~sw ~net ~process_mgr ~coordinator ~config mode_name =
     Eta.Effect.sync (fun () -> Printf.eprintf "PTT ignored: PIE is paused\n%!")
     |> Eta.Effect.map (fun () -> Ptt_loop.Skip)
 
+let action_result coordinator action ?message accepted =
+  let snap = Daemon.Server.snapshot_of_coordinator coordinator in
+  {
+    Daemon.Contract.action;
+    accepted;
+    message;
+    snapshot = snap;
+  }
+
+let send_control control trigger =
+  Eio.Stream.add control trigger
+
+let action_handler ~control ~coordinator raw_action =
+  let action = raw_action |> String.trim |> String.lowercase_ascii in
+  let enqueue trigger message =
+    send_control control trigger;
+    action_result coordinator raw_action ?message true
+  in
+  match action with
+  | "status" -> action_result coordinator raw_action true
+  | "pause" ->
+    Recording.Coordinator.set_enabled coordinator false;
+    action_result coordinator raw_action true
+  | "resume" ->
+    Recording.Coordinator.set_enabled coordinator true;
+    action_result coordinator raw_action true
+  | "toggle" ->
+    ignore (Recording.Coordinator.toggle_enabled coordinator);
+    action_result coordinator raw_action true
+  | "ptt-start" | "dictation-start" ->
+    enqueue (Ptt_loop.Press "transcribe") (Some "ptt transcribe start queued")
+  | "ptt-stop" | "dictation-stop" ->
+    enqueue (Ptt_loop.Release "transcribe") (Some "ptt transcribe stop queued")
+  | "ptt-toggle" | "dictation-toggle" ->
+    let snap = Recording.Coordinator.snapshot coordinator in
+    if
+      snap.active
+      && snap.mode
+         = Recording.Coordinator.string_of_mode Recording.Coordinator.Ptt_transcribe
+    then
+      enqueue (Ptt_loop.Release "transcribe") (Some "ptt transcribe stop queued")
+    else
+      enqueue (Ptt_loop.Press "transcribe") (Some "ptt transcribe start queued")
+  | "ptt-translate-start" ->
+    enqueue (Ptt_loop.Press "translate") (Some "ptt translate start queued")
+  | "ptt-translate-stop" ->
+    enqueue (Ptt_loop.Release "translate") (Some "ptt translate stop queued")
+  | "ptt-translate-toggle" ->
+    let snap = Recording.Coordinator.snapshot coordinator in
+    if
+      snap.active
+      && snap.mode
+         = Recording.Coordinator.string_of_mode Recording.Coordinator.Ptt_translate
+    then
+      enqueue (Ptt_loop.Release "translate") (Some "ptt translate stop queued")
+    else
+      enqueue (Ptt_loop.Press "translate") (Some "ptt translate start queued")
+  | "meeting-start" ->
+    let result =
+      Recording.Coordinator.try_start coordinator Recording.Coordinator.Meeting_transcribe ()
+    in
+    let accepted =
+      match result with
+      | Started _ -> true
+      | Busy _ | Disabled -> false
+    in
+    action_result coordinator raw_action accepted
+  | "meeting-stop" ->
+    let stopped =
+      Recording.Coordinator.stop coordinator Recording.Coordinator.Meeting_transcribe
+    in
+    action_result coordinator raw_action stopped
+  | "meeting-toggle" ->
+    ignore (Recording.Coordinator.toggle_meeting coordinator);
+    action_result coordinator raw_action true
+  | _ ->
+    let message = Some ("unknown action: " ^ raw_action) in
+    action_result coordinator raw_action
+      ?message
+      false
+
 let run
     ~sw
     ~net
@@ -447,9 +528,12 @@ let run
     () =
   let* config = load_config () in
   let coordinator = Recording.Coordinator.create () in
+  let control = Eio.Stream.create 1024 in
   let* () =
     Eta.Effect.sync (fun () ->
-      Daemon.Server.start ~sw ~net coordinator;
+      Daemon.Server.start ~sw ~net
+        ~action_handler:(action_handler ~control ~coordinator)
+        coordinator;
       Printf.printf
         "pie assistant mode: hold F9 to transcribe, F10 to translate (Ctrl-C to exit)\n%!";
       Printf.printf
@@ -484,5 +568,5 @@ let run
       "pie: no microphone input"
       "No input detected during push-to-talk. Your microphone may be muted.";
   } in
-  Ptt_loop.run ~keyboard ~recv ptt_config
+  Ptt_loop.run ~control ~keyboard ~recv ptt_config
   |> Eta.Effect.map_error (fun (`Ptt_error msg) -> `Pulse_error msg)

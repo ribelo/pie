@@ -64,6 +64,12 @@ let render_start_result = function
   | Disabled -> "paused"
   | Error message -> "error:" ^ message
 
+let render_action_result (result : Camelpie.Daemon.Contract.action_result) =
+  match String.lowercase_ascii result.action, result.message with
+  | "status", _ -> render_recording_status result.snapshot
+  | _, Some message -> message
+  | _ -> "ok"
+
 let sources_cmd =
   let doc = "List PulseAudio capture sources" in
   let info = Cmd.info "sources" ~doc in
@@ -252,6 +258,28 @@ let meeting_toggle_cmd =
             Printf.printf "%s\n%!" (render_recording_status snap))))
       $ env_term)
 
+let msg_action_cmd =
+  let action_arg =
+    Arg.(required & pos 0 (some string) None & info [] ~docv:"ACTION" ~doc:"Action name")
+  in
+  let doc = "Send an action to the running daemon" in
+  let info = Cmd.info "action" ~doc in
+  Cmd.v info
+    Term.(
+      const (fun action () ->
+        run_effect (fun ~env ~sw ->
+          let net = Eio.Stdenv.net env in
+          let open Eta.Syntax in
+          let* result = Camelpie.Daemon.Client.action ~net ~sw action in
+          Eta.Effect.sync (fun () ->
+            Printf.printf "%s\n%!" (render_action_result result))))
+      $ action_arg $ env_term)
+
+let msg_cmd =
+  let doc = "Send a message to the running daemon" in
+  let info = Cmd.info "msg" ~doc in
+  Cmd.group info [ msg_action_cmd ]
+
 let ptt_portal_cmd =
   let doc = "Register a GlobalShortcuts portal binding" in
   let info = Cmd.info "ptt-portal" ~doc in
@@ -408,6 +436,7 @@ let default_cmd =
         `P "$(b,toggle) — toggle recording";
         `P "$(b,pause) — pause recording";
         `P "$(b,resume) — resume recording";
+        `P "$(b,msg action ACTION) — send an action to the daemon";
         `P "$(b,meeting-start) — start meeting transcription";
         `P "$(b,meeting-stop) — stop meeting transcription";
         `P "$(b,meeting-toggle) — toggle meeting transcription";
@@ -417,7 +446,7 @@ let default_cmd =
     sources_cmd; meter_cmd; record_cmd; type_cmd;
     ptt_portal_cmd; ptt_cmd; ptt_transcribe_cmd; ptt_translate_cmd;
     stt_interactive_cmd; wakeword_cmd; wakeword_tune_cmd; wakeword_train_cmd;
-    status_cmd; toggle_cmd; pause_cmd; resume_cmd;
+    status_cmd; toggle_cmd; pause_cmd; resume_cmd; msg_cmd;
     meeting_start_cmd; meeting_stop_cmd; meeting_toggle_cmd;
   ]
 

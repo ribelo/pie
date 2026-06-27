@@ -187,6 +187,51 @@ let test_daemon_contract_request () =
       (request = Camelpie.Daemon.Contract.Status)
   | Error msg -> Alcotest.fail msg
 
+let test_daemon_contract_action_request () =
+  let json =
+    Camelpie.Daemon.Contract.request_to_json
+      (Camelpie.Daemon.Contract.Action "ptt-start")
+  in
+  match Camelpie.Daemon.Contract.request_of_json json with
+  | Ok (Camelpie.Daemon.Contract.Action action) ->
+    Alcotest.(check string) "action" "ptt-start" action
+  | Ok _ -> Alcotest.fail "expected Action request"
+  | Error msg -> Alcotest.fail msg
+
+let test_daemon_contract_action_response () =
+  let snapshot : Camelpie.Daemon.Contract.recording_snapshot =
+    {
+      active = true;
+      mode = "ptt-transcribe";
+      enabled = true;
+      started_at = None;
+      updated_at = Some "now";
+      transcript_path = None;
+      last_error = None;
+    }
+  in
+  let response =
+    Camelpie.Daemon.Contract.Action_resp
+      {
+        action = "ptt-start";
+        accepted = true;
+        message = Some "queued";
+        snapshot;
+      }
+    |> Camelpie.Daemon.Contract.response_to_json
+  in
+  match
+    Camelpie.Daemon.Contract.response_of_json
+      (Camelpie.Daemon.Contract.Action "ptt-start")
+      response
+  with
+  | Camelpie.Daemon.Contract.Action_resp result ->
+    Alcotest.(check bool) "accepted" true result.accepted;
+    Alcotest.(check string) "message" "queued"
+      (Option.value result.message ~default:"");
+    Alcotest.(check string) "mode" "ptt-transcribe" result.snapshot.mode
+  | _ -> Alcotest.fail "expected Action response"
+
 let test_daemon_contract_error_response_parsed_as_success () =
   let error_json = `Assoc [("error", `String "server crashed")] in
   let response =
@@ -423,6 +468,79 @@ let test_daemon_server_state () =
      Alcotest.(check string) "meeting mode" "meeting-transcribe"
        (match List.assoc_opt "mode" fields with Some (`String s) -> s | _ -> "")
    | _ -> Alcotest.fail "meeting value must be object");
+  (try Sys.remove persist_path with Sys_error _ -> ())
+
+let test_daemon_server_action_handler () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let socket_path =
+    Filename.concat
+      (Filename.get_temp_dir_name ())
+      (Printf.sprintf "camelpie-daemon-action-%d.sock" (Unix.getpid ()))
+  in
+  let persist_path =
+    Filename.concat
+      (Filename.get_temp_dir_name ())
+      (Printf.sprintf "camelpie-daemon-action-%d.json" (Unix.getpid ()))
+  in
+  (try Sys.remove socket_path with Sys_error _ -> ());
+  (try Sys.remove persist_path with Sys_error _ -> ());
+  let coordinator =
+    Camelpie.Recording.Coordinator.create ~persist_path ()
+  in
+  let seen = ref [] in
+  let action_handler action =
+    seen := action :: !seen;
+    {
+      Camelpie.Daemon.Contract.action;
+      accepted = true;
+      message = Some "queued";
+      snapshot =
+        {
+          active = false;
+          mode = "idle";
+          enabled = true;
+          started_at = None;
+          updated_at = Some "now";
+          transcript_path = None;
+          last_error = None;
+        };
+    }
+  in
+  Camelpie.Daemon.Server.start
+    ~sw
+    ~net:(Eio.Stdenv.net env)
+    ~socket_path
+    ~action_handler
+    coordinator;
+  let flow =
+    Eio.Net.connect
+      ~sw
+      (Eio.Stdenv.net env)
+      (`Unix socket_path)
+  in
+  let response =
+    Fun.protect
+      ~finally:(fun () -> Eio.Flow.close flow)
+      (fun () ->
+         let payload =
+           Yojson.Safe.to_string
+             (Camelpie.Daemon.Contract.request_to_json
+                (Camelpie.Daemon.Contract.Action "ptt-start"))
+           ^ "\n"
+         in
+         Eio.Flow.write flow [Cstruct.of_string payload];
+         let reader = Eio.Buf_read.of_flow ~max_size:65536 flow in
+         Yojson.Safe.from_string (Eio.Buf_read.line reader))
+  in
+  Alcotest.(check (list string)) "handler called" [ "ptt-start" ] (List.rev !seen);
+  (match response with
+   | `Assoc fields ->
+     Alcotest.(check bool) "accepted" true
+       (match List.assoc_opt "accepted" fields with Some (`Bool b) -> b | _ -> false);
+     Alcotest.(check string) "message" "queued"
+       (match List.assoc_opt "message" fields with Some (`String s) -> s | _ -> "")
+   | _ -> Alcotest.fail "expected action response object");
   (try Sys.remove persist_path with Sys_error _ -> ())
 
 let test_daemon_server_meeting_stop_no_failure_signal () =
@@ -706,7 +824,7 @@ let read_http_head flow =
   loop ()
 
 let write_ws_text flow payload =
-  Eta_http.Ws.Codec.encode
+  Eta_http_eio.Ws.Codec.encode
     { fin = true; opcode = Text; payload = Bytes.of_string payload }
   |> Bytes.to_string
   |> fun encoded -> Eio.Flow.copy_string encoded flow
@@ -761,7 +879,7 @@ let close_payload code reason =
   payload
 
 let write_ws_close flow =
-  Eta_http.Ws.Codec.encode
+  Eta_http_eio.Ws.Codec.encode
     { fin = true; opcode = Close; payload = close_payload 1000 "" }
   |> Bytes.to_string
   |> fun encoded -> Eio.Flow.copy_string encoded flow
@@ -772,7 +890,7 @@ let write_ws_switching_response flow key =
     ^ "Upgrade: websocket\r\n"
     ^ "Connection: keep-alive, Upgrade\r\n"
     ^ "Sec-WebSocket-Accept: "
-    ^ Eta_http.Ws.Codec.accept_key key
+    ^ Eta_http_eio.Ws.Codec.accept_key ~sha1:Eta_http_tls_openssl.sha1 key
     ^ "\r\n\r\n"
   in
   Eio.Flow.copy_string response flow
@@ -1833,6 +1951,62 @@ let test_ptt_loop_continues_after_finish () =
   | Error _ -> ()
   | Ok () -> Alcotest.fail "expected second finish to stop the test loop"
 
+let test_ptt_loop_control_stream_triggers_capture () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let clock = Eio.Stdenv.clock env in
+  let rt = Eta_eio.Runtime.create ~sw ~clock () in
+  let keyboard = Camelpie.Keyboard.Monitor.create () in
+  let control = Eio.Stream.create 16 in
+  let audio = Eio.Stream.create 16 in
+  let starts = ref 0 in
+  let finishes = ref 0 in
+  Eio.Fiber.fork ~sw (fun () ->
+    Eio.Time.sleep clock 0.05;
+    Eio.Stream.add control (Camelpie.Ptt_loop.Press "test");
+    Eio.Stream.add audio (Bytes.make 320 '\001');
+    Eio.Time.sleep clock 0.05;
+    Eio.Stream.add control (Camelpie.Ptt_loop.Release "test"));
+  let handle =
+    {
+      Camelpie.Ptt_loop.offer = (fun _ -> Eta.Effect.unit);
+      finish =
+        (fun _ ->
+           let* () = Eta.Effect.sync (fun () -> incr finishes) in
+           Eta.Effect.fail (`Ptt_error "done"));
+      cancel = Eta.Effect.unit;
+    }
+  in
+  let config : Camelpie.Ptt_loop.config =
+    {
+      recognize = (fun _ -> None);
+      min_duration_ms = 0;
+      min_capture_rms = Camelpie.Audio.Pcm.ptt_min_capture_rms_for_stt;
+      min_capture_peak = Camelpie.Audio.Pcm.ptt_min_capture_peak_for_stt;
+      log_prefix = (fun mode -> mode);
+      source = None;
+      on_ready = Eta.Effect.unit;
+      on_press =
+        (fun _ ->
+           Eta.Effect.sync (fun () -> incr starts)
+           |> Eta.Effect.map (fun () -> Camelpie.Ptt_loop.Handle handle));
+      on_release = (fun _ -> Eta.Effect.unit);
+      on_abort = Eta.Effect.pure false;
+      on_dead_input = Eta.Effect.unit;
+    }
+  in
+  let recv () = Eta.Effect.sync (fun () -> Eio.Stream.take audio) in
+  let result =
+    Eta_eio.Runtime.run rt
+      (Camelpie.Ptt_loop.run ~control ~keyboard ~recv config
+       |> Eta.Effect.timeout_as (Eta.Duration.seconds 5) ~on_timeout:(`Ptt_error "timeout"))
+  in
+  Alcotest.(check int) "starts" 1 !starts;
+  Alcotest.(check int) "finishes" 1 !finishes;
+  match result with
+  | Error _ -> ()
+  | Ok () -> Alcotest.fail "expected finish to stop the test loop"
+
 let test_ptt_loop_post_roll_repress_continues_capture () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
@@ -2428,6 +2602,10 @@ let () =
            Alcotest.(check bool) "enabled" true snap.enabled);
          Alcotest.test_case "request parsing" `Quick
            test_daemon_contract_request;
+         Alcotest.test_case "action request parsing" `Quick
+           test_daemon_contract_action_request;
+         Alcotest.test_case "action response parsing" `Quick
+           test_daemon_contract_action_response;
          Alcotest.test_case "response roundtrip" `Quick
            test_daemon_contract_response;
          Alcotest.test_case "error response parsed as success" `Quick
@@ -2443,6 +2621,8 @@ let () =
        [
          Alcotest.test_case "socket state" `Quick
            test_daemon_server_state;
+         Alcotest.test_case "action handler" `Quick
+           test_daemon_server_action_handler;
          Alcotest.test_case "meeting stop no failure signal" `Quick
            test_daemon_server_meeting_stop_no_failure_signal;
          Alcotest.test_case "mkdir_p silent on existing file" `Quick
@@ -2541,6 +2721,8 @@ let () =
            Alcotest.(check bool) "postroll expired" true (Camelpie.Ptt.Capture.post_roll_remaining_ms s2 4000.0 = 0.0));
          Alcotest.test_case "loop continues after finish" `Quick
            test_ptt_loop_continues_after_finish;
+         Alcotest.test_case "control stream triggers capture" `Quick
+           test_ptt_loop_control_stream_triggers_capture;
          Alcotest.test_case "post-roll re-press continues capture" `Quick
            test_ptt_loop_post_roll_repress_continues_capture;
          Alcotest.test_case "scoped handle lifetime" `Quick

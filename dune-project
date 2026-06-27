@@ -18,6 +18,7 @@
   eta_eio
   eta_http
   eta_http_eio
+  (eta_http_tls_openssl :with-test)
   eta_stream
   (eio (>= 1.0))
   (yojson (>= 2.0))

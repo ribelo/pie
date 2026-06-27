@@ -42,6 +42,18 @@ let toggle ~net ~sw () =
   | Toggle_resp b -> Eta.Effect.pure b
   | _ -> Eta.Effect.fail (`Daemon_error "unexpected response for Toggle")
 
+let action ~net ~sw name =
+  let* resp = call ~net ~sw (Action name) in
+  match resp with
+  | Action_resp result ->
+    if result.accepted then Eta.Effect.pure result
+    else
+      let message =
+        Option.value result.message ~default:("action rejected: " ^ result.action)
+      in
+      Eta.Effect.fail (`Daemon_error message)
+  | _ -> Eta.Effect.fail (`Daemon_error "unexpected response for Action")
+
 let pause ~net ~sw () =
   let* resp = call ~net ~sw Pause in
   match resp with

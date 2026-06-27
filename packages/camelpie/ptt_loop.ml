@@ -119,7 +119,7 @@ let capture_is_eligible ~min_duration_ms ~min_capture_rms ~min_capture_peak ~hel
   && Bytes.length pcm_bytes > 0
   && (rms >= min_capture_rms || peak >= min_capture_peak)
 
-let run ~(keyboard : Keyboard.Monitor.t) ~(recv : unit -> (bytes, [> `Closed ]) Eta.Effect.t) (config : config) =
+let run ?control ~(keyboard : Keyboard.Monitor.t) ~(recv : unit -> (bytes, [> `Closed ]) Eta.Effect.t) (config : config) =
   let keyboard_queue = Keyboard.Monitor.subscribe keyboard in
   let input = Eio.Stream.create 1024 in
   let push_input item =
@@ -131,6 +131,11 @@ let run ~(keyboard : Keyboard.Monitor.t) ~(recv : unit -> (bytes, [> `Closed ]) 
     let* () = push_input (`Event event) in
     keyboard_loop ()
   in
+  let rec control_loop control =
+    let* trigger = Eta.Effect.sync (fun () -> Eio.Stream.take control) in
+    let* () = push_input (`Trigger trigger) in
+    control_loop control
+  in
   let rec recv_loop () =
     let* chunk =
       recv ()
@@ -141,7 +146,14 @@ let run ~(keyboard : Keyboard.Monitor.t) ~(recv : unit -> (bytes, [> `Closed ]) 
     recv_loop ()
   in
   let input_loop =
-    Eta.Effect.par (keyboard_loop ()) (recv_loop ()) |> Eta.Effect.map (fun _ -> ())
+    let keyboard_and_audio =
+      Eta.Effect.par (keyboard_loop ()) (recv_loop ()) |> Eta.Effect.map (fun _ -> ())
+    in
+    match control with
+    | None -> keyboard_and_audio
+    | Some control ->
+      Eta.Effect.par keyboard_and_audio (control_loop control)
+      |> Eta.Effect.map (fun _ -> ())
   in
   let state_loop () =
   let offer_chunks handle chunks =
@@ -280,6 +292,25 @@ let run ~(keyboard : Keyboard.Monitor.t) ~(recv : unit -> (bytes, [> `Closed ]) 
            in
            loop next dead_input offered chunks
          | _ -> loop capture_state dead_input offered chunks)
+      | `Trigger (Release release_mode) when release_mode = mode ->
+        (match capture_state with
+         | Ptt.Capture.Capturing _ ->
+           let next = Ptt.Capture.release capture_state (float_of_int (now_ms ())) in
+           let* () = config.on_release mode in
+           loop next dead_input offered chunks
+         | _ -> loop capture_state dead_input offered chunks)
+      | `Trigger (Press press_mode) when press_mode = mode ->
+        let next = Ptt.Capture.start capture_state (float_of_int (now_ms ())) in
+        let* () =
+          match capture_state with
+          | Ptt.Capture.PostRoll _ ->
+            Eta.Effect.sync (fun () ->
+              log_info "Post-roll cancelled, continuing capture"
+                (ptt_fields config mode))
+          | _ -> Eta.Effect.unit
+        in
+        loop next dead_input offered chunks
+      | `Trigger _ -> loop capture_state dead_input offered chunks
     in
     loop (Ptt.Capture.start Ptt.Capture.idle (float_of_int started_at)) (Ptt.Dead_input.initial ()) false []
   in
@@ -300,6 +331,30 @@ let run ~(keyboard : Keyboard.Monitor.t) ~(recv : unit -> (bytes, [> `Closed ]) 
     match next with
     | `Timeout -> idle_loop ()
     | `Chunk _ -> idle_loop ()
+    | `Trigger (Press mode) ->
+      let* pressed = config.on_press mode in
+      (match pressed with
+       | Skip -> idle_loop ()
+       | Handle handle ->
+         let started_at = now_ms () in
+         let* () =
+           Eta.Effect.sync (fun () ->
+             log_info "PTT capture started" (ptt_fields config mode))
+         in
+         let* () = run_capture mode handle (run_active mode started_at handle) in
+         idle_loop ()
+       | Scoped with_handle ->
+         let started_at = now_ms () in
+         let* () =
+           Eta.Effect.sync (fun () ->
+             log_info "PTT capture started" (ptt_fields config mode))
+         in
+         let* () =
+           with_handle (fun handle ->
+             run_capture mode handle (run_active mode started_at handle))
+         in
+         idle_loop ())
+    | `Trigger (Release _) -> idle_loop ()
     | `Event event ->
       (match config.recognize event with
        | Some (Press mode) ->
