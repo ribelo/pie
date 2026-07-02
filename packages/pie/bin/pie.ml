@@ -17,6 +17,8 @@ let render_effect_error = function
   | `Timeout -> "operation timed out"
 
 let run_effect mk_eff =
+  Pie.Observability.init_from_env ~service_version:"0.1.0" ();
+  Fun.protect ~finally:Pie.Observability.shutdown @@ fun () ->
   try
     Eio_main.run @@ fun env ->
     Eio.Switch.run @@ fun sw ->
@@ -44,31 +46,52 @@ let run_effect mk_eff =
           Printf.eprintf "Interrupted\n%!";
           exit 130)
         else (
+          Pie.Observability.error
+            ~attrs:[ ("error", msg) ]
+            "command failed";
           Printf.eprintf "Error: %s\n%!" msg;
           exit 1)
   with exn ->
-    Printf.eprintf "Fatal: %s\n%!" (Printexc.to_string exn);
+    let error = Printexc.to_string exn in
+    Pie.Observability.error ~attrs:[ ("error", error) ] "fatal error";
+    Printf.eprintf "Fatal: %s\n%!" error;
     exit 1
 
 let env_term = Term.const ()
 
-let render_recording_status (snap : Camelpie.Daemon.Contract.recording_snapshot) =
+let render_recording_status (snap : Pie.Daemon.Contract.recording_snapshot) =
   if not snap.enabled then "paused"
   else if not snap.active then "armed"
   else if snap.mode = "idle" then "stale"
   else snap.mode
 
 let render_start_result = function
-  | Camelpie.Daemon.Contract.Started mode -> mode
+  | Pie.Daemon.Contract.Started mode -> mode
   | Busy mode -> "busy:" ^ mode
   | Disabled -> "paused"
   | Error message -> "error:" ^ message
 
-let render_action_result (result : Camelpie.Daemon.Contract.action_result) =
+let render_action_result (result : Pie.Daemon.Contract.action_result) =
   match String.lowercase_ascii result.action, result.message with
   | "status", _ -> render_recording_status result.snapshot
   | _, Some message -> message
   | _ -> "ok"
+
+let json_string json = Yojson.Safe.to_string json
+
+let json_of_daemon_error message =
+  `Assoc [
+    ("active", `Bool false);
+    ("mode", `String "offline");
+    ("enabled", `Bool false);
+    ("startedAt", `Null);
+    ("updatedAt", `Null);
+    ("transcriptPath", `Null);
+    ("lastError", `String message);
+  ]
+
+let print_jsonl json =
+  Printf.printf "%s\n%!" (json_string json)
 
 let sources_cmd =
   let doc = "List PulseAudio capture sources" in
@@ -77,7 +100,7 @@ let sources_cmd =
     Term.(
       const (fun () ->
         run_effect (fun ~env ~sw ->
-          Camelpie.Commands.Sources.run
+          Pie.Commands.Sources.run
             ~sw
             ~net:(Eio.Stdenv.net env)
             ~clock:(Eio.Stdenv.clock env)
@@ -91,7 +114,7 @@ let meter_cmd =
     Term.(
       const (fun () ->
         run_effect (fun ~env ~sw ->
-          Camelpie.Commands.Meter.run
+          Pie.Commands.Meter.run
             ~sw
             ~net:(Eio.Stdenv.net env)
             ~clock:(Eio.Stdenv.clock env)
@@ -114,7 +137,7 @@ let record_cmd =
     Term.(
       const (fun output_path duration_sec raw () ->
         run_effect (fun ~env ~sw ->
-          Camelpie.Commands.Record.run
+          Pie.Commands.Record.run
             ~sw
             ~net:(Eio.Stdenv.net env)
             ~clock:(Eio.Stdenv.clock env)
@@ -136,8 +159,8 @@ let type_cmd =
         run_effect (fun ~env ~sw ->
           let process_mgr = Eio.Stdenv.process_mgr env in
           let open Eta.Syntax in
-          let* (result : Camelpie.Input.Text_injection.result) =
-            Camelpie.Input.Text_injection.inject ~process_mgr text
+          let* (result : Pie.Input.Text_injection.result) =
+            Pie.Input.Text_injection.inject ~process_mgr text
           in
           Eta.Effect.sync (fun () ->
             Printf.printf "Typed %d chars via %s (%s)\n%!"
@@ -156,8 +179,8 @@ let status_cmd =
           let net = Eio.Stdenv.net env in
           let status =
             let open Eta.Syntax in
-            let* (snap : Camelpie.Daemon.Contract.recording_snapshot) =
-              Camelpie.Daemon.Client.status ~net ~sw ()
+            let* (snap : Pie.Daemon.Contract.recording_snapshot) =
+              Pie.Daemon.Client.status ~net ~sw ()
             in
             Eta.Effect.sync (fun () ->
               Printf.printf "%s\n%!" (render_recording_status snap))
@@ -181,7 +204,7 @@ let toggle_cmd =
         run_effect (fun ~env ~sw ->
           let net = Eio.Stdenv.net env in
           let open Eta.Syntax in
-          let* (result : bool) = Camelpie.Daemon.Client.toggle ~net ~sw () in
+          let* (result : bool) = Pie.Daemon.Client.toggle ~net ~sw () in
           Eta.Effect.sync (fun () ->
             Printf.printf "%s\n%!" (if result then "armed" else "paused"))))
       $ env_term)
@@ -194,7 +217,7 @@ let pause_cmd =
       const (fun () ->
         run_effect (fun ~env ~sw ->
           let net = Eio.Stdenv.net env in
-          Camelpie.Daemon.Client.pause ~net ~sw ()))
+          Pie.Daemon.Client.pause ~net ~sw ()))
       $ env_term)
 
 let resume_cmd =
@@ -205,7 +228,7 @@ let resume_cmd =
       const (fun () ->
         run_effect (fun ~env ~sw ->
           let net = Eio.Stdenv.net env in
-          Camelpie.Daemon.Client.resume ~net ~sw ()))
+          Pie.Daemon.Client.resume ~net ~sw ()))
       $ env_term)
 
 let meeting_start_cmd =
@@ -217,11 +240,11 @@ let meeting_start_cmd =
         run_effect (fun ~env ~sw ->
           let net = Eio.Stdenv.net env in
           let open Eta.Syntax in
-          let* (r : Camelpie.Daemon.Contract.meeting_start_result) =
-            Camelpie.Daemon.Client.meeting_start ~net ~sw ()
+          let* (r : Pie.Daemon.Contract.meeting_start_result) =
+            Pie.Daemon.Client.meeting_start ~net ~sw ()
           in
           Eta.Effect.sync (fun () ->
-            Printf.printf "%s\n%!" (render_start_result r.Camelpie.Daemon.Contract.result))))
+            Printf.printf "%s\n%!" (render_start_result r.Pie.Daemon.Contract.result))))
       $ env_term)
 
 let meeting_stop_cmd =
@@ -233,8 +256,8 @@ let meeting_stop_cmd =
         run_effect (fun ~env ~sw ->
           let net = Eio.Stdenv.net env in
           let open Eta.Syntax in
-          let* (r : Camelpie.Daemon.Contract.meeting_stop_result) =
-            Camelpie.Daemon.Client.meeting_stop ~net ~sw ()
+          let* (r : Pie.Daemon.Contract.meeting_stop_result) =
+            Pie.Daemon.Client.meeting_stop ~net ~sw ()
           in
           Eta.Effect.sync (fun () ->
             if not r.stopped then
@@ -251,8 +274,8 @@ let meeting_toggle_cmd =
         run_effect (fun ~env ~sw ->
           let net = Eio.Stdenv.net env in
           let open Eta.Syntax in
-          let* (snap : Camelpie.Daemon.Contract.recording_snapshot) =
-            Camelpie.Daemon.Client.meeting_toggle ~net ~sw ()
+          let* (snap : Pie.Daemon.Contract.recording_snapshot) =
+            Pie.Daemon.Client.meeting_toggle ~net ~sw ()
           in
           Eta.Effect.sync (fun () ->
             Printf.printf "%s\n%!" (render_recording_status snap))))
@@ -270,15 +293,96 @@ let msg_action_cmd =
         run_effect (fun ~env ~sw ->
           let net = Eio.Stdenv.net env in
           let open Eta.Syntax in
-          let* result = Camelpie.Daemon.Client.action ~net ~sw action in
+          let* result = Pie.Daemon.Client.action ~net ~sw action in
           Eta.Effect.sync (fun () ->
             Printf.printf "%s\n%!" (render_action_result result))))
       $ action_arg $ env_term)
 
+let msg_status_cmd =
+  let json_flag =
+    Arg.(value & flag & info ["json"] ~doc:"Print the full daemon status as JSON")
+  in
+  let doc = "Show daemon status through the message API" in
+  let info = Cmd.info "status" ~doc in
+  Cmd.v info
+    Term.(
+      const (fun as_json () ->
+        run_effect (fun ~env ~sw ->
+          let net = Eio.Stdenv.net env in
+          let open Eta.Syntax in
+          let* (snap : Pie.Daemon.Contract.recording_snapshot) =
+            Pie.Daemon.Client.status ~net ~sw ()
+          in
+          Eta.Effect.sync (fun () ->
+            if as_json then
+              print_jsonl (Pie.Daemon.Contract.json_of_snapshot snap)
+            else
+              Printf.printf "%s\n%!" (render_recording_status snap))))
+      $ json_flag $ env_term)
+
+let msg_subscribe_cmd =
+  let interval_ms_arg =
+    Arg.(
+      value
+      & opt int 500
+      & info ["interval-ms"] ~docv:"MS"
+          ~doc:"Daemon status polling interval for the JSONL stream")
+  in
+  let doc = "Subscribe to daemon status snapshots as JSONL" in
+  let info = Cmd.info "subscribe" ~doc in
+  Cmd.v info
+    Term.(
+      const (fun interval_ms () ->
+        run_effect (fun ~env ~sw ->
+          let net = Eio.Stdenv.net env in
+          let clock = Eio.Stdenv.clock env in
+          let sleep_seconds =
+            let seconds = (float_of_int interval_ms) /. 1000.0 in
+            if seconds <= 0.0 then 0.5 else seconds
+          in
+          let open Eta.Syntax in
+          let rec loop last_json =
+            let status =
+              let* (snap : Pie.Daemon.Contract.recording_snapshot) =
+                Pie.Daemon.Client.status ~net ~sw ()
+              in
+              let json =
+                json_string (Pie.Daemon.Contract.json_of_snapshot snap)
+              in
+              let* () =
+                Eta.Effect.sync (fun () ->
+                  if Some json <> last_json then Printf.printf "%s\n%!" json)
+              in
+              Eta.Effect.pure (Some json)
+            in
+            let* next_last =
+              Eta.Effect.catch
+                (fun err ->
+                  let message =
+                    match err with
+                    | `Daemon_off -> "daemon is not running"
+                    | `Daemon_error msg -> msg
+                  in
+                  let json = json_string (json_of_daemon_error message) in
+                  let* () =
+                    Eta.Effect.sync (fun () ->
+                      if Some json <> last_json then Printf.printf "%s\n%!" json)
+                  in
+                  Eta.Effect.pure (Some json))
+                status
+            in
+            let* () =
+              Eta.Effect.sync (fun () -> Eio.Time.sleep clock sleep_seconds)
+            in
+            loop next_last
+          in
+          loop None))
+      $ interval_ms_arg $ env_term)
+
 let msg_cmd =
   let doc = "Send a message to the running daemon" in
   let info = Cmd.info "msg" ~doc in
-  Cmd.group info [ msg_action_cmd ]
+  Cmd.group info [ msg_action_cmd; msg_status_cmd; msg_subscribe_cmd ]
 
 let ptt_portal_cmd =
   let doc = "Register a GlobalShortcuts portal binding" in
@@ -287,7 +391,7 @@ let ptt_portal_cmd =
     Term.(
       const (fun () ->
         run_effect (fun ~env ~sw ->
-          Camelpie.Commands.Ptt_portal.run
+          Pie.Commands.Ptt_portal.run
             ~process_mgr:(Eio.Stdenv.process_mgr env)
             ()))
       $ env_term)
@@ -299,7 +403,7 @@ let ptt_cmd =
     Term.(
       const (fun () ->
         run_effect (fun ~env ~sw ->
-          Camelpie.Commands.Ptt.run
+          Pie.Commands.Ptt.run
             ~sw
             ~net:(Eio.Stdenv.net env)
             ~clock:(Eio.Stdenv.clock env)
@@ -315,7 +419,7 @@ let ptt_transcribe_cmd =
     Term.(
       const (fun () ->
         run_effect (fun ~env ~sw ->
-          Camelpie.Commands.Ptt.run
+          Pie.Commands.Ptt.run
             ~sw
             ~net:(Eio.Stdenv.net env)
             ~clock:(Eio.Stdenv.clock env)
@@ -331,7 +435,7 @@ let ptt_translate_cmd =
     Term.(
       const (fun () ->
         run_effect (fun ~env ~sw ->
-          Camelpie.Commands.Ptt.run
+          Pie.Commands.Ptt.run
             ~sw
             ~net:(Eio.Stdenv.net env)
             ~clock:(Eio.Stdenv.clock env)
@@ -347,7 +451,7 @@ let stt_interactive_cmd =
     Term.(
       const (fun () ->
         run_effect (fun ~env ~sw ->
-          Camelpie.Commands.Stt_interactive.run
+          Pie.Commands.Stt_interactive.run
             ~sw
             ~net:(Eio.Stdenv.net env)
             ~clock:(Eio.Stdenv.clock env)
@@ -363,7 +467,7 @@ let wakeword_cmd =
     Term.(
       const (fun () ->
         run_effect (fun ~env ~sw ->
-          Camelpie.Commands.Wakeword_telemetry.run
+          Pie.Commands.Wakeword_telemetry.run
             ~sw
             ~net:(Eio.Stdenv.net env)
             ~clock:(Eio.Stdenv.clock env)
@@ -374,29 +478,29 @@ let wakeword_tune_cmd =
   let doc = "Tune wakeword detection thresholds" in
   let info = Cmd.info "wakeword-tune" ~doc in
   Cmd.v info
-    Term.(const (fun () -> run_effect (fun ~env ~sw -> Eta.Effect.sync (fun () -> Camelpie.Commands.Wakeword_tune_cmd.run ()))) $ env_term)
+    Term.(const (fun () -> run_effect (fun ~env ~sw -> Eta.Effect.sync (fun () -> Pie.Commands.Wakeword_tune_cmd.run ()))) $ env_term)
 
 let wakeword_train_cmd =
   let doc = "Train a custom wakeword model" in
   let info = Cmd.info "wakeword-train" ~doc in
   Cmd.v info
-    Term.(const (fun () -> run_effect (fun ~env ~sw -> Eta.Effect.sync (fun () -> Camelpie.Commands.Wakeword_train_cmd.run ()))) $ env_term)
+    Term.(const (fun () -> run_effect (fun ~env ~sw -> Eta.Effect.sync (fun () -> Pie.Commands.Wakeword_train_cmd.run ()))) $ env_term)
 
 let assistant_term =
   let transcribe_keysym_arg =
-    Arg.(value & opt int Camelpie.Commands.Assistant.default_transcribe_keysym
+    Arg.(value & opt int Pie.Commands.Assistant.default_transcribe_keysym
          & info ["ptt-transcribe-keysym"] ~docv:"KEYSYM"
              ~doc:"XKB keysym for PTT transcribe (default: F9 / 65478)")
   in
   let translate_keysym_arg =
-    Arg.(value & opt int Camelpie.Commands.Assistant.default_translate_keysym
+    Arg.(value & opt int Pie.Commands.Assistant.default_translate_keysym
          & info ["ptt-translate-keysym"] ~docv:"KEYSYM"
              ~doc:"XKB keysym for PTT translate (default: F10 / 65479)")
   in
   Term.(
     const (fun ptt_transcribe_keysym ptt_translate_keysym () ->
       run_effect (fun ~env ~sw ->
-        Camelpie.Commands.Assistant.run
+        Pie.Commands.Assistant.run
           ~sw
           ~net:(Eio.Stdenv.net env)
           ~clock:(Eio.Stdenv.clock env)

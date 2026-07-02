@@ -8,16 +8,13 @@ module Openrouter = Eta_ai_openrouter
 open Eta.Syntax
 
 let resolve_api_key () =
-  match Sys.getenv_opt "ERG_OPENROUTER_API_KEY", Sys.getenv_opt "OPENROUTER_API_KEY" with
-  | Some value, _ when String.trim value <> "" -> Some (String.trim value)
-  | _, Some value when String.trim value <> "" -> Some (String.trim value)
+  match Sys.getenv_opt "OPENROUTER_API_KEY" with
+  | Some value when String.trim value <> "" -> Some (String.trim value)
   | _ -> None
 
 let provider () =
-  match Sys.getenv_opt "ERG_OPENROUTER_BASE_URL", Sys.getenv_opt "OPENROUTER_BASE_URL" with
-  | Some value, _ when String.trim value <> "" ->
-    Openrouter.provider ~base_url:(String.trim value) ()
-  | _, Some value when String.trim value <> "" ->
+  match Sys.getenv_opt "OPENROUTER_BASE_URL" with
+  | Some value when String.trim value <> "" ->
     Openrouter.provider ~base_url:(String.trim value) ()
   | _ -> Openrouter.provider ()
 
@@ -195,7 +192,7 @@ let run_audio_responses ~sw ~net ~model ~prompt ~sample_rate ~task ?thinking_eff
   match resolve_api_key () with
   | None ->
     Eta.Effect.fail
-      (`Stt_error "Missing OpenRouter API key. Set ERG_OPENROUTER_API_KEY or OPENROUTER_API_KEY.")
+      (`Stt_error "Missing OpenRouter API key. Set OPENROUTER_API_KEY.")
   | Some api_key ->
     let client = http_client ~sw ~net in
     let* structured_output = structured_output task in
@@ -224,7 +221,7 @@ let transcribe ~sw ~net ~api_key ~model ~language ?(sample_rate = 16000) pcm_byt
       model;
       file =
         {
-          filename = "camelpie.wav";
+          filename = "pie.wav";
           content_type = "audio/wav";
           data = wav_bytes ~sample_rate pcm_bytes;
         };

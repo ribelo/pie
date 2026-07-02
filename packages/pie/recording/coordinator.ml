@@ -110,8 +110,12 @@ let write_state t =
 let persist t =
   try write_state t
   with exn ->
-    Printf.eprintf "Failed to write recording state at %s: %s\n%!"
-      t.persist_path (Printexc.to_string exn)
+    Observability.error
+      ~attrs:[
+        ("path", t.persist_path);
+        ("error", Printexc.to_string exn);
+      ]
+      "failed to write recording state"
 
 let create ?(persist_path = Paths.recording_state_path) () =
   let now = Unix.gettimeofday () in
@@ -212,4 +216,3 @@ let clear t =
       updated_at = Unix.gettimeofday ();
     } in
     ((), next))
-

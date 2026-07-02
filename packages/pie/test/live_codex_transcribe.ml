@@ -44,8 +44,8 @@ let () =
       ~capture_backtrace:true
       ()
   in
-  let effect =
-    Camelpie.Stt.Codex_realtime.transcribe_with_prompt
+  let operation =
+    Pie.Stt.Codex_realtime.transcribe_with_prompt
       ~sw
       ~net:(Eio.Stdenv.net env)
       ~model
@@ -57,7 +57,7 @@ let () =
          (Eta.Duration.seconds 45)
          ~on_timeout:(`Stt_error "live transcription timed out")
   in
-  match Eta_eio.Runtime.run rt effect with
+  match Eta_eio.Runtime.run rt operation with
   | Ok transcript ->
     let expected_normalized = normalize expected in
     let transcript_normalized = normalize transcript in

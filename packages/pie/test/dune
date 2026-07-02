@@ -1,0 +1,19 @@
+(include_subdirs no)
+
+(test
+ (name test_pie)
+ (libraries pie alcotest eio_main eta eta_ai eta_eio eta_http eta_http_eio eta_http_tls_openssl)
+ (deps
+  (source_tree ../)))
+
+(executable
+ (name live_codex_transcribe)
+ (libraries pie eio_main eta eta_eio))
+
+(executable
+ (name live_openrouter_transcribe)
+ (libraries pie eio_main eta eta_eio))
+
+(executable
+ (name live_openrouter_translate)
+ (libraries pie eio_main eta eta_eio))

@@ -2,15 +2,14 @@
 
 (generate_opam_files true)
 
-(name camelpie)
+(name pie)
 
 (package
- (name camelpie)
- (synopsis "Camelpie")
- (description "Camelpie OCaml library.")
+ (name pie)
+ (synopsis "Pie")
+ (description "Pie OCaml library.")
  (depends
-  (ocaml (= 5.2.0))
-  (ocaml-variants (= 5.2.0+ox))
+  (ocaml (>= 5.2.0))
   (dune (>= 3.0))
   (eta (>= 0.1.0))
   eta_ai
@@ -19,6 +18,7 @@
   eta_http
   eta_http_eio
   (eta_http_tls_openssl :with-test)
+  eta_otel
   eta_stream
   (eio (>= 1.0))
   (yojson (>= 2.0))

@@ -21,7 +21,7 @@ let normalize value =
 
 let usage () =
   Printf.eprintf
-    "usage: live_openrouter_translate RAW_S16LE_16K_MONO.pcm EXPECTED_TEXT [MODEL]\n%!";
+    "usage: live_openrouter_transcribe RAW_S16LE_16K_MONO.pcm EXPECTED_TEXT [MODEL]\n%!";
   exit 64
 
 let render_error = function
@@ -36,11 +36,11 @@ let () =
     else "openrouter/xiaomi/mimo-v2.5"
   in
   let resolved_model =
-    Camelpie.Config.Stt.resolve_model_provider
-      ~default_provider:Camelpie.Config.Stt.Openrouter
+    Pie.Config.Stt.resolve_model_provider
+      ~default_provider:Pie.Config.Stt.Openrouter
       model
   in
-  if resolved_model.provider <> Camelpie.Config.Stt.Openrouter then (
+  if resolved_model.provider <> Pie.Config.Stt.Openrouter then (
     Printf.eprintf "model must resolve to OpenRouter: %s\n%!" model;
     exit 64
   );
@@ -54,28 +54,27 @@ let () =
       ~capture_backtrace:true
       ()
   in
-  let effect =
-    Camelpie.Stt.Openrouter.translate_with_prompt
+  let operation =
+    Pie.Stt.Openrouter.transcribe_with_prompt
       ~sw
       ~net:(Eio.Stdenv.net env)
       ~model:resolved_model.model
-      ~source_language:"English"
-      ~target_language:"English"
-      ~prompt_template:"Translate the spoken audio from {{source_language}} to {{target_language}}."
+      ~language:"English"
+      ~prompt_template:"Transcribe the spoken English words."
       ~sample_rate:16000
       pcm
     |> Eta.Effect.timeout_as
          (Eta.Duration.seconds 90)
-         ~on_timeout:(`Stt_error "live OpenRouter translation timed out")
+         ~on_timeout:(`Stt_error "live OpenRouter transcription timed out")
   in
-  match Eta_eio.Runtime.run rt effect with
-  | Ok translation ->
+  match Eta_eio.Runtime.run rt operation with
+  | Ok transcript ->
     let expected_normalized = normalize expected in
-    let translation_normalized = normalize translation in
-    let matched = String.equal expected_normalized translation_normalized in
+    let transcript_normalized = normalize transcript in
+    let matched = String.equal expected_normalized transcript_normalized in
     Printf.printf "expected=%S\n" expected_normalized;
-    Printf.printf "translation=%S\n" translation;
-    Printf.printf "normalized_translation=%S\n" translation_normalized;
+    Printf.printf "transcript=%S\n" transcript;
+    Printf.printf "normalized_transcript=%S\n" transcript_normalized;
     Printf.printf "match=%b\n%!" matched;
     if not matched then exit 2
   | Error cause ->

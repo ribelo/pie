@@ -46,12 +46,18 @@ let timestamp () =
     tm.Unix.tm_hour tm.tm_min tm.tm_sec millis
 
 let log_info message fields =
-  let json = Yojson.Safe.to_string (`Assoc fields) in
-  Printf.eprintf "[%s] INFO: %s %s\n%!" (timestamp ()) message json
+  let attrs =
+    ("pie.timestamp", timestamp ())
+    :: List.map (fun (key, value) -> (key, Yojson.Safe.to_string value)) fields
+  in
+  Observability.info ~attrs message
 
 let log_error message fields =
-  let json = Yojson.Safe.to_string (`Assoc fields) in
-  Printf.eprintf "[%s] ERROR: %s %s\n%!" (timestamp ()) message json
+  let attrs =
+    ("pie.timestamp", timestamp ())
+    :: List.map (fun (key, value) -> (key, Yojson.Safe.to_string value)) fields
+  in
+  Observability.error ~attrs message
 
 let ptt_fields ?duration_ms ?held_duration_ms ?bytes ?rms ?peak config mode =
   let base =

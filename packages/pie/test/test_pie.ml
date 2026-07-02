@@ -1,4 +1,4 @@
-open Camelpie
+open Pie
 open Eta.Syntax
 
 let test_pcm_rms () =
@@ -99,7 +99,7 @@ let test_keyboard_monitor_session_bus_path_abstract_socket () =
   let old = Sys.getenv_opt "DBUS_SESSION_BUS_ADDRESS" in
   Unix.putenv "DBUS_SESSION_BUS_ADDRESS" "unix:abstract=/tmp/dbus-abstract";
   try
-    let path = Camelpie.Keyboard.Monitor.session_bus_path () in
+    let path = Pie.Keyboard.Monitor.session_bus_path () in
     restore_dbus_env old;
     (* If we get here, the abstract socket was accepted. *)
     Alcotest.(check string) "abstract path" "/tmp/dbus-abstract" path
@@ -161,7 +161,7 @@ let test_keyboard_dbus_key_event_parse () =
   | None -> Alcotest.fail "expected D-Bus KeyEvent"
 
 let test_recording_coordinator_transitions () =
-  let path = Filename.temp_file "camelpie-recording" ".json" in
+  let path = Filename.temp_file "pie-recording" ".json" in
   let coordinator = Recording.Coordinator.create ~persist_path:path () in
   let initial = Recording.Coordinator.snapshot coordinator in
   Alcotest.(check bool) "enabled" true initial.enabled;
@@ -180,26 +180,26 @@ let test_recording_coordinator_transitions () =
   Sys.remove path
 
 let test_daemon_contract_request () =
-  let json = Camelpie.Daemon.Contract.request_to_json Camelpie.Daemon.Contract.Status in
-  match Camelpie.Daemon.Contract.request_of_json json with
+  let json = Pie.Daemon.Contract.request_to_json Pie.Daemon.Contract.Status in
+  match Pie.Daemon.Contract.request_of_json json with
   | Ok request ->
     Alcotest.(check bool) "request" true
-      (request = Camelpie.Daemon.Contract.Status)
+      (request = Pie.Daemon.Contract.Status)
   | Error msg -> Alcotest.fail msg
 
 let test_daemon_contract_action_request () =
   let json =
-    Camelpie.Daemon.Contract.request_to_json
-      (Camelpie.Daemon.Contract.Action "ptt-start")
+    Pie.Daemon.Contract.request_to_json
+      (Pie.Daemon.Contract.Action "ptt-start")
   in
-  match Camelpie.Daemon.Contract.request_of_json json with
-  | Ok (Camelpie.Daemon.Contract.Action action) ->
+  match Pie.Daemon.Contract.request_of_json json with
+  | Ok (Pie.Daemon.Contract.Action action) ->
     Alcotest.(check string) "action" "ptt-start" action
   | Ok _ -> Alcotest.fail "expected Action request"
   | Error msg -> Alcotest.fail msg
 
 let test_daemon_contract_action_response () =
-  let snapshot : Camelpie.Daemon.Contract.recording_snapshot =
+  let snapshot : Pie.Daemon.Contract.recording_snapshot =
     {
       active = true;
       mode = "ptt-transcribe";
@@ -211,21 +211,21 @@ let test_daemon_contract_action_response () =
     }
   in
   let response =
-    Camelpie.Daemon.Contract.Action_resp
+    Pie.Daemon.Contract.Action_resp
       {
         action = "ptt-start";
         accepted = true;
         message = Some "queued";
         snapshot;
       }
-    |> Camelpie.Daemon.Contract.response_to_json
+    |> Pie.Daemon.Contract.response_to_json
   in
   match
-    Camelpie.Daemon.Contract.response_of_json
-      (Camelpie.Daemon.Contract.Action "ptt-start")
+    Pie.Daemon.Contract.response_of_json
+      (Pie.Daemon.Contract.Action "ptt-start")
       response
   with
-  | Camelpie.Daemon.Contract.Action_resp result ->
+  | Pie.Daemon.Contract.Action_resp result ->
     Alcotest.(check bool) "accepted" true result.accepted;
     Alcotest.(check string) "message" "queued"
       (Option.value result.message ~default:"");
@@ -235,8 +235,8 @@ let test_daemon_contract_action_response () =
 let test_daemon_contract_error_response_parsed_as_success () =
   let error_json = `Assoc [("error", `String "server crashed")] in
   let response =
-    Camelpie.Daemon.Contract.response_of_json
-      Camelpie.Daemon.Contract.Meeting_start
+    Pie.Daemon.Contract.response_of_json
+      Pie.Daemon.Contract.Meeting_start
       error_json
   in
   (* Bug: response_of_json for Meeting_start treats any JSON object as a valid
@@ -244,9 +244,9 @@ let test_daemon_contract_error_response_parsed_as_success () =
      default snapshot, making it impossible for the caller to know the server
      sent an error. A robust client should check for the "error" field first. *)
   match response with
-  | Camelpie.Daemon.Contract.Meeting_start_resp r ->
+  | Pie.Daemon.Contract.Meeting_start_resp r ->
     (match r.result with
-     | Camelpie.Daemon.Contract.Disabled ->
+     | Pie.Daemon.Contract.Disabled ->
        Alcotest.fail "error response was silently parsed as Disabled"
      | _ -> ())
   | _ -> Alcotest.fail "expected Meeting_start_resp"
@@ -254,8 +254,8 @@ let test_daemon_contract_error_response_parsed_as_success () =
 let test_daemon_contract_status_error_swallowed () =
   let error_json = `Assoc [("error", `String "server crashed")] in
   let response =
-    Camelpie.Daemon.Contract.response_of_json
-      Camelpie.Daemon.Contract.Status
+    Pie.Daemon.Contract.response_of_json
+      Pie.Daemon.Contract.Status
       error_json
   in
   (* Bug: response_of_json for Status treats any JSON object as a valid status
@@ -263,22 +263,22 @@ let test_daemon_contract_status_error_swallowed () =
      Status_resp with active=false, enabled=false, mode="idle", so the client
      thinks the daemon is paused when it actually crashed. *)
   match response with
-  | Camelpie.Daemon.Contract.Status_resp _ ->
+  | Pie.Daemon.Contract.Status_resp _ ->
     Alcotest.fail "status error response was silently parsed as a snapshot"
   | _ -> ()
 
 let test_daemon_contract_pause_error_swallowed () =
   let error_json = `Assoc [("error", `String "server crashed")] in
   let response =
-    Camelpie.Daemon.Contract.response_of_json
-      Camelpie.Daemon.Contract.Pause
+    Pie.Daemon.Contract.response_of_json
+      Pie.Daemon.Contract.Pause
       error_json
   in
   (* Bug: response_of_json for Pause/Resume always returns Pause_resp or
      Resume_resp regardless of the JSON content. A server error is therefore
      indistinguishable from a successful call. *)
   match response with
-  | Camelpie.Daemon.Contract.Pause_resp ->
+  | Pie.Daemon.Contract.Pause_resp ->
     Alcotest.fail "pause error response was silently parsed as success"
   | _ -> ()
 
@@ -318,7 +318,7 @@ let test_pulse_client_set_client_name_error_ignored () =
   let socket_path =
     Filename.concat
       (Filename.get_temp_dir_name ())
-      (Printf.sprintf "camelpie-pulse-%d.sock" (Unix.getpid ()))
+      (Printf.sprintf "pie-pulse-%d.sock" (Unix.getpid ()))
   in
   (try Sys.remove socket_path with Sys_error _ -> ());
   let socket =
@@ -360,7 +360,7 @@ let test_pulse_client_set_client_name_error_ignored () =
     Eio.Flow.write flow [Cstruct.of_bytes err_reply];
     try Eio.Flow.shutdown flow `Send with _ -> ());
   let rt = Eta_eio.Runtime.create ~sw ~clock:(Eio.Stdenv.clock env) () in
-  let effect =
+  let operation =
     Pulse.Client.with_client
       ~sw
       ~net:(Eio.Stdenv.net env)
@@ -372,14 +372,14 @@ let test_pulse_client_set_client_name_error_ignored () =
   (* Bug: Pulse.Client.connect receives the result of set_client_name but
      discards it with [let _ = ...]. A server error reply should be
      propagated to the caller instead of being silently swallowed. *)
-  match Eta_eio.Runtime.run rt effect with
+  match Eta_eio.Runtime.run rt operation with
   | Ok () ->
     Alcotest.fail
       "expected set_client_name error to propagate, but connect succeeded"
   | Error _ -> ()
 
 let test_daemon_contract_response () =
-  let snap : Camelpie.Daemon.Contract.recording_snapshot =
+  let snap : Pie.Daemon.Contract.recording_snapshot =
     {
       active = true;
       mode = "ptt-transcribe";
@@ -391,24 +391,24 @@ let test_daemon_contract_response () =
     }
   in
   let response =
-    Camelpie.Daemon.Contract.response_to_json
-      (Camelpie.Daemon.Contract.Status_resp snap)
+    Pie.Daemon.Contract.response_to_json
+      (Pie.Daemon.Contract.Status_resp snap)
   in
-  (match Camelpie.Daemon.Contract.response_of_json
-           Camelpie.Daemon.Contract.Status
+  (match Pie.Daemon.Contract.response_of_json
+           Pie.Daemon.Contract.Status
            response with
-   | Camelpie.Daemon.Contract.Status_resp decoded ->
+   | Pie.Daemon.Contract.Status_resp decoded ->
      Alcotest.(check bool) "active" true decoded.active;
      Alcotest.(check string) "mode" "ptt-transcribe" decoded.mode
    | _ -> Alcotest.fail "expected status response");
   let toggle_response =
-    Camelpie.Daemon.Contract.response_to_json
-      (Camelpie.Daemon.Contract.Toggle_resp true)
+    Pie.Daemon.Contract.response_to_json
+      (Pie.Daemon.Contract.Toggle_resp true)
   in
-  match Camelpie.Daemon.Contract.response_of_json
-          Camelpie.Daemon.Contract.Toggle
+  match Pie.Daemon.Contract.response_of_json
+          Pie.Daemon.Contract.Toggle
           toggle_response with
-  | Camelpie.Daemon.Contract.Toggle_resp true -> ()
+  | Pie.Daemon.Contract.Toggle_resp true -> ()
   | _ -> Alcotest.fail "expected toggle bool response"
 
 let test_daemon_server_state () =
@@ -417,19 +417,19 @@ let test_daemon_server_state () =
   let socket_path =
     Filename.concat
       (Filename.get_temp_dir_name ())
-      (Printf.sprintf "camelpie-daemon-%d.sock" (Unix.getpid ()))
+      (Printf.sprintf "pie-daemon-%d.sock" (Unix.getpid ()))
   in
   let persist_path =
     Filename.concat
       (Filename.get_temp_dir_name ())
-      (Printf.sprintf "camelpie-daemon-%d.json" (Unix.getpid ()))
+      (Printf.sprintf "pie-daemon-%d.json" (Unix.getpid ()))
   in
   (try Sys.remove socket_path with Sys_error _ -> ());
   (try Sys.remove persist_path with Sys_error _ -> ());
   let coordinator =
-    Camelpie.Recording.Coordinator.create ~persist_path ()
+    Pie.Recording.Coordinator.create ~persist_path ()
   in
-  Camelpie.Daemon.Server.start
+  Pie.Daemon.Server.start
     ~sw
     ~net:(Eio.Stdenv.net env)
     ~socket_path
@@ -445,25 +445,25 @@ let test_daemon_server_state () =
       ~finally:(fun () -> Eio.Flow.close flow)
       (fun () ->
          let payload =
-           Yojson.Safe.to_string (Camelpie.Daemon.Contract.request_to_json req)
+           Yojson.Safe.to_string (Pie.Daemon.Contract.request_to_json req)
            ^ "\n"
          in
          Eio.Flow.write flow [Cstruct.of_string payload];
          let reader = Eio.Buf_read.of_flow ~max_size:65536 flow in
          Yojson.Safe.from_string (Eio.Buf_read.line reader))
   in
-  ignore (send Camelpie.Daemon.Contract.Pause);
-  (match send Camelpie.Daemon.Contract.Status with
+  ignore (send Pie.Daemon.Contract.Pause);
+  (match send Pie.Daemon.Contract.Status with
    | `Assoc fields ->
      Alcotest.(check bool) "paused" false
        (match List.assoc_opt "enabled" fields with Some (`Bool b) -> b | _ -> true)
    | _ -> Alcotest.fail "status value must be object");
-  (match send Camelpie.Daemon.Contract.Toggle with
+  (match send Pie.Daemon.Contract.Toggle with
    | `Assoc fields ->
      Alcotest.(check bool) "toggle enabled" true
        (match List.assoc_opt "value" fields with Some (`Bool b) -> b | _ -> false)
    | _ -> Alcotest.fail "toggle should return enabled=true");
-  (match send Camelpie.Daemon.Contract.Meeting_toggle with
+  (match send Pie.Daemon.Contract.Meeting_toggle with
    | `Assoc fields ->
      Alcotest.(check string) "meeting mode" "meeting-transcribe"
        (match List.assoc_opt "mode" fields with Some (`String s) -> s | _ -> "")
@@ -476,23 +476,23 @@ let test_daemon_server_action_handler () =
   let socket_path =
     Filename.concat
       (Filename.get_temp_dir_name ())
-      (Printf.sprintf "camelpie-daemon-action-%d.sock" (Unix.getpid ()))
+      (Printf.sprintf "pie-daemon-action-%d.sock" (Unix.getpid ()))
   in
   let persist_path =
     Filename.concat
       (Filename.get_temp_dir_name ())
-      (Printf.sprintf "camelpie-daemon-action-%d.json" (Unix.getpid ()))
+      (Printf.sprintf "pie-daemon-action-%d.json" (Unix.getpid ()))
   in
   (try Sys.remove socket_path with Sys_error _ -> ());
   (try Sys.remove persist_path with Sys_error _ -> ());
   let coordinator =
-    Camelpie.Recording.Coordinator.create ~persist_path ()
+    Pie.Recording.Coordinator.create ~persist_path ()
   in
   let seen = ref [] in
   let action_handler action =
     seen := action :: !seen;
     {
-      Camelpie.Daemon.Contract.action;
+      Pie.Daemon.Contract.action;
       accepted = true;
       message = Some "queued";
       snapshot =
@@ -507,7 +507,7 @@ let test_daemon_server_action_handler () =
         };
     }
   in
-  Camelpie.Daemon.Server.start
+  Pie.Daemon.Server.start
     ~sw
     ~net:(Eio.Stdenv.net env)
     ~socket_path
@@ -525,8 +525,8 @@ let test_daemon_server_action_handler () =
       (fun () ->
          let payload =
            Yojson.Safe.to_string
-             (Camelpie.Daemon.Contract.request_to_json
-                (Camelpie.Daemon.Contract.Action "ptt-start"))
+             (Pie.Daemon.Contract.request_to_json
+                (Pie.Daemon.Contract.Action "ptt-start"))
            ^ "\n"
          in
          Eio.Flow.write flow [Cstruct.of_string payload];
@@ -549,25 +549,25 @@ let test_daemon_server_meeting_stop_no_failure_signal () =
   let socket_path =
     Filename.concat
       (Filename.get_temp_dir_name ())
-      (Printf.sprintf "camelpie-daemon-%d.sock" (Unix.getpid ()))
+      (Printf.sprintf "pie-daemon-%d.sock" (Unix.getpid ()))
   in
   let persist_path =
     Filename.concat
       (Filename.get_temp_dir_name ())
-      (Printf.sprintf "camelpie-daemon-%d.json" (Unix.getpid ()))
+      (Printf.sprintf "pie-daemon-%d.json" (Unix.getpid ()))
   in
   (try Sys.remove socket_path with Sys_error _ -> ());
   (try Sys.remove persist_path with Sys_error _ -> ());
   let coordinator =
-    Camelpie.Recording.Coordinator.create ~persist_path ()
+    Pie.Recording.Coordinator.create ~persist_path ()
   in
   (* Start PTT transcribe mode *)
   ignore
-    (Camelpie.Recording.Coordinator.try_start
+    (Pie.Recording.Coordinator.try_start
        coordinator
-       Camelpie.Recording.Coordinator.Ptt_transcribe
+       Pie.Recording.Coordinator.Ptt_transcribe
        ());
-  Camelpie.Daemon.Server.start
+  Pie.Daemon.Server.start
     ~sw
     ~net:(Eio.Stdenv.net env)
     ~socket_path
@@ -642,7 +642,7 @@ let test_codex_realtime_url_builders () =
 let test_codex_realtime_headers () =
   let headers =
     Stt.Codex_realtime.realtime_header_pairs
-      ~session_id:"camelpie-test-session"
+      ~session_id:"pie-test-session"
       "token"
   in
   Alcotest.(check (option string))
@@ -655,7 +655,7 @@ let test_codex_realtime_headers () =
     (List.assoc_opt "originator" headers);
   Alcotest.(check (option string))
     "user agent"
-    (Some "codex_cli_rs/0.0.0 (camelpie)")
+    (Some "codex_cli_rs/0.0.0 (pie)")
     (List.assoc_opt "User-Agent" headers);
   Alcotest.(check (option string))
     "version"
@@ -663,7 +663,7 @@ let test_codex_realtime_headers () =
     (List.assoc_opt "version" headers);
   Alcotest.(check (option string))
     "session id"
-    (Some "camelpie-test-session")
+    (Some "pie-test-session")
     (List.assoc_opt "x-session-id" headers);
   Alcotest.(check (option string))
     "beta header"
@@ -937,7 +937,7 @@ let test_codex_realtime_transcribe_with_prompt_ignores_language_e2e () =
     | None -> Unix.putenv "CODEX_REALTIME_BASE_URL_OVERRIDE" ""
   in
   let pcm = Bytes.make 3200 '\x00' in
-  let effect =
+  let operation =
     Stt.Codex_realtime.transcribe_with_prompt
       ~sw ~net:(Eio.Stdenv.net env)
       ~model:"m"
@@ -949,7 +949,7 @@ let test_codex_realtime_transcribe_with_prompt_ignores_language_e2e () =
          (Eta.Duration.seconds 5)
          ~on_timeout:(`Stt_error "timeout")
   in
-  (match Eta_eio.Runtime.run rt effect with Ok _ | Error _ -> ());
+  (match Eta_eio.Runtime.run rt operation with Ok _ | Error _ -> ());
   cleanup_env ();
   match !captured with
   | `Null -> Alcotest.fail "did not capture session.update message"
@@ -1018,7 +1018,7 @@ let test_codex_realtime_translate_nonconv_drops_prompt_e2e () =
     | None -> Unix.putenv "CODEX_REALTIME_BASE_URL_OVERRIDE" ""
   in
   let pcm = Bytes.make 3200 '\x00' in
-  let effect =
+  let operation =
     Stt.Codex_realtime.translate_with_prompt
       ~sw ~net:(Eio.Stdenv.net env)
       ~model:"not-the-conversation-model"
@@ -1030,7 +1030,7 @@ let test_codex_realtime_translate_nonconv_drops_prompt_e2e () =
          (Eta.Duration.seconds 5)
          ~on_timeout:(`Stt_error "timeout")
   in
-  (match Eta_eio.Runtime.run rt effect with Ok _ | Error _ -> ());
+  (match Eta_eio.Runtime.run rt operation with Ok _ | Error _ -> ());
   cleanup_env ();
   match !captured with
   | `Null -> Alcotest.fail "did not capture session.update"
@@ -1067,7 +1067,7 @@ let run_realtime_error_ws_server flow =
     (Some "0.0.0")
     (header_value "version" head);
   (match header_value "x-session-id" head with
-   | Some value when String.starts_with ~prefix:"camelpie-" value -> ()
+   | Some value when String.starts_with ~prefix:"pie-" value -> ()
    | Some value -> Alcotest.failf "unexpected x-session-id: %s" value
    | None -> Alcotest.fail "missing x-session-id");
   let key =
@@ -1102,7 +1102,7 @@ let test_codex_realtime_stream_reports_server_error_e2e () =
   let url = Printf.sprintf "ws://127.0.0.1:%d/v1/realtime?model=gpt-realtime-2" port in
   let open Eta.Syntax in
   let prompt = "Translate." in
-  let effect =
+  let operation =
     Stt.Codex_realtime.with_stream_session
       ~sw
       ~net:(Eio.Stdenv.net env)
@@ -1127,7 +1127,7 @@ let test_codex_realtime_stream_reports_server_error_e2e () =
   let pp_stt_error fmt = function
     | `Stt_error message -> Format.pp_print_string fmt message
   in
-  match Eta_eio.Runtime.run rt effect with
+  match Eta_eio.Runtime.run rt operation with
   | Error (Eta.Cause.Fail (`Stt_error message)) ->
     Alcotest.(check string)
       "server error"
@@ -1154,7 +1154,7 @@ let temp_dir prefix =
   path
 
 let test_recording_coordinator_persist_error_swallowed () =
-  let base = temp_dir "camelpie-coordinator-persist" in
+  let base = temp_dir "pie-coordinator-persist" in
   let path = Filename.concat base "recording.json" in
   write_file path "not a directory";
   let persist_path = Filename.concat path "nested.json" in
@@ -1168,7 +1168,7 @@ let test_recording_coordinator_persist_error_swallowed () =
   | exception _ -> ()
 
 let test_recording_coordinator_stop_clears_error () =
-  let path = Filename.temp_file "camelpie-recording" ".json" in
+  let path = Filename.temp_file "pie-recording" ".json" in
   let coordinator =
     Recording.Coordinator.create ~persist_path:path ()
   in
@@ -1202,7 +1202,7 @@ let test_recording_coordinator_stop_clears_error () =
   Sys.remove path
 
 let test_daemon_server_mkdir_p_silently_accepts_file () =
-  let base = temp_dir "camelpie-daemon-mkdir_p" in
+  let base = temp_dir "pie-daemon-mkdir_p" in
   let file_path = Filename.concat base "not-a-dir" in
   write_file file_path "block";
   (* Bug: Daemon.Server.mkdir_p is a duplicate of the old buggy mkdir_p that
@@ -1210,7 +1210,7 @@ let test_daemon_server_mkdir_p_silently_accepts_file () =
      existing regular file it silently returns () instead of raising EEXIST.
      Fs.mkdir_p was fixed but this copy was missed. *)
   try
-    Camelpie.Daemon.Server.mkdir_p file_path;
+    Pie.Daemon.Server.mkdir_p file_path;
     Alcotest.fail
       "mkdir_p should raise EEXIST for an existing file, not silently return"
   with
@@ -1226,7 +1226,7 @@ let test_assistant_prompt_value_utf8_truncation () =
      the result is a valid UTF-8 string of at most 200 bytes (here 199). *)
   let prefix = String.make 199 'x' in
   let input = prefix ^ "\195\169" in (* 'e' = two bytes *)
-  match Camelpie.Commands.Assistant.prompt_value (Some input) with
+  match Pie.Commands.Assistant.prompt_value (Some input) with
   | None -> Alcotest.fail "prompt_value returned None"
   | Some truncated ->
     Alcotest.(check bool) "at most 200 bytes" true
@@ -1250,7 +1250,7 @@ let test_pulse_parse_error_code_short_payload () =
      terminates the read_loop and kills the entire connection. *)
   try
     let result =
-      Camelpie.Pulse.Commands.parse_error_code (Bytes.make 1 '\x00')
+      Pie.Pulse.Commands.parse_error_code (Bytes.make 1 '\x00')
     in
     Alcotest.(check (option int))
       "short error code payload should return None"
@@ -1261,14 +1261,14 @@ let test_pulse_parse_error_code_short_payload () =
       ("parse_error_code crashed on short payload: " ^ msg)
 
 let test_pulse_default_record_stream_options_mismatched_channel_map () =
-  let default = Camelpie.Pulse.Defs.default_record_stream_options () in
+  let default = Pie.Pulse.Defs.default_record_stream_options () in
   let overrides = { default with
-    sample_spec = { format = Camelpie.Pulse.Defs.Pa_sample_format.s16le;
+    sample_spec = { format = Pie.Pulse.Defs.Pa_sample_format.s16le;
                     channels = 2; rate = 16000 };
     channel_map = [];
   } in
   let options =
-    Camelpie.Pulse.Defs.default_record_stream_options ~overrides ()
+    Pie.Pulse.Defs.default_record_stream_options ~overrides ()
   in
   (* Bug: default_record_stream_options uses the override's channel_map
      without validating that its length matches sample_spec.channels.
@@ -1286,17 +1286,17 @@ let test_pulse_parse_command_envelope_short_payload () =
   Alcotest.(check bool)
     "short payload returns None instead of crashing"
     true
-    (Camelpie.Pulse.Commands.parse_command_envelope (Bytes.make 3 '\x00') = None)
+    (Pie.Pulse.Commands.parse_command_envelope (Bytes.make 3 '\x00') = None)
 
 let test_daemon_contract_meeting_toggle_no_indicator () =
-  let snap : Camelpie.Daemon.Contract.recording_snapshot =
+  let snap : Pie.Daemon.Contract.recording_snapshot =
     { active = true; mode = "ptt-transcribe"; enabled = true;
       started_at = None; updated_at = None; transcript_path = None;
       last_error = None; }
   in
   let json =
-    Camelpie.Daemon.Contract.response_to_json
-      (Camelpie.Daemon.Contract.Meeting_toggle_resp snap)
+    Pie.Daemon.Contract.response_to_json
+      (Pie.Daemon.Contract.Meeting_toggle_resp snap)
   in
   match json with
   | `Assoc fields ->
@@ -1332,7 +1332,7 @@ let test_codex_realtime_translation_ignores_prompt () =
   | _ -> Alcotest.fail "expected JSON object"
 
 let test_stt_config_whitespace_app_id_not_trimmed () =
-  let dir = temp_dir "camelpie-stt-config-whitespace" in
+  let dir = temp_dir "pie-stt-config-whitespace" in
   let config_path = Filename.concat dir "stt.toml" in
   write_file
     config_path
@@ -1347,13 +1347,13 @@ action = "ctrl-j"
      it to None, leaving a rule with neither app_id nor title_regex. Such a
      matcher-less rule would match every window (a catch-all), so it must be
      rejected at load time rather than silently accepted. *)
-  match Camelpie.Config.Stt.load ~config_path () with
+  match Pie.Config.Stt.load ~config_path () with
   | _ ->
     Alcotest.fail "whitespace-only app_id should be rejected, not loaded"
-  | exception Camelpie.Config.Stt.Config_error _ -> ()
+  | exception Pie.Config.Stt.Config_error _ -> ()
 
 let test_assistant_focused_window_prompt_context () =
-  let window : Camelpie.Niri.window_info =
+  let window : Pie.Niri.window_info =
     {
       id = 7;
       title = Some "  Project   notes\nDraft  ";
@@ -1363,7 +1363,7 @@ let test_assistant_focused_window_prompt_context () =
     }
   in
   let prompt =
-    Camelpie.Commands.Assistant.append_focused_window_context
+    Pie.Commands.Assistant.append_focused_window_context
       "Transcribe in {{language}}."
       (Some window)
   in
@@ -1385,10 +1385,10 @@ let json_string name json =
   | _ -> Alcotest.failf "expected JSON string field: %s" name
 
 let test_assistant_startup_config_json () =
-  let config : Camelpie.Config.Stt.t =
+  let config : Pie.Config.Stt.t =
     {
       schema_version = 2;
-      provider = Camelpie.Config.Stt.Codex_realtime;
+      provider = Pie.Config.Stt.Codex_realtime;
       transcription_model = "openrouter/google/gemini-3.1-flash-lite";
       translation_model = "openrouter/google/gemini-3.1-flash-lite";
       transcription_language = "Polish";
@@ -1408,13 +1408,13 @@ let test_assistant_startup_config_json () =
           {
             app_id = Some "Alacritty";
             title_regex = Some "^π";
-            action = Camelpie.Input.Text_injection.Ctrl_j;
+            action = Pie.Input.Text_injection.Ctrl_j;
           };
         ];
     }
   in
   let report =
-    Camelpie.Commands.Assistant.startup_config_json
+    Pie.Commands.Assistant.startup_config_json
       ~config_path:"/tmp/stt.toml"
       ~config
       ~ptt_transcribe_keysym:65478
@@ -1448,7 +1448,7 @@ let test_assistant_startup_config_json () =
   | _ -> Alcotest.fail "expected one newline rule"
 
 let test_assistant_project_context_prompt_context () =
-  let dir = temp_dir "camelpie-project-context" in
+  let dir = temp_dir "pie-project-context" in
   let project_dir = Filename.concat dir "project" in
   let nested_dir = Filename.concat project_dir "src" in
   let pie_dir = Filename.concat project_dir ".pie" in
@@ -1458,9 +1458,9 @@ let test_assistant_project_context_prompt_context () =
   write_file
     (Filename.concat pie_dir "context.md")
     "Use Eta for the internal effect library.\nGlossary: pie means push-to-talk assistant.";
-  let context = Camelpie.Context.Project.load_for_cwd nested_dir in
+  let context = Pie.Context.Project.load_for_cwd nested_dir in
   let prompt =
-    Camelpie.Context.Project.append_to_prompt
+    Pie.Context.Project.append_to_prompt
       "Translate to {{target_language}}."
       context
   in
@@ -1470,10 +1470,10 @@ let test_assistant_project_context_prompt_context () =
     prompt
 
 let test_assistant_project_context_missing_is_empty () =
-  let dir = temp_dir "camelpie-project-context" in
-  let context = Camelpie.Context.Project.load_for_cwd dir in
+  let dir = temp_dir "pie-project-context" in
+  let context = Pie.Context.Project.load_for_cwd dir in
   let prompt =
-    Camelpie.Context.Project.append_to_prompt
+    Pie.Context.Project.append_to_prompt
       "Translate to {{target_language}}."
       context
   in
@@ -1483,7 +1483,7 @@ let test_assistant_project_context_missing_is_empty () =
     prompt
 
 let test_project_context_relative_cwd_traversal () =
-  let dir = temp_dir "camelpie-project-context-relative" in
+  let dir = temp_dir "pie-project-context-relative" in
   let pie_dir = Filename.concat dir ".pie" in
   Unix.mkdir pie_dir 0o700;
   write_file (Filename.concat pie_dir "context.md") "Project context.";
@@ -1492,7 +1492,7 @@ let test_project_context_relative_cwd_traversal () =
   try
     Unix.mkdir "subdir" 0o700;
     Sys.chdir "subdir";
-    let context = Camelpie.Context.Project.load_for_cwd "." in
+    let context = Pie.Context.Project.load_for_cwd "." in
     Sys.chdir old_cwd;
     (* Bug: find_context_file uses Filename.dirname which returns "." for ".",
        so it never traverses parent directories when given a relative path.
@@ -1506,13 +1506,13 @@ let test_project_context_relative_cwd_traversal () =
     raise exn
 
 let test_assistant_project_context_empty_file_is_empty () =
-  let dir = temp_dir "camelpie-project-context" in
+  let dir = temp_dir "pie-project-context" in
   let pie_dir = Filename.concat dir ".pie" in
   Unix.mkdir pie_dir 0o700;
   write_file (Filename.concat pie_dir "context.md") "  \n\t  ";
-  let context = Camelpie.Context.Project.load_for_cwd dir in
+  let context = Pie.Context.Project.load_for_cwd dir in
   let prompt =
-    Camelpie.Context.Project.append_to_prompt
+    Pie.Context.Project.append_to_prompt
       "Translate to {{target_language}}."
       context
   in
@@ -1523,7 +1523,7 @@ let test_assistant_project_context_empty_file_is_empty () =
 
 let process ?(ppid = 0) ?(pgrp = 0) ?(tty_nr = 0) ?(tpgid = 0) ?cwd pid =
   {
-    Camelpie.Context.Project.pid;
+    Pie.Context.Project.pid;
     ppid;
     pgrp;
     tty_nr;
@@ -1536,14 +1536,14 @@ let test_project_context_prefers_foreground_terminal_cwd () =
   let processes =
     [
       process 10 ~cwd:"/home/ribelo";
-      process 11 ~ppid:10 ~pgrp:11 ~tty_nr:34816 ~tpgid:12 ~cwd:"/home/ribelo/projects/camelpie";
-      process 12 ~ppid:11 ~pgrp:12 ~tty_nr:34816 ~tpgid:12 ~cwd:"/home/ribelo/projects/camelpie/subdir";
+      process 11 ~ppid:10 ~pgrp:11 ~tty_nr:34816 ~tpgid:12 ~cwd:"/home/ribelo/projects/pie";
+      process 12 ~ppid:11 ~pgrp:12 ~tty_nr:34816 ~tpgid:12 ~cwd:"/home/ribelo/projects/pie/subdir";
     ]
   in
   Alcotest.(check (option string))
     "foreground cwd"
-    (Some "/home/ribelo/projects/camelpie/subdir")
-    (Camelpie.Context.Project.cwd_from_processes
+    (Some "/home/ribelo/projects/pie/subdir")
+    (Pie.Context.Project.cwd_from_processes
        ~root_pid:10
        ~root_cwd:(Some "/home/ribelo")
        processes)
@@ -1558,19 +1558,19 @@ let test_project_context_falls_back_to_root_cwd () =
   Alcotest.(check (option string))
     "root cwd"
     (Some "/home/ribelo/projects/gui-app")
-    (Camelpie.Context.Project.cwd_from_processes
+    (Pie.Context.Project.cwd_from_processes
        ~root_pid:10
        ~root_cwd:(Some "/home/ribelo/projects/gui-app")
        processes)
 
 let test_project_metadata_package_json () =
-  let dir = temp_dir "camelpie-project-metadata" in
+  let dir = temp_dir "pie-project-metadata" in
   write_file
     (Filename.concat dir "package.json")
     {|{"name":"web-tool","description":"TypeScript UI tool"}|};
   let prompt =
-    Camelpie.Context.Metadata.load_for_cwd dir
-    |> Camelpie.Context.Metadata.append_to_prompt "Base prompt."
+    Pie.Context.Metadata.load_for_cwd dir
+    |> Pie.Context.Metadata.append_to_prompt "Base prompt."
   in
   Alcotest.(check string)
     "package.json metadata"
@@ -1578,7 +1578,7 @@ let test_project_metadata_package_json () =
     prompt
 
 let test_project_metadata_cargo_toml () =
-  let dir = temp_dir "camelpie-project-metadata" in
+  let dir = temp_dir "pie-project-metadata" in
   write_file
     (Filename.concat dir "Cargo.toml")
     {toml|[package]
@@ -1586,8 +1586,8 @@ name = "rust-tool"
 description = "Rust CLI"
 |toml};
   let prompt =
-    Camelpie.Context.Metadata.load_for_cwd dir
-    |> Camelpie.Context.Metadata.append_to_prompt "Base prompt."
+    Pie.Context.Metadata.load_for_cwd dir
+    |> Pie.Context.Metadata.append_to_prompt "Base prompt."
   in
   Alcotest.(check string)
     "Cargo.toml metadata"
@@ -1595,7 +1595,7 @@ description = "Rust CLI"
     prompt
 
 let test_project_metadata_pyproject_toml () =
-  let dir = temp_dir "camelpie-project-metadata" in
+  let dir = temp_dir "pie-project-metadata" in
   write_file
     (Filename.concat dir "pyproject.toml")
     {toml|[project]
@@ -1605,8 +1605,8 @@ description = "Python service"
 [tool.uv]
 |toml};
   let prompt =
-    Camelpie.Context.Metadata.load_for_cwd dir
-    |> Camelpie.Context.Metadata.append_to_prompt "Base prompt."
+    Pie.Context.Metadata.load_for_cwd dir
+    |> Pie.Context.Metadata.append_to_prompt "Base prompt."
   in
   Alcotest.(check string)
     "pyproject.toml metadata"
@@ -1614,27 +1614,27 @@ description = "Python service"
     prompt
 
 let test_project_metadata_dune_project () =
-  let dir = temp_dir "camelpie-project-metadata" in
+  let dir = temp_dir "pie-project-metadata" in
   write_file
     (Filename.concat dir "dune-project")
     {|(lang dune 3.21)
-(name camelpie)
+(name pie)
 (package
- (name camelpie)
- (synopsis "Camelpie")
- (description "Camelpie OCaml library."))
+ (name pie)
+ (synopsis "Pie")
+ (description "Pie OCaml library."))
 |};
   let prompt =
-    Camelpie.Context.Metadata.load_for_cwd dir
-    |> Camelpie.Context.Metadata.append_to_prompt "Base prompt."
+    Pie.Context.Metadata.load_for_cwd dir
+    |> Pie.Context.Metadata.append_to_prompt "Base prompt."
   in
   Alcotest.(check string)
     "dune-project metadata"
-    "Base prompt.\n\nProject metadata for transcription and translation disambiguation:\nUse this metadata to choose words, spellings, identifiers, and technical terms that best fit the project context. Do not mention this metadata in the output unless it is actually spoken or needed for the requested translation.\n- manifest: dune-project\n- language: OCaml\n- package: camelpie\n- description: Camelpie OCaml library."
+    "Base prompt.\n\nProject metadata for transcription and translation disambiguation:\nUse this metadata to choose words, spellings, identifiers, and technical terms that best fit the project context. Do not mention this metadata in the output unless it is actually spoken or needed for the requested translation.\n- manifest: dune-project\n- language: OCaml\n- package: pie\n- description: Pie OCaml library."
     prompt
 
 let test_project_metadata_opam_without_dune_project () =
-  let dir = temp_dir "camelpie-project-metadata" in
+  let dir = temp_dir "pie-project-metadata" in
   write_file
     (Filename.concat dir "sample.opam")
     {|opam-version: "2.0"
@@ -1642,8 +1642,8 @@ synopsis: "Sample"
 description: "Sample OCaml package"
 |};
   let prompt =
-    Camelpie.Context.Metadata.load_for_cwd dir
-    |> Camelpie.Context.Metadata.append_to_prompt "Base prompt."
+    Pie.Context.Metadata.load_for_cwd dir
+    |> Pie.Context.Metadata.append_to_prompt "Base prompt."
   in
   Alcotest.(check string)
     "opam metadata"
@@ -1651,15 +1651,15 @@ description: "Sample OCaml package"
     prompt
 
 let test_project_metadata_exact_directory_only () =
-  let dir = temp_dir "camelpie-project-metadata" in
+  let dir = temp_dir "pie-project-metadata" in
   let child = Filename.concat dir "child" in
   Unix.mkdir child 0o700;
   write_file
     (Filename.concat dir "package.json")
     {|{"name":"parent","description":"Parent package"}|};
   let prompt =
-    Camelpie.Context.Metadata.load_for_cwd child
-    |> Camelpie.Context.Metadata.append_to_prompt "Base prompt."
+    Pie.Context.Metadata.load_for_cwd child
+    |> Pie.Context.Metadata.append_to_prompt "Base prompt."
   in
   Alcotest.(check string)
     "no parent metadata"
@@ -1667,14 +1667,14 @@ let test_project_metadata_exact_directory_only () =
     prompt
 
 let test_project_metadata_manifest_without_description () =
-  let dir = temp_dir "camelpie-project-metadata" in
+  let dir = temp_dir "pie-project-metadata" in
   write_file
     (Filename.concat dir "pyproject.toml")
     {toml|[tool.uv]
 |toml};
   let prompt =
-    Camelpie.Context.Metadata.load_for_cwd dir
-    |> Camelpie.Context.Metadata.append_to_prompt "Base prompt."
+    Pie.Context.Metadata.load_for_cwd dir
+    |> Pie.Context.Metadata.append_to_prompt "Base prompt."
   in
   Alcotest.(check string)
     "language only"
@@ -1682,7 +1682,7 @@ let test_project_metadata_manifest_without_description () =
     prompt
 
 let test_stt_config_loads_toml_newline_rules () =
-  let dir = temp_dir "camelpie-stt-config" in
+  let dir = temp_dir "pie-stt-config" in
   let prompts_dir = Filename.concat dir "prompts" in
   Unix.mkdir prompts_dir 0o700;
   write_file
@@ -1719,7 +1719,7 @@ action = "ctrl-j"
 app_id = "Slack"
 action = "shift-enter"
 |toml};
-	  let config = Camelpie.Config.Stt.load ~config_path () in
+	  let config = Pie.Config.Stt.load ~config_path () in
 	  Alcotest.(check bool) "wakeword" false config.wakeword_enabled;
 	  Alcotest.(check (float 0.00001)) "ptt rms" 0.001 config.ptt_min_capture_rms;
 	  Alcotest.(check (float 0.00001)) "ptt peak" 0.008 config.ptt_min_capture_peak;
@@ -1729,13 +1729,13 @@ action = "shift-enter"
   | first :: second :: [] ->
     Alcotest.(check (option string)) "first app" (Some "Alacritty") first.app_id;
     Alcotest.(check (option string)) "first regex" (Some "(codex|π - csai)") first.title_regex;
-    Alcotest.(check bool) "first action" true (first.action = Camelpie.Input.Text_injection.Ctrl_j);
+    Alcotest.(check bool) "first action" true (first.action = Pie.Input.Text_injection.Ctrl_j);
     Alcotest.(check (option string)) "second app" (Some "Slack") second.app_id;
-    Alcotest.(check bool) "second action" true (second.action = Camelpie.Input.Text_injection.Shift_enter)
+    Alcotest.(check bool) "second action" true (second.action = Pie.Input.Text_injection.Shift_enter)
   | _ -> Alcotest.fail "expected two newline rules"
 
 let test_stt_config_rejects_bad_title_regex () =
-  let dir = temp_dir "camelpie-stt-config" in
+  let dir = temp_dir "pie-stt-config" in
   let config_path = Filename.concat dir "stt.toml" in
   write_file
     config_path
@@ -1747,13 +1747,13 @@ app_id = "Alacritty"
 title_regex = "("
 action = "ctrl-j"
 |toml};
-  match Camelpie.Config.Stt.load ~config_path () with
+  match Pie.Config.Stt.load ~config_path () with
   | _ -> Alcotest.fail "expected invalid regex to fail"
-  | exception Camelpie.Config.Stt.Config_error msg ->
+  | exception Pie.Config.Stt.Config_error msg ->
     Alcotest.(check bool) "mentions title_regex" true (String.contains msg 'r')
 
 let test_stt_config_rejects_prompt_with_wrong_placeholder () =
-  let dir = temp_dir "camelpie-stt-config-prompt" in
+  let dir = temp_dir "pie-stt-config-prompt" in
   let prompts_dir = Filename.concat dir "prompts" in
   Unix.mkdir prompts_dir 0o700;
   write_file
@@ -1772,15 +1772,15 @@ schema_version = 2
      of the required "{{language}}" placeholder. A prompt with "{language}"
      passes validation but render_template won't substitute it, so the
      language variable is silently omitted from the actual API request. *)
-  match Camelpie.Config.Stt.load ~config_path () with
-  | exception Camelpie.Config.Stt.Config_error msg ->
+  match Pie.Config.Stt.load ~config_path () with
+  | exception Pie.Config.Stt.Config_error msg ->
     Alcotest.(check bool) "mentions language placeholder" true
       (String.contains msg '{')
   | _ ->
     Alcotest.fail "expected Config_error for transcription prompt missing {{language}}"
 
 let test_stt_config_resolves_provider_qualified_model () =
-  let open Camelpie.Config.Stt in
+  let open Pie.Config.Stt in
   let openrouter =
     resolve_model_provider
       ~default_provider:Codex_realtime
@@ -1803,14 +1803,14 @@ let test_stt_config_resolves_provider_qualified_model () =
     openrouter_native_model.model;
   match resolve_model_provider ~default_provider:Codex_realtime "openrouter/" with
   | _ -> Alcotest.fail "expected empty provider-qualified model to fail"
-  | exception Camelpie.Config.Stt.Config_error msg ->
+  | exception Pie.Config.Stt.Config_error msg ->
     Alcotest.(check bool) "mentions empty model" true (String.contains msg 'e')
 
 let test_openrouter_responses_request_uses_text_and_audio () =
   let request : Eta_ai.chat_request =
-    Camelpie.Stt.Openrouter.responses_request
+    Pie.Stt.Openrouter.responses_request
       ~model:"xiaomi/mimo-v2.5"
-      ~prompt:"Use Camelpie context."
+      ~prompt:"Use Pie context."
       ~sample_rate:16000
       (Bytes.create 4)
   in
@@ -1818,7 +1818,7 @@ let test_openrouter_responses_request_uses_text_and_audio () =
   Alcotest.(check (option int)) "max tokens" None request.max_output_tokens;
   match request.prompt with
   | [Eta_ai.User [Eta_ai.Text prompt; Eta_ai.Audio audio]] ->
-    Alcotest.(check string) "prompt" "Use Camelpie context." prompt;
+    Alcotest.(check string) "prompt" "Use Pie context." prompt;
     Alcotest.(check bool) "wav format" true (audio.Eta_ai.format = Eta_ai.Wav);
     (match audio.Eta_ai.data with
      | Eta_ai.Bytes wav ->
@@ -1830,22 +1830,22 @@ let test_openrouter_decodes_structured_output_only () =
   Alcotest.(check (result string reject))
     "structured text"
     (Ok "hello")
-    (Camelpie.Stt.Openrouter.decode_structured_output "{\"text\":\"hello\"}");
+    (Pie.Stt.Openrouter.decode_structured_output "{\"text\":\"hello\"}");
   Alcotest.(check bool)
     "raw text rejected"
     true
-    (match Camelpie.Stt.Openrouter.decode_structured_output "hello" with
+    (match Pie.Stt.Openrouter.decode_structured_output "hello" with
      | Error _ -> true
      | Ok _ -> false);
   Alcotest.(check bool)
     "wrong field rejected"
     true
-    (match Camelpie.Stt.Openrouter.decode_structured_output "{\"transcription\":\"hello\"}" with
+    (match Pie.Stt.Openrouter.decode_structured_output "{\"transcription\":\"hello\"}" with
      | Error _ -> true
      | Ok _ -> false)
 
 let test_text_injection_newline_rule_regex () =
-  let window : Camelpie.Niri.window_info =
+  let window : Pie.Niri.window_info =
     {
       id = 384;
       title = Some "Eta | codex | 019e6df3-3186-7a51-ba29-34d742378792";
@@ -1854,27 +1854,27 @@ let test_text_injection_newline_rule_regex () =
       workspace_id = Some 3;
     }
   in
-  let rules : Camelpie.Input.Text_injection.newline_rule list =
+  let rules : Pie.Input.Text_injection.newline_rule list =
     [
       {
         app_id = Some "Alacritty";
         title_regex = Some "(^π - csai$|codex)";
-        action = Camelpie.Input.Text_injection.Ctrl_j;
+        action = Pie.Input.Text_injection.Ctrl_j;
       };
     ]
   in
   Alcotest.(check bool)
     "regex selects ctrl-j"
     true
-    (Camelpie.Input.Text_injection.newline_action_for_window rules (Some window)
-     = Camelpie.Input.Text_injection.Ctrl_j)
+    (Pie.Input.Text_injection.newline_action_for_window rules (Some window)
+     = Pie.Input.Text_injection.Ctrl_j)
 
 let test_ptt_loop_continues_after_finish () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let rt = Eta_eio.Runtime.create ~sw ~clock () in
-  let keyboard = Camelpie.Keyboard.Monitor.create () in
+  let keyboard = Pie.Keyboard.Monitor.create () in
   let audio = Eio.Stream.create 16 in
   let running = ref true in
   let starts = ref 0 in
@@ -1886,7 +1886,7 @@ let test_ptt_loop_continues_after_finish () =
       Eio.Time.sleep clock 0.02
     done);
   let key released =
-    Camelpie.Keyboard.Monitor.emit keyboard
+    Pie.Keyboard.Monitor.emit keyboard
       { released; state = 0; keysym = 1; unichar = 0; keycode = 1 }
   in
   Eio.Fiber.fork ~sw (fun () ->
@@ -1904,7 +1904,7 @@ let test_ptt_loop_continues_after_finish () =
     key true);
   let handle =
     {
-      Camelpie.Ptt_loop.offer = (fun _ -> Eta.Effect.unit);
+      Pie.Ptt_loop.offer = (fun _ -> Eta.Effect.unit);
       finish =
         (fun _ ->
            let* () = Eta.Effect.sync (fun () -> incr finishes) in
@@ -1913,37 +1913,37 @@ let test_ptt_loop_continues_after_finish () =
       cancel = Eta.Effect.unit;
     }
   in
-  let config : Camelpie.Ptt_loop.config =
+  let config : Pie.Ptt_loop.config =
     {
       recognize =
         (fun event ->
-           if event.Camelpie.Keyboard.Monitor.keysym = 1 then
+           if event.Pie.Keyboard.Monitor.keysym = 1 then
              Some
                (if event.released then
-                  Camelpie.Ptt_loop.Release "test"
+                  Pie.Ptt_loop.Release "test"
                 else Press "test")
            else None);
 	      min_duration_ms = 0;
-	      min_capture_rms = Camelpie.Audio.Pcm.ptt_min_capture_rms_for_stt;
-	      min_capture_peak = Camelpie.Audio.Pcm.ptt_min_capture_peak_for_stt;
+	      min_capture_rms = Pie.Audio.Pcm.ptt_min_capture_rms_for_stt;
+	      min_capture_peak = Pie.Audio.Pcm.ptt_min_capture_peak_for_stt;
 	      log_prefix = (fun mode -> mode);
       source = None;
       on_ready = Eta.Effect.unit;
       on_press =
         (fun _ ->
            Eta.Effect.sync (fun () -> incr starts)
-           |> Eta.Effect.map (fun () -> Camelpie.Ptt_loop.Handle handle));
+           |> Eta.Effect.map (fun () -> Pie.Ptt_loop.Handle handle));
       on_release = (fun _ -> Eta.Effect.unit);
       on_abort = Eta.Effect.pure false;
       on_dead_input = Eta.Effect.unit;
     }
   in
   let recv () = Eta.Effect.sync (fun () -> Eio.Stream.take audio) in
-  let effect =
-    Camelpie.Ptt_loop.run ~keyboard ~recv config
+  let operation =
+    Pie.Ptt_loop.run ~keyboard ~recv config
     |> Eta.Effect.timeout_as (Eta.Duration.seconds 7) ~on_timeout:(`Ptt_error "timeout")
   in
-  let result = Eta_eio.Runtime.run rt effect in
+  let result = Eta_eio.Runtime.run rt operation in
   running := false;
   Alcotest.(check int) "starts" 3 !starts;
   Alcotest.(check int) "finishes" 3 !finishes;
@@ -1956,20 +1956,20 @@ let test_ptt_loop_control_stream_triggers_capture () =
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let rt = Eta_eio.Runtime.create ~sw ~clock () in
-  let keyboard = Camelpie.Keyboard.Monitor.create () in
+  let keyboard = Pie.Keyboard.Monitor.create () in
   let control = Eio.Stream.create 16 in
   let audio = Eio.Stream.create 16 in
   let starts = ref 0 in
   let finishes = ref 0 in
   Eio.Fiber.fork ~sw (fun () ->
     Eio.Time.sleep clock 0.05;
-    Eio.Stream.add control (Camelpie.Ptt_loop.Press "test");
+    Eio.Stream.add control (Pie.Ptt_loop.Press "test");
     Eio.Stream.add audio (Bytes.make 320 '\001');
     Eio.Time.sleep clock 0.05;
-    Eio.Stream.add control (Camelpie.Ptt_loop.Release "test"));
+    Eio.Stream.add control (Pie.Ptt_loop.Release "test"));
   let handle =
     {
-      Camelpie.Ptt_loop.offer = (fun _ -> Eta.Effect.unit);
+      Pie.Ptt_loop.offer = (fun _ -> Eta.Effect.unit);
       finish =
         (fun _ ->
            let* () = Eta.Effect.sync (fun () -> incr finishes) in
@@ -1977,19 +1977,19 @@ let test_ptt_loop_control_stream_triggers_capture () =
       cancel = Eta.Effect.unit;
     }
   in
-  let config : Camelpie.Ptt_loop.config =
+  let config : Pie.Ptt_loop.config =
     {
       recognize = (fun _ -> None);
       min_duration_ms = 0;
-      min_capture_rms = Camelpie.Audio.Pcm.ptt_min_capture_rms_for_stt;
-      min_capture_peak = Camelpie.Audio.Pcm.ptt_min_capture_peak_for_stt;
+      min_capture_rms = Pie.Audio.Pcm.ptt_min_capture_rms_for_stt;
+      min_capture_peak = Pie.Audio.Pcm.ptt_min_capture_peak_for_stt;
       log_prefix = (fun mode -> mode);
       source = None;
       on_ready = Eta.Effect.unit;
       on_press =
         (fun _ ->
            Eta.Effect.sync (fun () -> incr starts)
-           |> Eta.Effect.map (fun () -> Camelpie.Ptt_loop.Handle handle));
+           |> Eta.Effect.map (fun () -> Pie.Ptt_loop.Handle handle));
       on_release = (fun _ -> Eta.Effect.unit);
       on_abort = Eta.Effect.pure false;
       on_dead_input = Eta.Effect.unit;
@@ -1998,7 +1998,7 @@ let test_ptt_loop_control_stream_triggers_capture () =
   let recv () = Eta.Effect.sync (fun () -> Eio.Stream.take audio) in
   let result =
     Eta_eio.Runtime.run rt
-      (Camelpie.Ptt_loop.run ~control ~keyboard ~recv config
+      (Pie.Ptt_loop.run ~control ~keyboard ~recv config
        |> Eta.Effect.timeout_as (Eta.Duration.seconds 5) ~on_timeout:(`Ptt_error "timeout"))
   in
   Alcotest.(check int) "starts" 1 !starts;
@@ -2012,13 +2012,13 @@ let test_ptt_loop_post_roll_repress_continues_capture () =
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let rt = Eta_eio.Runtime.create ~sw ~clock () in
-  let keyboard = Camelpie.Keyboard.Monitor.create () in
+  let keyboard = Pie.Keyboard.Monitor.create () in
   let audio = Eio.Stream.create 16 in
   let starts = ref 0 in
   let finishes = ref 0 in
   let offered = ref [] in
   let key released =
-    Camelpie.Keyboard.Monitor.emit keyboard
+    Pie.Keyboard.Monitor.emit keyboard
       { released; state = 0; keysym = 1; unichar = 0; keycode = 1 }
   in
   Eio.Fiber.fork ~sw (fun () ->
@@ -2034,7 +2034,7 @@ let test_ptt_loop_post_roll_repress_continues_capture () =
     key true);
   let handle =
     {
-      Camelpie.Ptt_loop.offer =
+      Pie.Ptt_loop.offer =
         (fun chunk ->
            Eta.Effect.sync (fun () ->
              offered := Bytes.to_string chunk :: !offered));
@@ -2045,26 +2045,26 @@ let test_ptt_loop_post_roll_repress_continues_capture () =
       cancel = Eta.Effect.unit;
     }
   in
-  let config : Camelpie.Ptt_loop.config =
+  let config : Pie.Ptt_loop.config =
     {
       recognize =
         (fun event ->
-           if event.Camelpie.Keyboard.Monitor.keysym = 1 then
+           if event.Pie.Keyboard.Monitor.keysym = 1 then
              Some
                (if event.released then
-                  Camelpie.Ptt_loop.Release "test"
+                  Pie.Ptt_loop.Release "test"
                 else Press "test")
            else None);
 	      min_duration_ms = 0;
-	      min_capture_rms = Camelpie.Audio.Pcm.ptt_min_capture_rms_for_stt;
-	      min_capture_peak = Camelpie.Audio.Pcm.ptt_min_capture_peak_for_stt;
+	      min_capture_rms = Pie.Audio.Pcm.ptt_min_capture_rms_for_stt;
+	      min_capture_peak = Pie.Audio.Pcm.ptt_min_capture_peak_for_stt;
 	      log_prefix = (fun mode -> mode);
       source = None;
       on_ready = Eta.Effect.unit;
       on_press =
         (fun _ ->
            Eta.Effect.sync (fun () -> incr starts)
-           |> Eta.Effect.map (fun () -> Camelpie.Ptt_loop.Handle handle));
+           |> Eta.Effect.map (fun () -> Pie.Ptt_loop.Handle handle));
       on_release = (fun _ -> Eta.Effect.unit);
       on_abort = Eta.Effect.pure false;
       on_dead_input = Eta.Effect.unit;
@@ -2073,7 +2073,7 @@ let test_ptt_loop_post_roll_repress_continues_capture () =
   let recv () = Eta.Effect.sync (fun () -> Eio.Stream.take audio) in
   let result =
     Eta_eio.Runtime.run rt
-      (Camelpie.Ptt_loop.run ~keyboard ~recv config
+      (Pie.Ptt_loop.run ~keyboard ~recv config
        |> Eta.Effect.timeout_as (Eta.Duration.seconds 5) ~on_timeout:(`Ptt_error "timeout"))
   in
   Alcotest.(check int) "one handle" 1 !starts;
@@ -2088,7 +2088,7 @@ let test_ptt_loop_scoped_handle_lifetime () =
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let rt = Eta_eio.Runtime.create ~sw ~clock () in
-  let keyboard = Camelpie.Keyboard.Monitor.create () in
+  let keyboard = Pie.Keyboard.Monitor.create () in
   let audio = Eio.Stream.create 16 in
   let scope_entries = ref 0 in
   let scope_exits = ref 0 in
@@ -2096,7 +2096,7 @@ let test_ptt_loop_scoped_handle_lifetime () =
   let finishes = ref 0 in
   let cancels = ref 0 in
   let key released =
-    Camelpie.Keyboard.Monitor.emit keyboard
+    Pie.Keyboard.Monitor.emit keyboard
       { released; state = 0; keysym = 1; unichar = 0; keycode = 1 }
   in
   Eio.Fiber.fork ~sw (fun () ->
@@ -2108,32 +2108,32 @@ let test_ptt_loop_scoped_handle_lifetime () =
     key true);
   let handle =
     {
-      Camelpie.Ptt_loop.offer =
+      Pie.Ptt_loop.offer =
         (fun _ -> Eta.Effect.sync (fun () -> incr offers));
       finish = (fun _ -> Eta.Effect.sync (fun () -> incr finishes));
       cancel = Eta.Effect.sync (fun () -> incr cancels);
     }
   in
-  let config : Camelpie.Ptt_loop.config =
+  let config : Pie.Ptt_loop.config =
     {
       recognize =
         (fun event ->
-           if event.Camelpie.Keyboard.Monitor.keysym = 1 then
+           if event.Pie.Keyboard.Monitor.keysym = 1 then
              Some
                (if event.released then
-                  Camelpie.Ptt_loop.Release "test"
+                  Pie.Ptt_loop.Release "test"
                 else Press "test")
            else None);
 	      min_duration_ms = 0;
-	      min_capture_rms = Camelpie.Audio.Pcm.ptt_min_capture_rms_for_stt;
-	      min_capture_peak = Camelpie.Audio.Pcm.ptt_min_capture_peak_for_stt;
+	      min_capture_rms = Pie.Audio.Pcm.ptt_min_capture_rms_for_stt;
+	      min_capture_peak = Pie.Audio.Pcm.ptt_min_capture_peak_for_stt;
 	      log_prefix = (fun mode -> mode);
       source = None;
       on_ready = Eta.Effect.unit;
       on_press =
         (fun _ ->
            Eta.Effect.pure
-             (Camelpie.Ptt_loop.Scoped
+             (Pie.Ptt_loop.Scoped
                 (fun use ->
                    let* () = Eta.Effect.sync (fun () -> incr scope_entries) in
                    let* () = use handle in
@@ -2144,11 +2144,11 @@ let test_ptt_loop_scoped_handle_lifetime () =
     }
   in
   let recv () = Eta.Effect.sync (fun () -> Eio.Stream.take audio) in
-  let effect =
-    Camelpie.Ptt_loop.run ~keyboard ~recv config
+  let operation =
+    Pie.Ptt_loop.run ~keyboard ~recv config
     |> Eta.Effect.timeout_as (Eta.Duration.seconds 5) ~on_timeout:(`Ptt_error "timeout")
   in
-  let result = Eta_eio.Runtime.run rt effect in
+  let result = Eta_eio.Runtime.run rt operation in
   Alcotest.(check int) "scope entered" 1 !scope_entries;
   Alcotest.(check int) "scope exited" 1 !scope_exits;
   Alcotest.(check int) "offers" 1 !offers;
@@ -2175,13 +2175,13 @@ let test_ptt_loop_ignores_short_capture_before_offering () =
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let rt = Eta_eio.Runtime.create ~sw ~clock () in
-  let keyboard = Camelpie.Keyboard.Monitor.create () in
+  let keyboard = Pie.Keyboard.Monitor.create () in
   let audio = Eio.Stream.create 16 in
   let offers = ref 0 in
   let finishes = ref 0 in
   let cancels = ref 0 in
   let key released =
-    Camelpie.Keyboard.Monitor.emit keyboard
+    Pie.Keyboard.Monitor.emit keyboard
       { released; state = 0; keysym = 1; unichar = 0; keycode = 1 }
   in
   Eio.Fiber.fork ~sw (fun () ->
@@ -2194,40 +2194,40 @@ let test_ptt_loop_ignores_short_capture_before_offering () =
     key true);
   let handle =
     {
-      Camelpie.Ptt_loop.offer =
+      Pie.Ptt_loop.offer =
         (fun _ -> Eta.Effect.sync (fun () -> incr offers));
       finish = (fun _ -> Eta.Effect.sync (fun () -> incr finishes));
       cancel = Eta.Effect.sync (fun () -> incr cancels);
     }
   in
-  let config : Camelpie.Ptt_loop.config =
+  let config : Pie.Ptt_loop.config =
     {
       recognize =
         (fun event ->
-           if event.Camelpie.Keyboard.Monitor.keysym = 1 then
+           if event.Pie.Keyboard.Monitor.keysym = 1 then
              Some
                (if event.released then
-                  Camelpie.Ptt_loop.Release "test"
+                  Pie.Ptt_loop.Release "test"
                 else Press "test")
            else None);
 	      min_duration_ms = 1000;
-	      min_capture_rms = Camelpie.Audio.Pcm.ptt_min_capture_rms_for_stt;
-	      min_capture_peak = Camelpie.Audio.Pcm.ptt_min_capture_peak_for_stt;
+	      min_capture_rms = Pie.Audio.Pcm.ptt_min_capture_rms_for_stt;
+	      min_capture_peak = Pie.Audio.Pcm.ptt_min_capture_peak_for_stt;
 	      log_prefix = (fun mode -> mode);
       source = None;
       on_ready = Eta.Effect.unit;
-      on_press = (fun _ -> Eta.Effect.pure (Camelpie.Ptt_loop.Handle handle));
+      on_press = (fun _ -> Eta.Effect.pure (Pie.Ptt_loop.Handle handle));
       on_release = (fun _ -> Eta.Effect.unit);
       on_abort = Eta.Effect.pure false;
       on_dead_input = Eta.Effect.unit;
     }
   in
   let recv () = Eta.Effect.sync (fun () -> Eio.Stream.take audio) in
-  let effect =
-    Camelpie.Ptt_loop.run ~keyboard ~recv config
+  let operation =
+    Pie.Ptt_loop.run ~keyboard ~recv config
     |> Eta.Effect.timeout_as (Eta.Duration.seconds 4) ~on_timeout:(`Ptt_error "timeout")
   in
-  let result = Eta_eio.Runtime.run rt effect in
+  let result = Eta_eio.Runtime.run rt operation in
   Alcotest.(check int) "offers" 0 !offers;
   Alcotest.(check int) "finishes" 0 !finishes;
   Alcotest.(check int) "cancels" 1 !cancels;
@@ -2240,13 +2240,13 @@ let test_ptt_loop_ignores_low_rms_capture_before_offering () =
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let rt = Eta_eio.Runtime.create ~sw ~clock () in
-  let keyboard = Camelpie.Keyboard.Monitor.create () in
+  let keyboard = Pie.Keyboard.Monitor.create () in
   let audio = Eio.Stream.create 64 in
   let offers = ref 0 in
   let finishes = ref 0 in
   let cancels = ref 0 in
   let key released =
-    Camelpie.Keyboard.Monitor.emit keyboard
+    Pie.Keyboard.Monitor.emit keyboard
       { released; state = 0; keysym = 1; unichar = 0; keycode = 1 }
   in
   Eio.Fiber.fork ~sw (fun () ->
@@ -2260,40 +2260,40 @@ let test_ptt_loop_ignores_low_rms_capture_before_offering () =
     key true);
   let handle =
     {
-      Camelpie.Ptt_loop.offer =
+      Pie.Ptt_loop.offer =
         (fun _ -> Eta.Effect.sync (fun () -> incr offers));
       finish = (fun _ -> Eta.Effect.sync (fun () -> incr finishes));
       cancel = Eta.Effect.sync (fun () -> incr cancels);
     }
   in
-  let config : Camelpie.Ptt_loop.config =
+  let config : Pie.Ptt_loop.config =
     {
       recognize =
         (fun event ->
-           if event.Camelpie.Keyboard.Monitor.keysym = 1 then
+           if event.Pie.Keyboard.Monitor.keysym = 1 then
              Some
                (if event.released then
-                  Camelpie.Ptt_loop.Release "test"
+                  Pie.Ptt_loop.Release "test"
                 else Press "test")
            else None);
 	      min_duration_ms = 300;
-	      min_capture_rms = Camelpie.Audio.Pcm.ptt_min_capture_rms_for_stt;
-	      min_capture_peak = Camelpie.Audio.Pcm.ptt_min_capture_peak_for_stt;
+	      min_capture_rms = Pie.Audio.Pcm.ptt_min_capture_rms_for_stt;
+	      min_capture_peak = Pie.Audio.Pcm.ptt_min_capture_peak_for_stt;
 	      log_prefix = (fun mode -> mode);
       source = None;
       on_ready = Eta.Effect.unit;
-      on_press = (fun _ -> Eta.Effect.pure (Camelpie.Ptt_loop.Handle handle));
+      on_press = (fun _ -> Eta.Effect.pure (Pie.Ptt_loop.Handle handle));
       on_release = (fun _ -> Eta.Effect.unit);
       on_abort = Eta.Effect.pure false;
       on_dead_input = Eta.Effect.unit;
     }
   in
   let recv () = Eta.Effect.sync (fun () -> Eio.Stream.take audio) in
-  let effect =
-    Camelpie.Ptt_loop.run ~keyboard ~recv config
+  let operation =
+    Pie.Ptt_loop.run ~keyboard ~recv config
     |> Eta.Effect.timeout_as (Eta.Duration.seconds 4) ~on_timeout:(`Ptt_error "timeout")
   in
-  let result = Eta_eio.Runtime.run rt effect in
+  let result = Eta_eio.Runtime.run rt operation in
   Alcotest.(check int) "offers" 0 !offers;
   Alcotest.(check int) "finishes" 0 !finishes;
   Alcotest.(check int) "cancels" 1 !cancels;
@@ -2306,13 +2306,13 @@ let test_ptt_loop_accepts_peak_over_silence_threshold () =
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let rt = Eta_eio.Runtime.create ~sw ~clock () in
-  let keyboard = Camelpie.Keyboard.Monitor.create () in
+  let keyboard = Pie.Keyboard.Monitor.create () in
   let audio = Eio.Stream.create 64 in
   let offers = ref 0 in
   let finishes = ref 0 in
   let cancels = ref 0 in
   let key released =
-    Camelpie.Keyboard.Monitor.emit keyboard
+    Pie.Keyboard.Monitor.emit keyboard
       { released; state = 0; keysym = 1; unichar = 0; keycode = 1 }
   in
   Eio.Fiber.fork ~sw (fun () ->
@@ -2326,7 +2326,7 @@ let test_ptt_loop_accepts_peak_over_silence_threshold () =
     key true);
   let handle =
     {
-      Camelpie.Ptt_loop.offer =
+      Pie.Ptt_loop.offer =
         (fun _ -> Eta.Effect.sync (fun () -> incr offers));
       finish =
         (fun _ ->
@@ -2335,23 +2335,23 @@ let test_ptt_loop_accepts_peak_over_silence_threshold () =
       cancel = Eta.Effect.sync (fun () -> incr cancels);
     }
   in
-  let config : Camelpie.Ptt_loop.config =
+  let config : Pie.Ptt_loop.config =
     {
       recognize =
         (fun event ->
-           if event.Camelpie.Keyboard.Monitor.keysym = 1 then
+           if event.Pie.Keyboard.Monitor.keysym = 1 then
              Some
                (if event.released then
-                  Camelpie.Ptt_loop.Release "test"
+                  Pie.Ptt_loop.Release "test"
                 else Press "test")
            else None);
 	      min_duration_ms = 300;
-	      min_capture_rms = Camelpie.Audio.Pcm.ptt_min_capture_rms_for_stt;
-	      min_capture_peak = Camelpie.Audio.Pcm.ptt_min_capture_peak_for_stt;
+	      min_capture_rms = Pie.Audio.Pcm.ptt_min_capture_rms_for_stt;
+	      min_capture_peak = Pie.Audio.Pcm.ptt_min_capture_peak_for_stt;
 	      log_prefix = (fun mode -> mode);
       source = None;
       on_ready = Eta.Effect.unit;
-      on_press = (fun _ -> Eta.Effect.pure (Camelpie.Ptt_loop.Handle handle));
+      on_press = (fun _ -> Eta.Effect.pure (Pie.Ptt_loop.Handle handle));
       on_release = (fun _ -> Eta.Effect.unit);
       on_abort = Eta.Effect.pure false;
       on_dead_input = Eta.Effect.unit;
@@ -2360,7 +2360,7 @@ let test_ptt_loop_accepts_peak_over_silence_threshold () =
   let recv () = Eta.Effect.sync (fun () -> Eio.Stream.take audio) in
   let result =
     Eta_eio.Runtime.run rt
-      (Camelpie.Ptt_loop.run ~keyboard ~recv config
+      (Pie.Ptt_loop.run ~keyboard ~recv config
        |> Eta.Effect.timeout_as (Eta.Duration.seconds 4) ~on_timeout:(`Ptt_error "timeout"))
   in
   Alcotest.(check bool) "offers" true (!offers > 0);
@@ -2375,13 +2375,13 @@ let test_ptt_loop_accepts_quiet_speech_over_rms_threshold () =
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let rt = Eta_eio.Runtime.create ~sw ~clock () in
-  let keyboard = Camelpie.Keyboard.Monitor.create () in
+  let keyboard = Pie.Keyboard.Monitor.create () in
   let audio = Eio.Stream.create 64 in
   let offers = ref 0 in
   let finishes = ref 0 in
   let cancels = ref 0 in
   let key released =
-    Camelpie.Keyboard.Monitor.emit keyboard
+    Pie.Keyboard.Monitor.emit keyboard
       { released; state = 0; keysym = 1; unichar = 0; keycode = 1 }
   in
   Eio.Fiber.fork ~sw (fun () ->
@@ -2395,7 +2395,7 @@ let test_ptt_loop_accepts_quiet_speech_over_rms_threshold () =
     key true);
   let handle =
     {
-      Camelpie.Ptt_loop.offer =
+      Pie.Ptt_loop.offer =
         (fun _ -> Eta.Effect.sync (fun () -> incr offers));
       finish =
         (fun _ ->
@@ -2404,23 +2404,23 @@ let test_ptt_loop_accepts_quiet_speech_over_rms_threshold () =
       cancel = Eta.Effect.sync (fun () -> incr cancels);
     }
   in
-  let config : Camelpie.Ptt_loop.config =
+  let config : Pie.Ptt_loop.config =
     {
       recognize =
         (fun event ->
-           if event.Camelpie.Keyboard.Monitor.keysym = 1 then
+           if event.Pie.Keyboard.Monitor.keysym = 1 then
              Some
                (if event.released then
-                  Camelpie.Ptt_loop.Release "test"
+                  Pie.Ptt_loop.Release "test"
                 else Press "test")
            else None);
 	      min_duration_ms = 300;
-	      min_capture_rms = Camelpie.Audio.Pcm.ptt_min_capture_rms_for_stt;
-	      min_capture_peak = Camelpie.Audio.Pcm.ptt_min_capture_peak_for_stt;
+	      min_capture_rms = Pie.Audio.Pcm.ptt_min_capture_rms_for_stt;
+	      min_capture_peak = Pie.Audio.Pcm.ptt_min_capture_peak_for_stt;
 	      log_prefix = (fun mode -> mode);
       source = None;
       on_ready = Eta.Effect.unit;
-      on_press = (fun _ -> Eta.Effect.pure (Camelpie.Ptt_loop.Handle handle));
+      on_press = (fun _ -> Eta.Effect.pure (Pie.Ptt_loop.Handle handle));
       on_release = (fun _ -> Eta.Effect.unit);
       on_abort = Eta.Effect.pure false;
       on_dead_input = Eta.Effect.unit;
@@ -2429,7 +2429,7 @@ let test_ptt_loop_accepts_quiet_speech_over_rms_threshold () =
   let recv () = Eta.Effect.sync (fun () -> Eio.Stream.take audio) in
   let result =
     Eta_eio.Runtime.run rt
-      (Camelpie.Ptt_loop.run ~keyboard ~recv config
+      (Pie.Ptt_loop.run ~keyboard ~recv config
        |> Eta.Effect.timeout_as (Eta.Duration.seconds 4) ~on_timeout:(`Ptt_error "timeout"))
   in
   Alcotest.(check bool) "offers" true (!offers > 0);
@@ -2444,14 +2444,14 @@ let test_ptt_loop_dead_input_cancels_active_capture () =
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let rt = Eta_eio.Runtime.create ~sw ~clock () in
-  let keyboard = Camelpie.Keyboard.Monitor.create () in
+  let keyboard = Pie.Keyboard.Monitor.create () in
   let audio = Eio.Stream.create 16 in
   let offers = ref 0 in
   let finishes = ref 0 in
   let cancels = ref 0 in
   let dead_inputs = ref 0 in
   let key released =
-    Camelpie.Keyboard.Monitor.emit keyboard
+    Pie.Keyboard.Monitor.emit keyboard
       { released; state = 0; keysym = 1; unichar = 0; keycode = 1 }
   in
   Eio.Fiber.fork ~sw (fun () ->
@@ -2465,40 +2465,40 @@ let test_ptt_loop_dead_input_cancels_active_capture () =
     key true);
   let handle =
     {
-      Camelpie.Ptt_loop.offer =
+      Pie.Ptt_loop.offer =
         (fun _ -> Eta.Effect.sync (fun () -> incr offers));
       finish = (fun _ -> Eta.Effect.sync (fun () -> incr finishes));
       cancel = Eta.Effect.sync (fun () -> incr cancels);
     }
   in
-  let config : Camelpie.Ptt_loop.config =
+  let config : Pie.Ptt_loop.config =
     {
       recognize =
         (fun event ->
-           if event.Camelpie.Keyboard.Monitor.keysym = 1 then
+           if event.Pie.Keyboard.Monitor.keysym = 1 then
              Some
                (if event.released then
-                  Camelpie.Ptt_loop.Release "test"
+                  Pie.Ptt_loop.Release "test"
                 else Press "test")
            else None);
 	      min_duration_ms = 0;
-	      min_capture_rms = Camelpie.Audio.Pcm.ptt_min_capture_rms_for_stt;
-	      min_capture_peak = Camelpie.Audio.Pcm.ptt_min_capture_peak_for_stt;
+	      min_capture_rms = Pie.Audio.Pcm.ptt_min_capture_rms_for_stt;
+	      min_capture_peak = Pie.Audio.Pcm.ptt_min_capture_peak_for_stt;
 	      log_prefix = (fun mode -> mode);
       source = None;
       on_ready = Eta.Effect.unit;
-      on_press = (fun _ -> Eta.Effect.pure (Camelpie.Ptt_loop.Handle handle));
+      on_press = (fun _ -> Eta.Effect.pure (Pie.Ptt_loop.Handle handle));
       on_release = (fun _ -> Eta.Effect.unit);
       on_abort = Eta.Effect.pure false;
       on_dead_input = Eta.Effect.sync (fun () -> incr dead_inputs);
     }
   in
   let recv () = Eta.Effect.sync (fun () -> Eio.Stream.take audio) in
-  let effect =
-    Camelpie.Ptt_loop.run ~keyboard ~recv config
+  let operation =
+    Pie.Ptt_loop.run ~keyboard ~recv config
     |> Eta.Effect.timeout_as (Eta.Duration.seconds 3) ~on_timeout:(`Ptt_error "timeout")
   in
-  let result = Eta_eio.Runtime.run rt effect in
+  let result = Eta_eio.Runtime.run rt operation in
   Alcotest.(check int) "offers" 0 !offers;
   Alcotest.(check int) "finishes" 0 !finishes;
   Alcotest.(check int) "cancels" 1 !cancels;
@@ -2508,13 +2508,13 @@ let test_ptt_loop_dead_input_cancels_active_capture () =
   | Ok () -> Alcotest.fail "expected timeout after dead-input cancellation returns to idle"
 
 let test_wakeword_pipeline_smoothing_uses_threshold_not_history () =
-  let det = Camelpie.Wakeword.Pipeline.create_detector () in
+  let det = Pie.Wakeword.Pipeline.create_detector () in
   let loud = Bytes.create 1600 in
   for i = 0 to 799 do
     Bytes.set_int16_le loud (i * 2) 32767
   done;
-  let score1 = Camelpie.Wakeword.Pipeline.process det loud in
-  let score2 = Camelpie.Wakeword.Pipeline.process det loud in
+  let score1 = Pie.Wakeword.Pipeline.process det loud in
+  let score2 = Pie.Wakeword.Pipeline.process det loud in
   (* Bug: process_frame blends the raw score toward model.threshold (0.5)
      instead of toward the previous detector.score. With proper temporal
      smoothing, score2 should be higher than score1 because the previous
@@ -2526,7 +2526,7 @@ let test_wakeword_pipeline_smoothing_uses_threshold_not_history () =
     (score2 > score1)
 
 let () =
-  Alcotest.run "camelpie"
+  Alcotest.run "pie"
     [
       ("pcm",
        [
@@ -2564,11 +2564,11 @@ let () =
       ("config",
        [
          Alcotest.test_case "provider codex-realtime" `Quick (fun () ->
-           let p = Camelpie.Config.Stt.provider_of_string "codex-realtime" in
-           Alcotest.(check bool) "is codex" true (p = Camelpie.Config.Stt.Codex_realtime));
+           let p = Pie.Config.Stt.provider_of_string "codex-realtime" in
+           Alcotest.(check bool) "is codex" true (p = Pie.Config.Stt.Codex_realtime));
          Alcotest.test_case "provider openrouter" `Quick (fun () ->
-           let p = Camelpie.Config.Stt.provider_of_string "openrouter" in
-           Alcotest.(check bool) "is openrouter" true (p = Camelpie.Config.Stt.Openrouter));
+           let p = Pie.Config.Stt.provider_of_string "openrouter" in
+           Alcotest.(check bool) "is openrouter" true (p = Pie.Config.Stt.Openrouter));
          Alcotest.test_case "provider-qualified model" `Quick
            test_stt_config_resolves_provider_qualified_model;
          Alcotest.test_case "load TOML newline rules" `Quick
@@ -2583,12 +2583,12 @@ let () =
       ("text_injection",
        [
          Alcotest.test_case "normalize" `Quick (fun () ->
-           Alcotest.(check string) "trimmed" "hello" (Camelpie.Input.Text_injection.normalize_text "  hello  "));
+           Alcotest.(check string) "trimmed" "hello" (Pie.Input.Text_injection.normalize_text "  hello  "));
          Alcotest.test_case "collapse line breaks" `Quick (fun () ->
            Alcotest.(check string)
              "collapsed"
              "first second third"
-             (Camelpie.Input.Text_injection.collapse_line_breaks " first\nsecond\r\n third "));
+             (Pie.Input.Text_injection.collapse_line_breaks " first\nsecond\r\n third "));
          Alcotest.test_case "regex newline rule" `Quick
            test_text_injection_newline_rule_regex;
        ]);
@@ -2596,7 +2596,7 @@ let () =
        [
          Alcotest.test_case "snapshot parsing" `Quick (fun () ->
            let json = `Assoc [("active", `Bool true); ("mode", `String "ptt-transcribe"); ("enabled", `Bool true)] in
-           let snap = Camelpie.Daemon.Contract.snapshot_of_json json in
+           let snap = Pie.Daemon.Contract.snapshot_of_json json in
            Alcotest.(check bool) "active" true snap.active;
            Alcotest.(check string) "mode" "ptt-transcribe" snap.mode;
            Alcotest.(check bool) "enabled" true snap.enabled);
@@ -2636,7 +2636,7 @@ let () =
          Alcotest.test_case "session bus path rejects abstract" `Quick
            test_keyboard_monitor_session_bus_path_abstract_socket;
          Alcotest.test_case "keysym_of_name rejects unknown keys" `Quick (fun () ->
-           let keysym = Camelpie.Keyboard.Monitor.keysym_of_name "F11" in
+           let keysym = Pie.Keyboard.Monitor.keysym_of_name "F11" in
            (* Bug: keysym_of_name returns 0 for unknown keys, but 0 is a valid
               keysym (XKB_KEY_NoSymbol). Callers cannot distinguish an unknown
               key from a deliberately-configured NoSymbol. The function should
@@ -2711,14 +2711,14 @@ let () =
       ("ptt_capture",
        [
          Alcotest.test_case "state machine" `Quick (fun () ->
-           let s0 = Camelpie.Ptt.Capture.idle in
-           Alcotest.(check bool) "idle not accepting" false (Camelpie.Ptt.Capture.is_accepting_chunks s0);
-           let s1 = Camelpie.Ptt.Capture.start s0 0.0 in
-           Alcotest.(check bool) "capturing accepting" true (Camelpie.Ptt.Capture.is_accepting_chunks s1);
-           let s2 = Camelpie.Ptt.Capture.release s1 1000.0 in
-           Alcotest.(check bool) "postroll accepting" true (Camelpie.Ptt.Capture.is_accepting_chunks s2);
-           Alcotest.(check bool) "postroll remaining > 0" true (Camelpie.Ptt.Capture.post_roll_remaining_ms s2 1000.0 > 0.0);
-           Alcotest.(check bool) "postroll expired" true (Camelpie.Ptt.Capture.post_roll_remaining_ms s2 4000.0 = 0.0));
+           let s0 = Pie.Ptt.Capture.idle in
+           Alcotest.(check bool) "idle not accepting" false (Pie.Ptt.Capture.is_accepting_chunks s0);
+           let s1 = Pie.Ptt.Capture.start s0 0.0 in
+           Alcotest.(check bool) "capturing accepting" true (Pie.Ptt.Capture.is_accepting_chunks s1);
+           let s2 = Pie.Ptt.Capture.release s1 1000.0 in
+           Alcotest.(check bool) "postroll accepting" true (Pie.Ptt.Capture.is_accepting_chunks s2);
+           Alcotest.(check bool) "postroll remaining > 0" true (Pie.Ptt.Capture.post_roll_remaining_ms s2 1000.0 > 0.0);
+           Alcotest.(check bool) "postroll expired" true (Pie.Ptt.Capture.post_roll_remaining_ms s2 4000.0 = 0.0));
          Alcotest.test_case "loop continues after finish" `Quick
            test_ptt_loop_continues_after_finish;
          Alcotest.test_case "control stream triggers capture" `Quick
@@ -2739,17 +2739,17 @@ let () =
       ("ptt_dead_input",
        [
          Alcotest.test_case "flatline detection" `Quick (fun () ->
-           let det = Camelpie.Ptt.Dead_input.initial () in
-           let det = Camelpie.Ptt.Dead_input.sync det true in
+           let det = Pie.Ptt.Dead_input.initial () in
+           let det = Pie.Ptt.Dead_input.sync det true in
            let chunk = Bytes.make 16 '\x00' in
            let rec loop det n =
              if n = 0 then det
              else
-               let r = Camelpie.Ptt.Dead_input.process_chunk det chunk in
+               let r = Pie.Ptt.Dead_input.process_chunk det chunk in
                loop r.detector (n - 1)
            in
            let det = loop det 3 in
-           let r = Camelpie.Ptt.Dead_input.process_chunk det chunk in
+           let r = Pie.Ptt.Dead_input.process_chunk det chunk in
            Alcotest.(check bool) "warn after 4 zeros" true r.warn;
            Alcotest.(check bool) "dead after 4 zeros" true r.dead);
          Alcotest.test_case "loop cancels flatline capture" `Quick
@@ -2765,11 +2765,11 @@ let () =
       ("wakeword_trigger",
        [
          Alcotest.test_case "trigger threshold" `Quick (fun () ->
-           let s = Camelpie.Wakeword.Trigger.initial in
+           let s = Pie.Wakeword.Trigger.initial in
            Alcotest.(check bool) "not triggered initially" false s.triggered;
-           let s2 = Camelpie.Wakeword.Trigger.update s 0.6 in
+           let s2 = Pie.Wakeword.Trigger.update s 0.6 in
            Alcotest.(check bool) "triggered above threshold" true s2.triggered;
-           let s3 = Camelpie.Wakeword.Trigger.update s2 0.3 in
+           let s3 = Pie.Wakeword.Trigger.update s2 0.3 in
            Alcotest.(check bool) "not triggered below threshold" false s3.triggered);
        ]);
       ("integration",
@@ -2780,7 +2780,7 @@ let () =
              let sample = (i * 2) mod 65536 in
              Bytes.set_uint16_le pcm (i * 2) sample
            done;
-           let header = Camelpie.Audio.Pcm.build_pcm_wav_header ~data_length:32000 ~sample_rate:16000 in
+           let header = Pie.Audio.Pcm.build_pcm_wav_header ~data_length:32000 ~sample_rate:16000 in
            Alcotest.(check int) "header size" 44 (Bytes.length header);
            Alcotest.(check string) "RIFF" "RIFF" (Bytes.sub_string header 0 4);
            Alcotest.(check string) "WAVE" "WAVE" (Bytes.sub_string header 8 4);
@@ -2791,28 +2791,28 @@ let () =
            (* quiet signal — should be normalized *)
            let quiet = Bytes.create 100 in
            Bytes.fill quiet 0 100 '\x01';
-           let result = Camelpie.Audio.Pcm.normalize_pcm_for_stt quiet in
+           let result = Pie.Audio.Pcm.normalize_pcm_for_stt quiet in
            Alcotest.(check bool) "quiet signal gets gain" true (result.gain > 1.0);
            (* silence — should not be normalized *)
            let silent = Bytes.make 100 '\x00' in
-           let result2 = Camelpie.Audio.Pcm.normalize_pcm_for_stt silent in
+           let result2 = Pie.Audio.Pcm.normalize_pcm_for_stt silent in
            Alcotest.(check bool) "silent signal no gain" true (result2.gain = 1.0));
        ]);
       ("wakeword_pipeline",
        [
          Alcotest.test_case "synthetic scoring" `Quick (fun () ->
-           let det = Camelpie.Wakeword.Pipeline.create_detector () in
+           let det = Pie.Wakeword.Pipeline.create_detector () in
            (* loud signal should trigger *)
            let loud = Bytes.create 1600 in
            for i = 0 to 799 do
              Bytes.set_int16_le loud (i * 2) 20000
            done;
-           let score = Camelpie.Wakeword.Pipeline.process det loud in
+           let score = Pie.Wakeword.Pipeline.process det loud in
            Alcotest.(check bool) "loud triggers" true det.triggered;
            Alcotest.(check bool) "score high" true (score > 0.5);
            (* silence should not trigger *)
            let silent = Bytes.make 1600 '\x00' in
-           let score2 = Camelpie.Wakeword.Pipeline.process det silent in
+           let score2 = Pie.Wakeword.Pipeline.process det silent in
            Alcotest.(check bool) "silence no trigger" false det.triggered;
            Alcotest.(check bool) "score low" true (score2 < 0.5));
          Alcotest.test_case "smoothing ignores history" `Quick
@@ -2832,10 +2832,10 @@ let () =
       ("fs",
        [
          Alcotest.test_case "mkdir_p creates nested directories" `Quick (fun () ->
-           let base = temp_dir "camelpie-fs-mkdir_p" in
+           let base = temp_dir "pie-fs-mkdir_p" in
            let nested = Filename.concat base "a/b/c" in
            try
-             Camelpie.Fs.mkdir_p nested;
+             Pie.Fs.mkdir_p nested;
              Alcotest.(check bool)
                "mkdir_p should create nested directories"
                true
@@ -2855,11 +2855,11 @@ let () =
            | exn ->
              Alcotest.failf "unexpected exception: %s" (Printexc.to_string exn));
          Alcotest.test_case "mkdir_p should fail when path is an existing file" `Quick (fun () ->
-           let base = temp_dir "camelpie-fs-mkdir_p-file" in
+           let base = temp_dir "pie-fs-mkdir_p-file" in
            let path = Filename.concat base "existing-file" in
            write_file path "content";
            try
-             Camelpie.Fs.mkdir_p path;
+             Pie.Fs.mkdir_p path;
              (* Bug: Fs.mkdir_p catches Unix.EEXIST and returns () even when the
                 path is a regular file, not a directory. The caller then assumes
                 the path is a directory and will fail later when trying to create
@@ -2876,7 +2876,7 @@ let () =
       ("sh",
        [
          Alcotest.test_case "find_executable rejects directories" `Quick (fun () ->
-           let base = temp_dir "camelpie-sh-find" in
+           let base = temp_dir "pie-sh-find" in
            let fake_dir = Filename.concat base "not-an-executable" in
            Unix.mkdir fake_dir 0o700;
            let old_path =
@@ -2884,7 +2884,7 @@ let () =
            in
            Unix.putenv "PATH" base;
            try
-             let result = Camelpie.Sh.find_executable "not-an-executable" in
+             let result = Pie.Sh.find_executable "not-an-executable" in
              Unix.putenv "PATH" old_path;
              (* Bug: find_executable uses Sys.file_exists which returns true for
                 directories. It should check Sys.is_directory = false (and ideally
@@ -2906,10 +2906,10 @@ let () =
        [
          Alcotest.test_case "sexp_tokens handles escaped newlines" `Quick (fun () ->
            let input = "(name \"foo\\nbar\")" in
-           let tokens = Camelpie.Context.Metadata.sexp_tokens input in
+           let tokens = Pie.Context.Metadata.sexp_tokens input in
            let atoms =
              List.filter_map
-               (function Camelpie.Context.Metadata.TAtom s -> Some s | _ -> None)
+               (function Pie.Context.Metadata.TAtom s -> Some s | _ -> None)
                tokens
            in
            (* We expect two atoms: bare atom name and string literal foonbar.

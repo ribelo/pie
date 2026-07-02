@@ -271,7 +271,7 @@ let headers pairs = Http.Core.Header.unsafe_of_list pairs
 
 let make_realtime_session_id () =
   Printf.sprintf
-    "camelpie-%Lx-%06x"
+    "pie-%Lx-%06x"
     (Int64.of_float (Unix.gettimeofday () *. 1000.))
     (Random.bits () land 0xffffff)
 
@@ -279,7 +279,7 @@ let realtime_header_pairs ?session_id access_token =
   let pairs = [
     ("Authorization", "Bearer " ^ access_token);
     ("originator", "codex_cli_rs");
-    ("User-Agent", "codex_cli_rs/0.0.0 (camelpie)");
+    ("User-Agent", "codex_cli_rs/0.0.0 (pie)");
     ("version", realtime_version);
   ] in
   match session_id with

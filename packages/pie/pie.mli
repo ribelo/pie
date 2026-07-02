@@ -16,5 +16,6 @@ module Recording = Recording
 module Desktop = Desktop
 module Stt = Stt
 module Wakeword = Wakeword
+module Observability = Observability
 module Sh = Sh
 module Fs = Fs
