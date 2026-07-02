@@ -153,9 +153,9 @@
 
               eta_path="''${ETA_PATH:-$repo_root/../ocaml/Eta}"
               if command -v eta-opam-install-ox >/dev/null 2>&1; then
-                eta-opam-install-ox
+                ETA_REPO_ROOT="$eta_path" eta-opam-install-ox
               elif [ -d "$eta_path" ]; then
-                nix develop "$eta_path" -c eta-opam-install-ox
+                ETA_REPO_ROOT="$eta_path" nix develop "$eta_path" -c eta-opam-install-ox
               else
                 echo "Missing Eta checkout at $eta_path" >&2
                 exit 1
