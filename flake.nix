@@ -1,10 +1,37 @@
 {
-  description = "Camelpie OCaml development environment";
+  description = "Pie OCaml development environment";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+  inputs.eta = {
+    url = "git+file:///home/ribelo/projects/ribelo/ocaml/Eta";
+    inputs.nixpkgs.follows = "nixpkgs";
+    inputs.opam-nix.follows = "opam-nix";
+    inputs.opam-repository.follows = "opam-repository";
+    inputs.oxcaml.follows = "oxcaml";
+  };
+  inputs.opam-nix = {
+    url = "github:tweag/opam-nix";
+    inputs.nixpkgs.follows = "nixpkgs";
+  };
+  inputs.opam-repository = {
+    url = "github:ocaml/opam-repository";
+    flake = false;
+  };
+  inputs.oxcaml = {
+    url = "github:oxcaml/oxcaml/5.2.0minus-31";
+    flake = false;
+  };
 
   outputs =
-    { nixpkgs, ... }:
+    {
+      self,
+      nixpkgs,
+      eta,
+      opam-nix,
+      opam-repository,
+      oxcaml,
+      ...
+    }:
     let
       systems = [
         "aarch64-darwin"
@@ -16,96 +43,135 @@
       forAllSystems = nixpkgs.lib.genAttrs systems;
     in
     {
+      packages = forAllSystems (
+        system:
+        let
+          pkgs = import nixpkgs { inherit system; };
+          cleanLocalSource =
+            src:
+            pkgs.lib.cleanSourceWith {
+              inherit src;
+              filter =
+                path: type:
+                let
+                  base = baseNameOf path;
+                in
+                !(
+                  base == ".git"
+                  || base == "_build"
+                  || base == "_opam"
+                  || base == ".opam"
+                  || base == ".opam-oxcaml"
+                  || base == ".reference"
+                  || base == ".scratch"
+                  || base == ".motel-data"
+                  || base == ".nema"
+                  || base == ".pi"
+                  || base == ".hill-climbing"
+                  || base == "node_modules"
+                );
+            };
+          pieSrc = cleanLocalSource ./.;
+          etaSrc = cleanLocalSource eta;
+          opamLib = opam-nix.lib.${system};
+          etaRepo = opamLib.makeOpamRepo etaSrc;
+          patchedOxcaml = pkgs.runCommand "oxcaml-source-patched" { } ''
+            cp -R ${oxcaml} "$out"
+            chmod -R u+w "$out"
+            ${pkgs.perl}/bin/perl -0pi -e 's|new: old: \{\n        buildInputs = \[|new: old: rec {\n        version = "20231231";\n        src = pkgs.fetchFromGitLab {\n          domain = "gitlab.inria.fr";\n          owner = "fpottier";\n          repo = "menhir";\n          rev = version;\n          sha256 = "sha256-veB0ORHp6jdRwCyDDAfc7a7ov8sOeHUmiELdOFf/QYk=";\n        };\n        patches = [ ];\n        buildInputs = [|' "$out/default.nix"
+          '';
+          oxcamlCompiler = pkgs.callPackage "${patchedOxcaml}/default.nix" {
+            src = patchedOxcaml;
+            ocamltest = false;
+            warnError = false;
+          };
+          oxcamlSystemOverlay = final: prev: {
+            ocaml-system = prev.ocaml-system.overrideAttrs (_old: {
+              nativeBuildInputs = [ oxcamlCompiler ];
+            });
+          };
+          scope = opamLib.buildOpamProject
+            {
+              inherit pkgs;
+              overlays = [ oxcamlSystemOverlay ];
+              repos = [
+                etaRepo
+                opam-repository
+              ];
+              resolveArgs.env.sys-ocaml-version = "5.2.0";
+            }
+            "pie"
+            pieSrc
+            {
+              ocaml-system = "*";
+            };
+
+          pie = scope.pie;
+        in
+        {
+          default = pie;
+          inherit pie;
+        }
+      );
+
       devShells = forAllSystems (
         system:
         let
           pkgs = import nixpkgs { inherit system; };
-          oxCamlSwitch = "5.2.0+ox";
+          switchName = "5.2.0+ox";
           sharedOpamRoot = "$HOME/.cache/opam";
 
-          oxCamlSetup = pkgs.writeShellApplication {
-            name = "camelpie-oxcaml-init";
+          setup = pkgs.writeShellApplication {
+            name = "pie-opam-install";
             runtimeInputs = [
+              pkgs.autoconf
+              pkgs.coreutils
               pkgs.git
+              pkgs.gnumake
+              pkgs.m4
+              pkgs.nix
               pkgs.opam
-              pkgs.rsync
+              pkgs.patch
+              pkgs.pkg-config
             ];
             text = ''
-              switch_name="''${1:-${oxCamlSwitch}}"
+              switch_name="''${1:-${switchName}}"
               repo_root="$(${pkgs.git}/bin/git rev-parse --show-toplevel 2>/dev/null || pwd)"
               cd "$repo_root"
 
               export OPAMROOT="''${OPAMROOT:-${sharedOpamRoot}}"
               export OPAMYES=1
 
-              if [ ! -d "$OPAMROOT" ]; then
-                opam init --bare --disable-sandboxing --no-setup --yes
-              fi
-
               if ! opam switch list --short | grep -Fxq "$switch_name"; then
-                opam switch create "$switch_name" \
-                  --repos ox=git+https://github.com/oxcaml/opam-repository.git,default \
-                  --assume-depexts \
-                  --yes
+                echo "Missing OPAM switch '$switch_name'." >&2
+                echo "Run: shared-ocaml-switch-init" >&2
+                exit 1
               fi
 
               export OPAMSWITCH="$switch_name"
               eval "$(opam env --switch "$switch_name" --set-switch)"
 
-              eta_dir="$repo_root/.reference/Eta"
-              eta_pin_dir="$repo_root/.opam-eta-src"
-              if [ -d "$eta_dir" ]; then
-                mkdir -p "$eta_pin_dir"
-                rsync -aL --delete \
-                  --exclude '.git' \
-                  --exclude '_build' \
-                  --exclude '_build_*' \
-                  --exclude '_opam*' \
-                  --exclude '.opam-oxcaml' \
-                  --exclude '.hill-climbing' \
-                  --exclude '.motel-data' \
-                  --exclude '.reference' \
-                  --exclude '.scratch' \
-                  --exclude 'bench' \
-                  --exclude 'http-testsuite/results' \
-                  "$eta_dir"/ "$eta_pin_dir"/
-
-                opam pin add --kind=path eta "$eta_pin_dir" --no-action --yes
-                for package in \
-                  eta_ai \
-                  eta_ai_openai_codec \
-                  eta_ai_openrouter \
-                  eta_blocking \
-                  eta_eio \
-                  eta_http \
-                  eta_http_eio \
-                  eta_http_h2 \
-                  eta_redacted \
-                  eta_stream
-                do
-                  opam pin add --kind=path "$package" "$eta_pin_dir" --no-action --yes
-                done
+              eta_path="''${ETA_PATH:-$repo_root/../ocaml/Eta}"
+              if command -v eta-opam-install-ox >/dev/null 2>&1; then
+                eta-opam-install-ox
+              elif [ -d "$eta_path" ]; then
+                nix develop "$eta_path" -c eta-opam-install-ox
+              else
+                echo "Missing Eta checkout at $eta_path" >&2
+                exit 1
               fi
 
-              # eio_linux.1.3+ox is not compatible with uring 2.x.
-              opam install 'uring=0.9' --assume-depexts --yes
-              opam install . --deps-only --with-test --assume-depexts --yes
-              opam install \
-                'dune=3.22.2+ox' \
-                'ocamlformat=0.26.2+ox1' \
-                'merlin=5.2.1-502+ox1' \
-                'ocaml-lsp-server=1.19.0+ox1' \
-                --assume-depexts \
-                --yes
+              opam pin add --kind=git pie "git+file://$repo_root#master" --no-action --yes
+              opam install pie --with-test --assume-depexts --yes
 
-              echo "OxCaml switch is ready: $switch_name"
+              echo "Pie is installed into OPAM switch: $switch_name"
               echo "Shared OPAMROOT: $OPAMROOT"
-              echo "Enter it with: nix develop .#oxcaml"
+              echo "Enter it with: nix develop"
             '';
           };
 
-          oxCamlToolchainCheck = pkgs.writeShellApplication {
-            name = "camelpie-oxcaml-check-toolchain";
+          toolchainCheck = pkgs.writeShellApplication {
+            name = "pie-opam-check-toolchain";
             runtimeInputs = [
               pkgs.git
               pkgs.opam
@@ -115,25 +181,25 @@
               cd "$repo_root"
 
               export OPAMROOT="''${OPAMROOT:-${sharedOpamRoot}}"
-              export OPAMSWITCH="${oxCamlSwitch}"
-              eval "$(opam env --switch "${oxCamlSwitch}" --set-switch)"
+              export OPAMSWITCH="${switchName}"
+              eval "$(opam env --switch "${switchName}" --set-switch)"
 
-              test "$(ocamlc -version)" = "${oxCamlSwitch}"
-              test "$(dune --version)" = "3.22.2"
+              test "$(ocamlc -version)" = "${switchName}"
+              dune --version >/dev/null
               opam list --installed --short ocamlformat | grep -Fxq ocamlformat
               opam list --installed --short merlin | grep -Fxq merlin
               opam list --installed --short ocaml-lsp-server | grep -Fxq ocaml-lsp-server
             '';
           };
 
-          oxCamlTest = pkgs.writeShellApplication {
-            name = "camelpie-oxcaml-test";
+          test = pkgs.writeShellApplication {
+            name = "pie-test";
             runtimeInputs = [
               pkgs.git
               pkgs.opam
             ];
             text = ''
-              switch_name="''${1:-${oxCamlSwitch}}"
+              switch_name="''${1:-${switchName}}"
               repo_root="$(${pkgs.git}/bin/git rev-parse --show-toplevel 2>/dev/null || pwd)"
               cd "$repo_root"
 
@@ -141,12 +207,12 @@
               export OPAMSWITCH="$switch_name"
               eval "$(opam env --switch "$switch_name" --set-switch)"
 
-              dune build packages/camelpie
-              dune runtest packages/camelpie --force
+              dune build packages/pie
+              dune runtest packages/pie --force
             '';
           };
 
-          oxCamlHostPackages =
+          hostPackages =
             [
               pkgs.autoconf
               pkgs.cacert
@@ -159,9 +225,9 @@
               pkgs.pkg-config
               pkgs.unzip
               pkgs.which
-              oxCamlSetup
-              oxCamlTest
-              oxCamlToolchainCheck
+              setup
+              test
+              toolchainCheck
             ]
             ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
               pkgs.gmp
@@ -173,24 +239,21 @@
 
           shellHook = ''
             export OPAMROOT="''${OPAMROOT:-${sharedOpamRoot}}"
-            if [ -d "$OPAMROOT/${oxCamlSwitch}" ]; then
-              export OPAMSWITCH="${oxCamlSwitch}"
-              eval "$(opam env --switch "${oxCamlSwitch}" --set-switch)"
+            if [ -d "$OPAMROOT/${switchName}" ]; then
+              export OPAMSWITCH="${switchName}"
+              eval "$(opam env --switch "${switchName}" --set-switch)"
             fi
-            echo "Camelpie OxCaml shell (${oxCamlSwitch})"
-            echo "Shared OPAMROOT: $OPAMROOT"
-            echo "Run 'camelpie-oxcaml-init' once to create/update the shared switch."
-            echo "Run 'camelpie-oxcaml-test' after setup to build and test shipped packages."
+            if [ -t 1 ]; then
+              echo "Pie OxCaml shell (${switchName})"
+              echo "Shared OPAMROOT: $OPAMROOT"
+              echo "Run 'shared-ocaml-switch-init' before 'pie-opam-install'."
+              echo "Run 'pie-test' after setup to build and test shipped packages."
+            fi
           '';
         in
         {
           default = pkgs.mkShell {
-            packages = oxCamlHostPackages;
-            inherit shellHook;
-          };
-
-          oxcaml = pkgs.mkShell {
-            packages = oxCamlHostPackages;
+            packages = hostPackages;
             inherit shellHook;
           };
         }
