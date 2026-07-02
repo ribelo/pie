@@ -162,7 +162,7 @@
               fi
 
               opam pin add --kind=git pie "git+file://$repo_root#master" --no-action --yes
-              opam install pie --with-test --assume-depexts --yes
+              opam install pie --assume-depexts --yes
 
               echo "Pie is installed into OPAM switch: $switch_name"
               echo "Shared OPAMROOT: $OPAMROOT"
