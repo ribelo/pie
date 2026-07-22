@@ -620,23 +620,23 @@ let test_codex_realtime_url_builders () =
     Stt.Codex_realtime.build_realtime_url
       ~base_url:"wss://api.openai.com/"
       ~mode:Stt.Codex_realtime.Transcription
-      ~model:"gpt-realtime-whisper"
+      ~model:"gpt-realtime-2.1"
       ()
   in
   Alcotest.(check string)
     "transcription url"
-    "wss://api.openai.com/v1/realtime?model=gpt-realtime-1.5"
+    "wss://api.openai.com/v1/realtime?model=gpt-realtime-2.1"
     transcribe_url;
   let translate_url =
     Stt.Codex_realtime.build_realtime_url
       ~base_url:"wss://api.openai.com"
       ~mode:Stt.Codex_realtime.Translation
-      ~model:"gpt-realtime-translate"
+      ~model:"gpt-realtime-2.1"
       ()
   in
   Alcotest.(check string)
     "translation url"
-    "wss://api.openai.com/v1/realtime/translations?model=gpt-realtime-translate"
+    "wss://api.openai.com/v1/realtime?model=gpt-realtime-2.1"
     translate_url
 
 let test_codex_realtime_headers () =
@@ -911,7 +911,7 @@ let run_realtime_capture_session_update flow captured =
   write_ws_close flow;
   try Eio.Flow.shutdown flow `Send with _ -> ()
 
-let test_codex_realtime_transcribe_with_prompt_ignores_language_e2e () =
+let test_codex_realtime_transcribe_uses_conversation_prompt_e2e () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let socket =
@@ -940,7 +940,7 @@ let test_codex_realtime_transcribe_with_prompt_ignores_language_e2e () =
   let operation =
     Stt.Codex_realtime.transcribe_with_prompt
       ~sw ~net:(Eio.Stdenv.net env)
-      ~model:"m"
+      ~model:"gpt-realtime-2.1"
       ~language:"pl"
       ~prompt_template:"Transcribe in {{language}}."
       ~sample_rate:16000
@@ -956,27 +956,17 @@ let test_codex_realtime_transcribe_with_prompt_ignores_language_e2e () =
   | `Assoc fields ->
     (match List.assoc_opt "session" fields with
      | Some (`Assoc session) ->
-       (* transcribe_with_prompt must render ~prompt_template (with ~language
-          substituted) into the session.update. Per the realtime transcription
-          schema the prompt belongs under audio.input.transcription.prompt, not
-          at the session top level, so check it there and confirm the language
-          made it into the rendered text. *)
-       let transcription =
-         match List.assoc_opt "audio" session with
-         | Some (`Assoc audio) ->
-           (match List.assoc_opt "input" audio with
-            | Some (`Assoc input) ->
-              (match List.assoc_opt "transcription" input with
-               | Some (`Assoc transcription) -> transcription
-               | _ -> Alcotest.fail "expected transcription object")
-            | _ -> Alcotest.fail "expected input object")
-         | _ -> Alcotest.fail "expected audio object"
-       in
        let prompt =
-         match List.assoc_opt "prompt" transcription with
+         match List.assoc_opt "instructions" session with
          | Some (`String value) -> value
-         | _ -> Alcotest.fail "transcription should include the rendered prompt"
+         | _ -> Alcotest.fail "realtime session should include the rendered prompt"
        in
+       Alcotest.(check (option string))
+         "conversation session type"
+         (Some "realtime")
+         (match List.assoc_opt "type" session with
+          | Some (`String value) -> Some value
+          | _ -> None);
        Alcotest.(check bool)
          "rendered prompt should include the configured language"
          true
@@ -1109,10 +1099,10 @@ let test_codex_realtime_stream_reports_server_error_e2e () =
       ~url
       ~access_token:"test-token"
       ~mode:Stt.Codex_realtime.Conversation
-      ~session_update:(Stt.Codex_realtime.build_conversation_translation_session_update
+      ~session_update:(Stt.Codex_realtime.build_conversation_session_update
                          ~model:"gpt-realtime-2"
                          ~prompt)
-      ~response_create:(Stt.Codex_realtime.build_conversation_translation_response_create
+      ~response_create:(Stt.Codex_realtime.build_conversation_response_create
                           ~prompt)
       ~sample_rate:16000
       ~cancel_message:"cancelled"
@@ -1323,7 +1313,7 @@ let test_codex_realtime_translation_ignores_prompt () =
           build_translation_session_update which has no ~prompt parameter
           and includes no instructions. The rendered prompt is silently
           dropped. The conversation translation path does include
-          instructions via build_conversation_translation_session_update. *)
+          instructions via build_conversation_session_update. *)
        Alcotest.(check bool)
          "translation session should include instructions"
          true
@@ -1733,6 +1723,20 @@ action = "shift-enter"
     Alcotest.(check (option string)) "second app" (Some "Slack") second.app_id;
     Alcotest.(check bool) "second action" true (second.action = Pie.Input.Text_injection.Shift_enter)
   | _ -> Alcotest.fail "expected two newline rules"
+
+let test_stt_config_defaults_to_gpt_realtime_2_1 () =
+  let dir = temp_dir "pie-stt-config-default-model" in
+  let config_path = Filename.concat dir "stt.toml" in
+  write_file config_path "schema_version = 2\n";
+  let config = Pie.Config.Stt.load ~config_path () in
+  Alcotest.(check string)
+    "transcription model"
+    "gpt-realtime-2.1"
+    config.transcription_model;
+  Alcotest.(check string)
+    "translation model"
+    "gpt-realtime-2.1"
+    config.translation_model
 
 let test_stt_config_rejects_bad_title_regex () =
   let dir = temp_dir "pie-stt-config" in
@@ -2573,6 +2577,8 @@ let () =
            test_stt_config_resolves_provider_qualified_model;
          Alcotest.test_case "load TOML newline rules" `Quick
            test_stt_config_loads_toml_newline_rules;
+         Alcotest.test_case "default GPT Realtime 2.1 models" `Quick
+           test_stt_config_defaults_to_gpt_realtime_2_1;
          Alcotest.test_case "reject invalid title regex" `Quick
            test_stt_config_rejects_bad_title_regex;
          Alcotest.test_case "reject transcription prompt missing language placeholder" `Quick
@@ -2668,8 +2674,8 @@ let () =
            test_codex_realtime_stream_reports_server_error_e2e;
          Alcotest.test_case "translation ignores prompt" `Quick
            test_codex_realtime_translation_ignores_prompt;
-         Alcotest.test_case "transcribe ignores language e2e" `Quick
-           test_codex_realtime_transcribe_with_prompt_ignores_language_e2e;
+         Alcotest.test_case "transcribe uses conversation prompt e2e" `Quick
+           test_codex_realtime_transcribe_uses_conversation_prompt_e2e;
          Alcotest.test_case "translate non-conv drops prompt e2e" `Quick
            test_codex_realtime_translate_nonconv_drops_prompt_e2e;
        ]);

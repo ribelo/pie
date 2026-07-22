@@ -32,7 +32,7 @@ let () =
   let pcm_path = Sys.argv.(1) in
   let expected = Sys.argv.(2) in
   let model =
-    if Array.length Sys.argv = 4 then Sys.argv.(3) else "gpt-realtime-whisper"
+    if Array.length Sys.argv = 4 then Sys.argv.(3) else "gpt-realtime-2.1"
   in
   let pcm = Bytes.of_string (read_file pcm_path) in
   Eio_main.run @@ fun env ->

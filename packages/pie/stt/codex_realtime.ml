@@ -6,10 +6,6 @@ module Stream = Eta_stream
 
 open Eta.Syntax
 
-(* Codex realtime is currently broken for ChatGPT/OAuth auth. Keep this path in
-   place, but prefer provider-backed models such as OpenRouter until Codex shows
-   how realtime STT should be authenticated through OAuth. *)
-
 type mode =
   | Transcription
   | Translation
@@ -25,9 +21,11 @@ type event =
 
 let realtime_sample_rate = 24_000
 let default_base_url = "wss://api.openai.com"
-let transcription_realtime_session_model = "gpt-realtime-1.5"
 let realtime_version = "0.0.0"
-let conversation_translation_model = "gpt-realtime-2"
+let default_conversation_model = "gpt-realtime-2.1"
+
+let is_conversation_model model =
+  model = "gpt-realtime-2" || model = default_conversation_model
 
 let transcription_delta_types = [
   "conversation.item.input_audio_transcription.delta";
@@ -80,11 +78,15 @@ let path_for_mode = function
   | Conversation -> "/v1/realtime"
 
 let build_realtime_url ?(base_url = resolve_base_url ()) ~mode ~model () =
-  let path = strip_trailing_slashes base_url ^ path_for_mode mode in
-  match mode with
-  | Transcription -> path ^ "?model=" ^ transcription_realtime_session_model
-  | Translation
-  | Conversation -> path ^ "?model=" ^ model
+  let base_url = strip_trailing_slashes base_url in
+  if is_conversation_model model then
+    base_url ^ "/v1/realtime?model=" ^ model
+  else
+    let path = base_url ^ path_for_mode mode in
+    match mode with
+    | Transcription -> path ^ "?intent=transcription"
+    | Translation
+    | Conversation -> path ^ "?model=" ^ model
 
 let render_template template variables =
   List.fold_left
@@ -161,7 +163,7 @@ let build_translation_session_update ?prompt ?target_language () =
   in
   `Assoc [("type", `String "session.update"); ("session", `Assoc session_fields)]
 
-let build_conversation_translation_session_update ~model ~prompt =
+let build_conversation_session_update ~model ~prompt =
   `Assoc [
     ("type", `String "session.update");
     ("session", `Assoc [
@@ -178,7 +180,7 @@ let build_conversation_translation_session_update ~model ~prompt =
     ]);
   ]
 
-let build_conversation_translation_response_create ~prompt =
+let build_conversation_response_create ~prompt =
   `Assoc [
     ("type", `String "response.create");
     ("response", `Assoc [
@@ -898,16 +900,29 @@ let with_transcription_stream
   let client = realtime_rest_client ~sw ~net in
   let* access_token = realtime_access_token ~client () in
   let prompt = render_template prompt_template [ ("language", language) ] in
-  with_stream_session
-    ~sw
-    ~net
-    ~url:(build_realtime_url ~mode:Transcription ~model ())
-    ~access_token
-    ~mode:Transcription
-    ~session_update:(build_transcription_session_update ~model ~prompt ())
-    ~sample_rate
-    ~cancel_message:"Codex realtime transcription cancelled"
-    use
+  if is_conversation_model model then
+    with_stream_session
+      ~sw
+      ~net
+      ~url:(build_realtime_url ~mode:Conversation ~model ())
+      ~access_token
+      ~mode:Conversation
+      ~session_update:(build_conversation_session_update ~model ~prompt)
+      ~response_create:(build_conversation_response_create ~prompt)
+      ~sample_rate
+      ~cancel_message:"Codex realtime transcription cancelled"
+      use
+  else
+    with_stream_session
+      ~sw
+      ~net
+      ~url:(build_realtime_url ~mode:Transcription ~model ())
+      ~access_token
+      ~mode:Transcription
+      ~session_update:(build_transcription_session_update ~model ~prompt ())
+      ~sample_rate
+      ~cancel_message:"Codex realtime transcription cancelled"
+      use
 
 let with_translation_stream
     ~sw
@@ -926,15 +941,15 @@ let with_translation_stream
       ("target_language", target_language);
     ]
   in
-  if model = conversation_translation_model then
+  if is_conversation_model model then
     with_stream_session
       ~sw
       ~net
       ~url:(build_realtime_url ~mode:Conversation ~model ())
       ~access_token
       ~mode:Conversation
-      ~session_update:(build_conversation_translation_session_update ~model ~prompt)
-      ~response_create:(build_conversation_translation_response_create ~prompt)
+      ~session_update:(build_conversation_session_update ~model ~prompt)
+      ~response_create:(build_conversation_response_create ~prompt)
       ~sample_rate
       ~cancel_message:"Codex realtime translation cancelled"
       use
@@ -954,15 +969,27 @@ let transcribe_with_prompt ~sw ~net ~model ~language ~prompt_template ?(sample_r
   let client = realtime_rest_client ~sw ~net in
   let* access_token = realtime_access_token ~client () in
   let prompt = render_template prompt_template [ ("language", language) ] in
-  run_realtime_session
-    ~sw
-    ~net
-    ~url:(build_realtime_url ~mode:Transcription ~model ())
-    ~access_token
-    ~mode:Transcription
-    ~session_update:(build_transcription_session_update ~model ~prompt ())
-    ~input_sample_rate:sample_rate
-    pcm_bytes
+  if is_conversation_model model then
+    run_realtime_session
+      ~sw
+      ~net
+      ~url:(build_realtime_url ~mode:Conversation ~model ())
+      ~access_token
+      ~mode:Conversation
+      ~session_update:(build_conversation_session_update ~model ~prompt)
+      ~response_create:(build_conversation_response_create ~prompt)
+      ~input_sample_rate:sample_rate
+      pcm_bytes
+  else
+    run_realtime_session
+      ~sw
+      ~net
+      ~url:(build_realtime_url ~mode:Transcription ~model ())
+      ~access_token
+      ~mode:Transcription
+      ~session_update:(build_transcription_session_update ~model ~prompt ())
+      ~input_sample_rate:sample_rate
+      pcm_bytes
 
 let translate_with_prompt
     ~sw
@@ -981,15 +1008,15 @@ let translate_with_prompt
       ("target_language", target_language);
     ]
   in
-  if model = conversation_translation_model then
+  if is_conversation_model model then
     run_realtime_session
       ~sw
       ~net
       ~url:(build_realtime_url ~mode:Conversation ~model ())
       ~access_token
       ~mode:Conversation
-      ~session_update:(build_conversation_translation_session_update ~model ~prompt)
-      ~response_create:(build_conversation_translation_response_create ~prompt)
+      ~session_update:(build_conversation_session_update ~model ~prompt)
+      ~response_create:(build_conversation_response_create ~prompt)
       ~input_sample_rate:sample_rate
       pcm_bytes
   else

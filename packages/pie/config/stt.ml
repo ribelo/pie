@@ -243,7 +243,11 @@ let load ?(config_path = Paths.stt_config_path) () : t =
   if schema_version <> 2 then
     raise (Config_error "schema_version must be 2");
   let provider = provider_of_string (get_string table "provider" "codex-realtime") in
-  let default_model = "openrouter/xiaomi/mimo-v2.5" in
+  let default_model =
+    match provider with
+    | Codex_realtime -> "gpt-realtime-2.1"
+    | Openrouter -> "openrouter/xiaomi/mimo-v2.5"
+  in
   let transcription_model = get_string table "transcription_model" default_model in
   let translation_model = get_string table "translation_model" default_model in
   ignore (resolve_model_provider ~default_provider:provider transcription_model);
