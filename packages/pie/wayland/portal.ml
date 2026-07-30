@@ -5,7 +5,7 @@ open Eta.Syntax
 let busctl ~process_mgr args =
   Sh.run_capture ~process_mgr ~prog:"busctl" ~args:("--user" :: args)
   |> Eta.Effect.map (fun out -> (0, out))
-  |> Eta.Effect.catch (fun (`Subprocess_error msg) ->
+  |> Eta.Effect.bind_error (fun (`Subprocess_error msg) ->
     Eta.Effect.pure (1, msg))
 
 let create_session ~process_mgr () =

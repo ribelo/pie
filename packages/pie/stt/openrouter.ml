@@ -7,6 +7,21 @@ module Openrouter = Eta_ai_openrouter
 
 open Eta.Syntax
 
+let direct_transcription_timeout = Eta.Duration.seconds 60
+let response_operation_timeout = Eta.Duration.seconds 120
+
+let with_direct_transcription_timeout effect =
+  effect
+  |> Eta.Effect.timeout_as
+       direct_transcription_timeout
+       ~on_timeout:(`Stt_error "OpenRouter transcription timed out after 60 seconds")
+
+let with_response_operation_timeout effect =
+  effect
+  |> Eta.Effect.timeout_as
+       response_operation_timeout
+       ~on_timeout:(`Stt_error "OpenRouter response operation timed out after 120 seconds")
+
 let resolve_api_key () =
   match Sys.getenv_opt "OPENROUTER_API_KEY" with
   | Some value when String.trim value <> "" -> Some (String.trim value)
@@ -17,6 +32,12 @@ let provider () =
   | Some value when String.trim value <> "" ->
     Openrouter.provider ~base_url:(String.trim value) ()
   | _ -> Openrouter.provider ()
+
+let responses_provider () =
+  match Sys.getenv_opt "OPENROUTER_BASE_URL" with
+  | Some value when String.trim value <> "" ->
+    Openrouter.responses_provider ~base_url:(String.trim value) ()
+  | _ -> Openrouter.responses_provider ()
 
 let http_client ~sw ~net =
   Http_eio.Client.make_h1_direct ~sw ~net ()
@@ -37,6 +58,8 @@ let ai_error_message = function
     Printf.sprintf "%s provider error%s%s: %s" provider status code message
   | Decode_error { provider; message; _ } ->
     Printf.sprintf "%s decode error: %s" provider message
+  | Invalid_request { provider; message } ->
+    Printf.sprintf "%s invalid request: %s" provider message
   | Invalid_tool { name; message } ->
     Printf.sprintf "invalid tool %s: %s" name message
   | Unsupported { provider; feature } ->
@@ -105,17 +128,16 @@ let structured_output task =
       ("required", `List [`String output_text_field]);
       ("additionalProperties", `Bool false);
     ]
-    |> Yojson.Safe.to_string
   in
-  match
-    Openrouter.structured_output
-      ~name:(task ^ "_response")
-      ~schema_json:schema
-      ~strict:true
-      ()
-  with
-  | Ok output -> Eta.Effect.pure output
-  | Error error -> Eta.Effect.fail (stt_error_of_ai error)
+  {
+    A.Responses.format =
+      A.Responses.Json_schema
+        {
+          name = task ^ "_response";
+          schema;
+          strict = Some true;
+        };
+  }
 
 let reasoning_for_effort = function
   | None -> Eta.Effect.pure None
@@ -166,83 +188,101 @@ let debug_response_content content raw =
       raw
   | _ -> ()
 
-let responses_request ~model ~prompt ~sample_rate pcm_bytes : A.chat_request =
+let responses_request ~model ~prompt ~sample_rate ~task pcm_bytes : A.tool A.Responses.request =
   {
     model;
-    prompt =
-      [
-        A.User
-          [
-            A.Text prompt;
-            A.Audio
-              {
-                data = A.Bytes (wav_bytes ~sample_rate pcm_bytes);
-                format = A.Wav;
-                transcript = None;
-              };
-          ];
-      ];
+    input =
+      A.Responses.Messages
+        [
+          A.User
+            [
+              A.Text prompt;
+              A.Audio
+                {
+                  data = A.Bytes (wav_bytes ~sample_rate pcm_bytes);
+                  format = A.Wav;
+                  transcript = None;
+                };
+            ];
+        ];
+    instructions = None;
+    previous_response_id = None;
+    store = None;
+    include_ = [];
     tools = [];
-    temperature = Some 0.0;
+    tool_choice = None;
+    parallel_tool_calls = None;
+    max_turns = None;
     max_output_tokens = None;
+    temperature = Some 0.0;
+    top_p = None;
+    top_k = None;
+    min_p = None;
+    text = Some (structured_output task);
+    reasoning = None;
+    reasoning_effort = None;
+    service_tier = None;
+    user = None;
+    prompt_cache_key = None;
+    replay_items = [];
     stream = false;
   }
 
 let run_audio_responses ~sw ~net ~model ~prompt ~sample_rate ~task ?thinking_effort pcm_bytes =
-  match resolve_api_key () with
-  | None ->
-    Eta.Effect.fail
-      (`Stt_error "Missing OpenRouter API key. Set OPENROUTER_API_KEY.")
-  | Some api_key ->
-    let client = http_client ~sw ~net in
-    let* structured_output = structured_output task in
-    let* reasoning = reasoning_for_effort thinking_effort in
-    let request = responses_request ~model ~prompt ~sample_rate pcm_bytes in
-    let* raw =
-      Openrouter.responses
-      ~provider:(provider ())
-      ~structured_output
-      ?reasoning
-      client
-      ~api_key:(A.api_key api_key)
-      request
-      |> Eta.Effect.map_error stt_error_of_ai
-      |> Eta.Effect.map (fun response ->
-        let content = extract_message_content response.A.message in
-        debug_response_content content response.raw;
-        content)
-    in
-    Eta.Effect.from_result (decode_structured_output raw)
+  (match resolve_api_key () with
+   | None ->
+     Eta.Effect.fail
+       (`Stt_error "Missing OpenRouter API key. Set OPENROUTER_API_KEY.")
+   | Some api_key ->
+     let client = http_client ~sw ~net in
+     let* reasoning = reasoning_for_effort thinking_effort in
+     let request = responses_request ~model ~prompt ~sample_rate ~task pcm_bytes in
+     let* raw =
+       Openrouter.responses
+         ~provider:(responses_provider ())
+         ?reasoning
+         client
+         ~api_key:(A.api_key api_key)
+         request
+       |> Eta.Effect.map_error stt_error_of_ai
+       |> Eta.Effect.map (fun response ->
+         let content = extract_message_content response.A.message in
+         debug_response_content content response.raw;
+         content)
+     in
+     Eta.Effect.from_result (decode_structured_output raw))
+  |> with_response_operation_timeout
 
 let transcribe ~sw ~net ~api_key ~model ~language ?(sample_rate = 16000) pcm_bytes =
-  let client = http_client ~sw ~net in
-  let request : A.Transcription.request =
-    {
-      model;
-      file =
-        {
-          filename = "pie.wav";
-          content_type = "audio/wav";
-          data = wav_bytes ~sample_rate pcm_bytes;
-        };
-      language = Some language;
-      prompt = None;
-      response_format = None;
-      temperature = Some 0.0;
-      extra_fields = [];
-    }
-  in
-  let* response =
-    Openrouter.transcription
-    ~provider:(provider ())
-    client
-    ~api_key:(A.api_key api_key)
-    request
-    |> Eta.Effect.map_error stt_error_of_ai
-  in
-  match response.A.Transcription.text with
-  | Some text when String.trim text <> "" -> Eta.Effect.pure (String.trim text)
-  | _ -> Eta.Effect.fail (`Stt_error "OpenRouter transcription response was empty")
+  (let client = http_client ~sw ~net in
+   let request : A.Transcription.request =
+     {
+       model;
+       file =
+         {
+           filename = "pie.wav";
+           content_type = "audio/wav";
+           data = wav_bytes ~sample_rate pcm_bytes;
+         };
+       language = Some language;
+       prompt = None;
+       response_format = None;
+       temperature = Some 0.0;
+       extra_fields = [];
+     }
+   in
+   let* response =
+     Openrouter.transcription
+       ~provider:(provider ())
+       client
+       ~api_key:(A.api_key api_key)
+       request
+     |> Eta.Effect.map_error stt_error_of_ai
+   in
+   match response.A.Transcription.text with
+   | Some text when String.trim text <> "" -> Eta.Effect.pure (String.trim text)
+   | _ -> Eta.Effect.fail (`Stt_error "OpenRouter transcription response was empty"))
+  |> with_direct_transcription_timeout
 
 let transcribe_with_prompt
     ~sw

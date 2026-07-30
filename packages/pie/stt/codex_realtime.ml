@@ -23,6 +23,8 @@ let realtime_sample_rate = 24_000
 let default_base_url = "wss://api.openai.com"
 let realtime_version = "0.0.0"
 let default_conversation_model = "gpt-realtime-2.1"
+let oauth_response_idle_timeout = Http.Request.Response_idle_timeout.of_ms 30_000
+let websocket_establishment_timeout = Eta.Duration.seconds 10
 
 let is_conversation_model model =
   model = "gpt-realtime-2" || model = default_conversation_model
@@ -264,7 +266,8 @@ let http_error_message context error =
 
 let ws_error_message = function
   | `Connect message -> "connect: " ^ message
-  | `Upgrade_failed status -> Printf.sprintf "upgrade failed with HTTP %d" status
+  | `Upgrade_failed failure ->
+    Printf.sprintf "upgrade failed with HTTP %d" failure.Http_eio.Ws.Client.status
   | `Closed (code, reason) -> Printf.sprintf "closed (%d): %s" code reason
   | `Protocol message -> "protocol: " ^ message
   | `Timeout -> "timeout"
@@ -297,7 +300,7 @@ let realtime_rest_client ~sw ~net =
 
 let read_response_body response =
   Http.Body.Stream.read_all response.Http.Response.body
-  |> Eta.Effect.catch (fun error ->
+  |> Eta.Effect.bind_error (fun error ->
     stt_error (http_error_message "failed to read Codex HTTP response body" error))
   |> Eta.Effect.map Bytes.to_string
 
@@ -501,12 +504,13 @@ module Codex_auth = struct
       Http.Request.make
         ~headers:(headers [("Content-Type", "application/json"); ("Accept", "application/json")])
         ~body:(Http.Request.Fixed [Bytes.of_string (Yojson.Safe.to_string body)])
+        ~response_idle_timeout:oauth_response_idle_timeout
         "POST"
         url
     in
     let* response =
       Http.request client request
-      |> Eta.Effect.catch (fun error ->
+      |> Eta.Effect.bind_error (fun error ->
         stt_error (http_error_message ("Codex token refresh " ^ url) error))
     in
     let* raw = read_response_body response in
@@ -574,6 +578,18 @@ let empty_session_result = { final = None; deltas = []; error = None; session_se
 let close_ws_ignore ws =
   Http_eio.Ws.Client.close ws |> Eta.Effect.ignore_errors
 
+let with_websocket_establishment_timeout effect =
+  effect
+  |> Eta.Effect.timeout_as
+       websocket_establishment_timeout
+       ~on_timeout:(`Stt_error "Codex realtime WebSocket establishment timed out after 10 seconds")
+
+let connect_realtime_ws ~headers ~sw ~net url =
+  Http_eio.Ws.Client.connect ~headers ~sw ~net url
+  |> Eta.Effect.bind_error (fun error ->
+    stt_error ("Codex realtime WebSocket connect failed: " ^ ws_error_message error))
+  |> with_websocket_establishment_timeout
+
 let debug_realtime_payload direction payload =
   match Sys.getenv_opt "CAMELPIE_CODEX_REALTIME_DEBUG" with
   | Some value when String.trim value <> "" ->
@@ -634,7 +650,7 @@ let receive_result ~mode ws =
   Stream.run
     (Http_eio.Ws.Client.incoming ws |> Stream.Stream.take_until_effect (receive_should_stop ~mode))
     (Stream.Sink.fold_effect step empty_session_result)
-  |> Eta.Effect.catch (fun error ->
+  |> Eta.Effect.bind_error (fun error ->
     stt_error ("Codex realtime WebSocket receive failed: " ^ ws_error_message error))
 
 let initial_receive_should_stop = function
@@ -670,7 +686,7 @@ let await_session_ready ws =
     Stream.run
       (Http_eio.Ws.Client.incoming ws |> Stream.Stream.take_until_effect initial_receive_should_stop)
       (Stream.Sink.fold_effect step empty_session_result)
-    |> Eta.Effect.catch (fun error ->
+    |> Eta.Effect.bind_error (fun error ->
       stt_error ("Codex realtime WebSocket receive failed: " ^ ws_error_message error))
   in
   let* result = receive in
@@ -682,7 +698,7 @@ let await_session_ready ws =
 let send_text ?(ignore_closing = fun () -> false) ws payload =
   debug_realtime_payload "send" payload;
   Http_eio.Ws.Client.send_text ws payload
-  |> Eta.Effect.catch (fun error ->
+  |> Eta.Effect.bind_error (fun error ->
     match error with
     | `Closed _ when ignore_closing () ->
       Eta.Effect.unit
@@ -738,13 +754,11 @@ let run_realtime_session
   let pcm_bytes = resample_s16le_mono ~from_rate:input_sample_rate ~to_rate:realtime_sample_rate pcm_bytes in
   let session_id = make_realtime_session_id () in
   let* ws =
-    Http_eio.Ws.Client.connect
+    connect_realtime_ws
       ~headers:(realtime_headers ~session_id access_token)
       ~sw
       ~net
       url
-    |> Eta.Effect.catch (fun error ->
-      stt_error ("Codex realtime WebSocket connect failed: " ^ ws_error_message error))
   in
   let receive_done = Atomic.make false in
   let ignore_closing () = Atomic.get receive_done in
@@ -769,6 +783,7 @@ let run_realtime_session
        | None -> Eta.Effect.unit
        | Some json -> send_json ~ignore_closing ws json)
   in
+  (* stttime-i0cx: an established realtime stream has no provider deadline. *)
   let receive = receive_result_marking_done ~mode ws receive_done in
   let* result, () = Eta.Effect.par receive send in
   let* () = close_ws_ignore ws in
@@ -787,13 +802,11 @@ let run_realtime_stream_session
     audio =
   let session_id = make_realtime_session_id () in
   let* ws =
-    Http_eio.Ws.Client.connect
+    connect_realtime_ws
       ~headers:(realtime_headers ~session_id access_token)
       ~sw
       ~net
       url
-    |> Eta.Effect.catch (fun error ->
-      stt_error ("Codex realtime WebSocket connect failed: " ^ ws_error_message error))
   in
   let receive_done = Atomic.make false in
   let ignore_closing () = Atomic.get receive_done in
@@ -833,6 +846,66 @@ let run_realtime_stream_session
   let* () = close_ws_ignore ws in
   finish_result result
 
+module Async_completion = struct
+  type ('a, 'err) phase =
+    | Pending
+    | Waiting of (('a, 'err) Eta.Exit.t -> unit)
+    | Resolved of ('a, 'err) Eta.Exit.t
+    | Done
+
+  type ('a, 'err) t = {
+    mutex : Mutex.t;
+    mutable phase : ('a, 'err) phase;
+    canceler : (unit, 'err) Eta.Effect.t;
+  }
+
+  let create ~canceler () =
+    { mutex = Mutex.create (); phase = Pending; canceler }
+
+  let with_lock completion f =
+    Mutex.lock completion.mutex;
+    Fun.protect ~finally:(fun () -> Mutex.unlock completion.mutex) f
+
+  let resolve completion exit =
+    let accepted, resume =
+      with_lock completion @@ fun () ->
+      match completion.phase with
+      | Pending ->
+        completion.phase <- Resolved exit;
+        true, None
+      | Waiting resume ->
+        completion.phase <- Done;
+        true, Some resume
+      | Resolved _
+      | Done -> false, None
+    in
+    Option.iter (fun resume -> resume exit) resume;
+    accepted
+
+  let await completion =
+    Eta.Effect.async ~register:(fun resume ->
+      let resolved =
+        with_lock completion @@ fun () ->
+        match completion.phase with
+        | Pending ->
+          completion.phase <- Waiting resume;
+          None
+        | Resolved exit ->
+          completion.phase <- Done;
+          Some exit
+        | Waiting _
+        | Done -> invalid_arg "Codex async completion may only be awaited once"
+      in
+      Option.iter resume resolved;
+      Some
+        (let* () =
+           Eta.Effect.sync (fun () ->
+             with_lock completion @@ fun () ->
+             completion.phase <- Done)
+         in
+         completion.canceler))
+end
+
 type stream_handle = {
   offer_chunk : bytes -> (unit, error) Eta.Effect.t;
   finish_stream : unit -> (string, error) Eta.Effect.t;
@@ -851,13 +924,16 @@ let with_stream_session
     ~cancel_message
     use =
   let queue = Eta.Queue.unbounded () in
-  let promise, resolver = Eio.Promise.create () in
-  let publish result =
-    Eta.Effect.sync (fun () -> ignore (Eio.Promise.try_resolve resolver result))
+  let cancel_stream =
+    Eta.Queue.close_with_error_effect queue (`Stt_error cancel_message)
+  in
+  let completion = Async_completion.create ~canceler:cancel_stream () in
+  let publish exit =
+    Eta.Effect.sync (fun () -> ignore (Async_completion.resolve completion exit))
   in
   let audio = Stream.Stream.from_queue queue in
   let session =
-    let* result =
+    let* exit =
       run_realtime_stream_session
         ~sw
         ~net
@@ -868,9 +944,9 @@ let with_stream_session
         ?response_create
         ~input_sample_rate:sample_rate
         audio
-      |> Eta.Effect.result
+      |> Eta.Effect.to_exit
     in
-    publish result
+    publish exit
   in
   let handle =
     {
@@ -881,10 +957,8 @@ let with_stream_session
       finish_stream =
         (fun () ->
            let* () = Eta.Queue.close_effect queue in
-           Eta.Effect.sync (fun () -> Eio.Promise.await promise)
-           |> Eta.Effect.flatten_result);
-      cancel_stream =
-        Eta.Queue.close_with_error_effect queue (`Stt_error cancel_message);
+           Async_completion.await completion);
+      cancel_stream;
     }
   in
   Eta.Effect.with_background ~name:"codex.realtime.stream" session (fun () -> use handle)

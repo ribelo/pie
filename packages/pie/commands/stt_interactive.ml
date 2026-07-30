@@ -4,17 +4,20 @@ let read_stdin_line ~stdin =
   Eta.Effect.sync (fun () ->
     Eio.Buf_read.parse_exn ~max_size:4096 Eio.Buf_read.line stdin)
 
-let drain_until_interrupt ~stdin recv =
+let drain_until_interrupt ~stdin audio =
   let chunks_ref = ref [] in
-  let rec recv_loop () =
-    let* chunk = recv () in
-    let* () = Eta.Effect.sync (fun () -> chunks_ref := chunk :: !chunks_ref) in
-    recv_loop ()
+  let recv_loop =
+    Eta_stream.run_for_each
+      (fun chunk ->
+        Eta.Effect.sync (fun () -> chunks_ref := chunk :: !chunks_ref))
+      audio
+    |> Eta.Effect.map_error (fun (`Pulse_error error) ->
+      `Stt_error (Pulse.Client.error_message error))
   in
   let* () =
     Eta.Effect.race [
       Eta.Effect.map (fun _ -> ()) (read_stdin_line ~stdin);
-      recv_loop ();
+      recv_loop;
     ]
   in
   Eta.Effect.sync (fun () ->
@@ -34,15 +37,15 @@ let drain_until_interrupt ~stdin recv =
     let normalized = Audio.Pcm.normalize_pcm_for_stt pcm in
     normalized.normalized_bytes)
 
-let run ~sw ~net ~clock ~process_mgr ~stdin () =
-  Pulse.Client.with_client ~sw ~net ~clock @@ fun client ->
-  Pulse.Client.with_record_stream client @@ fun _info recv ->
+let run ~sw ~net ~clock:_ ~process_mgr ~stdin () =
+  Pulse.Client.with_client ~net @@ fun client ->
+  Pulse.Client.with_record_stream client @@ fun _info audio ->
   let* () = Eta.Effect.sync (fun () ->
     Printf.printf "stt-interactive: press Enter to start recording, Enter to stop...\n%!")
   in
   let* _ = read_stdin_line ~stdin in
   let* () = Eta.Effect.sync (fun () -> Printf.printf "Recording... (press Enter to stop)\n%!") in
-  let* pcm_bytes = drain_until_interrupt ~stdin recv in
+  let* pcm_bytes = drain_until_interrupt ~stdin audio in
   let api_key =
     match Sys.getenv_opt "OPENROUTER_API_KEY" with
     | Some k -> k

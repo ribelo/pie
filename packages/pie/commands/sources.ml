@@ -1,7 +1,7 @@
 open Eta.Syntax
 
-let run ~sw ~net ~clock () =
-  Pulse.Client.with_client ~sw ~net ~clock @@ fun client ->
+let run ~sw:_ ~net ~clock:_ () =
+  Pulse.Client.with_client ~net @@ fun client ->
   let* sources = Pulse.Client.list_sources client in
   Eta.Effect.sync (fun () ->
     List.iter (fun (s : Pulse.Defs.source_info) ->

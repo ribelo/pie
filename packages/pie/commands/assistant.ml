@@ -203,7 +203,10 @@ let load_config () =
   Eta.Effect.sync (fun () ->
       try Ok (Config.Stt.load ())
       with Config.Stt.Config_error msg ->
-        Error (`Pulse_error ("Failed to load STT config: " ^ msg)))
+        Error
+          (`Pulse_error
+             (Pulse.Client.Protocol_error
+                ("Failed to load STT config: " ^ msg))))
   |> Eta.Effect.flatten_result
 
 let run_stt ~sw ~net ~process_mgr (config : Config.Stt.t) mode pcm_bytes =
@@ -545,8 +548,8 @@ let run
            ~min_duration_ms
            ()))
   in
-  Pulse.Client.with_client ~sw ~net ~clock @@ fun client ->
-  Pulse.Client.with_record_stream client @@ fun info recv ->
+  Pulse.Client.with_client ~net @@ fun client ->
+  Pulse.Client.with_record_stream client @@ fun info audio ->
   Keyboard.Monitor.with_monitor ~sw ~net ~process_mgr @@ fun keyboard ->
   let ptt_config : Ptt_loop.config = {
     recognize = recognize ~transcribe_keysym:ptt_transcribe_keysym ~translate_keysym:ptt_translate_keysym;
@@ -568,5 +571,6 @@ let run
       "pie: no microphone input"
       "No input detected during push-to-talk. Your microphone may be muted.";
   } in
-  Ptt_loop.run ~control ~keyboard ~recv ptt_config
-  |> Eta.Effect.map_error (fun (`Ptt_error msg) -> `Pulse_error msg)
+  Ptt_loop.run ~control ~keyboard ~audio ptt_config
+  |> Eta.Effect.map_error (fun (`Ptt_error msg) ->
+    `Pulse_error (Pulse.Client.Protocol_error msg))

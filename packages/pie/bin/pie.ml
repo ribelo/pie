@@ -1,7 +1,7 @@
 open Cmdliner
 
 let render_effect_error = function
-  | `Pulse_error msg
+  | `Pulse_error error -> Pie.Pulse.Client.error_message error
   | `Ptt_error msg
   | `Stt_error msg
   | `Subprocess_error msg
@@ -15,6 +15,9 @@ let render_effect_error = function
   | `Daemon_off -> "daemon is not running"
   | `Closed -> "stream closed"
   | `Timeout -> "operation timed out"
+
+let pp_effect_error formatter error =
+  Format.pp_print_string formatter (render_effect_error error)
 
 let run_effect mk_eff =
   Pie.Observability.init_from_env ~service_version:"0.1.0" ();
@@ -31,15 +34,14 @@ let run_effect mk_eff =
     in
     match
       mk_eff ~env ~sw
-      |> Eta.Effect.with_error_renderer render_effect_error
+      |> Eta.Effect.with_error_pp pp_effect_error
       |> Eta_eio.Runtime.run rt
     with
     | Ok () -> ()
     | Error cause ->
         let msg =
           Format.asprintf "%a"
-            (Eta.Cause.pp (fun fmt err ->
-               Format.pp_print_string fmt (render_effect_error err)))
+            (Eta.Cause.pp pp_effect_error)
             cause
         in
         if Eta.Cause.is_interrupt_only cause then (
@@ -185,7 +187,7 @@ let status_cmd =
             Eta.Effect.sync (fun () ->
               Printf.printf "%s\n%!" (render_recording_status snap))
           in
-          Eta.Effect.catch
+          Eta.Effect.bind_error
             (fun e ->
               match e with
               | `Daemon_off ->
@@ -356,7 +358,7 @@ let msg_subscribe_cmd =
               Eta.Effect.pure (Some json)
             in
             let* next_last =
-              Eta.Effect.catch
+              Eta.Effect.bind_error
                 (fun err ->
                   let message =
                     match err with

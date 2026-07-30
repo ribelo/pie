@@ -7,6 +7,6 @@ let notify_send ~process_mgr title message =
 
 let notify_warning ~process_mgr title message =
   notify_send ~process_mgr title message
-  |> Eta.Effect.catch (fun _ ->
+  |> Eta.Effect.bind_error (fun _ ->
     Eta.Effect.sync (fun () ->
       Printf.eprintf "Notification failed\n%!"))

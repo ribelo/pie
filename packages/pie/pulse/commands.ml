@@ -91,16 +91,25 @@ let build_get_server_info_command () : command_packet =
 
 let parse_server_info_response (payload : bytes) : Defs.server_info =
   let reader = Protocol.Tag_struct_reader.create payload in
+  let name = Protocol.Tag_struct_reader.get_string reader in
+  let version = Protocol.Tag_struct_reader.get_string reader in
+  let username = Protocol.Tag_struct_reader.get_string reader in
+  let hostname = Protocol.Tag_struct_reader.get_string reader in
+  let sample_spec = Protocol.Tag_struct_reader.get_sample_spec reader in
+  let default_sink = Protocol.Tag_struct_reader.get_string reader in
+  let default_source = Protocol.Tag_struct_reader.get_string reader in
+  let cookie = Int32.of_int (Protocol.Tag_struct_reader.get_u32 reader) in
+  let default_channel_map = Protocol.Tag_struct_reader.get_channel_map reader in
   {
-    name = Protocol.Tag_struct_reader.get_string reader;
-    version = Protocol.Tag_struct_reader.get_string reader;
-    username = Protocol.Tag_struct_reader.get_string reader;
-    hostname = Protocol.Tag_struct_reader.get_string reader;
-    sample_spec = Protocol.Tag_struct_reader.get_sample_spec reader;
-    default_sink = Protocol.Tag_struct_reader.get_string reader;
-    default_source = Protocol.Tag_struct_reader.get_string reader;
-    cookie = Int32.of_int (Protocol.Tag_struct_reader.get_u32 reader);
-    default_channel_map = Protocol.Tag_struct_reader.get_channel_map reader;
+    name;
+    version;
+    username;
+    hostname;
+    sample_spec;
+    default_sink;
+    default_source;
+    cookie;
+    default_channel_map;
   }
 
 let build_get_source_list_command () : command_packet =

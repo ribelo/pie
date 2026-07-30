@@ -1,21 +1,21 @@
 open Eta.Syntax
 
-let run ~sw ~net ~clock ~output_path ~duration_sec ~raw () =
-  Pulse.Client.with_client ~sw ~net ~clock @@ fun client ->
-  Pulse.Client.with_record_stream client @@ fun _info recv ->
+let run ~sw:_ ~net ~clock:_ ~output_path ~duration_sec ~raw () =
+  Pulse.Client.with_client ~net @@ fun client ->
+  Pulse.Client.with_record_stream client @@ fun _info audio ->
   let chunks_ref = ref [] in
   let total_ref = ref 0 in
-  let rec recv_loop () =
-    let* chunk = recv () in
-    let processed =
-      if raw then chunk
-      else (Audio.Pcm.normalize_pcm_for_stt chunk).normalized_bytes
-    in
-    let* () = Eta.Effect.sync (fun () ->
-      chunks_ref := processed :: !chunks_ref;
-      incr total_ref)
-    in
-    recv_loop ()
+  let recv_loop =
+    Eta_stream.run_for_each
+      (fun chunk ->
+        let processed =
+          if raw then chunk
+          else (Audio.Pcm.normalize_pcm_for_stt chunk).normalized_bytes
+        in
+        Eta.Effect.sync (fun () ->
+          chunks_ref := processed :: !chunks_ref;
+          incr total_ref))
+      audio
   in
   let timeout =
     Eta.Effect.delay (Eta.Duration.ms (int_of_float (duration_sec *. 1000.0))) Eta.Effect.unit
@@ -24,7 +24,7 @@ let run ~sw ~net ~clock ~output_path ~duration_sec ~raw () =
     Printf.printf "Recording to %s (%.0f seconds, raw=%b)...\n%!"
       output_path duration_sec raw)
   in
-  let* () = Eta.Effect.race [ timeout; recv_loop () ] in
+  let* () = Eta.Effect.race [timeout; recv_loop] in
   Eta.Effect.sync (fun () ->
     let chunks = List.rev !chunks_ref in
     let total = !total_ref in

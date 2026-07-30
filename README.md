@@ -4,6 +4,14 @@ OCaml/OxCaml voice assistant.
 
 ## Install
 
+Build the Nix package:
+
+```bash
+nix build --impure .#pie
+```
+
+<!-- etabuild-hh3e -->
+
 Build and install the `pie` binary into the shared OxCaml/opam switch:
 
 ```bash

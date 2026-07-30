@@ -1,35 +1,60 @@
-type error = {
-  message : string;
-  code : int option;
+type error =
+  | Protocol_error of string
+  | Authentication_error of string
+  | Server_error of { message : string; code : int option }
+  | Timeout of { operation : string; duration : Eta.Duration.t }
+  | Disconnected of string
+  | Malformed_packet of string
+
+open Eta.Syntax
+
+let default_request_timeout = Eta.Duration.seconds 3
+let record_stream_capacity = 64
+
+let error_message = function
+  | Protocol_error message -> "PulseAudio protocol error: " ^ message
+  | Authentication_error message -> "PulseAudio authentication failed: " ^ message
+  | Server_error { message; code = None } -> "PulseAudio server error: " ^ message
+  | Server_error { message; code = Some code } ->
+    Printf.sprintf "PulseAudio server error %d: %s" code message
+  | Timeout { operation; duration } ->
+    Printf.sprintf "PulseAudio %s timed out after %s"
+      operation (Eta.Duration.humanize duration)
+  | Disconnected message -> "PulseAudio disconnected: " ^ message
+  | Malformed_packet message -> "PulseAudio malformed packet: " ^ message
+
+let pp_error formatter error =
+  Format.pp_print_string formatter (error_message error)
+
+let pulse_error error = `Pulse_error error
+
+let widen_pulse_error effect =
+  Eta.Effect.map_error
+    (function `Pulse_error error -> `Pulse_error error)
+    effect
+
+let debug message attrs =
+  Eta.Effect.sync (fun () -> Observability.debug message ~attrs)
+
+let warn message attrs =
+  Eta.Effect.sync (fun () -> Observability.warn message ~attrs)
+
+type record_queue = (bytes, [ `Pulse_error of error ]) Eta.Queue.t
+
+type pending = {
+  accept : bytes -> (unit, [ `Pulse_error of error ]) Eta.Effect.t;
+  reject : [ `Pulse_error of error ] -> (unit, [ `Pulse_error of error ]) Eta.Effect.t;
 }
-
-exception Client_error of error
-
-let error message ?code () = { message; code }
-
-let fail message ?code () = raise (Client_error { message; code })
-
-let debug_enabled =
-  match Sys.getenv_opt "CAMELPIE_PULSE_DEBUG" with
-  | Some ("1" | "true" | "yes") -> true
-  | _ -> false
-
-let debug fmt =
-  Printf.ksprintf
-    (fun msg -> if debug_enabled then Printf.eprintf "%s%!" msg)
-    fmt
 
 type t =
   | T : {
-      socket : 'a Eio.Flow.two_way;
-      sw : Eio.Switch.t;
-      mutable pending : (int, (bytes, error) result Eio.Promise.u) Hashtbl.t;
-      record_queues : (int, bytes Eio.Stream.t) Hashtbl.t;
+      socket : 'a Eio.Net.stream_socket;
+      pending : (int, pending) Hashtbl.t;
+      record_queues : (int, record_queue) Hashtbl.t;
       mutable remainder : bytes;
-      mutable next_tag : int;
       mutable protocol_version : int;
-      request_timeout_ms : int;
-      clock : 'b Eio.Time.clock;
+      request_timeout : Eta.Duration.t;
+      write_lock : Eta.Semaphore.t;
     } -> t
 
 let load_cookie () =
@@ -38,220 +63,376 @@ let load_cookie () =
     let len = in_channel_length ic in
     let buf = really_input_string ic len in
     close_in ic;
-    Some (Bytes.of_string buf)
-  with
-  | Sys_error msg ->
-    debug "[pulse] cookie load failed: %s (tried %s)\n" msg Defs.pa_default_cookie_path;
-    None
+    Ok (Bytes.of_string buf)
+  with Sys_error message ->
+    Error (pulse_error (Authentication_error message))
 
-let process_incoming (T t) (chunk : bytes) : unit =
+let protocol_result context f =
+  Eta.Effect.sync_result (fun () ->
+    try Ok (f ()) with
+    | Failure message ->
+      Error (pulse_error (Protocol_error (context ^ ": " ^ message)))
+    | Invalid_argument message ->
+      Error (pulse_error (Malformed_packet (context ^ ": " ^ message))))
+
+let malformed context message =
+  Eta.Effect.fail (pulse_error (Malformed_packet (context ^ ": " ^ message)))
+
+let resolve_success promise value =
+  Eta.Promise.resolve promise (Eta.Exit.ok value) |> Eta.Effect.discard
+
+let resolve_failure promise failure =
+  Eta.Promise.resolve promise (Eta.Exit.error (Eta.Cause.fail failure))
+  |> Eta.Effect.discard
+
+let take_pending (T t) tag =
+  Eta.Effect.sync (fun () ->
+    let pending = Hashtbl.find_opt t.pending tag in
+    Hashtbl.remove t.pending tag;
+    pending)
+
+let process_command client envelope =
+  let* pending = take_pending client envelope.Commands.tag in
+  match pending with
+  | None ->
+    debug "PulseAudio late reply dropped"
+      [("pulse.tag", string_of_int envelope.tag)]
+  | Some pending when envelope.packet_type = Defs.Pa_command.reply ->
+    pending.accept envelope.body
+  | Some pending when envelope.packet_type = Defs.Pa_command.error ->
+    (match Commands.parse_error_code envelope.body with
+     | Some code ->
+       pending.reject
+         (pulse_error (Server_error { message = "command rejected"; code = Some code }))
+     | None ->
+       pending.reject
+         (pulse_error
+            (Protocol_error
+               "PulseAudio command error payload omitted its error code")))
+  | Some pending ->
+    pending.reject
+      (pulse_error
+         (Protocol_error
+            (Printf.sprintf "unsupported response type %d" envelope.packet_type)))
+
+let process_record_chunk (T t) channel payload =
+  let* queue = Eta.Effect.sync (fun () -> Hashtbl.find_opt t.record_queues channel) in
+  match queue with
+  | None ->
+    debug "PulseAudio chunk for inactive record stream dropped"
+      [("pulse.channel", string_of_int channel)]
+  | Some queue -> Eta.Queue.send queue payload |> Eta.Effect.ignore_errors
+
+let save_remainder (T t) buffer offset =
+  Eta.Effect.sync (fun () ->
+    t.remainder <-
+      if offset >= Bytes.length buffer then Bytes.empty
+      else Bytes.sub buffer offset (Bytes.length buffer - offset))
+
+let process_incoming (T t as client) chunk =
   let buffer = Bytes.create (Bytes.length t.remainder + Bytes.length chunk) in
   Bytes.blit t.remainder 0 buffer 0 (Bytes.length t.remainder);
   Bytes.blit chunk 0 buffer (Bytes.length t.remainder) (Bytes.length chunk);
-  let offset = ref 0 in
-  let continue = ref true in
-  while !continue do
-    if Bytes.length buffer - !offset < Defs.pa_stream_descriptor_size then
-      continue := false
-    else begin
-      let header_bytes = Bytes.sub buffer !offset Defs.pa_stream_descriptor_size in
-      let header = Protocol.decode_packet_header header_bytes in
-      let max_packet_length = 256 * 1024 in
-      if header.length > max_packet_length then
-        fail (Printf.sprintf "packet length %d exceeds max" header.length) ();
-      let packet_length = Defs.pa_stream_descriptor_size + header.length in
-      if Bytes.length buffer - !offset < packet_length then
-        continue := false
-      else begin
-        let payload = Bytes.sub buffer (!offset + Defs.pa_stream_descriptor_size) header.length in
-        if header.channel = Defs.pa_no_index then begin
-          match Commands.parse_command_envelope payload with
-          | None ->
-            debug "[pulse] skipping unparseable command packet (%d bytes)\n"
-              (Bytes.length payload)
-          | Some envelope ->
-            (match Hashtbl.find_opt t.pending envelope.tag with
-             | Some resolver ->
-               Hashtbl.remove t.pending envelope.tag;
-               if envelope.packet_type = Defs.Pa_command.reply then
-                 Eio.Promise.resolve_ok resolver envelope.body
-               else if envelope.packet_type = Defs.Pa_command.error then
-                 let code = Commands.parse_error_code envelope.body in
-                 Eio.Promise.resolve_error resolver (error "PulseAudio command failed" ?code ())
-               else
-                 Eio.Promise.resolve_error resolver (error (Printf.sprintf "unsupported response type: %d" envelope.packet_type) ())
-             | None -> ())
-        end else begin
-          match Hashtbl.find_opt t.record_queues header.channel with
-          | Some queue -> Eio.Stream.add queue payload
-          | None -> ()
-        end;
-        offset := !offset + packet_length
-      end
-    end
-  done;
-  t.remainder <-
-    if !offset = 0 then buffer
-    else Bytes.sub buffer !offset (Bytes.length buffer - !offset)
+  let rec loop offset =
+    if Bytes.length buffer - offset < Defs.pa_stream_descriptor_size then
+      save_remainder client buffer offset
+    else
+      let header_bytes = Bytes.sub buffer offset Defs.pa_stream_descriptor_size in
+      let* header =
+        protocol_result "packet header" (fun () ->
+          Protocol.decode_packet_header header_bytes)
+      in
+      if header.Protocol.length > 256 * 1024 then
+        malformed "packet header"
+          (Printf.sprintf "length %d exceeds 262144 bytes" header.length)
+      else
+        let packet_length = Defs.pa_stream_descriptor_size + header.length in
+        if Bytes.length buffer - offset < packet_length then
+          save_remainder client buffer offset
+        else
+          let payload =
+            Bytes.sub buffer
+              (offset + Defs.pa_stream_descriptor_size)
+              header.length
+          in
+          let* () =
+            if header.channel = Defs.pa_no_index then
+              match Commands.parse_command_envelope payload with
+              | None ->
+                malformed "command envelope" "missing packet type or request tag"
+              | Some envelope -> process_command client envelope
+            else process_record_chunk client header.channel payload
+          in
+          loop (offset + packet_length)
+  in
+  loop 0
 
-let read_loop (T t) =
-  debug "[pulse] read loop started\n";
-  let buf = Cstruct.create 8192 in
+let detach_waiters (T t) =
+  Eta.Effect.sync (fun () ->
+    let pending = Hashtbl.to_seq_values t.pending |> List.of_seq in
+    let queues = Hashtbl.to_seq_values t.record_queues |> List.of_seq in
+    Hashtbl.clear t.pending;
+    Hashtbl.clear t.record_queues;
+    pending, queues)
+
+let fail_waiters client error =
+  let failure = pulse_error error in
+  let* pending, queues = detach_waiters client in
+  let* () =
+    pending
+    |> List.map (fun pending -> pending.reject failure)
+    |> Eta.Effect.concat
+  in
+  Eta.Effect.sync (fun () ->
+    List.iter (fun queue -> Eta.Queue.close_with_error queue failure) queues)
+
+let read_chunk (T t) =
+  Eta.Effect.sync_result (fun () ->
+    try
+      let buffer = Cstruct.create 8192 in
+      let length = Eio.Flow.single_read t.socket buffer in
+      if length = 0 then Error (pulse_error (Disconnected "end of stream"))
+      else Ok (Some (Cstruct.to_bytes (Cstruct.sub buffer 0 length)))
+    with
+    | Eio.Cancel.Cancelled _ as exn -> raise exn
+    | End_of_file -> Error (pulse_error (Disconnected "end of stream"))
+    | exn ->
+      Error
+        (pulse_error
+           (Disconnected ("reader failed: " ^ Printexc.to_string exn))))
+
+let read_loop client =
+  let rec loop () =
+    let* chunk = read_chunk client in
+    match chunk with
+    | None -> Eta.Effect.unit
+    | Some chunk ->
+      let* () = process_incoming client chunk in
+      let* () = Eta.Effect.yield in
+      loop ()
+  in
+  loop ()
+  |> Eta.Effect.bind_error (fun (`Pulse_error error as failure) ->
+    let* () = fail_waiters client error in
+    Eta.Effect.fail failure)
+
+let write_packet (T t) packet =
+  Eta.Semaphore.with_permits t.write_lock 1 @@ fun () ->
+  Eta.Effect.sync_result (fun () ->
+    try
+      Eio.Flow.write t.socket [Cstruct.of_bytes packet.Commands.bytes];
+      Ok ()
+    with
+    | Eio.Cancel.Cancelled _ as exn -> raise exn
+    | exn ->
+      Error
+        (pulse_error
+           (Disconnected ("write failed: " ^ Printexc.to_string exn))))
+
+let await_command (T t as client) (packet : Commands.command_packet) pending await =
+  let register =
+    Eta.Effect.sync (fun () ->
+      Hashtbl.replace t.pending packet.Commands.tag pending)
+  in
+  let cleanup _exit =
+    Eta.Effect.sync (fun () -> Hashtbl.remove t.pending packet.tag)
+  in
+  let operation =
+    let* () = register in
+    let* () = write_packet client packet in
+    await
+  in
+  operation
+  |> Eta.Effect.timeout_as t.request_timeout
+       ~on_timeout:
+         (pulse_error
+            (Timeout
+               {
+                 operation = Printf.sprintf "request tag %d" packet.tag;
+                 duration = t.request_timeout;
+               }))
+  |> Eta.Effect.on_exit cleanup
+
+let await_reply client packet =
+  let promise = Eta.Promise.create () in
+  let pending =
+    {
+      accept = (fun payload -> resolve_success promise payload);
+      reject = (fun failure -> resolve_failure promise failure);
+    }
+  in
+  await_command client packet pending (Eta.Promise.await promise)
+
+let await_record_stream (T t as client) packet =
+  let promise = Eta.Promise.create () in
+  let accept payload =
+    let completion =
+      let* info =
+        protocol_result "create record stream response" (fun () ->
+          Commands.parse_create_record_stream_response payload)
+      in
+      let queue = Eta.Queue.bounded ~capacity:record_stream_capacity () in
+      let* () =
+        Eta.Effect.sync (fun () ->
+          Hashtbl.replace t.record_queues info.Defs.stream_index queue)
+      in
+      Eta.Effect.pure (info, queue)
+    in
+    let* completion =
+      completion
+      |> Eta.Effect.fold
+           ~ok:(fun value -> Ok value)
+           ~error:(fun failure -> Error failure)
+    in
+    match completion with
+    | Error failure -> resolve_failure promise failure
+    | Ok (info, queue) ->
+      let* accepted = Eta.Promise.resolve promise (Eta.Exit.ok (info, queue)) in
+      if accepted then Eta.Effect.unit
+      else
+        Eta.Effect.sync (fun () ->
+          Hashtbl.remove t.record_queues info.Defs.stream_index;
+          Eta.Queue.close queue)
+  in
+  let pending =
+    {
+      accept;
+      reject = (fun failure -> resolve_failure promise failure);
+    }
+  in
+  await_command client packet pending (Eta.Promise.await promise)
+
+let parse_reply context parser payload =
+  protocol_result context (fun () -> parser payload)
+
+let authenticate (T t as client) ~cookie ~client_name ~protocol_version =
+  let* cookie =
+    match cookie with
+    | Some cookie -> Eta.Effect.pure cookie
+    | None -> Eta.Effect.from_result (load_cookie ())
+  in
+  let* auth_packet =
+    Commands.build_auth_command ~cookie ~protocol_version ()
+    |> Result.map_error (fun message -> pulse_error (Authentication_error message))
+    |> Eta.Effect.from_result
+  in
+  let* auth_payload =
+    await_reply client auth_packet
+    |> Eta.Effect.bind_error (function
+      | `Pulse_error (Server_error { message; _ }) ->
+        Eta.Effect.fail (pulse_error (Authentication_error message))
+      | failure -> Eta.Effect.fail failure)
+  in
+  let* auth_version =
+    parse_reply "authentication response" Commands.parse_auth_response auth_payload
+  in
+  let* () =
+    Commands.parse_protocol_compatibility auth_version
+    |> Result.map_error (fun message -> pulse_error (Protocol_error message))
+    |> Eta.Effect.from_result
+  in
+  let* () = Eta.Effect.sync (fun () -> t.protocol_version <- auth_version) in
+  let* _ =
+    await_reply client
+      (Commands.build_set_client_name_command
+         ~client_name_or_props:(`String client_name) ())
+  in
+  Eta.Effect.unit
+
+let with_eio_switch use =
+  Eta.Spi.Expert.make ~leaf_name:"pulse.client.scope" @@ fun context ->
+  let contract = Eta.Spi.Expert.contract context in
   try
-    while true do
-      let n = Eio.Flow.single_read t.socket buf in
-      debug "[pulse] read %d bytes\n" n;
-      let chunk = Cstruct.to_bytes (Cstruct.sub buf 0 n) in
-      process_incoming (T t) chunk
-    done;
-    `Stop_daemon
-  with
-  | End_of_file -> debug "[pulse] read loop: EOF\n"; `Stop_daemon
-  | Client_error _ -> `Stop_daemon
-  | Eio.Cancel.Cancelled _ -> debug "[pulse] read loop: cancelled\n"; `Stop_daemon
-  | exn ->
-    debug "[pulse] read loop error: %s\n" (Printexc.to_string exn);
-    let err = error (Printf.sprintf "read loop error: %s" (Printexc.to_string exn)) () in
-    (* B1: iteration is safe here because Eio fibers cannot preempt
-       mid-statement, and await_reply only mutates pending on the
-       success/timeout paths (not the error fan-out path). *)
-    Hashtbl.iter (fun _ resolver -> Eio.Promise.resolve_error resolver err) t.pending;
-    `Stop_daemon
+    Eio.Switch.run ~name:"pulse.client" @@ fun sw ->
+    Eta.Spi.Expert.eval context (use sw)
+  with exn ->
+    match contract.cancellation_reason exn with
+    | Some _ -> raise exn
+    | None -> Eta.Spi.Expert.exit_of_exn context exn
 
-let await_reply (T t) (packet : Commands.command_packet) : (bytes, error) result =
-  let promise, resolver = Eio.Promise.create () in
-  Hashtbl.add t.pending packet.tag resolver;
-  let write_buf = Cstruct.of_bytes packet.bytes in
-  debug "[pulse] sending packet tag=%d len=%d\n" packet.tag (Bytes.length packet.bytes);
-  Eio.Flow.write t.socket [write_buf];
-  debug "[pulse] packet sent, waiting for reply (timeout=%.1fs)\n" (Float.of_int t.request_timeout_ms /. 1000.0);
-  let timeout_s = Float.of_int t.request_timeout_ms /. 1000.0 in
-  try
-    let result = Eio.Time.with_timeout_exn t.clock timeout_s (fun () -> Eio.Promise.await promise) in
-    debug "[pulse] reply received for tag=%d\n" packet.tag;
-    result
-  with
-  | Eio.Time.Timeout ->
-    debug "[pulse] timeout waiting for reply to tag=%d\n" packet.tag;
-    Hashtbl.remove t.pending packet.tag;
-    Error (error (Printf.sprintf "timed out waiting for response to tag %d" packet.tag) ())
+let connect_socket ~sw ~net socket_path =
+  Eta.Effect.sync_result (fun () ->
+    try Ok (Eio.Net.connect ~sw net (`Unix socket_path)) with
+    | Eio.Cancel.Cancelled _ as exn -> raise exn
+    | exn ->
+      Error
+        (pulse_error
+           (Disconnected
+              ("connect failed: " ^ Printexc.to_string exn))))
 
-let connect
+let with_client ~net
     ?(socket_path = Defs.pa_default_socket_path)
     ?cookie
     ?(client_name = "pie")
     ?(protocol_version = Defs.pa_native_protocol_version)
-    ?(request_timeout_ms = 3000)
-    ~net ~clock ~sw () =
-  try
-    let socket = Eio.Net.connect ~sw net (`Unix socket_path) in
-    let t = T {
-      socket;
-      sw;
-      pending = Hashtbl.create 16;
-      record_queues = Hashtbl.create 4;
-      remainder = Bytes.empty;
-      next_tag = 0;
-      protocol_version = 0;
-      request_timeout_ms;
-      clock;
-    } in
-    let (T tr) = t in
-    Eio.Fiber.fork_daemon ~sw (fun () -> read_loop t);
-    let cookie =
-      match cookie with
-      | Some c -> c
-      | None ->
-        match load_cookie () with
-        | Some c -> c
-        | None -> fail "PulseAudio cookie not found" ()
+    ?(request_timeout = default_request_timeout)
+    use =
+  (* pulse-86o0, pulse-d36y, pulse-w447, pulse-kryi, pulse-zj05,
+     pulse-brjg: this Eta effect scope owns both the socket and its reader. *)
+  with_eio_switch @@ fun sw ->
+  let* socket = connect_socket ~sw ~net socket_path |> widen_pulse_error in
+  let client =
+    T
+      {
+        socket;
+        pending = Hashtbl.create 16;
+        record_queues = Hashtbl.create 4;
+        remainder = Bytes.empty;
+        protocol_version = 0;
+        request_timeout;
+        write_lock = Eta.Semaphore.make ~permits:1;
+      }
+  in
+  let reader = read_loop client |> widen_pulse_error in
+  let workflow =
+    Eta.Effect.with_background reader @@ fun () ->
+    let* () =
+      authenticate client ~cookie ~client_name ~protocol_version
+      |> widen_pulse_error
     in
-    let auth_packet =
-      match Commands.build_auth_command ~cookie ~protocol_version () with
-      | Ok pkt -> pkt
-      | Error msg -> fail msg ()
+    use client
+  in
+  let release_client =
+    let* () = fail_waiters client (Disconnected "client scope ended") in
+    let* () =
+      Eta.Effect.sync (fun () ->
+        try Eio.Flow.close socket with _ -> ())
     in
-    let auth_payload = await_reply t auth_packet in
-    match auth_payload with
-    | Error e -> fail e.message ?code:e.code ()
-    | Ok payload ->
-      let auth_version = Commands.parse_auth_response payload in
-      (match Commands.parse_protocol_compatibility auth_version with
-       | Error msg -> fail msg ()
-       | Ok () -> ());
-      tr.protocol_version <- auth_version;
-      (match
-         await_reply t
-           (Commands.build_set_client_name_command
-              ~client_name_or_props:(`String client_name) ())
-       with
-       | Error e -> fail e.message ?code:e.code ()
-       | Ok _ -> ());
-      Ok t
-  with
-  | Eio.Cancel.Cancelled _ as exn -> raise exn
-  | Client_error e ->
-    Error (`Pulse_error (Printf.sprintf "PulseAudio: %s" e.message))
-  | exn ->
-    Error (`Pulse_error (Printf.sprintf "PulseAudio connect failed: %s" (Printexc.to_string exn)))
-
-let get_server_info_impl (T t) =
-  match await_reply (T t) (Commands.build_get_server_info_command ()) with
-  | Error e -> Error (`Pulse_error e.message)
-  | Ok payload -> Ok (Commands.parse_server_info_response payload)
-
-let list_sources_impl (T t) =
-  match await_reply (T t) (Commands.build_get_source_list_command ()) with
-  | Error e -> Error (`Pulse_error e.message)
-  | Ok payload -> Ok (Commands.parse_source_list_response payload)
-
-let with_client ~sw ~net ~clock ?socket_path ?cookie ?client_name ?protocol_version ?request_timeout_ms f =
-  Eta.Effect.with_resource
-    ~acquire:
-      (Eta.Effect.sync (fun () ->
-         connect ~net ~clock ~sw ?socket_path ?cookie ?client_name
-           ?protocol_version ?request_timeout_ms ())
-       |> Eta.Effect.flatten_result)
-    ~release:(fun (T t) -> Eta.Effect.sync (fun () ->
-      Hashtbl.iter (fun _ resolver ->
-        Eio.Promise.resolve_error resolver (error "client released" ())
-      ) t.pending;
-      Hashtbl.clear t.pending))
-    f
+    Eta.Effect.unit
+  in
+  workflow |> Eta.Effect.finally release_client
 
 let get_server_info client =
-  Eta.Effect.sync (fun () -> get_server_info_impl client)
-  |> Eta.Effect.flatten_result
+  let* payload = await_reply client (Commands.build_get_server_info_command ()) in
+  parse_reply "server info response" Commands.parse_server_info_response payload
+  |> widen_pulse_error
 
 let list_sources client =
-  Eta.Effect.sync (fun () -> list_sources_impl client)
-  |> Eta.Effect.flatten_result
+  let* payload = await_reply client (Commands.build_get_source_list_command ()) in
+  parse_reply "source list response" Commands.parse_source_list_response payload
+  |> widen_pulse_error
 
-let with_record_stream (T t) ?(options : Defs.record_stream_options option) f =
+let with_record_stream (T t as client) ?options use =
   let acquire =
-    Eta.Effect.sync (fun () ->
-        let packet = Commands.build_create_record_stream_command ?options () in
-        match await_reply (T t) packet with
-        | Error e -> Error (`Pulse_error e.message)
-        | Ok payload ->
-          let info = Commands.parse_create_record_stream_response payload in
-          let queue = Eio.Stream.create 64 in
-          Hashtbl.add t.record_queues info.Defs.stream_index queue;
-          Ok info)
-    |> Eta.Effect.flatten_result
+    await_record_stream client
+      (Commands.build_create_record_stream_command ?options ())
   in
-  let release (info : Defs.record_stream_info) =
-    Eta.Effect.sync (fun () ->
-      Hashtbl.remove t.record_queues info.Defs.stream_index;
-      let packet = Commands.build_delete_record_stream_command info.stream_index in
-      try ignore (await_reply (T t) packet) with _ -> ())
-  in
-  Eta.Effect.with_resource ~acquire ~release (fun info ->
-    let recv () =
-      match Hashtbl.find_opt t.record_queues info.Defs.stream_index with
-      | None -> Eta.Effect.fail `Closed
-      | Some queue ->
-        Eta.Effect.sync (fun () -> Eio.Stream.take queue)
-        |> Eta.Effect.catch (fun _ -> Eta.Effect.fail `Closed)
+  let release (info, queue) =
+    let* () =
+      Eta.Effect.sync (fun () ->
+        Hashtbl.remove t.record_queues info.Defs.stream_index;
+        Eta.Queue.close queue)
     in
-    f info recv)
+    await_reply client
+      (Commands.build_delete_record_stream_command info.stream_index)
+    |> Eta.Effect.discard
+    |> Eta.Effect.bind_error (fun (`Pulse_error error) ->
+      warn "PulseAudio record stream cleanup failed"
+        [
+          ("pulse.stream_index", string_of_int info.stream_index);
+          ("pulse.error", error_message error);
+        ])
+  in
+  Eta.Effect.with_resource ~acquire:(acquire |> widen_pulse_error) ~release
+  @@ fun (info, queue) ->
+  use info (Eta_stream.Stream.from_queue queue)

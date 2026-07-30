@@ -143,7 +143,7 @@ let type_text ?(newline_action = Collapse_to_space) ~process_mgr ~backend text =
 
 let focused_window_for_rules ~process_mgr rules =
   if rules = [] then Eta.Effect.pure None
-  else Niri.focused_window ~process_mgr () |> Eta.Effect.catch (fun _ -> Eta.Effect.pure None)
+  else Niri.focused_window ~process_mgr () |> Eta.Effect.bind_error (fun _ -> Eta.Effect.pure None)
 
 let inject ?(newline_rules = []) ~process_mgr text =
   let open Eta.Syntax in

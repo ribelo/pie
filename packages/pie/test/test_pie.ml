@@ -312,7 +312,74 @@ let pulse_read_command flow =
   | Some envelope -> envelope
   | None -> Alcotest.fail "could not parse command envelope"
 
-let test_pulse_client_set_client_name_error_ignored () =
+let pulse_write_response flow envelope packet_type body =
+  pulse_command_packet packet_type envelope.Pulse.Commands.tag body
+  |> Cstruct.of_bytes
+  |> fun response -> Eio.Flow.write flow [response]
+
+let pulse_u32 value =
+  let writer = Pulse.Protocol.Tag_struct_writer.create () in
+  Pulse.Protocol.Tag_struct_writer.add_u32 writer value;
+  Pulse.Protocol.Tag_struct_writer.finalize writer
+
+let pulse_server_handshake flow =
+  let auth = pulse_read_command flow in
+  pulse_write_response
+    flow
+    auth
+    Pulse.Defs.Pa_command.reply
+    (pulse_u32 Pulse.Defs.pa_native_protocol_version);
+  let set_name = pulse_read_command flow in
+  pulse_write_response flow set_name Pulse.Defs.Pa_command.reply Bytes.empty
+
+let pulse_server_info_body () =
+  let writer = Pulse.Protocol.Tag_struct_writer.create () in
+  Pulse.Protocol.Tag_struct_writer.add_string writer (Some "test-server");
+  Pulse.Protocol.Tag_struct_writer.add_string writer (Some "1.0");
+  Pulse.Protocol.Tag_struct_writer.add_string writer (Some "tester");
+  Pulse.Protocol.Tag_struct_writer.add_string writer (Some "localhost");
+  Pulse.Protocol.Tag_struct_writer.add_sample_spec writer
+    { Pulse.Defs.format = Pulse.Defs.Pa_sample_format.s16le; channels = 1; rate = 16000 };
+  Pulse.Protocol.Tag_struct_writer.add_string writer None;
+  Pulse.Protocol.Tag_struct_writer.add_string writer None;
+  Pulse.Protocol.Tag_struct_writer.add_u32 writer 42;
+  Pulse.Protocol.Tag_struct_writer.add_channel_map writer [0];
+  Pulse.Protocol.Tag_struct_writer.finalize writer
+
+let pulse_record_stream_body stream_index =
+  let writer = Pulse.Protocol.Tag_struct_writer.create () in
+  Pulse.Protocol.Tag_struct_writer.add_u32 writer stream_index;
+  Pulse.Protocol.Tag_struct_writer.add_u32 writer 11;
+  Pulse.Protocol.Tag_struct_writer.add_u32 writer 65536;
+  Pulse.Protocol.Tag_struct_writer.add_u32 writer 320;
+  Pulse.Protocol.Tag_struct_writer.add_sample_spec writer
+    { Pulse.Defs.format = Pulse.Defs.Pa_sample_format.s16le; channels = 1; rate = 16000 };
+  Pulse.Protocol.Tag_struct_writer.add_channel_map writer [0];
+  Pulse.Protocol.Tag_struct_writer.add_u32 writer 1;
+  Pulse.Protocol.Tag_struct_writer.add_string writer (Some "test-source");
+  Pulse.Protocol.Tag_struct_writer.add_bool writer false;
+  Pulse.Protocol.Tag_struct_writer.add_usec writer 0L;
+  Pulse.Protocol.Tag_struct_writer.add_format_info writer 0 [];
+  Pulse.Protocol.Tag_struct_writer.finalize writer
+
+let pulse_test_server ~sw ~net name handler =
+  let socket_path =
+    Filename.concat
+      (Filename.get_temp_dir_name ())
+      (Printf.sprintf "pie-pulse-%s-%d.sock" name (Unix.getpid ()))
+  in
+  (try Sys.remove socket_path with Sys_error _ -> ());
+  let socket =
+    Eio.Net.listen ~sw ~reuse_addr:true ~backlog:1 net (`Unix socket_path)
+  in
+  Eio.Fiber.fork ~sw (fun () ->
+    Eio.Switch.run @@ fun conn_sw ->
+    let flow, _ = Eio.Net.accept ~sw:conn_sw socket in
+    handler flow);
+  socket_path
+
+(* pulse-l1qs, pulse-vm4c, pulse-qoto *)
+let test_pulse_client_set_client_name_error_is_typed () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let socket_path =
@@ -358,25 +425,318 @@ let test_pulse_client_set_client_name_error_ignored () =
         err_body
     in
     Eio.Flow.write flow [Cstruct.of_bytes err_reply];
-    try Eio.Flow.shutdown flow `Send with _ -> ());
+    let buffer = Cstruct.create 1 in
+    (try ignore (Eio.Flow.single_read flow buffer) with End_of_file -> ()));
   let rt = Eta_eio.Runtime.create ~sw ~clock:(Eio.Stdenv.clock env) () in
   let operation =
     Pulse.Client.with_client
-      ~sw
       ~net:(Eio.Stdenv.net env)
-      ~clock:(Eio.Stdenv.clock env)
       ~socket_path
       ~cookie:(Bytes.make Pulse.Defs.pa_native_cookie_length '\x00')
       (fun _client -> Eta.Effect.pure ())
   in
-  (* Bug: Pulse.Client.connect receives the result of set_client_name but
-     discards it with [let _ = ...]. A server error reply should be
-     propagated to the caller instead of being silently swallowed. *)
   match Eta_eio.Runtime.run rt operation with
-  | Ok () ->
-    Alcotest.fail
-      "expected set_client_name error to propagate, but connect succeeded"
-  | Error _ -> ()
+  | Error cause
+    when List.exists
+           (function
+             | `Pulse_error (Pulse.Client.Server_error { code = Some 1; _ }) -> true
+             | _ -> false)
+           (Eta.Cause.failures cause) -> ()
+  | Error cause ->
+    Alcotest.failf
+      "expected typed SET_CLIENT_NAME server error, got %a"
+      (Eta.Cause.pp (fun formatter (`Pulse_error error) ->
+         Pulse.Client.pp_error formatter error))
+      cause
+  | Ok () -> Alcotest.fail "expected SET_CLIENT_NAME rejection"
+
+(* pulse-2ncz, pulse-9v2r *)
+let test_pulse_default_request_timeout () =
+  Alcotest.(check int)
+    "default request timeout"
+    3_000
+    (Eta.Duration.to_ms Pulse.Client.default_request_timeout);
+  Alcotest.(check int)
+    "record stream capacity"
+    64
+    Pulse.Client.record_stream_capacity
+
+(* pulse-gu09, pulse-b7kt, pulse-6qr7 *)
+let test_pulse_client_correlates_concurrent_replies () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let socket_path =
+    pulse_test_server
+      ~sw
+      ~net:(Eio.Stdenv.net env)
+      "concurrent"
+      (fun flow ->
+        pulse_server_handshake flow;
+        let first = pulse_read_command flow in
+        let second = pulse_read_command flow in
+        let respond envelope =
+          if envelope.Pulse.Commands.packet_type = Pulse.Defs.Pa_command.get_server_info then
+            pulse_write_response flow envelope Pulse.Defs.Pa_command.reply
+              (pulse_server_info_body ())
+          else if envelope.packet_type = Pulse.Defs.Pa_command.get_source_info_list then
+            pulse_write_response flow envelope Pulse.Defs.Pa_command.reply Bytes.empty
+          else Alcotest.failf "unexpected PulseAudio command %d" envelope.packet_type
+        in
+        respond second;
+        respond first;
+        let buffer = Cstruct.create 1 in
+        (try ignore (Eio.Flow.single_read flow buffer) with End_of_file -> ()))
+  in
+  let rt = Eta_eio.Runtime.create ~sw ~clock:(Eio.Stdenv.clock env) () in
+  let operation =
+    Pulse.Client.with_client
+      ~net:(Eio.Stdenv.net env)
+      ~socket_path
+      ~cookie:(Bytes.make Pulse.Defs.pa_native_cookie_length '\x00')
+      (fun client ->
+        Eta.Effect.par
+          (Pulse.Client.get_server_info client)
+          (Pulse.Client.list_sources client))
+  in
+  match Eta_eio.Runtime.run rt operation with
+  | Ok (server, sources) ->
+    Alcotest.(check (option string)) "server" (Some "test-server") server.name;
+    Alcotest.(check int) "sources" 0 (List.length sources)
+  | Error cause ->
+    Alcotest.failf
+      "concurrent PulseAudio commands failed: %a"
+      (Eta.Cause.pp (fun formatter (`Pulse_error error) ->
+         Pulse.Client.pp_error formatter error))
+      cause
+
+(* pulse-h303, pulse-wipy, pulse-ow5o, pulse-xqrb *)
+let test_pulse_client_drops_late_reply_after_timeout () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let clock = Eio.Stdenv.clock env in
+  let socket_path =
+    pulse_test_server ~sw ~net:(Eio.Stdenv.net env) "late" (fun flow ->
+      pulse_server_handshake flow;
+      let timed_out = pulse_read_command flow in
+      Eio.Time.sleep clock 0.015;
+      pulse_write_response flow timed_out Pulse.Defs.Pa_command.reply
+        (pulse_server_info_body ());
+      let next = pulse_read_command flow in
+      pulse_write_response flow next Pulse.Defs.Pa_command.reply Bytes.empty;
+      let buffer = Cstruct.create 1 in
+      (try ignore (Eio.Flow.single_read flow buffer) with End_of_file -> ()))
+  in
+  let rt = Eta_eio.Runtime.create ~sw ~clock () in
+  let operation =
+    Pulse.Client.with_client
+      ~net:(Eio.Stdenv.net env)
+      ~socket_path
+      ~cookie:(Bytes.make Pulse.Defs.pa_native_cookie_length '\x00')
+      ~request_timeout:(Eta.Duration.ms 10)
+      (fun client ->
+        let* timed_out =
+          Pulse.Client.get_server_info client |> Eta.Effect.to_result
+        in
+        match timed_out with
+        | Error (`Pulse_error (Pulse.Client.Timeout _)) ->
+          Pulse.Client.list_sources client
+        | Error (`Pulse_error error) ->
+          Alcotest.failf "expected timeout, got %a" Pulse.Client.pp_error error
+        | Ok _ -> Alcotest.fail "expected first command to time out")
+  in
+  match Eta_eio.Runtime.run rt operation with
+  | Ok [] -> ()
+  | Ok _ -> Alcotest.fail "expected empty source list"
+  | Error cause ->
+    Alcotest.failf
+      "late reply corrupted the next command: %a"
+      (Eta.Cause.pp (fun formatter (`Pulse_error error) ->
+         Pulse.Client.pp_error formatter error))
+      cause
+
+(* pulse-33fc *)
+let test_pulse_client_rejects_malformed_error_payload () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let socket_path =
+    pulse_test_server ~sw ~net:(Eio.Stdenv.net env) "malformed" (fun flow ->
+      let auth = pulse_read_command flow in
+      pulse_write_response flow auth Pulse.Defs.Pa_command.reply
+        (pulse_u32 Pulse.Defs.pa_native_protocol_version);
+      let set_name = pulse_read_command flow in
+      pulse_write_response flow set_name Pulse.Defs.Pa_command.error (Bytes.of_string "x");
+      let buffer = Cstruct.create 1 in
+      (try ignore (Eio.Flow.single_read flow buffer) with End_of_file -> ()))
+  in
+  let rt = Eta_eio.Runtime.create ~sw ~clock:(Eio.Stdenv.clock env) () in
+  let operation =
+    Pulse.Client.with_client
+      ~net:(Eio.Stdenv.net env)
+      ~socket_path
+      ~cookie:(Bytes.make Pulse.Defs.pa_native_cookie_length '\x00')
+      (fun _ -> Eta.Effect.unit)
+  in
+  match Eta_eio.Runtime.run rt operation with
+  | Error cause
+    when List.exists
+           (function
+             | `Pulse_error (Pulse.Client.Protocol_error _) -> true
+             | _ -> false)
+           (Eta.Cause.failures cause) -> ()
+  | Error _ -> Alcotest.fail "expected typed protocol error"
+  | Ok () -> Alcotest.fail "malformed command error was accepted"
+
+(* pulse-if62, pulse-rla0, pulse-blrc *)
+let test_pulse_reader_failure_fails_pending_command () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let socket_path =
+    pulse_test_server ~sw ~net:(Eio.Stdenv.net env) "reader-failure" (fun flow ->
+      pulse_server_handshake flow;
+      ignore (pulse_read_command flow);
+      Eio.Flow.shutdown flow `All)
+  in
+  let rt = Eta_eio.Runtime.create ~sw ~clock:(Eio.Stdenv.clock env) () in
+  let operation =
+    Pulse.Client.with_client
+      ~net:(Eio.Stdenv.net env)
+      ~socket_path
+      ~cookie:(Bytes.make Pulse.Defs.pa_native_cookie_length '\x00')
+      (fun client -> Pulse.Client.get_server_info client)
+  in
+  match Eta_eio.Runtime.run rt operation with
+  | Error cause
+    when List.exists
+           (function
+             | `Pulse_error (Pulse.Client.Disconnected _) -> true
+             | _ -> false)
+           (Eta.Cause.failures cause) -> ()
+  | Error _ -> Alcotest.fail "expected typed reader disconnection"
+  | Ok _ -> Alcotest.fail "pending command survived reader failure"
+
+(* pulse-o36o *)
+let test_pulse_scope_end_disconnects_pending_command () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let request_seen, resolve_request_seen = Eio.Promise.create () in
+  let command_exit, resolve_command_exit = Eio.Promise.create () in
+  let socket_path =
+    pulse_test_server ~sw ~net:(Eio.Stdenv.net env) "scope-end" (fun flow ->
+      pulse_server_handshake flow;
+      ignore (pulse_read_command flow);
+      Eio.Promise.resolve resolve_request_seen ();
+      let buffer = Cstruct.create 1 in
+      (try ignore (Eio.Flow.single_read flow buffer) with End_of_file -> ()))
+  in
+  let clock = Eio.Stdenv.clock env in
+  let client_runtime = Eta_eio.Runtime.create ~sw ~clock () in
+  let command_runtime = Eta_eio.Runtime.create ~sw ~clock () in
+  let operation =
+    Pulse.Client.with_client
+      ~net:(Eio.Stdenv.net env)
+      ~socket_path
+      ~cookie:(Bytes.make Pulse.Defs.pa_native_cookie_length '\x00')
+      (fun client ->
+        Eta.Effect.sync (fun () ->
+          Eio.Fiber.fork ~sw (fun () ->
+            Pulse.Client.get_server_info client
+            |> Eta_eio.Runtime.run command_runtime
+            |> Eio.Promise.resolve resolve_command_exit);
+          Eio.Promise.await request_seen))
+  in
+  (match Eta_eio.Runtime.run client_runtime operation with
+   | Ok () -> ()
+   | Error _ -> Alcotest.fail "client scope failed while releasing normally");
+  match Eio.Promise.await command_exit with
+  | Error cause
+    when List.exists
+           (function
+             | `Pulse_error (Pulse.Client.Disconnected _) -> true
+             | _ -> false)
+           (Eta.Cause.failures cause) -> ()
+  | Error _ -> Alcotest.fail "expected typed scope-end disconnection"
+  | Ok _ -> Alcotest.fail "pending command survived client scope release"
+
+(* pulse-bc14, pulse-ngc5, pulse-9bc5, pulse-7ny7, pulse-bsa1 *)
+let test_pulse_record_stream_drains_before_reader_failure () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let clock = Eio.Stdenv.clock env in
+  let socket_path =
+    pulse_test_server ~sw ~net:(Eio.Stdenv.net env) "stream" (fun flow ->
+      pulse_server_handshake flow;
+      let create = pulse_read_command flow in
+      let create_reply =
+        pulse_command_packet
+          Pulse.Defs.Pa_command.reply
+          create.Pulse.Commands.tag
+          (pulse_record_stream_body 7)
+      in
+      Eio.Flow.write flow
+        [
+          Cstruct.of_bytes create_reply;
+          Cstruct.of_bytes (Pulse.Protocol.frame_packet ~channel:7 (Bytes.of_string "one"));
+          Cstruct.of_bytes (Pulse.Protocol.frame_packet ~channel:7 (Bytes.of_string "two"));
+        ];
+      Eio.Flow.shutdown flow `All)
+  in
+  let seen = ref [] in
+  let rt = Eta_eio.Runtime.create ~sw ~clock () in
+  let operation =
+    Pulse.Client.with_client
+      ~net:(Eio.Stdenv.net env)
+      ~socket_path
+      ~cookie:(Bytes.make Pulse.Defs.pa_native_cookie_length '\x00')
+      (fun client ->
+        Pulse.Client.with_record_stream client @@ fun _ stream ->
+        Eta_stream.run_for_each
+          (fun chunk ->
+            Eta.Effect.sync (fun () -> seen := Bytes.to_string chunk :: !seen))
+          stream)
+  in
+  (match Eta_eio.Runtime.run rt operation with
+   | Error cause
+     when List.exists
+            (function
+              | `Pulse_error (Pulse.Client.Disconnected _) -> true
+              | _ -> false)
+            (Eta.Cause.failures cause) -> ()
+   | Error _ -> Alcotest.fail "expected typed disconnection"
+   | Ok () -> Alcotest.fail "reader failure unexpectedly succeeded");
+  Alcotest.(check (list string)) "buffered chunks" ["one"; "two"] (List.rev !seen)
+
+(* pulse-tg9e, pulse-4kja *)
+let test_pulse_record_cleanup_preserves_body_result () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let socket_path =
+    pulse_test_server ~sw ~net:(Eio.Stdenv.net env) "cleanup" (fun flow ->
+      pulse_server_handshake flow;
+      let create = pulse_read_command flow in
+      pulse_write_response flow create Pulse.Defs.Pa_command.reply
+        (pulse_record_stream_body 8);
+      let delete = pulse_read_command flow in
+      pulse_write_response flow delete Pulse.Defs.Pa_command.error (pulse_u32 9);
+      let buffer = Cstruct.create 1 in
+      (try ignore (Eio.Flow.single_read flow buffer) with End_of_file -> ()))
+  in
+  let rt = Eta_eio.Runtime.create ~sw ~clock:(Eio.Stdenv.clock env) () in
+  let operation =
+    Pulse.Client.with_client
+      ~net:(Eio.Stdenv.net env)
+      ~socket_path
+      ~cookie:(Bytes.make Pulse.Defs.pa_native_cookie_length '\x00')
+      (fun client ->
+        Pulse.Client.with_record_stream client (fun _ _ -> Eta.Effect.pure "body"))
+  in
+  match Eta_eio.Runtime.run rt operation with
+  | Ok value -> Alcotest.(check string) "body result" "body" value
+  | Error cause ->
+    Alcotest.failf
+      "DELETE_RECORD_STREAM failure replaced body result: %a"
+      (Eta.Cause.pp (fun formatter (`Pulse_error error) ->
+         Pulse.Client.pp_error formatter error))
+      cause
 
 let test_daemon_contract_response () =
   let snap : Pie.Daemon.Contract.recording_snapshot =
@@ -764,6 +1124,128 @@ let test_codex_realtime_resample () =
   let output = Stt.Codex_realtime.resample_s16le_mono ~from_rate:16000 ~to_rate:24000 input in
   Alcotest.(check int) "2 samples at 16k become 3 at 24k" 6 (Bytes.length output);
   Alcotest.(check int) "first sample" 0 (Bytes.get_int16_le output 0)
+
+(* stttime-33v8, stttime-nby7, stttime-blym, stttime-pf5a *)
+let test_speech_operation_deadline_policy () =
+  Alcotest.(check (option int))
+    "OAuth response idle timeout"
+    (Some 30_000)
+    (Eta_http.Request.Response_idle_timeout.to_ms
+       Stt.Codex_realtime.oauth_response_idle_timeout);
+  Alcotest.(check int)
+    "WebSocket establishment timeout"
+    10_000
+    (Eta.Duration.to_ms Stt.Codex_realtime.websocket_establishment_timeout);
+  Alcotest.(check int)
+    "direct transcription timeout"
+    60_000
+    (Eta.Duration.to_ms Stt.Openrouter.direct_transcription_timeout);
+  Alcotest.(check int)
+    "response operation timeout"
+    120_000
+    (Eta.Duration.to_ms Stt.Openrouter.response_operation_timeout)
+
+(* stttime-lhfu: each finite deadline reports a typed STT failure. *)
+let test_speech_operation_deadlines_are_typed () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let run effect =
+    let rt =
+      Eta_eio.Runtime.create
+        ~sw
+        ~clock:(Eio.Stdenv.clock env)
+        ~sleep:(fun _ -> Eio.Fiber.yield ())
+        ()
+    in
+    match Eta_eio.Runtime.run rt effect with
+    | Error cause ->
+      (match Eta.Cause.failures cause with
+       | [`Stt_error message] -> message
+       | _ -> Alcotest.fail "expected one typed STT timeout")
+    | Ok _ -> Alcotest.fail "stalled operation unexpectedly completed"
+  in
+  Alcotest.(check string)
+    "WebSocket timeout"
+    "Codex realtime WebSocket establishment timed out after 10 seconds"
+    (run
+       (Stt.Codex_realtime.with_websocket_establishment_timeout
+          Eta.Effect.never));
+  Alcotest.(check string)
+    "transcription timeout"
+    "OpenRouter transcription timed out after 60 seconds"
+    (run
+       (Stt.Openrouter.with_direct_transcription_timeout
+          Eta.Effect.never));
+  Alcotest.(check string)
+    "response timeout"
+    "OpenRouter response operation timed out after 120 seconds"
+    (run
+       (Stt.Openrouter.with_response_operation_timeout
+          Eta.Effect.never))
+
+(* codex-m71s: callback completion is represented by Eta.Effect.async.
+   codex-3y5k: the registered canceler runs at most once. *)
+let test_codex_async_completion_first_result_wins () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let rt = Eta_eio.Runtime.create ~sw ~clock:(Eio.Stdenv.clock env) () in
+  let completion =
+    Stt.Codex_realtime.Async_completion.create
+      ~canceler:Eta.Effect.unit
+      ()
+  in
+  let operation =
+    let* first =
+      Eta.Effect.sync (fun () ->
+        Stt.Codex_realtime.Async_completion.resolve
+          completion
+          (Eta.Exit.ok "first"))
+    in
+    let* second =
+      Eta.Effect.sync (fun () ->
+        Stt.Codex_realtime.Async_completion.resolve
+          completion
+          (Eta.Exit.ok "second"))
+    in
+    let* value = Stt.Codex_realtime.Async_completion.await completion in
+    Eta.Effect.pure (first, second, value)
+  in
+  match Eta_eio.Runtime.run rt operation with
+  | Ok (first, second, value) ->
+    Alcotest.(check bool) "first resolution accepted" true first;
+    Alcotest.(check bool) "duplicate resolution dropped" false second;
+    Alcotest.(check string) "first result" "first" value
+  | Error _ -> Alcotest.fail "async completion unexpectedly failed"
+
+(* codex-w1jx, codex-3y5k *)
+let test_codex_async_completion_interruption_runs_canceler_once () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let rt = Eta_eio.Runtime.create ~sw ~clock:(Eio.Stdenv.clock env) () in
+  let cancellations = ref 0 in
+  let interrupted = ref false in
+  let completion =
+    Stt.Codex_realtime.Async_completion.create
+      ~canceler:(Eta.Effect.sync (fun () -> incr cancellations))
+      ()
+  in
+  let pending =
+    Stt.Codex_realtime.Async_completion.await completion
+    |> Eta.Effect.on_interrupt (fun _ ->
+      Eta.Effect.sync (fun () -> interrupted := true))
+    |> Eta.Effect.map (fun _ -> `Completion)
+  in
+  let winner =
+    Eta.Effect.delay
+      (Eta.Duration.ms 1)
+      (Eta.Effect.pure `Timer)
+  in
+  (match Eta_eio.Runtime.run rt (Eta.Effect.race [pending; winner]) with
+   | Ok `Timer -> ()
+   | Ok `Completion -> Alcotest.fail "pending callback unexpectedly completed"
+   | Error _ -> Alcotest.fail "callback interruption race failed");
+  Alcotest.(check bool) "typed interruption observed" true !interrupted;
+  Alcotest.(check int) "canceler count" 1 !cancellations
 
 let tcp_port = function
   | `Tcp (_, port) -> port
@@ -1811,17 +2293,19 @@ let test_stt_config_resolves_provider_qualified_model () =
     Alcotest.(check bool) "mentions empty model" true (String.contains msg 'e')
 
 let test_openrouter_responses_request_uses_text_and_audio () =
-  let request : Eta_ai.chat_request =
+  let request : Eta_ai.tool Eta_ai.Responses.request =
     Pie.Stt.Openrouter.responses_request
       ~model:"xiaomi/mimo-v2.5"
       ~prompt:"Use Pie context."
       ~sample_rate:16000
+      ~task:"transcription"
       (Bytes.create 4)
   in
   Alcotest.(check string) "model id" "xiaomi/mimo-v2.5" request.model;
   Alcotest.(check (option int)) "max tokens" None request.max_output_tokens;
-  match request.prompt with
-  | [Eta_ai.User [Eta_ai.Text prompt; Eta_ai.Audio audio]] ->
+  match request.input with
+  | Eta_ai.Responses.Messages
+      [Eta_ai.User [Eta_ai.Text prompt; Eta_ai.Audio audio]] ->
     Alcotest.(check string) "prompt" "Use Pie context." prompt;
     Alcotest.(check bool) "wav format" true (audio.Eta_ai.format = Eta_ai.Wav);
     (match audio.Eta_ai.data with
@@ -1942,9 +2426,8 @@ let test_ptt_loop_continues_after_finish () =
       on_dead_input = Eta.Effect.unit;
     }
   in
-  let recv () = Eta.Effect.sync (fun () -> Eio.Stream.take audio) in
   let operation =
-    Pie.Ptt_loop.run ~keyboard ~recv config
+    Pie.Ptt_loop.run ~keyboard ~audio:(Eta_stream.Stream.from_eio_stream audio) config
     |> Eta.Effect.timeout_as (Eta.Duration.seconds 7) ~on_timeout:(`Ptt_error "timeout")
   in
   let result = Eta_eio.Runtime.run rt operation in
@@ -1999,10 +2482,9 @@ let test_ptt_loop_control_stream_triggers_capture () =
       on_dead_input = Eta.Effect.unit;
     }
   in
-  let recv () = Eta.Effect.sync (fun () -> Eio.Stream.take audio) in
   let result =
     Eta_eio.Runtime.run rt
-      (Pie.Ptt_loop.run ~control ~keyboard ~recv config
+      (Pie.Ptt_loop.run ~control ~keyboard ~audio:(Eta_stream.Stream.from_eio_stream audio) config
        |> Eta.Effect.timeout_as (Eta.Duration.seconds 5) ~on_timeout:(`Ptt_error "timeout"))
   in
   Alcotest.(check int) "starts" 1 !starts;
@@ -2074,10 +2556,9 @@ let test_ptt_loop_post_roll_repress_continues_capture () =
       on_dead_input = Eta.Effect.unit;
     }
   in
-  let recv () = Eta.Effect.sync (fun () -> Eio.Stream.take audio) in
   let result =
     Eta_eio.Runtime.run rt
-      (Pie.Ptt_loop.run ~keyboard ~recv config
+      (Pie.Ptt_loop.run ~keyboard ~audio:(Eta_stream.Stream.from_eio_stream audio) config
        |> Eta.Effect.timeout_as (Eta.Duration.seconds 5) ~on_timeout:(`Ptt_error "timeout"))
   in
   Alcotest.(check int) "one handle" 1 !starts;
@@ -2147,9 +2628,8 @@ let test_ptt_loop_scoped_handle_lifetime () =
       on_dead_input = Eta.Effect.unit;
     }
   in
-  let recv () = Eta.Effect.sync (fun () -> Eio.Stream.take audio) in
   let operation =
-    Pie.Ptt_loop.run ~keyboard ~recv config
+    Pie.Ptt_loop.run ~keyboard ~audio:(Eta_stream.Stream.from_eio_stream audio) config
     |> Eta.Effect.timeout_as (Eta.Duration.seconds 5) ~on_timeout:(`Ptt_error "timeout")
   in
   let result = Eta_eio.Runtime.run rt operation in
@@ -2226,9 +2706,8 @@ let test_ptt_loop_ignores_short_capture_before_offering () =
       on_dead_input = Eta.Effect.unit;
     }
   in
-  let recv () = Eta.Effect.sync (fun () -> Eio.Stream.take audio) in
   let operation =
-    Pie.Ptt_loop.run ~keyboard ~recv config
+    Pie.Ptt_loop.run ~keyboard ~audio:(Eta_stream.Stream.from_eio_stream audio) config
     |> Eta.Effect.timeout_as (Eta.Duration.seconds 4) ~on_timeout:(`Ptt_error "timeout")
   in
   let result = Eta_eio.Runtime.run rt operation in
@@ -2292,9 +2771,8 @@ let test_ptt_loop_ignores_low_rms_capture_before_offering () =
       on_dead_input = Eta.Effect.unit;
     }
   in
-  let recv () = Eta.Effect.sync (fun () -> Eio.Stream.take audio) in
   let operation =
-    Pie.Ptt_loop.run ~keyboard ~recv config
+    Pie.Ptt_loop.run ~keyboard ~audio:(Eta_stream.Stream.from_eio_stream audio) config
     |> Eta.Effect.timeout_as (Eta.Duration.seconds 4) ~on_timeout:(`Ptt_error "timeout")
   in
   let result = Eta_eio.Runtime.run rt operation in
@@ -2361,10 +2839,9 @@ let test_ptt_loop_accepts_peak_over_silence_threshold () =
       on_dead_input = Eta.Effect.unit;
     }
   in
-  let recv () = Eta.Effect.sync (fun () -> Eio.Stream.take audio) in
   let result =
     Eta_eio.Runtime.run rt
-      (Pie.Ptt_loop.run ~keyboard ~recv config
+      (Pie.Ptt_loop.run ~keyboard ~audio:(Eta_stream.Stream.from_eio_stream audio) config
        |> Eta.Effect.timeout_as (Eta.Duration.seconds 4) ~on_timeout:(`Ptt_error "timeout"))
   in
   Alcotest.(check bool) "offers" true (!offers > 0);
@@ -2430,10 +2907,9 @@ let test_ptt_loop_accepts_quiet_speech_over_rms_threshold () =
       on_dead_input = Eta.Effect.unit;
     }
   in
-  let recv () = Eta.Effect.sync (fun () -> Eio.Stream.take audio) in
   let result =
     Eta_eio.Runtime.run rt
-      (Pie.Ptt_loop.run ~keyboard ~recv config
+      (Pie.Ptt_loop.run ~keyboard ~audio:(Eta_stream.Stream.from_eio_stream audio) config
        |> Eta.Effect.timeout_as (Eta.Duration.seconds 4) ~on_timeout:(`Ptt_error "timeout"))
   in
   Alcotest.(check bool) "offers" true (!offers > 0);
@@ -2497,9 +2973,8 @@ let test_ptt_loop_dead_input_cancels_active_capture () =
       on_dead_input = Eta.Effect.sync (fun () -> incr dead_inputs);
     }
   in
-  let recv () = Eta.Effect.sync (fun () -> Eio.Stream.take audio) in
   let operation =
-    Pie.Ptt_loop.run ~keyboard ~recv config
+    Pie.Ptt_loop.run ~keyboard ~audio:(Eta_stream.Stream.from_eio_stream audio) config
     |> Eta.Effect.timeout_as (Eta.Duration.seconds 3) ~on_timeout:(`Ptt_error "timeout")
   in
   let result = Eta_eio.Runtime.run rt operation in
@@ -2562,8 +3037,24 @@ let () =
        ]);
       ("pulse_client",
        [
-         Alcotest.test_case "set_client_name error ignored" `Quick
-           test_pulse_client_set_client_name_error_ignored;
+         Alcotest.test_case "set_client_name error is typed" `Quick
+           test_pulse_client_set_client_name_error_is_typed;
+         Alcotest.test_case "default request timeout" `Quick
+           test_pulse_default_request_timeout;
+         Alcotest.test_case "concurrent tagged replies" `Quick
+           test_pulse_client_correlates_concurrent_replies;
+         Alcotest.test_case "late reply after timeout" `Quick
+           test_pulse_client_drops_late_reply_after_timeout;
+         Alcotest.test_case "malformed command error" `Quick
+           test_pulse_client_rejects_malformed_error_payload;
+         Alcotest.test_case "reader failure fails pending command" `Quick
+           test_pulse_reader_failure_fails_pending_command;
+         Alcotest.test_case "scope end disconnects pending command" `Quick
+           test_pulse_scope_end_disconnects_pending_command;
+         Alcotest.test_case "record stream drains on failure" `Quick
+           test_pulse_record_stream_drains_before_reader_failure;
+         Alcotest.test_case "record cleanup preserves body" `Quick
+           test_pulse_record_cleanup_preserves_body_result;
        ]);
       ("config",
        [
@@ -2670,6 +3161,14 @@ let () =
            test_codex_realtime_transcription_session_update;
          Alcotest.test_case "event parser" `Quick test_codex_realtime_event_parser;
          Alcotest.test_case "resample" `Quick test_codex_realtime_resample;
+         Alcotest.test_case "speech operation deadline policy" `Quick
+           test_speech_operation_deadline_policy;
+         Alcotest.test_case "speech operation deadlines are typed" `Quick
+           test_speech_operation_deadlines_are_typed;
+         Alcotest.test_case "async completion is one-shot" `Quick
+           test_codex_async_completion_first_result_wins;
+         Alcotest.test_case "async interruption cancels once" `Quick
+           test_codex_async_completion_interruption_runs_canceler_once;
          Alcotest.test_case "stream server error e2e" `Quick
            test_codex_realtime_stream_reports_server_error_e2e;
          Alcotest.test_case "translation ignores prompt" `Quick

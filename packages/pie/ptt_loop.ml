@@ -125,7 +125,7 @@ let capture_is_eligible ~min_duration_ms ~min_capture_rms ~min_capture_peak ~hel
   && Bytes.length pcm_bytes > 0
   && (rms >= min_capture_rms || peak >= min_capture_peak)
 
-let run ?control ~(keyboard : Keyboard.Monitor.t) ~(recv : unit -> (bytes, [> `Closed ]) Eta.Effect.t) (config : config) =
+let run ?control ~(keyboard : Keyboard.Monitor.t) ~audio (config : config) =
   let keyboard_queue = Keyboard.Monitor.subscribe keyboard in
   let input = Eio.Stream.create 1024 in
   let push_input item =
@@ -142,18 +142,17 @@ let run ?control ~(keyboard : Keyboard.Monitor.t) ~(recv : unit -> (bytes, [> `C
     let* () = push_input (`Trigger trigger) in
     control_loop control
   in
-  let rec recv_loop () =
-    let* chunk =
-      recv ()
-      |> Eta.Effect.catch (fun `Closed ->
-        Eta.Effect.fail (`Ptt_error "PulseAudio record stream closed"))
-    in
-    let* () = push_input (`Chunk chunk) in
-    recv_loop ()
+  let recv_loop =
+    Eta_stream.run_for_each
+      (fun chunk -> push_input (`Chunk chunk))
+      audio
+    |> Eta.Effect.bind_error (fun (`Pulse_error error) ->
+      Eta.Effect.fail
+        (`Ptt_error (Pulse.Client.error_message error)))
   in
   let input_loop =
     let keyboard_and_audio =
-      Eta.Effect.par (keyboard_loop ()) (recv_loop ()) |> Eta.Effect.map (fun _ -> ())
+      Eta.Effect.par (keyboard_loop ()) recv_loop |> Eta.Effect.map (fun _ -> ())
     in
     match control with
     | None -> keyboard_and_audio
@@ -328,7 +327,7 @@ let run ?control ~(keyboard : Keyboard.Monitor.t) ~(recv : unit -> (bytes, [> `C
     in
     let run_capture mode handle run =
       run
-      |> Eta.Effect.catch (fun (`Ptt_error message) ->
+      |> Eta.Effect.bind_error (fun (`Ptt_error message) ->
         let* () = handle.cancel |> Eta.Effect.ignore_errors in
         let* () = capture_failed mode message in
         Eta.Effect.unit)
