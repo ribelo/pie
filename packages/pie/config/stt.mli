@@ -12,7 +12,6 @@ type newline_rule = Input.Text_injection.newline_rule = {
 }
 
 type t = {
-  schema_version : int;
   provider : provider;
   transcription_model : string;
   translation_model : string;
@@ -25,6 +24,10 @@ type t = {
   wakeword_dictation_speech_rms_threshold : float;
   ptt_min_capture_rms : float;
   ptt_min_capture_peak : float;
+  ptt_transcribe_keysym : int;
+  ptt_translate_keysym : int;
+  ptt_transcribe_shift : bool;
+  ptt_translate_shift : bool;
   thinking_effort : string option;
   transcription_prompt : string;
   translation_prompt : string;

@@ -255,15 +255,17 @@ let run_audio_responses ~sw ~net ~model ~prompt ~sample_rate ~task ?thinking_eff
 
 let transcribe ~sw ~net ~api_key ~model ~language ?(sample_rate = 16000) pcm_bytes =
   (let client = http_client ~sw ~net in
-   let request : A.Transcription.request =
+   let file : A.Audio.upload =
+     {
+       filename = "pie.wav";
+       content_type = "audio/wav";
+       source = A.Audio.bytes (wav_bytes ~sample_rate pcm_bytes);
+     }
+   in
+   let request : Openrouter.Audio.Speech_to_text.request =
      {
        model;
-       file =
-         {
-           filename = "pie.wav";
-           content_type = "audio/wav";
-           data = wav_bytes ~sample_rate pcm_bytes;
-         };
+       file;
        language = Some language;
        prompt = None;
        response_format = None;
@@ -272,14 +274,14 @@ let transcribe ~sw ~net ~api_key ~model ~language ?(sample_rate = 16000) pcm_byt
      }
    in
    let* response =
-     Openrouter.transcription
+     Openrouter.Audio.Speech_to_text.create
        ~provider:(provider ())
        client
        ~api_key:(A.api_key api_key)
        request
      |> Eta.Effect.map_error stt_error_of_ai
    in
-   match response.A.Transcription.text with
+   match response.text with
    | Some text when String.trim text <> "" -> Eta.Effect.pure (String.trim text)
    | _ -> Eta.Effect.fail (`Stt_error "OpenRouter transcription response was empty"))
   |> with_direct_transcription_timeout

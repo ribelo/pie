@@ -23,8 +23,7 @@ type press_result =
 type config = {
   recognize : Keyboard.Monitor.key_event -> trigger option;
   min_duration_ms : int;
-  min_capture_rms : float;
-  min_capture_peak : float;
+  capture_thresholds : unit -> float * float;
   log_prefix : string -> string;
   source : string option;
   on_ready : (unit, error) Eta.Effect.t;
@@ -175,10 +174,11 @@ let run ?control ~(keyboard : Keyboard.Monitor.t) ~audio (config : config) =
     let held_duration_ms = held_duration_ms started_at capture_state in
     let pcm_bytes = concat_chunks chunks in
     let rms, peak = capture_stats pcm_bytes in
+    let min_capture_rms, min_capture_peak = config.capture_thresholds () in
     if not (capture_is_eligible
               ~min_duration_ms:config.min_duration_ms
-              ~min_capture_rms:config.min_capture_rms
-              ~min_capture_peak:config.min_capture_peak
+              ~min_capture_rms
+              ~min_capture_peak
               ~held_duration_ms
               ~pcm_bytes
               ~rms
@@ -259,10 +259,11 @@ let run ?control ~(keyboard : Keyboard.Monitor.t) ~audio (config : config) =
                 let pcm_bytes = concat_chunks chunks in
                 let held_duration_ms = held_duration_ms started_at capture_state in
                 let rms, peak = capture_stats pcm_bytes in
+                let min_capture_rms, min_capture_peak = config.capture_thresholds () in
                 capture_is_eligible
                   ~min_duration_ms:config.min_duration_ms
-                  ~min_capture_rms:config.min_capture_rms
-                  ~min_capture_peak:config.min_capture_peak
+                  ~min_capture_rms
+                  ~min_capture_peak
                   ~held_duration_ms
                   ~pcm_bytes
                   ~rms

@@ -17,6 +17,13 @@ type ptt_mode =
   | Transcribe
   | Translate
 
+type ptt_binding = {
+  keysym : int;
+  shift : bool;
+}
+
+let shift_modifier_mask = 1 lsl 0
+
 let mode_name = function
   | Transcribe -> "transcribe"
   | Translate -> "translate"
@@ -25,16 +32,60 @@ let recording_mode = function
   | Transcribe -> Recording.Coordinator.Ptt_transcribe
   | Translate -> Recording.Coordinator.Ptt_translate
 
-let recognize ~transcribe_keysym ~translate_keysym event =
+let binding_matches binding event =
+  let shift = event.Keyboard.Monitor.state land shift_modifier_mask <> 0 in
+  event.keysym = binding.keysym && shift = binding.shift
+
+let recognize ~transcribe_binding ~translate_binding event =
   let phase mode =
     if event.Keyboard.Monitor.released then
       Some (Ptt_loop.Release (mode_name mode))
     else
       Some (Ptt_loop.Press (mode_name mode))
   in
-  if event.keysym = transcribe_keysym then phase Transcribe
-  else if event.keysym = translate_keysym then phase Translate
+  if binding_matches transcribe_binding event then phase Transcribe
+  else if binding_matches translate_binding event then phase Translate
   else None
+
+let make_live_recognizer ~load_bindings =
+  let held = Hashtbl.create 2 in
+  fun event ->
+    if event.Keyboard.Monitor.released then
+      match Hashtbl.find_opt held event.keycode with
+      | None -> None
+      | Some mode ->
+        Hashtbl.remove held event.keycode;
+        Some (Ptt_loop.Release mode)
+    else
+      match Hashtbl.find_opt held event.keycode with
+      | Some mode -> Some (Ptt_loop.Press mode)
+      | None ->
+        let transcribe_binding, translate_binding = load_bindings () in
+        match recognize ~transcribe_binding ~translate_binding event with
+        | Some (Ptt_loop.Press mode) as trigger ->
+          Hashtbl.add held event.keycode mode;
+          trigger
+        | trigger -> trigger
+
+let effective_bindings
+    ?ptt_transcribe_keysym
+    ?ptt_translate_keysym
+    (config : Config.Stt.t) =
+  let transcribe =
+    Option.value ~default:config.ptt_transcribe_keysym ptt_transcribe_keysym
+  in
+  let translate =
+    Option.value ~default:config.ptt_translate_keysym ptt_translate_keysym
+  in
+  if transcribe <= 0 then
+    raise (Config.Stt.Config_error "effective PTT transcribe keysym must be positive");
+  if translate <= 0 then
+    raise (Config.Stt.Config_error "effective PTT translate keysym must be positive");
+  let transcribe_binding = { keysym = transcribe; shift = config.ptt_transcribe_shift } in
+  let translate_binding = { keysym = translate; shift = config.ptt_translate_shift } in
+  if transcribe_binding = translate_binding then
+    raise (Config.Stt.Config_error "effective PTT transcribe and translate bindings must differ");
+  transcribe_binding, translate_binding
 
 let mode_of_name = function
   | "transcribe" -> Transcribe
@@ -91,7 +142,6 @@ let startup_config_json
     () =
   `Assoc [
     ("config_path", `String config_path);
-    ("schema_version", `Int config.schema_version);
     ("provider", `String (Config.Stt.string_of_provider config.provider));
     ("transcription_model", configured_model_json config Transcribe);
     ("translation_model", configured_model_json config Translate);
@@ -108,6 +158,8 @@ let startup_config_json
     ("ptt_min_capture_peak", `Float config.ptt_min_capture_peak);
     ("ptt_transcribe_keysym", `Int ptt_transcribe_keysym);
     ("ptt_translate_keysym", `Int ptt_translate_keysym);
+    ("ptt_transcribe_shift", `Bool config.ptt_transcribe_shift);
+    ("ptt_translate_shift", `Bool config.ptt_translate_shift);
     ("transcription_prompt", `String config.transcription_prompt);
     ("translation_prompt", `String config.translation_prompt);
     ("newline_rules", `List (List.mapi newline_rule_json config.newline_rules));
@@ -420,9 +472,10 @@ let make_handle ~sw ~net ~process_mgr ~coordinator ~config mode =
     Eta.Effect.pure
       (Ptt_loop.Handle (make_clip_handle ~sw ~net ~process_mgr ~coordinator ~config mode))
 
-let on_press ~sw ~net ~process_mgr ~coordinator ~config mode_name =
+let on_press ~sw ~net ~process_mgr ~coordinator ~current_config mode_name =
   let mode = mode_of_name mode_name in
   let recording_mode = recording_mode mode in
+  let config = current_config () in
   match Recording.Coordinator.try_start coordinator recording_mode () with
   | Started _ ->
     make_handle ~sw ~net ~process_mgr ~coordinator ~config mode
@@ -524,53 +577,18 @@ let run
     ~net
     ~clock
     ~process_mgr
-    ?(ptt_transcribe_keysym = default_transcribe_keysym)
-    ?(ptt_translate_keysym = default_translate_keysym)
+    ?ptt_transcribe_keysym
+    ?ptt_translate_keysym
     ?(min_duration_ms = default_min_duration_ms)
-    ?stdin:_stdin
+    ?stdin
     () =
-  let* config = load_config () in
-  let coordinator = Recording.Coordinator.create () in
-  let control = Eio.Stream.create 1024 in
-  let* () =
-    Eta.Effect.sync (fun () ->
-      Daemon.Server.start ~sw ~net
-        ~action_handler:(action_handler ~control ~coordinator)
-        coordinator;
-      Printf.printf
-        "pie assistant mode: hold F9 to transcribe, F10 to translate (Ctrl-C to exit)\n%!";
-      Printf.printf
-        "pie config:\n%s\n%!"
-        (startup_config_json
-           ~config
-           ~ptt_transcribe_keysym
-           ~ptt_translate_keysym
-           ~min_duration_ms
-           ()))
-  in
-  Pulse.Client.with_client ~net @@ fun client ->
-  Pulse.Client.with_record_stream client @@ fun info audio ->
-  Keyboard.Monitor.with_monitor ~sw ~net ~process_mgr @@ fun keyboard ->
-  let ptt_config : Ptt_loop.config = {
-    recognize = recognize ~transcribe_keysym:ptt_transcribe_keysym ~translate_keysym:ptt_translate_keysym;
-    min_duration_ms;
-    min_capture_rms = config.Config.Stt.ptt_min_capture_rms;
-    min_capture_peak = config.Config.Stt.ptt_min_capture_peak;
-    log_prefix = (fun mode -> "assistant-ptt-" ^ mode);
-    source = info.Pulse.Defs.source_name;
-    on_ready = Eta.Effect.sync (fun () ->
-      Printf.printf "PTT armed: F9=%d F10=%d source=%s\n%!"
-        ptt_transcribe_keysym
-        ptt_translate_keysym
-        (Option.value ~default:"<default>" info.Pulse.Defs.source_name));
-    on_press = on_press ~sw ~net ~process_mgr ~coordinator ~config;
-    on_release = (fun _ -> Eta.Effect.unit);
-    on_abort = Eta.Effect.sync (fun () -> not (Recording.Coordinator.snapshot coordinator).enabled);
-    on_dead_input = Desktop.Notification.notify_warning
-      ~process_mgr
-      "pie: no microphone input"
-      "No input detected during push-to-talk. Your microphone may be muted.";
-  } in
-  Ptt_loop.run ~control ~keyboard ~audio ptt_config
-  |> Eta.Effect.map_error (fun (`Ptt_error msg) ->
-    `Pulse_error (Pulse.Client.Protocol_error msg))
+  Pie__Assistant__Service.run
+    ~sw
+    ~net
+    ~clock
+    ~process_mgr
+    ?ptt_transcribe_keysym
+    ?ptt_translate_keysym
+    ~min_duration_ms
+    ?stdin
+    ()

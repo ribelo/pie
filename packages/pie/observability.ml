@@ -132,7 +132,7 @@ let log_to_otlp record =
       try sink.logger#log record with _ -> ())
 
 let emit level ?(attrs = []) body =
-  let record : Eta.Logger.record =
+  let record : Eta_observability.Logger.record =
     {
       level;
       body;
@@ -143,7 +143,7 @@ let emit level ?(attrs = []) body =
     }
   in
   let line =
-    try Eta.Logger.format_logfmt record
+    try Eta_observability.Logger.format_logfmt record
     with Invalid_argument _ ->
       "level=error body=\"invalid log attributes\" component=pie"
   in

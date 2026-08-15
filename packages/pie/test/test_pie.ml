@@ -1809,7 +1809,6 @@ let test_stt_config_whitespace_app_id_not_trimmed () =
   write_file
     config_path
     {toml|
-schema_version = 2
 
 [[newline_rules]]
 app_id = "   "
@@ -1859,7 +1858,6 @@ let json_string name json =
 let test_assistant_startup_config_json () =
   let config : Pie.Config.Stt.t =
     {
-      schema_version = 2;
       provider = Pie.Config.Stt.Codex_realtime;
       transcription_model = "openrouter/google/gemini-3.1-flash-lite";
       translation_model = "openrouter/google/gemini-3.1-flash-lite";
@@ -1872,6 +1870,10 @@ let test_assistant_startup_config_json () =
       wakeword_dictation_speech_rms_threshold = 0.01;
       ptt_min_capture_rms = 0.001;
       ptt_min_capture_peak = 0.008;
+      ptt_transcribe_keysym = 65516;
+      ptt_translate_keysym = 65508;
+      ptt_transcribe_shift = true;
+      ptt_translate_shift = false;
       thinking_effort = Some "minimal";
       transcription_prompt = "Transcribe in {{language}}.";
       translation_prompt = "Translate from {{source_language}} to {{target_language}}.";
@@ -2167,7 +2169,6 @@ let test_stt_config_loads_toml_newline_rules () =
   write_file
     config_path
     {toml|
-schema_version = 2
 provider = "codex-realtime"
 transcription_model = "gpt-realtime-whisper"
 translation_model = "gpt-realtime-2"
@@ -2180,6 +2181,10 @@ wakeword_dictation_max_seconds = 120.0
 wakeword_dictation_speech_rms_threshold = 0.01
 ptt_min_capture_rms = 0.001
 ptt_min_capture_peak = 0.008
+ptt_transcribe_keysym = 65516
+ptt_translate_keysym = 65508
+ptt_transcribe_shift = true
+ptt_translate_shift = false
 thinking_effort = "minimal"
 
 [[newline_rules]]
@@ -2195,6 +2200,10 @@ action = "shift-enter"
 	  Alcotest.(check bool) "wakeword" false config.wakeword_enabled;
 	  Alcotest.(check (float 0.00001)) "ptt rms" 0.001 config.ptt_min_capture_rms;
 	  Alcotest.(check (float 0.00001)) "ptt peak" 0.008 config.ptt_min_capture_peak;
+	  Alcotest.(check int) "ptt transcribe keysym" 65516 config.ptt_transcribe_keysym;
+	  Alcotest.(check int) "ptt translate keysym" 65508 config.ptt_translate_keysym;
+	  Alcotest.(check bool) "ptt transcribe shift" true config.ptt_transcribe_shift;
+	  Alcotest.(check bool) "ptt translate shift" false config.ptt_translate_shift;
 	  Alcotest.(check (option string)) "thinking effort" (Some "minimal") config.thinking_effort;
 	  Alcotest.(check int) "newline rules" 2 (List.length config.newline_rules);
   match config.newline_rules with
@@ -2220,13 +2229,79 @@ let test_stt_config_defaults_to_gpt_realtime_2_1 () =
     "gpt-realtime-2.1"
     config.translation_model
 
+let test_assistant_hot_reloads_keysyms_and_releases_original_hold () =
+  let binding keysym shift : Pie.Commands.Assistant.ptt_binding =
+    { keysym; shift }
+  in
+  let bindings = ref (binding 65478 false, binding 65479 false) in
+  let recognize =
+    Pie.Commands.Assistant.make_live_recognizer
+      ~load_bindings:(fun () -> !bindings)
+  in
+  let event keysym released : Pie.Keyboard.Monitor.key_event =
+    { released; state = 0; keysym; unichar = 0; keycode = 42 }
+  in
+  let check expected actual =
+    Alcotest.(check bool) "recognized event" true (actual = expected)
+  in
+  check
+    (Some (Pie.Ptt_loop.Press "transcribe"))
+    (recognize (event 65478 false));
+  bindings := (binding 65516 false, binding 65508 false);
+  check
+    (Some (Pie.Ptt_loop.Press "transcribe"))
+    (recognize (event 65478 false));
+  check
+    (Some (Pie.Ptt_loop.Release "transcribe"))
+    (recognize (event 65478 true));
+  Alcotest.(check bool)
+    "old binding no longer starts capture"
+    true
+    (recognize (event 65478 false) = None);
+  check
+    (Some (Pie.Ptt_loop.Press "translate"))
+    (recognize (event 65508 false))
+
+let test_assistant_distinguishes_shift_right_control () =
+  let binding keysym shift : Pie.Commands.Assistant.ptt_binding =
+    { keysym; shift }
+  in
+  let recognize =
+    Pie.Commands.Assistant.make_live_recognizer
+      ~load_bindings:(fun () -> binding 65508 true, binding 65508 false)
+  in
+  let event state keycode released : Pie.Keyboard.Monitor.key_event =
+    { released; state; keysym = 65508; unichar = 0; keycode }
+  in
+  Alcotest.(check bool)
+    "right control alone translates"
+    true
+    (recognize (event 0 42 false) = Some (Pie.Ptt_loop.Press "translate"));
+  ignore (recognize (event 0 42 true));
+  Alcotest.(check bool)
+    "shift plus right control transcribes"
+    true
+    (recognize (event 1 43 false) = Some (Pie.Ptt_loop.Press "transcribe"))
+
+let test_assistant_rejects_colliding_effective_keysyms () =
+  let dir = temp_dir "pie-stt-config-keysyms" in
+  let config_path = Filename.concat dir "stt.toml" in
+  write_file config_path "ptt_transcribe_keysym = 10\nptt_translate_keysym = 20\n";
+  let config = Pie.Config.Stt.load ~config_path () in
+  match
+    Pie.Commands.Assistant.effective_bindings
+      ~ptt_transcribe_keysym:20
+      config
+  with
+  | _ -> Alcotest.fail "effective CLI and config keysyms must not collide"
+  | exception Pie.Config.Stt.Config_error _ -> ()
+
 let test_stt_config_rejects_bad_title_regex () =
   let dir = temp_dir "pie-stt-config" in
   let config_path = Filename.concat dir "stt.toml" in
   write_file
     config_path
     {toml|
-schema_version = 2
 
 [[newline_rules]]
 app_id = "Alacritty"
@@ -2252,7 +2327,6 @@ let test_stt_config_rejects_prompt_with_wrong_placeholder () =
   write_file
     config_path
     {toml|
-schema_version = 2
 |toml};
   (* Bug: validate_transcription_prompt checks for any '{' character instead
      of the required "{{language}}" placeholder. A prompt with "{language}"
@@ -2412,8 +2486,9 @@ let test_ptt_loop_continues_after_finish () =
                 else Press "test")
            else None);
 	      min_duration_ms = 0;
-	      min_capture_rms = Pie.Audio.Pcm.ptt_min_capture_rms_for_stt;
-	      min_capture_peak = Pie.Audio.Pcm.ptt_min_capture_peak_for_stt;
+	      capture_thresholds = (fun () ->
+	        Pie.Audio.Pcm.ptt_min_capture_rms_for_stt,
+	        Pie.Audio.Pcm.ptt_min_capture_peak_for_stt);
 	      log_prefix = (fun mode -> mode);
       source = None;
       on_ready = Eta.Effect.unit;
@@ -2468,8 +2543,9 @@ let test_ptt_loop_control_stream_triggers_capture () =
     {
       recognize = (fun _ -> None);
       min_duration_ms = 0;
-      min_capture_rms = Pie.Audio.Pcm.ptt_min_capture_rms_for_stt;
-      min_capture_peak = Pie.Audio.Pcm.ptt_min_capture_peak_for_stt;
+      capture_thresholds = (fun () ->
+        Pie.Audio.Pcm.ptt_min_capture_rms_for_stt,
+        Pie.Audio.Pcm.ptt_min_capture_peak_for_stt);
       log_prefix = (fun mode -> mode);
       source = None;
       on_ready = Eta.Effect.unit;
@@ -2542,8 +2618,9 @@ let test_ptt_loop_post_roll_repress_continues_capture () =
                 else Press "test")
            else None);
 	      min_duration_ms = 0;
-	      min_capture_rms = Pie.Audio.Pcm.ptt_min_capture_rms_for_stt;
-	      min_capture_peak = Pie.Audio.Pcm.ptt_min_capture_peak_for_stt;
+	      capture_thresholds = (fun () ->
+	        Pie.Audio.Pcm.ptt_min_capture_rms_for_stt,
+	        Pie.Audio.Pcm.ptt_min_capture_peak_for_stt);
 	      log_prefix = (fun mode -> mode);
       source = None;
       on_ready = Eta.Effect.unit;
@@ -2610,8 +2687,9 @@ let test_ptt_loop_scoped_handle_lifetime () =
                 else Press "test")
            else None);
 	      min_duration_ms = 0;
-	      min_capture_rms = Pie.Audio.Pcm.ptt_min_capture_rms_for_stt;
-	      min_capture_peak = Pie.Audio.Pcm.ptt_min_capture_peak_for_stt;
+	      capture_thresholds = (fun () ->
+	        Pie.Audio.Pcm.ptt_min_capture_rms_for_stt,
+	        Pie.Audio.Pcm.ptt_min_capture_peak_for_stt);
 	      log_prefix = (fun mode -> mode);
       source = None;
       on_ready = Eta.Effect.unit;
@@ -2695,8 +2773,9 @@ let test_ptt_loop_ignores_short_capture_before_offering () =
                 else Press "test")
            else None);
 	      min_duration_ms = 1000;
-	      min_capture_rms = Pie.Audio.Pcm.ptt_min_capture_rms_for_stt;
-	      min_capture_peak = Pie.Audio.Pcm.ptt_min_capture_peak_for_stt;
+	      capture_thresholds = (fun () ->
+	        Pie.Audio.Pcm.ptt_min_capture_rms_for_stt,
+	        Pie.Audio.Pcm.ptt_min_capture_peak_for_stt);
 	      log_prefix = (fun mode -> mode);
       source = None;
       on_ready = Eta.Effect.unit;
@@ -2760,8 +2839,9 @@ let test_ptt_loop_ignores_low_rms_capture_before_offering () =
                 else Press "test")
            else None);
 	      min_duration_ms = 300;
-	      min_capture_rms = Pie.Audio.Pcm.ptt_min_capture_rms_for_stt;
-	      min_capture_peak = Pie.Audio.Pcm.ptt_min_capture_peak_for_stt;
+	      capture_thresholds = (fun () ->
+	        Pie.Audio.Pcm.ptt_min_capture_rms_for_stt,
+	        Pie.Audio.Pcm.ptt_min_capture_peak_for_stt);
 	      log_prefix = (fun mode -> mode);
       source = None;
       on_ready = Eta.Effect.unit;
@@ -2828,8 +2908,9 @@ let test_ptt_loop_accepts_peak_over_silence_threshold () =
                 else Press "test")
            else None);
 	      min_duration_ms = 300;
-	      min_capture_rms = Pie.Audio.Pcm.ptt_min_capture_rms_for_stt;
-	      min_capture_peak = Pie.Audio.Pcm.ptt_min_capture_peak_for_stt;
+	      capture_thresholds = (fun () ->
+	        Pie.Audio.Pcm.ptt_min_capture_rms_for_stt,
+	        Pie.Audio.Pcm.ptt_min_capture_peak_for_stt);
 	      log_prefix = (fun mode -> mode);
       source = None;
       on_ready = Eta.Effect.unit;
@@ -2896,8 +2977,9 @@ let test_ptt_loop_accepts_quiet_speech_over_rms_threshold () =
                 else Press "test")
            else None);
 	      min_duration_ms = 300;
-	      min_capture_rms = Pie.Audio.Pcm.ptt_min_capture_rms_for_stt;
-	      min_capture_peak = Pie.Audio.Pcm.ptt_min_capture_peak_for_stt;
+	      capture_thresholds = (fun () ->
+	        Pie.Audio.Pcm.ptt_min_capture_rms_for_stt,
+	        Pie.Audio.Pcm.ptt_min_capture_peak_for_stt);
 	      log_prefix = (fun mode -> mode);
       source = None;
       on_ready = Eta.Effect.unit;
@@ -2962,8 +3044,9 @@ let test_ptt_loop_dead_input_cancels_active_capture () =
                 else Press "test")
            else None);
 	      min_duration_ms = 0;
-	      min_capture_rms = Pie.Audio.Pcm.ptt_min_capture_rms_for_stt;
-	      min_capture_peak = Pie.Audio.Pcm.ptt_min_capture_peak_for_stt;
+	      capture_thresholds = (fun () ->
+	        Pie.Audio.Pcm.ptt_min_capture_rms_for_stt,
+	        Pie.Audio.Pcm.ptt_min_capture_peak_for_stt);
 	      log_prefix = (fun mode -> mode);
       source = None;
       on_ready = Eta.Effect.unit;
@@ -3184,6 +3267,12 @@ let () =
            test_assistant_focused_window_prompt_context;
          Alcotest.test_case "startup config report" `Quick
            test_assistant_startup_config_json;
+         Alcotest.test_case "hot reloads PTT keysyms" `Quick
+           test_assistant_hot_reloads_keysyms_and_releases_original_hold;
+         Alcotest.test_case "distinguishes Shift plus Right Control" `Quick
+           test_assistant_distinguishes_shift_right_control;
+         Alcotest.test_case "rejects colliding effective PTT keysyms" `Quick
+           test_assistant_rejects_colliding_effective_keysyms;
          Alcotest.test_case "project context" `Quick
            test_assistant_project_context_prompt_context;
          Alcotest.test_case "missing project context is empty" `Quick

@@ -12,7 +12,6 @@ type newline_rule = Input.Text_injection.newline_rule = {
 }
 
 type t = {
-  schema_version : int;
   provider : provider;
   transcription_model : string;
   translation_model : string;
@@ -25,6 +24,10 @@ type t = {
   wakeword_dictation_speech_rms_threshold : float;
   ptt_min_capture_rms : float;
   ptt_min_capture_peak : float;
+  ptt_transcribe_keysym : int;
+  ptt_translate_keysym : int;
+  ptt_transcribe_shift : bool;
+  ptt_translate_shift : bool;
   thinking_effort : string option;
   transcription_prompt : string;
   translation_prompt : string;
@@ -134,12 +137,6 @@ let toml_find table key = TT.Table.find_opt (toml_key key) table
 let type_error key expected =
   raise (Config_error (Printf.sprintf "%s must be %s" key expected))
 
-let get_required_int table key =
-  match toml_find table key with
-  | Some (TT.TInt value) -> value
-  | Some _ -> type_error key "an integer"
-  | None -> raise (Config_error (Printf.sprintf "missing %s" key))
-
 let get_string table key default_val =
   match toml_find table key with
   | Some (TT.TString value) -> value
@@ -157,6 +154,12 @@ let get_float table key default_val =
   | Some (TT.TFloat value) -> value
   | Some (TT.TInt value) -> float_of_int value
   | Some _ -> type_error key "a number"
+  | None -> default_val
+
+let get_int table key default_val =
+  match toml_find table key with
+  | Some (TT.TInt value) -> value
+  | Some _ -> type_error key "an integer"
   | None -> default_val
 
 let get_optional_string table key =
@@ -239,9 +242,6 @@ let load_toml config_path =
 
 let load ?(config_path = Paths.stt_config_path) () : t =
   let table = load_toml config_path in
-  let schema_version = get_required_int table "schema_version" in
-  if schema_version <> 2 then
-    raise (Config_error "schema_version must be 2");
   let provider = provider_of_string (get_string table "provider" "codex-realtime") in
   let default_model =
     match provider with
@@ -250,6 +250,19 @@ let load ?(config_path = Paths.stt_config_path) () : t =
   in
   let transcription_model = get_string table "transcription_model" default_model in
   let translation_model = get_string table "translation_model" default_model in
+  let ptt_transcribe_keysym = get_int table "ptt_transcribe_keysym" 65478 in
+  let ptt_translate_keysym = get_int table "ptt_translate_keysym" 65479 in
+  let ptt_transcribe_shift = get_bool table "ptt_transcribe_shift" false in
+  let ptt_translate_shift = get_bool table "ptt_translate_shift" false in
+  if ptt_transcribe_keysym <= 0 then
+    raise (Config_error "ptt_transcribe_keysym must be positive");
+  if ptt_translate_keysym <= 0 then
+    raise (Config_error "ptt_translate_keysym must be positive");
+  if
+    ptt_transcribe_keysym = ptt_translate_keysym
+    && ptt_transcribe_shift = ptt_translate_shift
+  then
+    raise (Config_error "PTT transcribe and translate bindings must differ");
   ignore (resolve_model_provider ~default_provider:provider transcription_model);
   ignore (resolve_model_provider ~default_provider:provider translation_model);
   let prompts_dir = Filename.concat (Filename.dirname config_path) "prompts" in
@@ -266,7 +279,6 @@ let load ?(config_path = Paths.stt_config_path) () : t =
   validate_transcription_prompt transcription_prompt;
   validate_translation_prompt translation_prompt;
   {
-    schema_version;
     provider;
     transcription_model;
     translation_model;
@@ -279,6 +291,10 @@ let load ?(config_path = Paths.stt_config_path) () : t =
     wakeword_dictation_speech_rms_threshold = get_float table "wakeword_dictation_speech_rms_threshold" 0.01;
     ptt_min_capture_rms = get_float table "ptt_min_capture_rms" Audio.Pcm.ptt_min_capture_rms_for_stt;
     ptt_min_capture_peak = get_float table "ptt_min_capture_peak" Audio.Pcm.ptt_min_capture_peak_for_stt;
+    ptt_transcribe_keysym;
+    ptt_translate_keysym;
+    ptt_transcribe_shift;
+    ptt_translate_shift;
     thinking_effort = parse_thinking_effort table;
     transcription_prompt;
     translation_prompt;

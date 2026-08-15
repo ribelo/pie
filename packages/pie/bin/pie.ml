@@ -34,7 +34,6 @@ let run_effect mk_eff =
     in
     match
       mk_eff ~env ~sw
-      |> Eta.Effect.with_error_pp pp_effect_error
       |> Eta_eio.Runtime.run rt
     with
     | Ok () -> ()
@@ -490,14 +489,14 @@ let wakeword_train_cmd =
 
 let assistant_term =
   let transcribe_keysym_arg =
-    Arg.(value & opt int Pie.Commands.Assistant.default_transcribe_keysym
+    Arg.(value & opt (some int) None
          & info ["ptt-transcribe-keysym"] ~docv:"KEYSYM"
-             ~doc:"XKB keysym for PTT transcribe (default: F9 / 65478)")
+             ~doc:"Override the XDG config keysym for PTT transcribe")
   in
   let translate_keysym_arg =
-    Arg.(value & opt int Pie.Commands.Assistant.default_translate_keysym
+    Arg.(value & opt (some int) None
          & info ["ptt-translate-keysym"] ~docv:"KEYSYM"
-             ~doc:"XKB keysym for PTT translate (default: F10 / 65479)")
+             ~doc:"Override the XDG config keysym for PTT translate")
   in
   Term.(
     const (fun ptt_transcribe_keysym ptt_translate_keysym () ->
@@ -508,8 +507,8 @@ let assistant_term =
           ~clock:(Eio.Stdenv.clock env)
           ~process_mgr:(Eio.Stdenv.process_mgr env)
           ~stdin:(Eio.Stdenv.stdin env)
-          ~ptt_transcribe_keysym
-          ~ptt_translate_keysym
+          ?ptt_transcribe_keysym
+          ?ptt_translate_keysym
           ()))
     $ transcribe_keysym_arg $ translate_keysym_arg $ env_term)
 

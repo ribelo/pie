@@ -14,10 +14,12 @@
   (eta (>= 0.1.0))
   eta_ai
   eta_ai_openrouter
+  eta_component
   eta_eio
   eta_http
   eta_http_eio
   (eta_http_tls_openssl :with-test)
+  eta_observability
   eta_otel
   eta_stream
   (eio (>= 1.0))
