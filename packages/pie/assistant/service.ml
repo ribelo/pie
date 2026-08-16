@@ -187,6 +187,26 @@ let recognize_with_shift ~transcribe_keysym ~transcribe_shift ~translate_keysym 
 let recognize ~transcribe_keysym ~translate_keysym event =
   recognize_with_shift ~transcribe_keysym ~transcribe_shift:false ~translate_keysym ~translate_shift:false event
 
+(* Robust recognize that does not require shift on release: uses coordinator active mode to disambiguate same-keysym case *)
+let recognize_robust ~coordinator ~transcribe_keysym ~transcribe_shift ~translate_keysym ~translate_shift event =
+  let has_shift = event.Keyboard.Monitor.state land 1 <> 0 in
+  if event.Keyboard.Monitor.released then
+    let snap = Recording.Coordinator.snapshot coordinator in
+    if snap.active then
+      if snap.mode = "ptt-transcribe" && event.keysym = transcribe_keysym then Some (Ptt_loop.Release "transcribe")
+      else if snap.mode = "ptt-translate" && event.keysym = translate_keysym then Some (Ptt_loop.Release "translate")
+      else if event.keysym = transcribe_keysym && has_shift = transcribe_shift then Some (Ptt_loop.Release "transcribe")
+      else if event.keysym = translate_keysym && has_shift = translate_shift then Some (Ptt_loop.Release "translate")
+      else None
+    else
+      if event.keysym = transcribe_keysym && has_shift = transcribe_shift then Some (Ptt_loop.Release "transcribe")
+      else if event.keysym = translate_keysym && has_shift = translate_shift then Some (Ptt_loop.Release "translate")
+      else None
+  else
+    if event.keysym = transcribe_keysym && has_shift = transcribe_shift then Some (Ptt_loop.Press "transcribe")
+    else if event.keysym = translate_keysym && has_shift = translate_shift then Some (Ptt_loop.Press "translate")
+    else None
+
 let mode_of_name = function
   | "transcribe" -> Transcribe
   | "translate" -> Translate
@@ -898,10 +918,26 @@ let run
       let ptt_config : Ptt_loop.config = {
         recognize = (fun event ->
           let cfg = !current in
-          recognize_with_shift
-            ~transcribe_keysym:cfg.ptt_transcribe_keysym ~transcribe_shift:cfg.ptt_transcribe_shift
-            ~translate_keysym:cfg.ptt_translate_keysym ~translate_shift:cfg.ptt_translate_shift
-            event);
+          let result =
+            recognize_robust ~coordinator
+              ~transcribe_keysym:cfg.ptt_transcribe_keysym ~transcribe_shift:cfg.ptt_transcribe_shift
+              ~translate_keysym:cfg.ptt_translate_keysym ~translate_shift:cfg.ptt_translate_shift
+              event
+          in
+          (* Debug: log every Control_R event to diagnose shift handling *)
+          if event.Keyboard.Monitor.keysym = cfg.ptt_transcribe_keysym || event.Keyboard.Monitor.keysym = cfg.ptt_translate_keysym then
+            Observability.info "ptt key event"
+              ~attrs:[
+                ("keysym", string_of_int event.Keyboard.Monitor.keysym);
+                ("state", string_of_int event.Keyboard.Monitor.state);
+                ("has_shift", string_of_bool (event.Keyboard.Monitor.state land 1 <> 0));
+                ("released", string_of_bool event.Keyboard.Monitor.released);
+                ("transcribe_shift", string_of_bool cfg.ptt_transcribe_shift);
+                ("translate_shift", string_of_bool cfg.ptt_translate_shift);
+                ("result", match result with Some (Ptt_loop.Press m) -> "Press:" ^ m | Some (Ptt_loop.Release m) -> "Release:" ^ m | None -> "None");
+                ("active_mode", (Recording.Coordinator.snapshot coordinator).mode);
+              ];
+          result);
         min_duration_ms;
         capture_thresholds = (fun () -> (!current).Config.Stt.ptt_min_capture_rms, (!current).Config.Stt.ptt_min_capture_peak);
         log_prefix = (fun mode -> "assistant-ptt-" ^ mode);
