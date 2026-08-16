@@ -582,7 +582,7 @@ let run
     ?(min_duration_ms = default_min_duration_ms)
     ?stdin
     () =
-  Pie__Assistant__Service.run
+  Assistant_shim.Service.run
     ~sw
     ~net
     ~clock
