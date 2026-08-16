@@ -12,14 +12,24 @@ let component =
       ~provisions:(Provision.one Coeffects.recording_state)
       ~pp_error:(fun ppf msg -> Format.pp_print_string ppf msg)
       ~activate:(fun _config () activation ->
-        let coordinator = Recording.Coordinator.create () in
-        let* _ =
-          Activation.own activation
-            ~acquire:(Eta.Effect.pure coordinator)
-            ~release:(fun _ -> Eta.Effect.unit)
-            ~pp_release_error:(fun ppf _ -> Format.pp_print_string ppf "recording release failed")
-        in
-        Eta.Effect.pure coordinator
+        match !Env.coordinator_ref with
+        | Some coordinator ->
+          let* _ =
+            Activation.own activation
+              ~acquire:(Eta.Effect.pure ())
+              ~release:(fun () -> Eta.Effect.unit)
+              ~pp_release_error:(fun ppf _ -> Format.pp_print_string ppf "recording release failed")
+          in
+          Eta.Effect.pure coordinator
+        | None ->
+          let coordinator = Recording.Coordinator.create () in
+          let* _ =
+            Activation.own activation
+              ~acquire:(Eta.Effect.pure coordinator)
+              ~release:(fun _ -> Eta.Effect.unit)
+              ~pp_release_error:(fun ppf _ -> Format.pp_print_string ppf "recording release failed")
+          in
+          Eta.Effect.pure coordinator
       )
   with
   | Ok c -> c

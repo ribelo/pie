@@ -12,15 +12,25 @@ let component =
       ~provisions:(Provision.one Coeffects.key_events)
       ~pp_error:(fun ppf msg -> Format.pp_print_string ppf msg)
       ~activate:(fun _config () activation ->
-        let t = Keyboard.Monitor.create () in
-        let stream = Keyboard.Monitor.subscribe t in
-        let* _ =
-          Activation.own activation
-            ~acquire:(Eta.Effect.pure t)
-            ~release:(fun _ -> Eta.Effect.unit)
-            ~pp_release_error:(fun ppf _ -> Format.pp_print_string ppf "keyboard release failed")
-        in
-        Eta.Effect.pure stream
+        match (try Some (Env.get_keyboard ()) with Failure _ -> None) with
+        | Some stream ->
+          let* _ =
+            Activation.own activation
+              ~acquire:(Eta.Effect.pure ())
+              ~release:(fun () -> Eta.Effect.unit)
+              ~pp_release_error:(fun ppf _ -> Format.pp_print_string ppf "keyboard release failed")
+          in
+          Eta.Effect.pure stream
+        | None ->
+          let t = Keyboard.Monitor.create () in
+          let stream = Keyboard.Monitor.subscribe t in
+          let* _ =
+            Activation.own activation
+              ~acquire:(Eta.Effect.pure t)
+              ~release:(fun _ -> Eta.Effect.unit)
+              ~pp_release_error:(fun ppf _ -> Format.pp_print_string ppf "keyboard release failed")
+          in
+          Eta.Effect.pure stream
       )
   with
   | Ok c -> c

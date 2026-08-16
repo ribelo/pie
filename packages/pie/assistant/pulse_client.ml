@@ -12,16 +12,26 @@ let component =
       ~provisions:(Provision.one Coeffects.audio_stream)
       ~pp_error:(fun ppf msg -> Format.pp_print_string ppf msg)
       ~activate:(fun _config () activation ->
-        let queue = Eta.Queue.bounded ~capacity:Pulse.Client.record_stream_capacity () in
-        let stream = Eta_stream.Stream.from_queue queue in
-        let* _ =
-          Activation.own activation
-            ~acquire:(Eta.Effect.pure queue)
-            ~release:(fun q ->
-              Eta.Effect.sync (fun () -> Eta.Queue.close q))
-            ~pp_release_error:(fun ppf _ -> Format.pp_print_string ppf "pulse release failed")
-        in
-        Eta.Effect.pure stream
+        match (try Some (Env.get_audio ()) with Failure _ -> None) with
+        | Some stream ->
+          let* _ =
+            Activation.own activation
+              ~acquire:(Eta.Effect.pure ())
+              ~release:(fun () -> Eta.Effect.unit)
+              ~pp_release_error:(fun ppf _ -> Format.pp_print_string ppf "pulse release failed")
+          in
+          Eta.Effect.pure stream
+        | None ->
+          let queue = Eta.Queue.bounded ~capacity:Pulse.Client.record_stream_capacity () in
+          let stream = Eta_stream.Stream.from_queue queue in
+          let* _ =
+            Activation.own activation
+              ~acquire:(Eta.Effect.pure queue)
+              ~release:(fun q ->
+                Eta.Effect.sync (fun () -> Eta.Queue.close q))
+              ~pp_release_error:(fun ppf _ -> Format.pp_print_string ppf "pulse release failed")
+          in
+          Eta.Effect.pure stream
       )
   with
   | Ok c -> c

@@ -12,15 +12,17 @@ let component =
       ~provisions:(Provision.one Coeffects.control_events)
       ~pp_error:(fun ppf msg -> Format.pp_print_string ppf msg)
       ~activate:(fun _config coordinator activation ->
-        let control_stream : Coeffects.control_events = Eio.Stream.create 1024 in
+        let control_stream =
+          match (try Some (Env.get_control ()) with Failure _ -> None) with
+          | Some s -> s
+          | None -> Eio.Stream.create 1024
+        in
         let* _ =
           Activation.own activation
             ~acquire:(Eta.Effect.pure control_stream)
             ~release:(fun _ -> Eta.Effect.unit)
             ~pp_release_error:(fun ppf _ -> Format.pp_print_string ppf "rpc release failed")
         in
-        (* In production, this would start Assistant_service.Server with coordinator
-           and control_stream. For component tests, we just provide the stream. *)
         ignore coordinator;
         Eta.Effect.pure control_stream
       )
