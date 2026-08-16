@@ -172,16 +172,20 @@ let recording_mode = function
   | Transcribe -> Recording.Coordinator.Ptt_transcribe
   | Translate -> Recording.Coordinator.Ptt_translate
 
-let recognize ~transcribe_keysym ~translate_keysym event =
+let recognize_with_shift ~transcribe_keysym ~transcribe_shift ~translate_keysym ~translate_shift event =
+  let has_shift = event.Keyboard.Monitor.state land 1 <> 0 in
   let phase mode =
     if event.Keyboard.Monitor.released then
       Some (Ptt_loop.Release (mode_name mode))
     else
       Some (Ptt_loop.Press (mode_name mode))
   in
-  if event.keysym = transcribe_keysym then phase Transcribe
-  else if event.keysym = translate_keysym then phase Translate
+  if event.keysym = transcribe_keysym && has_shift = transcribe_shift then phase Transcribe
+  else if event.keysym = translate_keysym && has_shift = translate_shift then phase Translate
   else None
+
+let recognize ~transcribe_keysym ~translate_keysym event =
+  recognize_with_shift ~transcribe_keysym ~transcribe_shift:false ~translate_keysym ~translate_shift:false event
 
 let mode_of_name = function
   | "transcribe" -> Transcribe
@@ -892,15 +896,21 @@ let run
     (* Real PTT loop that uses the outer audio/keyboard/control and current config ref *)
     let ptt_loop =
       let ptt_config : Ptt_loop.config = {
-        recognize = recognize ~transcribe_keysym:effective_transcribe ~translate_keysym:effective_translate;
+        recognize = (fun event ->
+          let cfg = !current in
+          recognize_with_shift
+            ~transcribe_keysym:cfg.ptt_transcribe_keysym ~transcribe_shift:cfg.ptt_transcribe_shift
+            ~translate_keysym:cfg.ptt_translate_keysym ~translate_shift:cfg.ptt_translate_shift
+            event);
         min_duration_ms;
         capture_thresholds = (fun () -> (!current).Config.Stt.ptt_min_capture_rms, (!current).Config.Stt.ptt_min_capture_peak);
         log_prefix = (fun mode -> "assistant-ptt-" ^ mode);
         source = info.Pulse.Defs.source_name;
         on_ready = Eta.Effect.sync (fun () ->
-          Printf.printf "PTT armed: F9=%d F10=%d source=%s\n%!"
-            effective_transcribe
-            effective_translate
+          let cfg = !current in
+          Printf.printf "PTT armed: transcribe=%d%s translate=%d%s source=%s\n%!"
+            cfg.ptt_transcribe_keysym (if cfg.ptt_transcribe_shift then "+shift" else "")
+            cfg.ptt_translate_keysym (if cfg.ptt_translate_shift then "+shift" else "")
             (Option.value ~default:"<default>" info.Pulse.Defs.source_name));
         on_press = (fun mode_name -> on_press ~sw ~net ~process_mgr ~coordinator ~config:!current mode_name);
         on_release = (fun _ -> Eta.Effect.unit);
