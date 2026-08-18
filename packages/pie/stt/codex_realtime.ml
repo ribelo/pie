@@ -79,16 +79,38 @@ let path_for_mode = function
   | Transcription
   | Conversation -> "/v1/realtime"
 
+let http_scheme_stand_in url =
+  if String.starts_with ~prefix:"wss://" url then
+    ("wss://", "https://" ^ String.sub url 6 (String.length url - 6))
+  else if String.starts_with ~prefix:"ws://" url then
+    ("ws://", "http://" ^ String.sub url 5 (String.length url - 5))
+  else
+    ("", url)
+
+let restore_scheme prefix http_url =
+  match prefix with
+  | "wss://" -> "wss://" ^ String.sub http_url 8 (String.length http_url - 8)
+  | "ws://" -> "ws://" ^ String.sub http_url 7 (String.length http_url - 7)
+  | _ -> http_url
+
 let build_realtime_url ?(base_url = resolve_base_url ()) ~mode ~model () =
   let base_url = strip_trailing_slashes base_url in
-  if is_conversation_model model then
-    base_url ^ "/v1/realtime?model=" ^ model
-  else
-    let path = base_url ^ path_for_mode mode in
-    match mode with
-    | Transcription -> path ^ "?intent=transcription"
-    | Translation
-    | Conversation -> path ^ "?model=" ^ model
+  let path =
+    if is_conversation_model model then "/v1/realtime" else path_for_mode mode
+  in
+  let scheme, http_base = http_scheme_stand_in base_url in
+  match Http.Core.Url.parse (http_base ^ path) with
+  | Error parse_error ->
+    invalid_arg (Http.Core.Url.parse_error_to_string parse_error)
+  | Ok url ->
+    let url =
+      if is_conversation_model model then Http.Core.Url.with_query_param url "model" model
+      else
+        match mode with
+        | Transcription -> Http.Core.Url.with_query_param url "intent" "transcription"
+        | Translation | Conversation -> Http.Core.Url.with_query_param url "model" model
+    in
+    restore_scheme scheme (Http.Core.Url.to_string url)
 
 let render_template template variables =
   List.fold_left
@@ -262,7 +284,29 @@ let resample_s16le_mono ~from_rate ~to_rate pcm_bytes =
 let stt_error message = Eta.Effect.fail (`Stt_error message)
 
 let http_error_message context error =
-  context ^ ": " ^ Http.Error.to_string error
+  context
+  ^ ": "
+  ^ Http.Error.category_to_string (Http.Error.category error)
+  ^ " "
+  ^ Http.Error.to_string error
+
+let token_refresh_failure error =
+  match Http.Error.status error with
+  | Some (401 | 403) ->
+    `Stt_error
+      (Printf.sprintf
+         "Codex token refresh failed with HTTP %d. Run 'codex login' to re-authenticate. details=%s"
+         (Option.value (Http.Error.status error) ~default:0)
+         (Option.value (Http.Error.buffered_body error) ~default:""
+          |> fun raw -> String.sub raw 0 (min 200 (String.length raw))))
+  | Some status ->
+    let raw = Option.value (Http.Error.buffered_body error) ~default:"" in
+    `Stt_error
+      (Printf.sprintf
+         "Codex token refresh failed with HTTP %d. Retry later; the Codex auth service may be temporarily unavailable. details=%s"
+         status
+         (String.sub raw 0 (min 200 (String.length raw))))
+  | None -> `Stt_error (http_error_message "Codex token refresh" error)
 
 let ws_error_message = function
   | `Connect message -> "connect: " ^ message
@@ -295,11 +339,10 @@ let realtime_header_pairs ?session_id access_token =
 let realtime_headers ?session_id access_token =
   headers (realtime_header_pairs ?session_id access_token)
 
-let realtime_rest_client ~sw ~net =
-  Http_eio.Client.make_h1_direct ~sw ~net ()
+let realtime_rest_client () = Http.Client.make_runtime ()
 
-let read_response_body response =
-  Http.Body.Stream.read_all response.Http.Response.body
+let read_fetched_body body =
+  Http.Body.Stream.read_all body
   |> Eta.Effect.bind_error (fun error ->
     stt_error (http_error_message "failed to read Codex HTTP response body" error))
   |> Eta.Effect.map Bytes.to_string
@@ -500,6 +543,12 @@ module Codex_auth = struct
       ]
     in
     let url = refresh_endpoint () in
+    let url =
+      match Http.Core.Url.parse url with
+      | Error parse_error ->
+        invalid_arg (Http.Core.Url.parse_error_to_string parse_error)
+      | Ok parsed -> Http.Core.Url.to_string parsed
+    in
     let request =
       Http.Request.make
         ~headers:(headers [("Content-Type", "application/json"); ("Accept", "application/json")])
@@ -508,22 +557,11 @@ module Codex_auth = struct
         "POST"
         url
     in
-    let* response =
-      Http.request client request
-      |> Eta.Effect.bind_error (fun error ->
-        stt_error (http_error_message ("Codex token refresh " ^ url) error))
+    let* raw =
+      Http.Client.fetch client request
+      |> Eta.Effect.bind_error (fun error -> Eta.Effect.fail (token_refresh_failure error))
+      |> Eta.Effect.bind (fun (_response, body) -> read_fetched_body body)
     in
-    let* raw = read_response_body response in
-    if response.Http.Response.status < 200 || response.status >= 300 then
-      let remedy =
-        match response.status with
-        | 400 | 401 | 403 -> "Run 'codex login' to re-authenticate."
-        | _ -> "Retry later; the Codex auth service may be temporarily unavailable."
-      in
-      stt_error
-        (Printf.sprintf "Codex token refresh failed with HTTP %d. %s details=%s"
-           response.status remedy (String.sub raw 0 (min 200 (String.length raw))))
-    else
       let* tokens =
         Eta.Effect.sync (fun () ->
             try
@@ -971,7 +1009,7 @@ let with_transcription_stream
     ~prompt_template
     ?(sample_rate = 16000)
     use =
-  let client = realtime_rest_client ~sw ~net in
+  let client = realtime_rest_client () in
   let* access_token = realtime_access_token ~client () in
   let prompt = render_template prompt_template [ ("language", language) ] in
   if is_conversation_model model then
@@ -1007,7 +1045,7 @@ let with_translation_stream
     ~prompt_template
     ?(sample_rate = 16000)
     use =
-  let client = realtime_rest_client ~sw ~net in
+  let client = realtime_rest_client () in
   let* access_token = realtime_access_token ~client () in
   let prompt =
     render_template prompt_template [
@@ -1040,7 +1078,7 @@ let with_translation_stream
       use
 
 let transcribe_with_prompt ~sw ~net ~model ~language ~prompt_template ?(sample_rate = 16000) pcm_bytes =
-  let client = realtime_rest_client ~sw ~net in
+  let client = realtime_rest_client () in
   let* access_token = realtime_access_token ~client () in
   let prompt = render_template prompt_template [ ("language", language) ] in
   if is_conversation_model model then
@@ -1074,7 +1112,7 @@ let translate_with_prompt
     ~prompt_template
     ?(sample_rate = 16000)
     pcm_bytes =
-  let client = realtime_rest_client ~sw ~net in
+  let client = realtime_rest_client () in
   let* access_token = realtime_access_token ~client () in
   let prompt =
     render_template prompt_template [
