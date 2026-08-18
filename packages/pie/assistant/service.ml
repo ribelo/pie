@@ -676,15 +676,15 @@ let run
   let context_body (context : Eta_component.Context.t) (diagnostics : Eta_component.Diagnostics.t) =
     let* () =
       Eta_component.Context.reconcile_and_await context initial_tree
-      |> Eta.Effect.fold
-           ~ok:(fun report ->
-             last_fence_report_ref := Some report;
-             update_components_cache (Eta_component.Diagnostics.Fence.final_snapshot report);
-             ())
-           ~error:(fun err ->
-             let msg = Format.asprintf "%a" pp_admission_error err in
-             admission_error_ref := Some msg;
-             Process.emit_sync ~level:Error "initial reconcile admission failed" ~attrs:[("error", msg)])
+      |> Eta.Effect.bind (fun report ->
+           last_fence_report_ref := Some report;
+           update_components_cache (Eta_component.Diagnostics.Fence.final_snapshot report);
+           Eta.Effect.unit)
+      |> Eta.Effect.bind_error (fun err ->
+           let msg = Format.asprintf "%a" pp_admission_error err in
+           admission_error_ref := Some msg;
+           Eta_observability.log_error ~attrs:[("error", msg)]
+             "initial reconcile admission failed")
     in
     let components_updater =
       Eta_stream.run_for_each
@@ -777,25 +777,27 @@ let run
                       | Ok batch ->
                         let* () =
                           Eta_component.Context.replace_and_await context batch
-                          |> Eta.Effect.fold
-                               ~ok:(fun report ->
-                                 last_fence_report_ref := Some report;
-                                 (match Eta_component.Diagnostics.Fence.outcome report with
-                                  | Rolled_back ->
-                                    Process.emit_sync ~level:Info "stt-backend replacement rolled back" ~attrs:[]
-                                  | Quiescent ->
-                                    current := new_config;
-                                    last_stamp := loaded_stamp;
-                                    admission_error_ref := None;
-                                    Process.emit_sync ~level:Info "Pie config reloaded via replacement" ~attrs:[("config.path", config_path)]
-                                  | _ ->
-                                    current := new_config;
-                                    last_stamp := loaded_stamp;
-                                    admission_error_ref := None))
-                               ~error:(fun err ->
-                                 let msg = Format.asprintf "%a" pp_admission_error err in
-                                 admission_error_ref := Some msg;
-                                 Process.emit_sync ~level:Error "replacement admission failed" ~attrs:[("error", msg)])
+                          |> Eta.Effect.bind (fun report ->
+                               last_fence_report_ref := Some report;
+                               match Eta_component.Diagnostics.Fence.outcome report with
+                               | Rolled_back ->
+                                 Eta_observability.log_info "stt-backend replacement rolled back"
+                               | Quiescent ->
+                                 current := new_config;
+                                 last_stamp := loaded_stamp;
+                                 admission_error_ref := None;
+                                 Eta_observability.log_info ~attrs:[("config.path", config_path)]
+                                   "Pie config reloaded via replacement"
+                               | _ ->
+                                 current := new_config;
+                                 last_stamp := loaded_stamp;
+                                 admission_error_ref := None;
+                                 Eta.Effect.unit)
+                          |> Eta.Effect.bind_error (fun err ->
+                               let msg = Format.asprintf "%a" pp_admission_error err in
+                               admission_error_ref := Some msg;
+                               Eta_observability.log_error ~attrs:[("error", msg)]
+                                 "replacement admission failed")
                         in
                         Eta.Effect.unit
                     )
@@ -805,21 +807,22 @@ let run
               let new_tree = Tree.build ~min_duration_ms new_config in
               let* () =
                 Eta_component.Context.reconcile_and_await context new_tree
-                |> Eta.Effect.fold
-                     ~ok:(fun report ->
-                       last_fence_report_ref := Some report;
-                       (match Eta_component.Diagnostics.Fence.outcome report with
-                        | Quiescent ->
-                          current := new_config;
-                          last_stamp := loaded_stamp;
-                          admission_error_ref := None;
-                          Process.emit_sync ~level:Info "Pie config reloaded via reconcile" ~attrs:[("config.path", config_path)]
-                        | _ ->
-                          Process.emit_sync ~level:Info "reconcile completed non-quiescent" ~attrs:[]))
-                     ~error:(fun err ->
-                       let msg = Format.asprintf "%a" pp_admission_error err in
-                       admission_error_ref := Some msg;
-                       Process.emit_sync ~level:Error "reconcile admission failed" ~attrs:[("error", msg)])
+                |> Eta.Effect.bind (fun report ->
+                     last_fence_report_ref := Some report;
+                     match Eta_component.Diagnostics.Fence.outcome report with
+                     | Quiescent ->
+                       current := new_config;
+                       last_stamp := loaded_stamp;
+                       admission_error_ref := None;
+                       Eta_observability.log_info ~attrs:[("config.path", config_path)]
+                         "Pie config reloaded via reconcile"
+                     | _ ->
+                       Eta_observability.log_info "reconcile completed non-quiescent")
+                |> Eta.Effect.bind_error (fun err ->
+                     let msg = Format.asprintf "%a" pp_admission_error err in
+                     admission_error_ref := Some msg;
+                     Eta_observability.log_error ~attrs:[("error", msg)]
+                       "reconcile admission failed")
               in
               Eta.Effect.unit
             )
