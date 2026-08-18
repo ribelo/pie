@@ -427,7 +427,6 @@ let test_pulse_client_set_client_name_error_is_typed () =
     Eio.Flow.write flow [Cstruct.of_bytes err_reply];
     let buffer = Cstruct.create 1 in
     (try ignore (Eio.Flow.single_read flow buffer) with End_of_file -> ()));
-  let rt = Eta_eio.Runtime.create ~sw ~clock:(Eio.Stdenv.clock env) () in
   let operation =
     Pulse.Client.with_client
       ~net:(Eio.Stdenv.net env)
@@ -435,7 +434,7 @@ let test_pulse_client_set_client_name_error_is_typed () =
       ~cookie:(Bytes.make Pulse.Defs.pa_native_cookie_length '\x00')
       (fun _client -> Eta.Effect.pure ())
   in
-  match Eta_eio.Runtime.run rt operation with
+  match Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env) operation with
   | Error cause
     when List.exists
            (function
@@ -487,7 +486,6 @@ let test_pulse_client_correlates_concurrent_replies () =
         let buffer = Cstruct.create 1 in
         (try ignore (Eio.Flow.single_read flow buffer) with End_of_file -> ()))
   in
-  let rt = Eta_eio.Runtime.create ~sw ~clock:(Eio.Stdenv.clock env) () in
   let operation =
     Pulse.Client.with_client
       ~net:(Eio.Stdenv.net env)
@@ -498,7 +496,7 @@ let test_pulse_client_correlates_concurrent_replies () =
           (Pulse.Client.get_server_info client)
           (Pulse.Client.list_sources client))
   in
-  match Eta_eio.Runtime.run rt operation with
+  match Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env) operation with
   | Ok (server, sources) ->
     Alcotest.(check (option string)) "server" (Some "test-server") server.name;
     Alcotest.(check int) "sources" 0 (List.length sources)
@@ -526,7 +524,6 @@ let test_pulse_client_drops_late_reply_after_timeout () =
       let buffer = Cstruct.create 1 in
       (try ignore (Eio.Flow.single_read flow buffer) with End_of_file -> ()))
   in
-  let rt = Eta_eio.Runtime.create ~sw ~clock () in
   let operation =
     Pulse.Client.with_client
       ~net:(Eio.Stdenv.net env)
@@ -544,7 +541,7 @@ let test_pulse_client_drops_late_reply_after_timeout () =
           Alcotest.failf "expected timeout, got %a" Pulse.Client.pp_error error
         | Ok _ -> Alcotest.fail "expected first command to time out")
   in
-  match Eta_eio.Runtime.run rt operation with
+  match Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env) operation with
   | Ok [] -> ()
   | Ok _ -> Alcotest.fail "expected empty source list"
   | Error cause ->
@@ -568,7 +565,6 @@ let test_pulse_client_rejects_malformed_error_payload () =
       let buffer = Cstruct.create 1 in
       (try ignore (Eio.Flow.single_read flow buffer) with End_of_file -> ()))
   in
-  let rt = Eta_eio.Runtime.create ~sw ~clock:(Eio.Stdenv.clock env) () in
   let operation =
     Pulse.Client.with_client
       ~net:(Eio.Stdenv.net env)
@@ -576,7 +572,7 @@ let test_pulse_client_rejects_malformed_error_payload () =
       ~cookie:(Bytes.make Pulse.Defs.pa_native_cookie_length '\x00')
       (fun _ -> Eta.Effect.unit)
   in
-  match Eta_eio.Runtime.run rt operation with
+  match Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env) operation with
   | Error cause
     when List.exists
            (function
@@ -596,7 +592,6 @@ let test_pulse_reader_failure_fails_pending_command () =
       ignore (pulse_read_command flow);
       Eio.Flow.shutdown flow `All)
   in
-  let rt = Eta_eio.Runtime.create ~sw ~clock:(Eio.Stdenv.clock env) () in
   let operation =
     Pulse.Client.with_client
       ~net:(Eio.Stdenv.net env)
@@ -604,7 +599,7 @@ let test_pulse_reader_failure_fails_pending_command () =
       ~cookie:(Bytes.make Pulse.Defs.pa_native_cookie_length '\x00')
       (fun client -> Pulse.Client.get_server_info client)
   in
-  match Eta_eio.Runtime.run rt operation with
+  match Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env) operation with
   | Error cause
     when List.exists
            (function
@@ -629,9 +624,7 @@ let test_pulse_scope_end_disconnects_pending_command () =
       (try ignore (Eio.Flow.single_read flow buffer) with End_of_file -> ()))
   in
   let clock = Eio.Stdenv.clock env in
-  let client_runtime = Eta_eio.Runtime.create ~sw ~clock () in
-  let command_runtime = Eta_eio.Runtime.create ~sw ~clock () in
-  let operation =
+    let operation =
     Pulse.Client.with_client
       ~net:(Eio.Stdenv.net env)
       ~socket_path
@@ -640,11 +633,11 @@ let test_pulse_scope_end_disconnects_pending_command () =
         Eta.Effect.sync (fun () ->
           Eio.Fiber.fork ~sw (fun () ->
             Pulse.Client.get_server_info client
-            |> Eta_eio.Runtime.run command_runtime
+            |> Eta_eio.run_once ~sw ~clock
             |> Eio.Promise.resolve resolve_command_exit);
           Eio.Promise.await request_seen))
   in
-  (match Eta_eio.Runtime.run client_runtime operation with
+  (match Eta_eio.run_once ~sw ~clock operation with
    | Ok () -> ()
    | Error _ -> Alcotest.fail "client scope failed while releasing normally");
   match Eio.Promise.await command_exit with
@@ -661,7 +654,6 @@ let test_pulse_scope_end_disconnects_pending_command () =
 let test_pulse_record_stream_drains_before_reader_failure () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  let clock = Eio.Stdenv.clock env in
   let socket_path =
     pulse_test_server ~sw ~net:(Eio.Stdenv.net env) "stream" (fun flow ->
       pulse_server_handshake flow;
@@ -681,7 +673,6 @@ let test_pulse_record_stream_drains_before_reader_failure () =
       Eio.Flow.shutdown flow `All)
   in
   let seen = ref [] in
-  let rt = Eta_eio.Runtime.create ~sw ~clock () in
   let operation =
     Pulse.Client.with_client
       ~net:(Eio.Stdenv.net env)
@@ -694,7 +685,7 @@ let test_pulse_record_stream_drains_before_reader_failure () =
             Eta.Effect.sync (fun () -> seen := Bytes.to_string chunk :: !seen))
           stream)
   in
-  (match Eta_eio.Runtime.run rt operation with
+  (match Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env) operation with
    | Error cause
      when List.exists
             (function
@@ -720,7 +711,6 @@ let test_pulse_record_cleanup_preserves_body_result () =
       let buffer = Cstruct.create 1 in
       (try ignore (Eio.Flow.single_read flow buffer) with End_of_file -> ()))
   in
-  let rt = Eta_eio.Runtime.create ~sw ~clock:(Eio.Stdenv.clock env) () in
   let operation =
     Pulse.Client.with_client
       ~net:(Eio.Stdenv.net env)
@@ -729,7 +719,7 @@ let test_pulse_record_cleanup_preserves_body_result () =
       (fun client ->
         Pulse.Client.with_record_stream client (fun _ _ -> Eta.Effect.pure "body"))
   in
-  match Eta_eio.Runtime.run rt operation with
+  match Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env) operation with
   | Ok value -> Alcotest.(check string) "body result" "body" value
   | Error cause ->
     Alcotest.failf
@@ -1188,7 +1178,6 @@ let test_speech_operation_deadlines_are_typed () =
 let test_codex_async_completion_first_result_wins () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  let rt = Eta_eio.Runtime.create ~sw ~clock:(Eio.Stdenv.clock env) () in
   let completion =
     Stt.Codex_realtime.Async_completion.create
       ~canceler:Eta.Effect.unit
@@ -1210,7 +1199,7 @@ let test_codex_async_completion_first_result_wins () =
     let* value = Stt.Codex_realtime.Async_completion.await completion in
     Eta.Effect.pure (first, second, value)
   in
-  match Eta_eio.Runtime.run rt operation with
+  match Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env) operation with
   | Ok (first, second, value) ->
     Alcotest.(check bool) "first resolution accepted" true first;
     Alcotest.(check bool) "duplicate resolution dropped" false second;
@@ -1221,7 +1210,6 @@ let test_codex_async_completion_first_result_wins () =
 let test_codex_async_completion_interruption_runs_canceler_once () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  let rt = Eta_eio.Runtime.create ~sw ~clock:(Eio.Stdenv.clock env) () in
   let cancellations = ref 0 in
   let interrupted = ref false in
   let completion =
@@ -1240,7 +1228,7 @@ let test_codex_async_completion_interruption_runs_canceler_once () =
       (Eta.Duration.ms 1)
       (Eta.Effect.pure `Timer)
   in
-  (match Eta_eio.Runtime.run rt (Eta.Effect.race [pending; winner]) with
+  (match Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env) (Eta.Effect.race [pending; winner]) with
    | Ok `Timer -> ()
    | Ok `Completion -> Alcotest.fail "pending callback unexpectedly completed"
    | Error _ -> Alcotest.fail "callback interruption race failed");
@@ -1408,7 +1396,6 @@ let test_codex_realtime_transcribe_uses_conversation_prompt_e2e () =
     Eio.Switch.run @@ fun conn_sw ->
     let flow, _addr = Eio.Net.accept ~sw:conn_sw socket in
     run_realtime_capture_session_update flow captured);
-  let rt = Eta_eio.Runtime.create ~sw ~clock:(Eio.Stdenv.clock env) () in
   let old_url = Sys.getenv_opt "CODEX_REALTIME_BASE_URL_OVERRIDE" in
   Unix.putenv "CODEX_REALTIME_BASE_URL_OVERRIDE"
     (Printf.sprintf "ws://127.0.0.1:%d" port);
@@ -1431,7 +1418,7 @@ let test_codex_realtime_transcribe_uses_conversation_prompt_e2e () =
          (Eta.Duration.seconds 5)
          ~on_timeout:(`Stt_error "timeout")
   in
-  (match Eta_eio.Runtime.run rt operation with Ok _ | Error _ -> ());
+  (match Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env) operation with Ok _ | Error _ -> ());
   cleanup_env ();
   match !captured with
   | `Null -> Alcotest.fail "did not capture session.update message"
@@ -1479,7 +1466,6 @@ let test_codex_realtime_translate_nonconv_drops_prompt_e2e () =
     Eio.Switch.run @@ fun conn_sw ->
     let flow, _addr = Eio.Net.accept ~sw:conn_sw socket in
     run_realtime_capture_session_update flow captured);
-  let rt = Eta_eio.Runtime.create ~sw ~clock:(Eio.Stdenv.clock env) () in
   let old_url = Sys.getenv_opt "CODEX_REALTIME_BASE_URL_OVERRIDE" in
   Unix.putenv "CODEX_REALTIME_BASE_URL_OVERRIDE"
     (Printf.sprintf "ws://127.0.0.1:%d" port);
@@ -1502,7 +1488,7 @@ let test_codex_realtime_translate_nonconv_drops_prompt_e2e () =
          (Eta.Duration.seconds 5)
          ~on_timeout:(`Stt_error "timeout")
   in
-  (match Eta_eio.Runtime.run rt operation with Ok _ | Error _ -> ());
+  (match Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env) operation with Ok _ | Error _ -> ());
   cleanup_env ();
   match !captured with
   | `Null -> Alcotest.fail "did not capture session.update"
@@ -1570,7 +1556,6 @@ let test_codex_realtime_stream_reports_server_error_e2e () =
     Eio.Switch.run @@ fun conn_sw ->
     let flow, _addr = Eio.Net.accept ~sw:conn_sw socket in
     run_realtime_error_ws_server flow);
-  let rt = Eta_eio.Runtime.create ~sw ~clock:(Eio.Stdenv.clock env) () in
   let url = Printf.sprintf "ws://127.0.0.1:%d/v1/realtime?model=gpt-realtime-2" port in
   let open Eta.Syntax in
   let prompt = "Translate." in
@@ -1599,7 +1584,7 @@ let test_codex_realtime_stream_reports_server_error_e2e () =
   let pp_stt_error fmt = function
     | `Stt_error message -> Format.pp_print_string fmt message
   in
-  match Eta_eio.Runtime.run rt operation with
+  match Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env) operation with
   | Error (Eta.Cause.Fail (`Stt_error message)) ->
     Alcotest.(check string)
       "server error"
@@ -2435,7 +2420,6 @@ let test_ptt_loop_continues_after_finish () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
-  let rt = Eta_eio.Runtime.create ~sw ~clock () in
   let keyboard = Pie.Keyboard.Monitor.create () in
   let audio = Eio.Stream.create 16 in
   let running = ref true in
@@ -2505,7 +2489,7 @@ let test_ptt_loop_continues_after_finish () =
     Pie.Ptt_loop.run ~keyboard ~audio:(Eta_stream.Stream.from_eio_stream audio) config
     |> Eta.Effect.timeout_as (Eta.Duration.seconds 7) ~on_timeout:(`Ptt_error "timeout")
   in
-  let result = Eta_eio.Runtime.run rt operation in
+  let result = Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env) operation in
   running := false;
   Alcotest.(check int) "starts" 3 !starts;
   Alcotest.(check int) "finishes" 3 !finishes;
@@ -2517,7 +2501,6 @@ let test_ptt_loop_control_stream_triggers_capture () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
-  let rt = Eta_eio.Runtime.create ~sw ~clock () in
   let keyboard = Pie.Keyboard.Monitor.create () in
   let control = Eio.Stream.create 16 in
   let audio = Eio.Stream.create 16 in
@@ -2559,7 +2542,7 @@ let test_ptt_loop_control_stream_triggers_capture () =
     }
   in
   let result =
-    Eta_eio.Runtime.run rt
+    Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env)
       (Pie.Ptt_loop.run ~control ~keyboard ~audio:(Eta_stream.Stream.from_eio_stream audio) config
        |> Eta.Effect.timeout_as (Eta.Duration.seconds 5) ~on_timeout:(`Ptt_error "timeout"))
   in
@@ -2573,7 +2556,6 @@ let test_ptt_loop_post_roll_repress_continues_capture () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
-  let rt = Eta_eio.Runtime.create ~sw ~clock () in
   let keyboard = Pie.Keyboard.Monitor.create () in
   let audio = Eio.Stream.create 16 in
   let starts = ref 0 in
@@ -2634,7 +2616,7 @@ let test_ptt_loop_post_roll_repress_continues_capture () =
     }
   in
   let result =
-    Eta_eio.Runtime.run rt
+    Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env)
       (Pie.Ptt_loop.run ~keyboard ~audio:(Eta_stream.Stream.from_eio_stream audio) config
        |> Eta.Effect.timeout_as (Eta.Duration.seconds 5) ~on_timeout:(`Ptt_error "timeout"))
   in
@@ -2649,7 +2631,6 @@ let test_ptt_loop_scoped_handle_lifetime () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
-  let rt = Eta_eio.Runtime.create ~sw ~clock () in
   let keyboard = Pie.Keyboard.Monitor.create () in
   let audio = Eio.Stream.create 16 in
   let scope_entries = ref 0 in
@@ -2710,7 +2691,7 @@ let test_ptt_loop_scoped_handle_lifetime () =
     Pie.Ptt_loop.run ~keyboard ~audio:(Eta_stream.Stream.from_eio_stream audio) config
     |> Eta.Effect.timeout_as (Eta.Duration.seconds 5) ~on_timeout:(`Ptt_error "timeout")
   in
-  let result = Eta_eio.Runtime.run rt operation in
+  let result = Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env) operation in
   Alcotest.(check int) "scope entered" 1 !scope_entries;
   Alcotest.(check int) "scope exited" 1 !scope_exits;
   Alcotest.(check int) "offers" 1 !offers;
@@ -2736,7 +2717,6 @@ let test_ptt_loop_ignores_short_capture_before_offering () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
-  let rt = Eta_eio.Runtime.create ~sw ~clock () in
   let keyboard = Pie.Keyboard.Monitor.create () in
   let audio = Eio.Stream.create 16 in
   let offers = ref 0 in
@@ -2789,7 +2769,7 @@ let test_ptt_loop_ignores_short_capture_before_offering () =
     Pie.Ptt_loop.run ~keyboard ~audio:(Eta_stream.Stream.from_eio_stream audio) config
     |> Eta.Effect.timeout_as (Eta.Duration.seconds 4) ~on_timeout:(`Ptt_error "timeout")
   in
-  let result = Eta_eio.Runtime.run rt operation in
+  let result = Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env) operation in
   Alcotest.(check int) "offers" 0 !offers;
   Alcotest.(check int) "finishes" 0 !finishes;
   Alcotest.(check int) "cancels" 1 !cancels;
@@ -2801,7 +2781,6 @@ let test_ptt_loop_ignores_low_rms_capture_before_offering () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
-  let rt = Eta_eio.Runtime.create ~sw ~clock () in
   let keyboard = Pie.Keyboard.Monitor.create () in
   let audio = Eio.Stream.create 64 in
   let offers = ref 0 in
@@ -2855,7 +2834,7 @@ let test_ptt_loop_ignores_low_rms_capture_before_offering () =
     Pie.Ptt_loop.run ~keyboard ~audio:(Eta_stream.Stream.from_eio_stream audio) config
     |> Eta.Effect.timeout_as (Eta.Duration.seconds 4) ~on_timeout:(`Ptt_error "timeout")
   in
-  let result = Eta_eio.Runtime.run rt operation in
+  let result = Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env) operation in
   Alcotest.(check int) "offers" 0 !offers;
   Alcotest.(check int) "finishes" 0 !finishes;
   Alcotest.(check int) "cancels" 1 !cancels;
@@ -2867,7 +2846,6 @@ let test_ptt_loop_accepts_peak_over_silence_threshold () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
-  let rt = Eta_eio.Runtime.create ~sw ~clock () in
   let keyboard = Pie.Keyboard.Monitor.create () in
   let audio = Eio.Stream.create 64 in
   let offers = ref 0 in
@@ -2921,7 +2899,7 @@ let test_ptt_loop_accepts_peak_over_silence_threshold () =
     }
   in
   let result =
-    Eta_eio.Runtime.run rt
+    Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env)
       (Pie.Ptt_loop.run ~keyboard ~audio:(Eta_stream.Stream.from_eio_stream audio) config
        |> Eta.Effect.timeout_as (Eta.Duration.seconds 4) ~on_timeout:(`Ptt_error "timeout"))
   in
@@ -2936,7 +2914,6 @@ let test_ptt_loop_accepts_quiet_speech_over_rms_threshold () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
-  let rt = Eta_eio.Runtime.create ~sw ~clock () in
   let keyboard = Pie.Keyboard.Monitor.create () in
   let audio = Eio.Stream.create 64 in
   let offers = ref 0 in
@@ -2990,7 +2967,7 @@ let test_ptt_loop_accepts_quiet_speech_over_rms_threshold () =
     }
   in
   let result =
-    Eta_eio.Runtime.run rt
+    Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env)
       (Pie.Ptt_loop.run ~keyboard ~audio:(Eta_stream.Stream.from_eio_stream audio) config
        |> Eta.Effect.timeout_as (Eta.Duration.seconds 4) ~on_timeout:(`Ptt_error "timeout"))
   in
@@ -3005,7 +2982,6 @@ let test_ptt_loop_dead_input_cancels_active_capture () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
-  let rt = Eta_eio.Runtime.create ~sw ~clock () in
   let keyboard = Pie.Keyboard.Monitor.create () in
   let audio = Eio.Stream.create 16 in
   let offers = ref 0 in
@@ -3060,7 +3036,7 @@ let test_ptt_loop_dead_input_cancels_active_capture () =
     Pie.Ptt_loop.run ~keyboard ~audio:(Eta_stream.Stream.from_eio_stream audio) config
     |> Eta.Effect.timeout_as (Eta.Duration.seconds 3) ~on_timeout:(`Ptt_error "timeout")
   in
-  let result = Eta_eio.Runtime.run rt operation in
+  let result = Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env) operation in
   Alcotest.(check int) "offers" 0 !offers;
   Alcotest.(check int) "finishes" 0 !finishes;
   Alcotest.(check int) "cancels" 1 !cancels;

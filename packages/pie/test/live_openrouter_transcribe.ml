@@ -47,13 +47,6 @@ let () =
   let pcm = Bytes.of_string (read_file pcm_path) in
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  let rt =
-    Eta_eio.Runtime.create
-      ~sw
-      ~clock:(Eio.Stdenv.clock env)
-      ~capture_backtrace:true
-      ()
-  in
   let operation =
     Pie.Stt.Openrouter.transcribe_with_prompt
       ~sw
@@ -67,7 +60,7 @@ let () =
          (Eta.Duration.seconds 90)
          ~on_timeout:(`Stt_error "live OpenRouter transcription timed out")
   in
-  match Eta_eio.Runtime.run rt operation with
+  match Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env) operation with
   | Ok transcript ->
     let expected_normalized = normalize expected in
     let transcript_normalized = normalize transcript in
