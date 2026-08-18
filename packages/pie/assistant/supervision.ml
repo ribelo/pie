@@ -43,9 +43,7 @@ let run ~context ~diagnostics =
     let backoff = get_backoff id in
     let* () = Eta.Effect.delay (Eta.Duration.ms backoff) Eta.Effect.unit in
     let* () =
-      (let* fence = Context.retry context id in
-       let* () = Diagnostics.Fence.await fence |> Eta.Effect.ignore_errors in
-       Eta.Effect.unit)
+      (Context.retry_and_await context id |> Eta.Effect.ignore_errors)
       |> Eta.Effect.ignore_errors
     in
     let* () = Eta.Effect.sync (fun () -> set_backoff id (next_backoff backoff)) |> Eta.Effect.ignore_errors in

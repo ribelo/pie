@@ -4,45 +4,18 @@ open Eta.Syntax
 
 let default_min_duration_ms = 120
 
-let pp_admission_error ppf = function
-  | Eta_component.Context.Context_not_running -> Format.pp_print_string ppf "Context_not_running"
-  | Duplicate_entry_id id -> Format.fprintf ppf "Duplicate_entry_id:%a" Eta_component.Entry_id.pp id
-  | Entry_kind_changed id -> Format.fprintf ppf "Entry_kind_changed:%a" Eta_component.Entry_id.pp id
-  | Duplicate_provider { coeffect; realm; entries } ->
-    Format.fprintf ppf "Duplicate_provider:%s:%s:%s" coeffect realm (String.concat "," (List.map (fun id -> Format.asprintf "%a" Eta_component.Entry_id.pp id) entries))
-  | Dependency_cycle ids ->
-    Format.fprintf ppf "Dependency_cycle:%s" (String.concat "," (List.map (fun id -> Format.asprintf "%a" Eta_component.Entry_id.pp id) ids))
-  | Callback_failed { callback; failure } ->
-    let cb = match callback with Configuration_equivalence -> "Configuration_equivalence" | Interception_merge s -> "Interception_merge:" ^ s in
-    Format.fprintf ppf "Callback_failed:%s:%a" cb Eta_component.Diagnostics.Failure.pp failure
-  | Retry_not_available id -> Format.fprintf ppf "Retry_not_available:%a" Eta_component.Entry_id.pp id
-  | Stale_source_revision src -> Format.fprintf ppf "Stale_source_revision:%a" Eta_component.Source_revision.pp src
-  | Stale_entry_incarnation id -> Format.fprintf ppf "Stale_entry_incarnation:%a" Eta_component.Entry_id.pp id
-  | Stale_target_revision id -> Format.fprintf ppf "Stale_target_revision:%a" Eta_component.Entry_id.pp id
-  | Wrong_target_context id -> Format.fprintf ppf "Wrong_target_context:%a" Eta_component.Entry_id.pp id
-  | Component_identity_mismatch id -> Format.fprintf ppf "Component_identity_mismatch:%a" Eta_component.Entry_id.pp id
-  | Quarantined_instance id -> Format.fprintf ppf "Quarantined_instance:%a" Eta_component.Entry_id.pp id
+let pp_admission_error = Eta_component.Context.pp_admission_error
 
 (* Global state for components_field reporting *)
 let admission_error_ref : string option ref = ref None
 let last_fence_report_ref : Eta_component.Diagnostics.Fence.report option ref = ref None
 let components_cache_ref : Assistant_service.Contract.components_field option ref = ref None
 
-let phase_to_string = function
-  | Eta_component.Diagnostics.Inactive -> "inactive"
-  | Waiting -> "waiting"
-  | Activating _ -> "activating"
-  | Active _ -> "active"
-  | Settling _ -> "settling"
-  | Activation_failed (_, _) -> "activation-failed"
-  | Recovery_failed (_, _) -> "recovery-failed"
+let phase_to_string phase =
+  Format.asprintf "%a" Eta_component.Diagnostics.pp_phase phase
 
-let integrity_to_string = function
-  | Eta_component.Diagnostics.Sound -> "Sound"
-  | Degraded ids ->
-    "Degraded:" ^ String.concat "," (List.map (fun id -> Format.asprintf "%a" Eta_component.Diagnostics.Instance_id.pp id) ids)
-  | Failed failure ->
-    Format.asprintf "Failed:%a" Eta_component.Diagnostics.Failure.pp failure
+let integrity_to_string integrity =
+  Format.asprintf "%a" Eta_component.Diagnostics.pp_integrity integrity
 
 let build_components_field snapshot =
   let entries =
@@ -74,13 +47,8 @@ let build_components_field snapshot =
     | None -> None, None
     | Some report ->
       let outcome =
-        match Eta_component.Diagnostics.Fence.outcome report with
-        | Quiescent -> "Quiescent"
-        | Superseded -> "Superseded"
-        | Rolled_back -> "Rolled_back"
-        | Degraded -> "Degraded"
-        | Restoration_failed -> "Restoration_failed"
-        | Context_failed -> "Context_failed"
+        Format.asprintf "%a" Eta_component.Diagnostics.Fence.pp_outcome
+          (Eta_component.Diagnostics.Fence.outcome report)
       in
       Some outcome, Some true
   in
@@ -706,58 +674,24 @@ let run
   (* Also hook pulse errors to control? For now just log *)
   let initial_tree = Tree.build ~min_duration_ms !current in
   let context_body (context : Eta_component.Context.t) (diagnostics : Eta_component.Diagnostics.t) =
-    let* initial_fence =
-      Eta_component.Context.reconcile context initial_tree
-      |> Eta.Effect.map_error (fun err ->
-        let msg = Format.asprintf "%a" pp_admission_error err in
-        admission_error_ref := Some msg;
-        Process.emit_sync ~level:Error "initial reconcile admission failed" ~attrs:[("error", msg)];
-        `Pulse_error (Pulse.Client.Protocol_error msg))
-      |> Eta.Effect.fold ~ok:(fun f -> Some f) ~error:(fun _ -> None)
-    in
     let* () =
-      match initial_fence with
-      | None -> Eta.Effect.unit
-      | Some fence ->
-        let* report =
-          Eta_component.Diagnostics.Fence.await fence
-          |> Eta.Effect.fold ~ok:(fun r -> Some r) ~error:(fun _ -> None)
-        in
-        (match report with
-         | Some r -> last_fence_report_ref := Some r
-         | None -> ());
-        let* snapshot_opt =
-          Eta_component.Diagnostics.snapshot diagnostics
-          |> Eta.Effect.fold ~ok:(fun s -> Some s) ~error:(fun _ -> None)
-        in
-        (match snapshot_opt with
-         | Some s -> Eta.Effect.sync (fun () -> update_components_cache s) |> Eta.Effect.ignore_errors
-         | None -> Eta.Effect.unit)
+      Eta_component.Context.reconcile_and_await context initial_tree
+      |> Eta.Effect.fold
+           ~ok:(fun report ->
+             last_fence_report_ref := Some report;
+             update_components_cache (Eta_component.Diagnostics.Fence.final_snapshot report);
+             ())
+           ~error:(fun err ->
+             let msg = Format.asprintf "%a" pp_admission_error err in
+             admission_error_ref := Some msg;
+             Process.emit_sync ~level:Error "initial reconcile admission failed" ~attrs:[("error", msg)])
     in
-    (* Components updater fiber: watches diagnostics change and updates cache *)
     let components_updater =
-      let rec loop () =
-        let* snapshot_opt =
-          Eta_component.Diagnostics.snapshot diagnostics
-          |> Eta.Effect.fold ~ok:(fun s -> Some s) ~error:(fun _ -> None)
-        in
-        match snapshot_opt with
-        | None -> Eta.Effect.unit
-        | Some snap ->
-          let rev = Eta_component.Diagnostics.revision snap in
-          let* change_opt =
-            Eta_component.Diagnostics.await_change diagnostics ~after:rev
-            |> Eta.Effect.fold ~ok:(fun c -> Some c) ~error:(fun _ -> None)
-          in
-          match change_opt with
-          | None -> Eta.Effect.unit
-          | Some (Eta_component.Diagnostics.Closed final_snap) ->
-            Eta.Effect.sync (fun () -> update_components_cache final_snap) |> Eta.Effect.ignore_errors
-          | Some (Eta_component.Diagnostics.Changed new_snap) ->
-            let* () = Eta.Effect.sync (fun () -> update_components_cache new_snap) |> Eta.Effect.ignore_errors in
-            loop ()
-      in
-      loop ()
+      Eta_stream.run_for_each
+        (fun snapshot ->
+          Eta.Effect.sync (fun () -> update_components_cache snapshot))
+        (Eta_component.Diagnostics.changes diagnostics)
+      |> Eta.Effect.ignore_errors
     in
     let watcher_router =
       let rec loop () =
@@ -841,71 +775,53 @@ let run
                           admission_error_ref := Some msg;
                           Process.emit_sync ~level:Error "replacement batch failed" ~attrs:[("error", msg)])
                       | Ok batch ->
-                        let* fence_opt =
-                          Eta_component.Context.replace context batch
-                          |> Eta.Effect.fold ~ok:(fun f -> Some f) ~error:(fun err ->
-                            let msg = Format.asprintf "%a" pp_admission_error err in
-                            admission_error_ref := Some msg;
-                            Process.emit_sync ~level:Error "replacement admission failed" ~attrs:[("error", msg)];
-                            None)
+                        let* () =
+                          Eta_component.Context.replace_and_await context batch
+                          |> Eta.Effect.fold
+                               ~ok:(fun report ->
+                                 last_fence_report_ref := Some report;
+                                 (match Eta_component.Diagnostics.Fence.outcome report with
+                                  | Rolled_back ->
+                                    Process.emit_sync ~level:Info "stt-backend replacement rolled back" ~attrs:[]
+                                  | Quiescent ->
+                                    current := new_config;
+                                    last_stamp := loaded_stamp;
+                                    admission_error_ref := None;
+                                    Process.emit_sync ~level:Info "Pie config reloaded via replacement" ~attrs:[("config.path", config_path)]
+                                  | _ ->
+                                    current := new_config;
+                                    last_stamp := loaded_stamp;
+                                    admission_error_ref := None))
+                               ~error:(fun err ->
+                                 let msg = Format.asprintf "%a" pp_admission_error err in
+                                 admission_error_ref := Some msg;
+                                 Process.emit_sync ~level:Error "replacement admission failed" ~attrs:[("error", msg)])
                         in
-                        match fence_opt with
-                        | None -> Eta.Effect.unit
-                        | Some fence ->
-                          let* report_opt =
-                            Eta_component.Diagnostics.Fence.await fence
-                            |> Eta.Effect.fold ~ok:(fun r -> Some r) ~error:(fun _ -> None)
-                          in
-                          (match report_opt with
-                           | Some report ->
-                             Eta.Effect.sync (fun () ->
-                               last_fence_report_ref := Some report;
-                               (match Eta_component.Diagnostics.Fence.outcome report with
-                                | Rolled_back ->
-                                  Process.emit_sync ~level:Info "stt-backend replacement rolled back" ~attrs:[]
-                                | Quiescent ->
-                                  current := new_config;
-                                  last_stamp := loaded_stamp;
-                                  admission_error_ref := None;
-                                  Process.emit_sync ~level:Info "Pie config reloaded via replacement" ~attrs:[("config.path", config_path)]
-                                | _ ->
-                                  current := new_config;
-                                  last_stamp := loaded_stamp;
-                                  admission_error_ref := None))
-                           | None -> Eta.Effect.unit)
+                        Eta.Effect.unit
                     )
                 )
             ) else (
               (* Reconcile path *)
               let new_tree = Tree.build ~min_duration_ms new_config in
-              let* fence_opt =
-                Eta_component.Context.reconcile context new_tree
-                |> Eta.Effect.fold ~ok:(fun f -> Some f) ~error:(fun err ->
-                  let msg = Format.asprintf "%a" pp_admission_error err in
-                  admission_error_ref := Some msg;
-                  Process.emit_sync ~level:Error "reconcile admission failed" ~attrs:[("error", msg)];
-                  None)
+              let* () =
+                Eta_component.Context.reconcile_and_await context new_tree
+                |> Eta.Effect.fold
+                     ~ok:(fun report ->
+                       last_fence_report_ref := Some report;
+                       (match Eta_component.Diagnostics.Fence.outcome report with
+                        | Quiescent ->
+                          current := new_config;
+                          last_stamp := loaded_stamp;
+                          admission_error_ref := None;
+                          Process.emit_sync ~level:Info "Pie config reloaded via reconcile" ~attrs:[("config.path", config_path)]
+                        | _ ->
+                          Process.emit_sync ~level:Info "reconcile completed non-quiescent" ~attrs:[]))
+                     ~error:(fun err ->
+                       let msg = Format.asprintf "%a" pp_admission_error err in
+                       admission_error_ref := Some msg;
+                       Process.emit_sync ~level:Error "reconcile admission failed" ~attrs:[("error", msg)])
               in
-              match fence_opt with
-              | None -> Eta.Effect.unit
-              | Some fence ->
-                let* report_opt =
-                  Eta_component.Diagnostics.Fence.await fence
-                  |> Eta.Effect.fold ~ok:(fun r -> Some r) ~error:(fun _ -> None)
-                in
-                (match report_opt with
-                 | Some report ->
-                   Eta.Effect.sync (fun () ->
-                     last_fence_report_ref := Some report;
-                     (match Eta_component.Diagnostics.Fence.outcome report with
-                      | Quiescent ->
-                        current := new_config;
-                        last_stamp := loaded_stamp;
-                        admission_error_ref := None;
-                        Process.emit_sync ~level:Info "Pie config reloaded via reconcile" ~attrs:[("config.path", config_path)]
-                      | _ ->
-                        Process.emit_sync ~level:Info "reconcile completed non-quiescent" ~attrs:[]))
-                 | None -> Eta.Effect.unit)
+              Eta.Effect.unit
             )
         in
         loop ()
