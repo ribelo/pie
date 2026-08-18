@@ -110,7 +110,7 @@ let write_state t =
 let persist t =
   try write_state t
   with exn ->
-    Observability.error
+    Process.emit_sync ~level:Error
       ~attrs:[
         ("path", t.persist_path);
         ("error", Printexc.to_string exn);

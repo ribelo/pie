@@ -3087,9 +3087,93 @@ let test_wakeword_pipeline_smoothing_uses_threshold_not_history () =
     true
     (score2 > score1)
 
+let process_pp_err formatter = function
+  | `Invalid_config message
+  | `Stt_error message -> Format.pp_print_string formatter message
+  | _ -> Format.pp_print_string formatter "error"
+
+let with_captured_stderr f =
+  let tmp = Filename.temp_file "pie-stderr" ".log" in
+  let oc = open_out tmp in
+  let old = Unix.dup Unix.stderr in
+  Unix.dup2 (Unix.descr_of_out_channel oc) Unix.stderr;
+  Fun.protect
+    ~finally:(fun () ->
+      flush stderr;
+      Unix.dup2 old Unix.stderr;
+      Unix.close old;
+      close_out_noerr oc)
+    (fun () ->
+      let result = f () in
+      flush stderr;
+      close_out_noerr oc;
+      let body = In_channel.with_open_text tmp In_channel.input_all in
+      result, body)
+
+let test_process_success_exit () =
+  let code =
+    Pie.Process.run ~pp_err:process_pp_err (fun ~env:_ ~sw:_ -> Eta.Effect.unit)
+  in
+  Alcotest.(check int) "pieeta-94ds" 0 code
+
+let test_process_typed_failure_exit () =
+  let code, stderr =
+    with_captured_stderr (fun () ->
+      Pie.Process.run ~pp_err:process_pp_err (fun ~env:_ ~sw:_ ->
+        Eta.Effect.fail (`Stt_error "typed boom")))
+  in
+  Alcotest.(check int) "pieeta-np5l" 1 code;
+  Alcotest.(check bool) "renders typed failure" true
+    (String.contains stderr 't' && String.length stderr > 0)
+
+let test_process_interrupt_exit () =
+  let code =
+    Pie.Process.run ~pp_err:process_pp_err (fun ~env:_ ~sw:_ ->
+      Eta.Effect.async ~register:(fun resume ->
+        resume (Eta.Exit.Error Eta.Cause.interrupt);
+        None))
+  in
+  Alcotest.(check int) "pieeta-yr8l" 130 code
+
+let test_process_logfmt_stderr () =
+  let _code, stderr =
+    with_captured_stderr (fun () ->
+      Pie.Process.run ~pp_err:process_pp_err (fun ~env:_ ~sw:_ ->
+        Eta_observability.log_info "process door ready"))
+  in
+  Alcotest.(check bool) "pieeta-bal1 logfmt body" true
+    (let needle = "process door ready" in
+     let rec contains i =
+       i + String.length needle <= String.length stderr
+       && (String.sub stderr i (String.length needle) = needle || contains (i + 1))
+     in
+     contains 0)
+
+let test_process_otel_disabled () =
+  let previous = Sys.getenv_opt "OTEL_SDK_DISABLED" in
+  Unix.putenv "OTEL_SDK_DISABLED" "true";
+  Fun.protect
+    ~finally:(fun () ->
+      match previous with
+      | None -> Unix.putenv "OTEL_SDK_DISABLED" ""
+      | Some value -> Unix.putenv "OTEL_SDK_DISABLED" value)
+    (fun () ->
+      let code =
+        Pie.Process.run ~pp_err:process_pp_err (fun ~env:_ ~sw:_ -> Eta.Effect.unit)
+      in
+      Alcotest.(check int) "pieeta-w728" 0 code)
+
 let () =
   Alcotest.run "pie"
     [
+      ("process_door",
+       [
+         Alcotest.test_case "success exit 0" `Quick test_process_success_exit;
+         Alcotest.test_case "typed failure exit 1" `Quick test_process_typed_failure_exit;
+         Alcotest.test_case "interrupt exit 130" `Quick test_process_interrupt_exit;
+         Alcotest.test_case "logfmt on stderr" `Quick test_process_logfmt_stderr;
+         Alcotest.test_case "OTEL_SDK_DISABLED still runs" `Quick test_process_otel_disabled;
+       ]);
       ("pcm",
        [
          Alcotest.test_case "rms" `Quick test_pcm_rms;

@@ -15,48 +15,13 @@ let render_effect_error = function
   | `Daemon_off -> "daemon is not running"
   | `Closed -> "stream closed"
   | `Timeout -> "operation timed out"
+  | `Invalid_config msg -> msg
 
 let pp_effect_error formatter error =
   Format.pp_print_string formatter (render_effect_error error)
 
 let run_effect mk_eff =
-  Pie.Observability.init_from_env ~service_version:"0.1.0" ();
-  Fun.protect ~finally:Pie.Observability.shutdown @@ fun () ->
-  try
-    Eio_main.run @@ fun env ->
-    Eio.Switch.run @@ fun sw ->
-    let rt =
-      Eta_eio.Runtime.create
-        ~sw
-        ~clock:(Eio.Stdenv.clock env)
-        ~capture_backtrace:true
-        ()
-    in
-    match
-      mk_eff ~env ~sw
-      |> Eta_eio.Runtime.run rt
-    with
-    | Ok () -> ()
-    | Error cause ->
-        let msg =
-          Format.asprintf "%a"
-            (Eta.Cause.pp pp_effect_error)
-            cause
-        in
-        if Eta.Cause.is_interrupt_only cause then (
-          Printf.eprintf "Interrupted\n%!";
-          exit 130)
-        else (
-          Pie.Observability.error
-            ~attrs:[ ("error", msg) ]
-            "command failed";
-          Printf.eprintf "Error: %s\n%!" msg;
-          exit 1)
-  with exn ->
-    let error = Printexc.to_string exn in
-    Pie.Observability.error ~attrs:[ ("error", error) ] "fatal error";
-    Printf.eprintf "Fatal: %s\n%!" error;
-    exit 1
+  exit (Pie.Process.run ~pp_err:pp_effect_error mk_eff)
 
 let env_term = Term.const ()
 

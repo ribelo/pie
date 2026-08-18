@@ -34,10 +34,10 @@ let widen_pulse_error effect =
     effect
 
 let debug message attrs =
-  Eta.Effect.sync (fun () -> Observability.debug message ~attrs)
+  Eta_observability.log_debug ~attrs message
 
 let warn message attrs =
-  Eta.Effect.sync (fun () -> Observability.warn message ~attrs)
+  Eta_observability.log_warn ~attrs message
 
 type record_queue = (bytes, [ `Pulse_error of error ]) Eta.Queue.t
 

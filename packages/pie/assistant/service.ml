@@ -680,7 +680,7 @@ let run
             { action = raw_action; accepted = false; message = Some ("unknown action: " ^ raw_action); snapshot = snap }
         )
         coordinator;
-      Observability.info "assistant_service started" ~attrs:[("config.path", config_path)];
+      Process.emit_sync ~level:Info "assistant_service started" ~attrs:[("config.path", config_path)];
       Printf.printf
         "pie config:\n%s\n%!"
         (startup_config_json
@@ -710,7 +710,7 @@ let run
       |> Eta.Effect.map_error (fun err ->
         let msg = Format.asprintf "%a" pp_admission_error err in
         admission_error_ref := Some msg;
-        Observability.error "initial reconcile admission failed" ~attrs:[("error", msg)];
+        Process.emit_sync ~level:Error "initial reconcile admission failed" ~attrs:[("error", msg)];
         `Pulse_error (Pulse.Client.Protocol_error msg))
       |> Eta.Effect.fold ~ok:(fun f -> Some f) ~error:(fun _ -> None)
     in
@@ -779,7 +779,7 @@ let run
           | `Failed (failed_stamp, message) ->
             Eta.Effect.sync (fun () ->
               last_stamp := failed_stamp;
-              Observability.error "Pie config reload failed; keeping previous config"
+              Process.emit_sync ~level:Error "Pie config reload failed; keeping previous config"
                 ~attrs:[("config.path", config_path); ("config.error", message)])
           | `Loaded (new_config, loaded_stamp) ->
             let old_config = !current in
@@ -793,7 +793,7 @@ let run
               match snapshot_opt with
               | None ->
                 Eta.Effect.sync (fun () ->
-                  Observability.error "replacement: failed to get snapshot" ~attrs:[])
+                  Process.emit_sync ~level:Error "replacement: failed to get snapshot" ~attrs:[])
               | Some snapshot ->
                 let instances = Eta_component.Diagnostics.instances snapshot in
                 let stt_instance_opt =
@@ -806,14 +806,11 @@ let run
                 match stt_instance_opt with
                 | None ->
                   Eta.Effect.sync (fun () ->
-                    Observability.error "replacement: stt-backend instance not found" ~attrs:[])
+                    Process.emit_sync ~level:Error "replacement: stt-backend instance not found" ~attrs:[])
                 | Some stt_inst ->
                   let expected_instance = Eta_component.Diagnostics.instance_id stt_inst in
                   let expected_target =
-                    match Eta_component.Diagnostics.target_revision stt_inst with
-                    | Some tr -> tr
-                    | None ->
-                      Obj.magic ()
+                    Eta_component.Diagnostics.target_revision stt_inst
                   in
                   let stt_slice = Config_slices.stt_backend_slice new_config in
                   let entry = Stt_backend.make_entry stt_slice in
@@ -826,7 +823,7 @@ let run
                      in
                      Eta.Effect.sync (fun () ->
                        admission_error_ref := Some msg;
-                       Observability.error "replacement candidate failed" ~attrs:[("error", msg)])
+                       Process.emit_sync ~level:Error "replacement candidate failed" ~attrs:[("error", msg)])
                    | Ok candidate ->
                      let src = Eta_component.Source_revision.of_int64 !source_revision_counter in
                      source_revision_counter := Int64.succ !source_revision_counter;
@@ -839,14 +836,14 @@ let run
                         in
                         Eta.Effect.sync (fun () ->
                           admission_error_ref := Some msg;
-                          Observability.error "replacement batch failed" ~attrs:[("error", msg)])
+                          Process.emit_sync ~level:Error "replacement batch failed" ~attrs:[("error", msg)])
                       | Ok batch ->
                         let* fence_opt =
                           Eta_component.Context.replace context batch
                           |> Eta.Effect.fold ~ok:(fun f -> Some f) ~error:(fun err ->
                             let msg = Format.asprintf "%a" pp_admission_error err in
                             admission_error_ref := Some msg;
-                            Observability.error "replacement admission failed" ~attrs:[("error", msg)];
+                            Process.emit_sync ~level:Error "replacement admission failed" ~attrs:[("error", msg)];
                             None)
                         in
                         match fence_opt with
@@ -862,12 +859,12 @@ let run
                                last_fence_report_ref := Some report;
                                (match Eta_component.Diagnostics.Fence.outcome report with
                                 | Rolled_back ->
-                                  Observability.info "stt-backend replacement rolled back" ~attrs:[]
+                                  Process.emit_sync ~level:Info "stt-backend replacement rolled back" ~attrs:[]
                                 | Quiescent ->
                                   current := new_config;
                                   last_stamp := loaded_stamp;
                                   admission_error_ref := None;
-                                  Observability.info "Pie config reloaded via replacement" ~attrs:[("config.path", config_path)]
+                                  Process.emit_sync ~level:Info "Pie config reloaded via replacement" ~attrs:[("config.path", config_path)]
                                 | _ ->
                                   current := new_config;
                                   last_stamp := loaded_stamp;
@@ -883,7 +880,7 @@ let run
                 |> Eta.Effect.fold ~ok:(fun f -> Some f) ~error:(fun err ->
                   let msg = Format.asprintf "%a" pp_admission_error err in
                   admission_error_ref := Some msg;
-                  Observability.error "reconcile admission failed" ~attrs:[("error", msg)];
+                  Process.emit_sync ~level:Error "reconcile admission failed" ~attrs:[("error", msg)];
                   None)
               in
               match fence_opt with
@@ -902,9 +899,9 @@ let run
                         current := new_config;
                         last_stamp := loaded_stamp;
                         admission_error_ref := None;
-                        Observability.info "Pie config reloaded via reconcile" ~attrs:[("config.path", config_path)]
+                        Process.emit_sync ~level:Info "Pie config reloaded via reconcile" ~attrs:[("config.path", config_path)]
                       | _ ->
-                        Observability.info "reconcile completed non-quiescent" ~attrs:[]))
+                        Process.emit_sync ~level:Info "reconcile completed non-quiescent" ~attrs:[]))
                  | None -> Eta.Effect.unit)
             )
         in
@@ -926,7 +923,7 @@ let run
           in
           (* Debug: log every Control_R event to diagnose shift handling *)
           if event.Keyboard.Monitor.keysym = cfg.ptt_transcribe_keysym || event.Keyboard.Monitor.keysym = cfg.ptt_translate_keysym then
-            Observability.info "ptt key event"
+            Process.emit_sync ~level:Info "ptt key event"
               ~attrs:[
                 ("keysym", string_of_int event.Keyboard.Monitor.keysym);
                 ("state", string_of_int event.Keyboard.Monitor.state);

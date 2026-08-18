@@ -104,7 +104,7 @@ let start ~sw ~net ?(socket_path = Paths.daemon_socket_path) ?action_handler coo
     let rec loop () =
       Eio.Net.accept_fork ~sw socket
         ~on_error:(fun exn ->
-          Observability.error
+          Process.emit_sync ~level:Error
             ~attrs:[ ("error", Printexc.to_string exn) ]
             "daemon server error")
         (handle_flow ?action_handler coordinator);
@@ -113,7 +113,7 @@ let start ~sw ~net ?(socket_path = Paths.daemon_socket_path) ?action_handler coo
     try loop () with
     | Eio.Cancel.Cancelled _ -> `Stop_daemon
     | exn ->
-      Observability.error
+      Process.emit_sync ~level:Error
         ~attrs:[ ("error", Printexc.to_string exn) ]
         "daemon server stopped";
       `Stop_daemon)

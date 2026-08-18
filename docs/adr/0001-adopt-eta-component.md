@@ -14,5 +14,5 @@ The assistant service ran as one nested-callback pyramid: resources were acquire
 - `Daemon.*` modules are renamed to `Assistant_service.*`. The RPC wire format stays compatible; the `Status` response gains an additive `components` field.
 - Feature toggles for providers use dormant providers, not entry-level `enabled` flags. A disabled entry publishes no provisions, so its consumers would wait forever.
 - The STT backend provides a factory coeffect. Per-press sessions stay as they are. A provider-field change in the configuration makes the watcher submit a replacement batch, so a failed candidate rolls back to the working backend.
-- OTLP observability stays outside the component tree so it can report context shutdown.
+- OTLP observability stays outside the component tree so it can report context shutdown. That means `Eta_otel_eio.with_otlp` at the process door, not a second event loop.
 - The generic loader and native HMR packages remain spec-only in Eta. Pie watches its own configuration files and calls `reconcile` or `replace` directly.

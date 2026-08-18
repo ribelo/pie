@@ -49,14 +49,14 @@ let log_info message fields =
     ("pie.timestamp", timestamp ())
     :: List.map (fun (key, value) -> (key, Yojson.Safe.to_string value)) fields
   in
-  Observability.info ~attrs message
+  Eta_observability.log_info ~attrs message
 
 let log_error message fields =
   let attrs =
     ("pie.timestamp", timestamp ())
     :: List.map (fun (key, value) -> (key, Yojson.Safe.to_string value)) fields
   in
-  Observability.error ~attrs message
+  Eta_observability.log_error ~attrs message
 
 let ptt_fields ?duration_ms ?held_duration_ms ?bytes ?rms ?peak config mode =
   let base =
@@ -183,29 +183,33 @@ let run ?control ~(keyboard : Keyboard.Monitor.t) ~audio (config : config) =
               ~pcm_bytes
               ~rms
               ~peak) then (
-      log_info "PTT capture ignored"
-        (ptt_fields
-           ~duration_ms
-           ~held_duration_ms
-           ~bytes:(Bytes.length pcm_bytes)
-           ~rms
-           ~peak
-           config
-           mode);
+      let* () =
+        log_info "PTT capture ignored"
+          (ptt_fields
+             ~duration_ms
+             ~held_duration_ms
+             ~bytes:(Bytes.length pcm_bytes)
+             ~rms
+             ~peak
+             config
+             mode)
+      in
       handle.cancel
     ) else (
       let* () =
         if offered then Eta.Effect.unit else offer_chunks handle chunks
       in
-      log_info "PTT capture stopped"
-        (ptt_fields
-           ~duration_ms
-           ~held_duration_ms
-           ~bytes:(Bytes.length pcm_bytes)
-           ~rms
-           ~peak
-           config
-           mode);
+      let* () =
+        log_info "PTT capture stopped"
+          (ptt_fields
+             ~duration_ms
+             ~held_duration_ms
+             ~bytes:(Bytes.length pcm_bytes)
+             ~rms
+             ~peak
+             config
+             mode)
+      in
       handle.finish { duration_ms; pcm_bytes }
     )
   in
@@ -246,9 +250,8 @@ let run ?control ~(keyboard : Keyboard.Monitor.t) ~audio (config : config) =
           if result.dead then
             let* () = handle.cancel in
             let* () =
-              Eta.Effect.sync (fun () ->
-                log_info "PTT capture cancelled: no microphone input"
-                  (ptt_fields config mode))
+              log_info "PTT capture cancelled: no microphone input"
+                (ptt_fields config mode)
             in
             config.on_dead_input
           else
@@ -291,9 +294,8 @@ let run ?control ~(keyboard : Keyboard.Monitor.t) ~audio (config : config) =
            let* () =
              match capture_state with
              | Ptt.Capture.PostRoll _ ->
-               Eta.Effect.sync (fun () ->
-                 log_info "Post-roll cancelled, continuing capture"
-                   (ptt_fields config mode))
+               log_info "Post-roll cancelled, continuing capture"
+                 (ptt_fields config mode)
              | _ -> Eta.Effect.unit
            in
            loop next dead_input offered chunks
@@ -310,9 +312,8 @@ let run ?control ~(keyboard : Keyboard.Monitor.t) ~audio (config : config) =
         let* () =
           match capture_state with
           | Ptt.Capture.PostRoll _ ->
-            Eta.Effect.sync (fun () ->
-              log_info "Post-roll cancelled, continuing capture"
-                (ptt_fields config mode))
+            log_info "Post-roll cancelled, continuing capture"
+              (ptt_fields config mode)
           | _ -> Eta.Effect.unit
         in
         loop next dead_input offered chunks
@@ -322,9 +323,8 @@ let run ?control ~(keyboard : Keyboard.Monitor.t) ~audio (config : config) =
   in
   let rec idle_loop () =
     let capture_failed mode message =
-      Eta.Effect.sync (fun () ->
-        log_error "PTT capture failed"
-          (("ptt.error", `String message) :: ptt_fields config mode))
+      log_error "PTT capture failed"
+        (("ptt.error", `String message) :: ptt_fields config mode)
     in
     let run_capture mode handle run =
       run
@@ -344,16 +344,14 @@ let run ?control ~(keyboard : Keyboard.Monitor.t) ~audio (config : config) =
        | Handle handle ->
          let started_at = now_ms () in
          let* () =
-           Eta.Effect.sync (fun () ->
-             log_info "PTT capture started" (ptt_fields config mode))
+           log_info "PTT capture started" (ptt_fields config mode)
          in
          let* () = run_capture mode handle (run_active mode started_at handle) in
          idle_loop ()
        | Scoped with_handle ->
          let started_at = now_ms () in
          let* () =
-           Eta.Effect.sync (fun () ->
-             log_info "PTT capture started" (ptt_fields config mode))
+           log_info "PTT capture started" (ptt_fields config mode)
          in
          let* () =
            with_handle (fun handle ->
@@ -370,16 +368,14 @@ let run ?control ~(keyboard : Keyboard.Monitor.t) ~audio (config : config) =
           | Handle handle ->
             let started_at = now_ms () in
             let* () =
-              Eta.Effect.sync (fun () ->
-                log_info "PTT capture started" (ptt_fields config mode))
+              log_info "PTT capture started" (ptt_fields config mode)
             in
             let* () = run_capture mode handle (run_active mode started_at handle) in
             idle_loop ()
           | Scoped with_handle ->
             let started_at = now_ms () in
             let* () =
-              Eta.Effect.sync (fun () ->
-                log_info "PTT capture started" (ptt_fields config mode))
+              log_info "PTT capture started" (ptt_fields config mode)
             in
             let* () =
               with_handle (fun handle ->
