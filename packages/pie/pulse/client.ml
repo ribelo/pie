@@ -68,12 +68,13 @@ let load_cookie () =
     Error (pulse_error (Authentication_error message))
 
 let protocol_result context f =
-  Eta.Effect.sync_result (fun () ->
-    try Ok (f ()) with
+  Eta.Effect.sync_exn f ~catch:(function
     | Failure message ->
-      Error (pulse_error (Protocol_error (context ^ ": " ^ message)))
+      pulse_error (Protocol_error (context ^ ": " ^ message))
     | Invalid_argument message ->
-      Error (pulse_error (Malformed_packet (context ^ ": " ^ message))))
+      pulse_error (Malformed_packet (context ^ ": " ^ message))
+    | exn ->
+      pulse_error (Protocol_error (context ^ ": " ^ Printexc.to_string exn)))
 
 let malformed context message =
   Eta.Effect.fail (pulse_error (Malformed_packet (context ^ ": " ^ message)))
@@ -187,19 +188,15 @@ let fail_waiters client error =
     List.iter (fun queue -> Eta.Queue.close_with_error queue failure) queues)
 
 let read_chunk (T t) =
-  Eta.Effect.sync_result (fun () ->
-    try
+  Eta.Effect.sync_exn
+    (fun () ->
       let buffer = Cstruct.create 8192 in
       let length = Eio.Flow.single_read t.socket buffer in
-      if length = 0 then Error (pulse_error (Disconnected "end of stream"))
-      else Ok (Some (Cstruct.to_bytes (Cstruct.sub buffer 0 length)))
-    with
-    | Eio.Cancel.Cancelled _ as exn -> raise exn
-    | End_of_file -> Error (pulse_error (Disconnected "end of stream"))
-    | exn ->
-      Error
-        (pulse_error
-           (Disconnected ("reader failed: " ^ Printexc.to_string exn))))
+      if length = 0 then None
+      else Some (Cstruct.to_bytes (Cstruct.sub buffer 0 length)))
+    ~catch:(function
+      | End_of_file -> pulse_error (Disconnected "end of stream")
+      | exn -> pulse_error (Disconnected ("reader failed: " ^ Printexc.to_string exn)))
 
 let read_loop client =
   let rec loop () =
@@ -218,16 +215,10 @@ let read_loop client =
 
 let write_packet (T t) packet =
   Eta.Semaphore.with_permits t.write_lock 1 @@ fun () ->
-  Eta.Effect.sync_result (fun () ->
-    try
-      Eio.Flow.write t.socket [Cstruct.of_bytes packet.Commands.bytes];
-      Ok ()
-    with
-    | Eio.Cancel.Cancelled _ as exn -> raise exn
-    | exn ->
-      Error
-        (pulse_error
-           (Disconnected ("write failed: " ^ Printexc.to_string exn))))
+  Eta.Effect.sync_exn
+    (fun () -> Eio.Flow.write t.socket [Cstruct.of_bytes packet.Commands.bytes])
+    ~catch:(fun exn ->
+      pulse_error (Disconnected ("write failed: " ^ Printexc.to_string exn)))
 
 let await_command (T t as client) (packet : Commands.command_packet) pending await =
   let register =
@@ -351,14 +342,10 @@ let with_eio_switch use =
     | None -> Eta.Spi.Expert.exit_of_exn context exn
 
 let connect_socket ~sw ~net socket_path =
-  Eta.Effect.sync_result (fun () ->
-    try Ok (Eio.Net.connect ~sw net (`Unix socket_path)) with
-    | Eio.Cancel.Cancelled _ as exn -> raise exn
-    | exn ->
-      Error
-        (pulse_error
-           (Disconnected
-              ("connect failed: " ^ Printexc.to_string exn))))
+  Eta.Effect.sync_exn
+    (fun () -> Eio.Net.connect ~sw net (`Unix socket_path))
+    ~catch:(fun exn ->
+      pulse_error (Disconnected ("connect failed: " ^ Printexc.to_string exn)))
 
 let with_client ~net
     ?(socket_path = Defs.pa_default_socket_path)

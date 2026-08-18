@@ -607,14 +607,15 @@ let run
     () =
   (* Load initial config with stamp handling *)
   let* (initial_config, initial_stamp) =
-    Eta.Effect.sync (fun () ->
-      try Ok (Eio_unix.run_in_systhread ~label:"pie initial config load" (fun () -> load_snapshot 3))
-      with
-      | Config.Stt.Config_error message ->
-        Error (`Pulse_error (Pulse.Client.Protocol_error ("Failed to load STT config: " ^ message)))
-      | exn ->
-        Error (`Pulse_error (Pulse.Client.Protocol_error ("Failed to load STT config: " ^ Printexc.to_string exn))))
-    |> Eta.Effect.flatten_result
+    Eta.Effect.sync_exn
+      (fun () ->
+        Eio_unix.run_in_systhread ~label:"pie initial config load" (fun () ->
+          load_snapshot 3))
+      ~catch:(function
+        | Config.Stt.Config_error message ->
+          `Pulse_error (Pulse.Client.Protocol_error ("Failed to load STT config: " ^ message))
+        | exn ->
+          `Pulse_error (Pulse.Client.Protocol_error ("Failed to load STT config: " ^ Printexc.to_string exn)))
   in
   let current = ref initial_config in
   let last_stamp = ref initial_stamp in
@@ -764,14 +765,16 @@ let run
         let expected_stamp = !last_stamp in
         let* result =
           Eta.Effect.sync (fun () ->
-            Eio_unix.run_in_systhread ~label:"pie config reload" (fun () ->
-              let next_stamp = config_stamp () in
-              if next_stamp = expected_stamp then `Unchanged
-              else
-                try
-                  let config, loaded_stamp = load_snapshot 3 in
-                  `Loaded (config, loaded_stamp)
-                with exn -> `Failed (next_stamp, Printexc.to_string exn)))
+            try
+              Eio_unix.run_in_systhread ~label:"pie config reload" (fun () ->
+                let next_stamp = config_stamp () in
+                if next_stamp = expected_stamp then `Unchanged
+                else
+                  try
+                    let config, loaded_stamp = load_snapshot 3 in
+                    `Loaded (config, loaded_stamp)
+                  with exn -> `Failed (next_stamp, Printexc.to_string exn))
+            with exn -> `Failed (expected_stamp, Printexc.to_string exn))
         in
         let* () =
           match result with

@@ -33,7 +33,8 @@ type window_info = {
 
 let focused_window ~process_mgr () =
   let* output = run_niri_json ~process_mgr ["msg"; "focused-window"] in
-  Eta.Effect.sync (fun () ->
+  Eta.Effect.sync_exn
+    (fun () ->
     let open Yojson.Safe in
     let json = from_string output in
     match json with
@@ -57,3 +58,4 @@ let focused_window ~process_mgr () =
         workspace_id = find_int "workspace_id";
       }
     | _ -> None)
+    ~catch:(fun exn -> `Niri_error ("focused-window json: " ^ Printexc.to_string exn))
