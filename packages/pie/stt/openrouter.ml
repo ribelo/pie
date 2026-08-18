@@ -39,7 +39,7 @@ let responses_provider () =
     Openrouter.responses_provider ~base_url:(String.trim value) ()
   | _ -> Openrouter.responses_provider ()
 
-let http_client () = Http.Client.make_runtime ()
+let http_client ~sw ~net = Process.http_client ~sw ~net
 
 let ai_error_message = function
   | A.Eta_http_error error ->
@@ -236,7 +236,7 @@ let run_audio_responses ~sw ~net ~model ~prompt ~sample_rate ~task ?thinking_eff
      Eta.Effect.fail
        (`Stt_error "Missing OpenRouter API key. Set OPENROUTER_API_KEY.")
    | Some api_key ->
-     let client = http_client () in
+     let client = http_client ~sw ~net in
      let* reasoning = reasoning_for_effort thinking_effort in
      let request = responses_request ~model ~prompt ~sample_rate ~task pcm_bytes in
      let* raw =
@@ -256,7 +256,7 @@ let run_audio_responses ~sw ~net ~model ~prompt ~sample_rate ~task ?thinking_eff
   |> with_response_operation_timeout
 
 let transcribe ~sw ~net ~api_key ~model ~language ?(sample_rate = 16000) pcm_bytes =
-  (let client = http_client () in
+  (let client = http_client ~sw ~net in
    let file : A.Audio.upload =
      {
        filename = "pie.wav";

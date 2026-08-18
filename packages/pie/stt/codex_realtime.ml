@@ -339,7 +339,7 @@ let realtime_header_pairs ?session_id access_token =
 let realtime_headers ?session_id access_token =
   headers (realtime_header_pairs ?session_id access_token)
 
-let realtime_rest_client () = Http.Client.make_runtime ()
+let realtime_rest_client ~sw ~net = Process.http_client ~sw ~net
 
 let read_fetched_body body =
   Http.Body.Stream.read_all body
@@ -1009,7 +1009,7 @@ let with_transcription_stream
     ~prompt_template
     ?(sample_rate = 16000)
     use =
-  let client = realtime_rest_client () in
+  let client = realtime_rest_client ~sw ~net in
   let* access_token = realtime_access_token ~client () in
   let prompt = render_template prompt_template [ ("language", language) ] in
   if is_conversation_model model then
@@ -1045,7 +1045,7 @@ let with_translation_stream
     ~prompt_template
     ?(sample_rate = 16000)
     use =
-  let client = realtime_rest_client () in
+  let client = realtime_rest_client ~sw ~net in
   let* access_token = realtime_access_token ~client () in
   let prompt =
     render_template prompt_template [
@@ -1078,7 +1078,7 @@ let with_translation_stream
       use
 
 let transcribe_with_prompt ~sw ~net ~model ~language ~prompt_template ?(sample_rate = 16000) pcm_bytes =
-  let client = realtime_rest_client () in
+  let client = realtime_rest_client ~sw ~net in
   let* access_token = realtime_access_token ~client () in
   let prompt = render_template prompt_template [ ("language", language) ] in
   if is_conversation_model model then
@@ -1112,7 +1112,7 @@ let translate_with_prompt
     ~prompt_template
     ?(sample_rate = 16000)
     pcm_bytes =
-  let client = realtime_rest_client () in
+  let client = realtime_rest_client ~sw ~net in
   let* access_token = realtime_access_token ~client () in
   let prompt =
     render_template prompt_template [

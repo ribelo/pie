@@ -15,7 +15,6 @@ let render_effect_error = function
   | `Daemon_off -> "daemon is not running"
   | `Closed -> "stream closed"
   | `Timeout -> "operation timed out"
-  | `Invalid_config msg -> msg
 
 let pp_effect_error formatter error =
   Format.pp_print_string formatter (render_effect_error error)

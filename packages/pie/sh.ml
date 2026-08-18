@@ -24,11 +24,15 @@ let find_executable name =
 let run ~process_mgr ~prog ~args =
   Eta.Effect.sync_exn
     (fun () -> Eio.Process.run process_mgr (prog :: args))
-    ~catch:(fun exn ->
-      `Subprocess_error (Printf.sprintf "%s failed: %s" prog (Printexc.to_string exn)))
+    ~catch:(function
+      | Eio.Cancel.Cancelled _ as exn -> raise exn
+      | exn ->
+        `Subprocess_error (Printf.sprintf "%s failed: %s" prog (Printexc.to_string exn)))
 
 let run_capture ~process_mgr ~prog ~args =
   Eta.Effect.sync_exn
     (fun () -> Eio.Process.parse_out process_mgr Eio.Buf_read.take_all (prog :: args))
-    ~catch:(fun exn ->
-      `Subprocess_error (Printf.sprintf "%s failed: %s" prog (Printexc.to_string exn)))
+    ~catch:(function
+      | Eio.Cancel.Cancelled _ as exn -> raise exn
+      | exn ->
+        `Subprocess_error (Printf.sprintf "%s failed: %s" prog (Printexc.to_string exn)))

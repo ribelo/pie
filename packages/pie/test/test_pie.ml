@@ -3100,7 +3100,12 @@ let test_process_typed_failure_exit () =
   in
   Alcotest.(check int) "pieeta-np5l" 1 code;
   Alcotest.(check bool) "renders typed failure" true
-    (String.contains stderr 't' && String.length stderr > 0)
+    (let needle = "typed boom" in
+     let rec contains i =
+       i + String.length needle <= String.length stderr
+       && (String.sub stderr i (String.length needle) = needle || contains (i + 1))
+     in
+     contains 0)
 
 let test_process_interrupt_exit () =
   let code =
