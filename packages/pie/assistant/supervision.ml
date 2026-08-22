@@ -26,9 +26,7 @@ let run ~context ~diagnostics =
   let backoffs = Hashtbl.create 4 in
   let get_backoff id =
     let key = Format.asprintf "%a" Entry_id.pp id in
-    match Hashtbl.find_opt backoffs key with
-    | Some v -> v
-    | None -> initial_backoff_ms
+    Option.value ~default:initial_backoff_ms (Hashtbl.find_opt backoffs key)
   in
   let set_backoff id v =
     let key = Format.asprintf "%a" Entry_id.pp id in

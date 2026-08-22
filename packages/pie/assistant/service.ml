@@ -156,9 +156,38 @@ let recognize ~transcribe_keysym ~translate_keysym event =
   recognize_with_shift ~transcribe_keysym ~transcribe_shift:false ~translate_keysym ~translate_shift:false event
 
 (* Robust recognize that does not require shift on release: uses coordinator active mode to disambiguate same-keysym case *)
-let recognize_robust ~coordinator ~transcribe_keysym ~transcribe_shift ~translate_keysym ~translate_shift event =
+let recognize_robust
+    ~coordinator
+    ~latch_keycode
+    ~transcribe_keysym
+    ~transcribe_shift
+    ~translate_keysym
+    ~translate_shift
+    event
+  =
   let has_shift = event.Keyboard.Monitor.state land 1 <> 0 in
-  if event.Keyboard.Monitor.released then
+  let has_mod5 = event.Keyboard.Monitor.state land 128 <> 0 in
+  let right_shift_keysym = 65506 in
+  let latch mode =
+    let snap = Recording.Coordinator.snapshot coordinator in
+    if snap.active && snap.mode = Recording.Coordinator.string_of_mode (recording_mode mode)
+    then Some (Ptt_loop.Release (mode_name mode))
+    else Some (Ptt_loop.Press (mode_name mode))
+  in
+  if event.Keyboard.Monitor.released && !latch_keycode = Some event.keycode then (
+    latch_keycode := None;
+    None
+  )
+  else if has_mod5 && not event.Keyboard.Monitor.released && event.keysym = translate_keysym then (
+    latch_keycode := Some event.keycode;
+    latch Translate
+  )
+  else if has_mod5 && not event.Keyboard.Monitor.released && event.keysym = right_shift_keysym then
+    (
+      latch_keycode := Some event.keycode;
+      latch Transcribe
+    )
+  else if event.Keyboard.Monitor.released then
     let snap = Recording.Coordinator.snapshot coordinator in
     if snap.active then
       if snap.mode = "ptt-transcribe" && event.keysym = transcribe_keysym then Some (Ptt_loop.Release "transcribe")
@@ -635,6 +664,14 @@ let run
             else enqueue (Ptt_loop.Press "transcribe") (Some "ptt transcribe start queued")
           | "ptt-translate-start" -> enqueue (Ptt_loop.Press "translate") (Some "ptt translate start queued")
           | "ptt-translate-stop" -> enqueue (Ptt_loop.Release "translate") (Some "ptt translate stop queued")
+          | "ptt-translate-toggle" ->
+            let snap = Recording.Coordinator.snapshot coordinator in
+            if
+              snap.active
+              && snap.mode
+                 = Recording.Coordinator.string_of_mode Recording.Coordinator.Ptt_translate
+            then enqueue (Ptt_loop.Release "translate") (Some "ptt translate stop queued")
+            else enqueue (Ptt_loop.Press "translate") (Some "ptt translate start queued")
           | "meeting-start" ->
             let result = Recording.Coordinator.try_start coordinator Recording.Coordinator.Meeting_transcribe () in
             let accepted = match result with Recording.Coordinator.Started _ -> true | _ -> false in
@@ -834,17 +871,22 @@ let run
     let supervision = Supervision.run ~context ~diagnostics in
     (* Real PTT loop that uses the outer audio/keyboard/control and current config ref *)
     let ptt_loop =
+      let latch_keycode = ref None in
       let ptt_config : Ptt_loop.config = {
         recognize = (fun event ->
           let cfg = !current in
           let result =
             recognize_robust ~coordinator
+              ~latch_keycode
               ~transcribe_keysym:cfg.ptt_transcribe_keysym ~transcribe_shift:cfg.ptt_transcribe_shift
               ~translate_keysym:cfg.ptt_translate_keysym ~translate_shift:cfg.ptt_translate_shift
               event
           in
-          (* Debug: log every Control_R event to diagnose shift handling *)
-          if event.Keyboard.Monitor.keysym = cfg.ptt_transcribe_keysym || event.Keyboard.Monitor.keysym = cfg.ptt_translate_keysym then
+          (* Log PTT keys and the Right Shift used by the Mod5 transcription latch. *)
+          if event.Keyboard.Monitor.keysym = cfg.ptt_transcribe_keysym
+             || event.Keyboard.Monitor.keysym = cfg.ptt_translate_keysym
+             || event.Keyboard.Monitor.keysym = 65506
+          then
             Process.emit_sync ~level:Info "ptt key event"
               ~attrs:[
                 ("keysym", string_of_int event.Keyboard.Monitor.keysym);
@@ -887,4 +929,3 @@ let run
   in
   Eta_component.Context.run context_body
   |> Eta.Effect.map_error (fun (`Pulse_error _ as e) -> e)
-

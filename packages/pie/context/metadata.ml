@@ -230,11 +230,7 @@ let dune_project dir =
       match forms with
       | None -> []
       | Some forms ->
-        let package_forms =
-          match find_form "package" forms with
-          | Some package_forms -> package_forms
-          | None -> []
-        in
+        let package_forms = Option.value ~default:[] (find_form "package" forms) in
         [
           {
             manifest;

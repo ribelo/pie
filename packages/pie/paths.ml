@@ -5,11 +5,7 @@ let resolve_xdg_home env_key fallback =
   | Some value when String.trim value <> "" ->
     String.trim value
   | _ ->
-    let home =
-      match Sys.getenv_opt "HOME" with
-      | Some h -> h
-      | None -> "/tmp"
-    in
+    let home = Option.value ~default:"/tmp" (Sys.getenv_opt "HOME") in
     Filename.concat home fallback
 
 let xdg_data_home = resolve_xdg_home "XDG_DATA_HOME" ".local/share"

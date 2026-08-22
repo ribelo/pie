@@ -2268,6 +2268,55 @@ let test_assistant_distinguishes_shift_right_control () =
     true
     (recognize (event 1 43 false) = Some (Pie.Ptt_loop.Press "transcribe"))
 
+let test_assistant_mod5_chords_latch () =
+  let coordinator = Pie.Recording.Coordinator.create () in
+  let latch_keycode = ref None in
+  let recognize event =
+    Pie.Assistant.Service.recognize_robust
+      ~coordinator
+      ~latch_keycode
+      ~transcribe_keysym:65508
+      ~transcribe_shift:true
+      ~translate_keysym:65508
+      ~translate_shift:false
+      event
+  in
+  let event ~state ~keysym ~released : Pie.Keyboard.Monitor.key_event =
+    { released; state; keysym; unichar = 0; keycode = 42 }
+  in
+  Alcotest.(check bool)
+    "Mod5 plus Right Control starts translation latch"
+    true
+    (recognize (event ~state:128 ~keysym:65508 ~released:false)
+     = Some (Pie.Ptt_loop.Press "translate"));
+  Alcotest.(check bool)
+    "releasing Right Control does not stop translation latch"
+    true
+    (recognize (event ~state:4 ~keysym:65508 ~released:true) = None);
+  ignore
+    (Pie.Recording.Coordinator.try_start
+       coordinator
+       Pie.Recording.Coordinator.Ptt_translate
+       ());
+  Alcotest.(check bool)
+    "second Mod5 plus Right Control stops translation latch"
+    true
+    (recognize (event ~state:128 ~keysym:65508 ~released:false)
+     = Some (Pie.Ptt_loop.Release "translate"));
+  ignore
+    (Pie.Recording.Coordinator.stop
+       coordinator
+       Pie.Recording.Coordinator.Ptt_translate);
+  Alcotest.(check bool)
+    "Mod5 plus Right Shift starts transcription latch"
+    true
+    (recognize (event ~state:129 ~keysym:65506 ~released:false)
+     = Some (Pie.Ptt_loop.Press "transcribe"));
+  Alcotest.(check bool)
+    "releasing Right Shift does not stop transcription latch"
+    true
+    (recognize (event ~state:128 ~keysym:65506 ~released:true) = None)
+
 let test_assistant_rejects_colliding_effective_keysyms () =
   let dir = temp_dir "pie-stt-config-keysyms" in
   let config_path = Filename.concat dir "stt.toml" in
@@ -3334,9 +3383,11 @@ let () =
            test_assistant_startup_config_json;
          Alcotest.test_case "hot reloads PTT keysyms" `Quick
            test_assistant_hot_reloads_keysyms_and_releases_original_hold;
-         Alcotest.test_case "distinguishes Shift plus Right Control" `Quick
-           test_assistant_distinguishes_shift_right_control;
-         Alcotest.test_case "rejects colliding effective PTT keysyms" `Quick
+	         Alcotest.test_case "distinguishes Shift plus Right Control" `Quick
+	           test_assistant_distinguishes_shift_right_control;
+	         Alcotest.test_case "Mod5 chords latch" `Quick
+	           test_assistant_mod5_chords_latch;
+	         Alcotest.test_case "rejects colliding effective PTT keysyms" `Quick
            test_assistant_rejects_colliding_effective_keysyms;
          Alcotest.test_case "project context" `Quick
            test_assistant_project_context_prompt_context;
@@ -3538,9 +3589,7 @@ let () =
            let base = temp_dir "pie-sh-find" in
            let fake_dir = Filename.concat base "not-an-executable" in
            Unix.mkdir fake_dir 0o700;
-           let old_path =
-             match Sys.getenv_opt "PATH" with Some p -> p | None -> ""
-           in
+           let old_path = Option.value ~default:"" (Sys.getenv_opt "PATH") in
            Unix.putenv "PATH" base;
            try
              let result = Pie.Sh.find_executable "not-an-executable" in
