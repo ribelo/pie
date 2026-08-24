@@ -28,10 +28,10 @@ let pp_error formatter error =
 
 let pulse_error error = `Pulse_error error
 
-let widen_pulse_error effect =
+let widen_pulse_error computation =
   Eta.Effect.map_error
     (function `Pulse_error error -> `Pulse_error error)
-    effect
+    computation
 
 let debug message attrs =
   Eta_observability.log_debug ~attrs message

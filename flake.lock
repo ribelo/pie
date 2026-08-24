@@ -1,5 +1,37 @@
 {
   "nodes": {
+    "eta": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ],
+        "opam-nix": [
+          "opam-nix"
+        ],
+        "opam-repository": [
+          "opam-repository"
+        ],
+        "oxcaml": [
+          "oxcaml"
+        ],
+        "oxcaml-opam-repository": [
+          "oxcaml-opam-repository"
+        ]
+      },
+      "locked": {
+        "lastModified": 1787612945,
+        "narHash": "sha256-p5fDNln8BNEQImtoncva7XbZfyoRXYh096FiH0+YhfI=",
+        "ref": "master",
+        "rev": "1589b3e5033ec1552d9ef0a6f55a248aaf1a814f",
+        "revCount": 2741,
+        "type": "git",
+        "url": "file:///home/ribelo/projects/ribelo/ocaml/Eta"
+      },
+      "original": {
+        "type": "git",
+        "url": "file:///home/ribelo/projects/ribelo/ocaml/Eta"
+      }
+    },
     "flake-compat": {
       "flake": false,
       "locked": {
@@ -178,16 +210,17 @@
     "opam-repository_2": {
       "flake": false,
       "locked": {
-        "lastModified": 1784786182,
-        "narHash": "sha256-IsToT1+ItI1GhnuUOyOlzzgOTBjmkrr1cV30BY5hAbU=",
+        "lastModified": 1784820001,
+        "narHash": "sha256-HSkxEA/shuN0eETbEG+/znCckbNtWjQnfO/UnwdhiaQ=",
         "owner": "ocaml",
         "repo": "opam-repository",
-        "rev": "717c44ec9929ffc34a7a733dde6f29aa59156738",
+        "rev": "4fde328c35c75c2c7269e426a3cf041888890018",
         "type": "github"
       },
       "original": {
         "owner": "ocaml",
         "repo": "opam-repository",
+        "rev": "4fde328c35c75c2c7269e426a3cf041888890018",
         "type": "github"
       }
     },
@@ -216,16 +249,16 @@
     "oxcaml": {
       "flake": false,
       "locked": {
-        "lastModified": 1771613821,
-        "narHash": "sha256-JwVNRca8q1WfmuFLPOK3hL1DxmaKRYd+gJgV9xTDUhI=",
+        "lastModified": 1782978358,
+        "narHash": "sha256-WXDcuVogNNQ/CZaqnhyz0Zq8dwJOvr7PYTsxV12MVUo=",
         "owner": "oxcaml",
         "repo": "oxcaml",
-        "rev": "7d714cfb3f1c79c9b1e2a9c40ac60ba0c44cafd7",
+        "rev": "172cba3614a4a1e8d621d88e3d11de4ad80bed33",
         "type": "github"
       },
       "original": {
         "owner": "oxcaml",
-        "ref": "5.2.0minus-31",
+        "ref": "5.4.0-ox2",
         "repo": "oxcaml",
         "type": "github"
       }
@@ -233,21 +266,23 @@
     "oxcaml-opam-repository": {
       "flake": false,
       "locked": {
-        "lastModified": 1783947609,
-        "narHash": "sha256-2zn4PKRw7vsSh7tp+/nBZFjGE6fWrYm9lgrIWmvfVS8=",
+        "lastModified": 1785483517,
+        "narHash": "sha256-nK+9+cN8j0WFDndW1FEJfaDMruTzrxqL623Nd54dh7E=",
         "owner": "oxcaml",
         "repo": "opam-repository",
-        "rev": "c2662be9bcad3875554acccff7bd1e3fe8cb57bc",
+        "rev": "d65f081024758576f7a848bbd369863e7f7c1e81",
         "type": "github"
       },
       "original": {
         "owner": "oxcaml",
         "repo": "opam-repository",
+        "rev": "d65f081024758576f7a848bbd369863e7f7c1e81",
         "type": "github"
       }
     },
     "root": {
       "inputs": {
+        "eta": "eta",
         "nixpkgs": "nixpkgs",
         "opam-nix": "opam-nix",
         "opam-repository": "opam-repository_2",

@@ -1139,7 +1139,7 @@ let test_speech_operation_deadline_policy () =
 let test_speech_operation_deadlines_are_typed () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  let run effect =
+  let run computation =
     let rt =
       Eta_eio.Runtime.create
         ~sw
@@ -1147,7 +1147,7 @@ let test_speech_operation_deadlines_are_typed () =
         ~sleep:(fun _ -> Eio.Fiber.yield ())
         ()
     in
-    match Eta_eio.Runtime.run rt effect with
+    match Eta_eio.Runtime.run rt computation with
     | Error cause ->
       (match Eta.Cause.failures cause with
        | [`Stt_error message] -> message

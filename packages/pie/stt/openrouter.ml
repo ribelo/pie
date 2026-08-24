@@ -10,14 +10,14 @@ open Eta.Syntax
 let direct_transcription_timeout = Eta.Duration.seconds 60
 let response_operation_timeout = Eta.Duration.seconds 120
 
-let with_direct_transcription_timeout effect =
-  effect
+let with_direct_transcription_timeout computation =
+  computation
   |> Eta.Effect.timeout_as
        direct_transcription_timeout
        ~on_timeout:(`Stt_error "OpenRouter transcription timed out after 60 seconds")
 
-let with_response_operation_timeout effect =
-  effect
+let with_response_operation_timeout computation =
+  computation
   |> Eta.Effect.timeout_as
        response_operation_timeout
        ~on_timeout:(`Stt_error "OpenRouter response operation timed out after 120 seconds")

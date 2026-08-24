@@ -34,12 +34,12 @@ let emit_sync ?(attrs = []) ~level body =
   in
   stderr_logger#log record
 
-let with_stderr_tee effect =
+let with_stderr_tee computation =
   Eta_observability.intercept_log
     (fun record ->
       stderr_logger#log record;
       Eta_observability.Keep)
-    effect
+    computation
 
 let install_signal_interrupt ~sw ~clock =
   let fired = Atomic.make false in

@@ -616,8 +616,8 @@ let empty_session_result = { final = None; deltas = []; error = None; session_se
 let close_ws_ignore ws =
   Http_eio.Ws.Client.close ws |> Eta.Effect.ignore_errors
 
-let with_websocket_establishment_timeout effect =
-  effect
+let with_websocket_establishment_timeout computation =
+  computation
   |> Eta.Effect.timeout_as
        websocket_establishment_timeout
        ~on_timeout:(`Stt_error "Codex realtime WebSocket establishment timed out after 10 seconds")
