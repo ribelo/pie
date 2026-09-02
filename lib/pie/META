@@ -1,0 +1,40 @@
+description = ""
+requires =
+"eio
+ 
+ eio_main
+ 
+ eta
+ 
+ eta_ai
+ 
+ eta_ai_openrouter
+ 
+ eta_component
+ 
+ eta_eio
+ 
+ eta_http
+ 
+ eta_http_eio
+ 
+ eta_observability
+ 
+ eta_otel_eio
+ 
+ eta_stream
+ 
+ re
+ 
+ threads
+ 
+ toml
+ 
+ unix
+ 
+ yojson"
+archive(byte) = "pie.cma"
+archive(native) = "pie.cmxa"
+plugin(byte) = "pie.cma"
+plugin(native) = "pie.cmxs"
+version = "ae4a0f2-dirty"

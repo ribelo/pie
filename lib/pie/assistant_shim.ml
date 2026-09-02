@@ -1,0 +1,1 @@
+module Service = Assistant.Service

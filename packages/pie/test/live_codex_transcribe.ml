@@ -8,24 +8,23 @@ let normalize value =
   let buffer = Buffer.create (String.length value) in
   String.iter
     (fun c ->
-       let c = Char.lowercase_ascii c in
-       if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') then
-         Buffer.add_char buffer c
-       else if c = ' ' || c = '\n' || c = '\r' || c = '\t' then
-         Buffer.add_char buffer ' ')
+      let c = Char.lowercase_ascii c in
+      if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') then
+        Buffer.add_char buffer c
+      else if c = ' ' || c = '\n' || c = '\r' || c = '\t' then
+        Buffer.add_char buffer ' ')
     value;
-  Buffer.contents buffer
-  |> String.split_on_char ' '
+  Buffer.contents buffer |> String.split_on_char ' '
   |> List.filter (fun part -> part <> "")
   |> String.concat " "
 
 let usage () =
   Printf.eprintf
-    "usage: live_codex_transcribe RAW_S16LE_16K_MONO.pcm EXPECTED_TEXT [MODEL]\n%!";
+    "usage: live_codex_transcribe RAW_S16LE_16K_MONO.pcm EXPECTED_TEXT [MODEL]\n\
+     %!";
   exit 64
 
-let render_error = function
-  | `Stt_error message -> message
+let render_error = function `Stt_error message -> message
 
 let () =
   if Array.length Sys.argv < 3 || Array.length Sys.argv > 4 then usage ();
@@ -38,37 +37,30 @@ let () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let operation =
-    Pie.Stt.Codex_realtime.transcribe_with_prompt
-      ~sw
-      ~net:(Eio.Stdenv.net env)
-      ~model
-      ~language:"English"
-      ~prompt_template:"Transcribe the spoken English words. Return only the transcript text."
-      ~sample_rate:16000
-      pcm
-    |> Eta.Effect.timeout_as
-         (Eta.Duration.seconds 45)
+    Pie.Stt.Codex_realtime.transcribe_with_prompt ~sw ~net:(Eio.Stdenv.net env)
+      ~model ~language:"English"
+      ~prompt_template:
+        "Transcribe the spoken English words. Return only the transcript text."
+      ~sample_rate:16000 pcm
+    |> Eta.Effect.timeout_as (Eta.Duration.seconds 45)
          ~on_timeout:(`Stt_error "live transcription timed out")
   in
   match Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env) operation with
   | Ok transcript ->
-    let expected_normalized = normalize expected in
-    let transcript_normalized = normalize transcript in
-    let matched = String.equal expected_normalized transcript_normalized in
-    Printf.printf "expected=%S\n" expected_normalized;
-    Printf.printf "transcript=%S\n" transcript;
-    Printf.printf "normalized_transcript=%S\n" transcript_normalized;
-    Printf.printf "match=%b\n%!" matched;
-    if not matched then exit 2
+      let expected_normalized = normalize expected in
+      let transcript_normalized = normalize transcript in
+      let matched = String.equal expected_normalized transcript_normalized in
+      Printf.printf "expected=%S\n" expected_normalized;
+      Printf.printf "transcript=%S\n" transcript;
+      Printf.printf "normalized_transcript=%S\n" transcript_normalized;
+      Printf.printf "match=%b\n%!" matched;
+      if not matched then exit 2
   | Error cause ->
-    let message =
-      Format.asprintf
-        "%a"
-        (Eta.Cause.pp (fun fmt error ->
-           Format.pp_print_string fmt (render_error error)))
-        cause
-    in
-    Printf.eprintf
-      "error=%s\n%!"
-      message;
-    exit 1
+      let message =
+        Format.asprintf "%a"
+          (Eta.Cause.pp (fun fmt error ->
+               Format.pp_print_string fmt (render_error error)))
+          cause
+      in
+      Printf.eprintf "error=%s\n%!" message;
+      exit 1

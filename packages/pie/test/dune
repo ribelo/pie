@@ -2,7 +2,17 @@
 
 (test
  (name test_pie)
- (libraries pie alcotest eio_main eta eta_ai eta_eio eta_http eta_http_eio eta_http_tls_openssl eta_observability)
+ (libraries
+  pie
+  alcotest
+  eio_main
+  eta
+  eta_ai
+  eta_eio
+  eta_http
+  eta_http_eio
+  eta_http_tls_openssl
+  eta_observability)
  (deps
   (source_tree ../)))
 

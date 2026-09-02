@@ -20,8 +20,7 @@ let encode_packet_header { length; channel; offset_hi; offset_lo; flags } =
   buf
 
 let decode_packet_header (buf : bytes) : packet_header =
-  if Bytes.length buf <> 20 then
-    failwith "invalid packet header size";
+  if Bytes.length buf <> 20 then failwith "invalid packet header size";
   {
     length = int_of_uint32_be buf 0;
     channel = int_of_uint32_be buf 4;
@@ -30,32 +29,37 @@ let decode_packet_header (buf : bytes) : packet_header =
     flags = int_of_uint32_be buf 16;
   }
 
-let frame_packet ?(channel = Defs.pa_no_index) ?(flags = 0) (payload : bytes) : bytes =
-  let header = encode_packet_header { length = Bytes.length payload; channel; offset_hi = 0; offset_lo = 0; flags } in
+let frame_packet ?(channel = Defs.pa_no_index) ?(flags = 0) (payload : bytes) :
+    bytes =
+  let header =
+    encode_packet_header
+      {
+        length = Bytes.length payload;
+        channel;
+        offset_hi = 0;
+        offset_lo = 0;
+        flags;
+      }
+  in
   let result = Bytes.create (20 + Bytes.length payload) in
   Bytes.blit header 0 result 0 20;
   Bytes.blit payload 0 result 20 (Bytes.length payload);
   result
 
-type framed_packet = {
-  header : packet_header;
-  payload : bytes;
-}
+type framed_packet = { header : packet_header; payload : bytes }
 
 let split_framed_packet (packet : bytes) : framed_packet =
-  if Bytes.length packet < 20 then
-    failwith "packet shorter than descriptor";
+  if Bytes.length packet < 20 then failwith "packet shorter than descriptor";
   let header = decode_packet_header (Bytes.sub packet 0 20) in
   let payload = Bytes.sub packet 20 (Bytes.length packet - 20) in
   if Bytes.length payload <> header.length then
-    failwith (Printf.sprintf "packet payload mismatch: expected %d, got %d" header.length (Bytes.length payload));
+    failwith
+      (Printf.sprintf "packet payload mismatch: expected %d, got %d"
+         header.length (Bytes.length payload));
   { header; payload }
 
 module Tag_struct_writer = struct
-  type t = {
-    mutable buf : bytes;
-    mutable offset : int;
-  }
+  type t = { mutable buf : bytes; mutable offset : int }
 
   let create ?(initial_capacity = 64) () =
     { buf = Bytes.create initial_capacity; offset = 0 }
@@ -63,9 +67,7 @@ module Tag_struct_writer = struct
   let ensure t extra_bytes =
     let required = t.offset + extra_bytes in
     if required > Bytes.length t.buf then begin
-      let rec next_size n =
-        if n >= required then n else next_size (n * 2)
-      in
+      let rec next_size n = if n >= required then n else next_size (n * 2) in
       let new_buf = Bytes.create (next_size (Bytes.length t.buf)) in
       Bytes.blit t.buf 0 new_buf 0 t.offset;
       t.buf <- new_buf
@@ -102,18 +104,18 @@ module Tag_struct_writer = struct
 
   let add_string t value =
     match value with
-    | None ->
-      write_tag t Defs.Pa_tag.string_null
+    | None -> write_tag t Defs.Pa_tag.string_null
     | Some s ->
-      write_tag t Defs.Pa_tag.string;
-      ensure t (String.length s + 1);
-      String.iteri (fun i c -> Bytes.set t.buf (t.offset + i) c) s;
-      t.offset <- t.offset + String.length s;
-      Bytes.set_uint8 t.buf t.offset 0;
-      t.offset <- t.offset + 1
+        write_tag t Defs.Pa_tag.string;
+        ensure t (String.length s + 1);
+        String.iteri (fun i c -> Bytes.set t.buf (t.offset + i) c) s;
+        t.offset <- t.offset + String.length s;
+        Bytes.set_uint8 t.buf t.offset 0;
+        t.offset <- t.offset + 1
 
   let add_bool t value =
-    write_tag t (if value then Defs.Pa_tag.boolean_true else Defs.Pa_tag.boolean_false)
+    write_tag t
+      (if value then Defs.Pa_tag.boolean_true else Defs.Pa_tag.boolean_false)
 
   let add_arbitrary t (value : bytes) =
     write_tag t Defs.Pa_tag.arbitrary;
@@ -144,35 +146,40 @@ module Tag_struct_writer = struct
     ensure t (1 + List.length map);
     Bytes.set_uint8 t.buf t.offset (List.length map);
     t.offset <- t.offset + 1;
-    List.iter (fun channel ->
-      Bytes.set_uint8 t.buf t.offset (channel land 0xff);
-      t.offset <- t.offset + 1
-    ) map
+    List.iter
+      (fun channel ->
+        Bytes.set_uint8 t.buf t.offset (channel land 0xff);
+        t.offset <- t.offset + 1)
+      map
 
   let add_props t (props : (string * string) list) =
     write_tag t Defs.Pa_tag.proplist;
-    List.iter (fun (key, value) ->
-      add_string t (Some key);
-      let encoded = Bytes.of_string value in
-      let with_term = Bytes.create (Bytes.length encoded + 1) in
-      Bytes.blit encoded 0 with_term 0 (Bytes.length encoded);
-      Bytes.set_uint8 with_term (Bytes.length encoded) 0;
-      add_u32 t (Bytes.length with_term);
-      add_arbitrary t with_term
-    ) props;
+    List.iter
+      (fun (key, value) ->
+        add_string t (Some key);
+        let encoded = Bytes.of_string value in
+        let with_term = Bytes.create (Bytes.length encoded + 1) in
+        Bytes.blit encoded 0 with_term 0 (Bytes.length encoded);
+        Bytes.set_uint8 with_term (Bytes.length encoded) 0;
+        add_u32 t (Bytes.length with_term);
+        add_arbitrary t with_term)
+      props;
     add_string t None
 
   let add_cvolume t (volumes : int list) =
     if List.length volumes > 255 then
-      failwith (Printf.sprintf "too many channels in cvolume: %d" (List.length volumes));
+      failwith
+        (Printf.sprintf "too many channels in cvolume: %d" (List.length volumes));
     write_tag t Defs.Pa_tag.cvolume;
-    ensure t (1 + List.length volumes * 4);
+    ensure t (1 + (List.length volumes * 4));
     Bytes.set_uint8 t.buf t.offset (List.length volumes);
     t.offset <- t.offset + 1;
-    List.iter (fun volume ->
-      Bytes.set_int32_be t.buf t.offset (Int32.of_int (volume land 0xffffffff));
-      t.offset <- t.offset + 4
-    ) volumes
+    List.iter
+      (fun volume ->
+        Bytes.set_int32_be t.buf t.offset
+          (Int32.of_int (volume land 0xffffffff));
+        t.offset <- t.offset + 4)
+      volumes
 
   let add_volume t value =
     write_tag t Defs.Pa_tag.volume;
@@ -185,15 +192,11 @@ module Tag_struct_writer = struct
     add_u8 t encoding;
     add_props t props
 
-  let finalize t =
-    Bytes.sub t.buf 0 t.offset
+  let finalize t = Bytes.sub t.buf 0 t.offset
 end
 
 module Tag_struct_reader = struct
-  type t = {
-    buf : bytes;
-    mutable offset : int;
-  }
+  type t = { buf : bytes; mutable offset : int }
 
   let create (buf : bytes) = { buf; offset = 0 }
 
@@ -249,16 +252,20 @@ module Tag_struct_reader = struct
     if tag = Defs.Pa_tag.string_null then begin
       t.offset <- t.offset + 1;
       None
-    end else if tag <> Defs.Pa_tag.string then
-      failwith (Printf.sprintf "invalid tag: expected %d or %d, got %d" Defs.Pa_tag.string Defs.Pa_tag.string_null tag)
+    end
+    else if tag <> Defs.Pa_tag.string then
+      failwith
+        (Printf.sprintf "invalid tag: expected %d or %d, got %d"
+           Defs.Pa_tag.string Defs.Pa_tag.string_null tag)
     else begin
       t.offset <- t.offset + 1;
       let start = t.offset in
-      while t.offset < Bytes.length t.buf && Bytes.get_uint8 t.buf t.offset <> 0 do
+      while
+        t.offset < Bytes.length t.buf && Bytes.get_uint8 t.buf t.offset <> 0
+      do
         t.offset <- t.offset + 1
       done;
-      if t.offset >= Bytes.length t.buf then
-        failwith "unterminated string";
+      if t.offset >= Bytes.length t.buf then failwith "unterminated string";
       let value = Bytes.sub_string t.buf start (t.offset - start) in
       t.offset <- t.offset + 1;
       Some value
@@ -280,14 +287,14 @@ module Tag_struct_reader = struct
     if tag = Defs.Pa_tag.boolean_true then begin
       t.offset <- t.offset + 1;
       true
-    end else if tag = Defs.Pa_tag.boolean_false then begin
+    end
+    else if tag = Defs.Pa_tag.boolean_false then begin
       t.offset <- t.offset + 1;
       false
-    end else
-      failwith (Printf.sprintf "invalid bool tag: %d" tag)
+    end
+    else failwith (Printf.sprintf "invalid bool tag: %d" tag)
 
-  let is_sample_format value =
-    value >= 0 && value <= 12
+  let is_sample_format value = value >= 0 && value <= 12
 
   let get_sample_spec t : Defs.sample_spec =
     assert_tag t Defs.Pa_tag.sample_spec;
@@ -324,16 +331,17 @@ module Tag_struct_reader = struct
       match get_string t with
       | None -> List.rev acc
       | Some key ->
-        ignore (get_u32 t);
-        let value_bytes = get_arbitrary t in
-        let without_term =
-          if Bytes.length value_bytes > 0 && Bytes.get_uint8 value_bytes (Bytes.length value_bytes - 1) = 0 then
-            Bytes.sub value_bytes 0 (Bytes.length value_bytes - 1)
-          else
-            value_bytes
-        in
-        let value = Bytes.to_string without_term in
-        read_props ((key, value) :: acc)
+          ignore (get_u32 t);
+          let value_bytes = get_arbitrary t in
+          let without_term =
+            if
+              Bytes.length value_bytes > 0
+              && Bytes.get_uint8 value_bytes (Bytes.length value_bytes - 1) = 0
+            then Bytes.sub value_bytes 0 (Bytes.length value_bytes - 1)
+            else value_bytes
+          in
+          let value = Bytes.to_string without_term in
+          read_props ((key, value) :: acc)
     in
     read_props []
 
@@ -369,5 +377,6 @@ module Tag_struct_reader = struct
 
   let has_remaining t = t.offset < Bytes.length t.buf
 
-  let remaining_bytes t = Bytes.sub t.buf t.offset (Bytes.length t.buf - t.offset)
+  let remaining_bytes t =
+    Bytes.sub t.buf t.offset (Bytes.length t.buf - t.offset)
 end

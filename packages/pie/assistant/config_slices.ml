@@ -1,14 +1,17 @@
 (* Configuration slices projected from Config.Stt.t *)
 
 type pulse_client_config = unit
+
 let pulse_client_equal () () = true
 let pulse_client_slice (_ : Config.Stt.t) = ()
 
 type keyboard_monitor_config = unit
+
 let keyboard_monitor_equal () () = true
 let keyboard_monitor_slice (_ : Config.Stt.t) = ()
 
 type recording_coordinator_config = unit
+
 let recording_coordinator_equal () () = true
 let recording_coordinator_slice (_ : Config.Stt.t) = ()
 
@@ -59,17 +62,20 @@ let wakeword_equal a b =
   a.enabled = b.enabled
   && Float.equal a.dictation_silence_seconds b.dictation_silence_seconds
   && Float.equal a.dictation_max_seconds b.dictation_max_seconds
-  && Float.equal a.dictation_speech_rms_threshold b.dictation_speech_rms_threshold
+  && Float.equal a.dictation_speech_rms_threshold
+       b.dictation_speech_rms_threshold
 
 let wakeword_slice (config : Config.Stt.t) : wakeword_config =
   {
     enabled = config.wakeword_enabled;
     dictation_silence_seconds = config.wakeword_dictation_silence_seconds;
     dictation_max_seconds = config.wakeword_dictation_max_seconds;
-    dictation_speech_rms_threshold = config.wakeword_dictation_speech_rms_threshold;
+    dictation_speech_rms_threshold =
+      config.wakeword_dictation_speech_rms_threshold;
   }
 
 type rpc_server_config = unit
+
 let rpc_server_equal () () = true
 let rpc_server_slice (_ : Config.Stt.t) = ()
 
@@ -92,7 +98,8 @@ let ptt_loop_equal a b =
   && Float.equal a.ptt_min_capture_peak b.ptt_min_capture_peak
   && a.min_duration_ms = b.min_duration_ms
 
-let ptt_loop_slice ?(min_duration_ms = 120) (config : Config.Stt.t) : ptt_loop_config =
+let ptt_loop_slice ?(min_duration_ms = 120) (config : Config.Stt.t) :
+    ptt_loop_config =
   {
     ptt_transcribe_keysym = config.ptt_transcribe_keysym;
     ptt_translate_keysym = config.ptt_translate_keysym;
@@ -109,15 +116,20 @@ let is_only_provider_change (old_c : Config.Stt.t) (new_c : Config.Stt.t) =
   && String.equal old_c.transcription_model new_c.transcription_model
   && String.equal old_c.translation_model new_c.translation_model
   && String.equal old_c.transcription_language new_c.transcription_language
-  && String.equal old_c.translation_source_language new_c.translation_source_language
-  && String.equal old_c.translation_target_language new_c.translation_target_language
+  && String.equal old_c.translation_source_language
+       new_c.translation_source_language
+  && String.equal old_c.translation_target_language
+       new_c.translation_target_language
   && Option.equal String.equal old_c.thinking_effort new_c.thinking_effort
   && String.equal old_c.transcription_prompt new_c.transcription_prompt
   && String.equal old_c.translation_prompt new_c.translation_prompt
   && old_c.wakeword_enabled = new_c.wakeword_enabled
-  && Float.equal old_c.wakeword_dictation_silence_seconds new_c.wakeword_dictation_silence_seconds
-  && Float.equal old_c.wakeword_dictation_max_seconds new_c.wakeword_dictation_max_seconds
-  && Float.equal old_c.wakeword_dictation_speech_rms_threshold new_c.wakeword_dictation_speech_rms_threshold
+  && Float.equal old_c.wakeword_dictation_silence_seconds
+       new_c.wakeword_dictation_silence_seconds
+  && Float.equal old_c.wakeword_dictation_max_seconds
+       new_c.wakeword_dictation_max_seconds
+  && Float.equal old_c.wakeword_dictation_speech_rms_threshold
+       new_c.wakeword_dictation_speech_rms_threshold
   && Float.equal old_c.ptt_min_capture_rms new_c.ptt_min_capture_rms
   && Float.equal old_c.ptt_min_capture_peak new_c.ptt_min_capture_peak
   && old_c.ptt_transcribe_keysym = new_c.ptt_transcribe_keysym
@@ -125,3 +137,4 @@ let is_only_provider_change (old_c : Config.Stt.t) (new_c : Config.Stt.t) =
   && old_c.ptt_transcribe_shift = new_c.ptt_transcribe_shift
   && old_c.ptt_translate_shift = new_c.ptt_translate_shift
   && old_c.newline_rules = new_c.newline_rules
+  && old_c.text_entry_rules = new_c.text_entry_rules

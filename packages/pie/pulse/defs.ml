@@ -1,13 +1,10 @@
 let pa_max_channels = 32
 let pa_default_source = "@DEFAULT_SOURCE@"
-
 let pa_no_value = 0xffffffff
 let pa_no_index = pa_no_value
 let pa_no_tag = pa_no_value
-
 let pa_native_cookie_length = 256
 let pa_native_protocol_version = 32
-
 let pa_volume_norm = 0x10000
 
 let pa_default_socket_path =
@@ -95,12 +92,7 @@ module Pa_sample_format = struct
   let s24_32be = 12
 end
 
-type sample_spec = {
-  format : int;
-  channels : int;
-  rate : int;
-}
-
+type sample_spec = { format : int; channels : int; rate : int }
 type channel_map = int list
 
 type source_info = {
@@ -172,7 +164,8 @@ type record_stream_info = {
   configured_source_latency_usec : int64;
 }
 
-let default_record_stream_options ?(overrides : record_stream_options option) () : record_stream_options =
+let default_record_stream_options ?(overrides : record_stream_options option) ()
+    : record_stream_options =
   let sample_spec =
     match overrides with
     | Some o -> o.sample_spec
@@ -181,41 +174,64 @@ let default_record_stream_options ?(overrides : record_stream_options option) ()
   let channel_map =
     let default_map = List.init sample_spec.channels (fun i -> i + 1) in
     match overrides with
-    | Some o when List.length o.channel_map = sample_spec.channels -> o.channel_map
+    | Some o when List.length o.channel_map = sample_spec.channels ->
+        o.channel_map
     | _ ->
-      (* PulseAudio requires exactly one channel-map entry per channel. Ignore
+        (* PulseAudio requires exactly one channel-map entry per channel. Ignore
          an override map whose length does not match and derive a default. *)
-      default_map
+        default_map
   in
-  let default_volume = List.init sample_spec.channels (fun _ -> pa_volume_norm) in
+  let default_volume =
+    List.init sample_spec.channels (fun _ -> pa_volume_norm)
+  in
   {
     sample_spec;
     channel_map;
-    source_index = (match overrides with Some o -> o.source_index | None -> pa_no_index);
-    source_name = (match overrides with Some o -> o.source_name | None -> None);
-    stream_name = (match overrides with Some o -> o.stream_name | None -> None);
-    maximum_length = (match overrides with Some o -> o.maximum_length | None -> pa_no_value);
-    fragment_size = (match overrides with Some o -> o.fragment_size | None -> pa_no_value);
+    source_index =
+      (match overrides with Some o -> o.source_index | None -> pa_no_index);
+    source_name =
+      (match overrides with Some o -> o.source_name | None -> None);
+    stream_name =
+      (match overrides with Some o -> o.stream_name | None -> None);
+    maximum_length =
+      (match overrides with Some o -> o.maximum_length | None -> pa_no_value);
+    fragment_size =
+      (match overrides with Some o -> o.fragment_size | None -> pa_no_value);
     corked = (match overrides with Some o -> o.corked | None -> false);
     no_remap = (match overrides with Some o -> o.no_remap | None -> false);
     no_remix = (match overrides with Some o -> o.no_remix | None -> false);
     fix_format = (match overrides with Some o -> o.fix_format | None -> false);
     fix_rate = (match overrides with Some o -> o.fix_rate | None -> false);
-    fix_channels = (match overrides with Some o -> o.fix_channels | None -> false);
+    fix_channels =
+      (match overrides with Some o -> o.fix_channels | None -> false);
     no_move = (match overrides with Some o -> o.no_move | None -> false);
-    variable_rate = (match overrides with Some o -> o.variable_rate | None -> false);
-    peak_detect = (match overrides with Some o -> o.peak_detect | None -> false);
-    adjust_latency = (match overrides with Some o -> o.adjust_latency | None -> false);
-    direct_on_input_index = (match overrides with Some o -> o.direct_on_input_index | None -> pa_no_value);
-    early_requests = (match overrides with Some o -> o.early_requests | None -> false);
-    dont_inhibit_auto_suspend = (match overrides with Some o -> o.dont_inhibit_auto_suspend | None -> false);
-    fail_on_suspend = (match overrides with Some o -> o.fail_on_suspend | None -> false);
-    volume = (match overrides with Some o -> o.volume | None -> default_volume);
+    variable_rate =
+      (match overrides with Some o -> o.variable_rate | None -> false);
+    peak_detect =
+      (match overrides with Some o -> o.peak_detect | None -> false);
+    adjust_latency =
+      (match overrides with Some o -> o.adjust_latency | None -> false);
+    direct_on_input_index =
+      (match overrides with
+      | Some o -> o.direct_on_input_index
+      | None -> pa_no_value);
+    early_requests =
+      (match overrides with Some o -> o.early_requests | None -> false);
+    dont_inhibit_auto_suspend =
+      (match overrides with
+      | Some o -> o.dont_inhibit_auto_suspend
+      | None -> false);
+    fail_on_suspend =
+      (match overrides with Some o -> o.fail_on_suspend | None -> false);
+    volume =
+      (match overrides with Some o -> o.volume | None -> default_volume);
     muted = (match overrides with Some o -> o.muted | None -> false);
     volume_set = (match overrides with Some o -> o.volume_set | None -> false);
     muted_set = (match overrides with Some o -> o.muted_set | None -> false);
-    relative_volume = (match overrides with Some o -> o.relative_volume | None -> false);
-    passthrough = (match overrides with Some o -> o.passthrough | None -> false);
+    relative_volume =
+      (match overrides with Some o -> o.relative_volume | None -> false);
+    passthrough =
+      (match overrides with Some o -> o.passthrough | None -> false);
     properties = (match overrides with Some o -> o.properties | None -> []);
   }
 
@@ -225,7 +241,8 @@ type pcm_record_options = {
   source_name : string option;
 }
 
-let make_pcm_record_options ?(channels = 1) ~(rate : int) ~(fragment_size : int) ~(source_name : string option) () : pcm_record_options =
+let make_pcm_record_options ?(channels = 1) ~(rate : int) ~(fragment_size : int)
+    ~(source_name : string option) () : pcm_record_options =
   {
     sample_spec = { format = Pa_sample_format.s16le; channels; rate };
     fragment_size;

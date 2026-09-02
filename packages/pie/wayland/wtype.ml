@@ -1,4 +1,4 @@
-type error = [`Wtype_error of string]
+type error = [ `Wtype_error of string ]
 
 let normalize_for_typing text = String.trim text
 
@@ -6,13 +6,15 @@ let key ?(modifiers = []) ~process_mgr key =
   match Sh.find_executable "wtype" with
   | None -> Eta.Effect.fail (`Wtype_error "wtype not found in PATH")
   | Some wtype ->
-    let args =
-      List.concat_map (fun modifier -> ["-M"; modifier]) modifiers
-      @ ["-k"; key]
-      @ List.concat_map (fun modifier -> ["-m"; modifier]) (List.rev modifiers)
-    in
-    Sh.run ~process_mgr ~prog:wtype ~args
-    |> Eta.Effect.map_error (fun (`Subprocess_error msg) -> `Wtype_error msg)
+      let args =
+        List.concat_map (fun modifier -> [ "-M"; modifier ]) modifiers
+        @ [ "-k"; key ]
+        @ List.concat_map
+            (fun modifier -> [ "-m"; modifier ])
+            (List.rev modifiers)
+      in
+      Sh.run ~process_mgr ~prog:wtype ~args
+      |> Eta.Effect.map_error (fun (`Subprocess_error msg) -> `Wtype_error msg)
 
 let type_text ~process_mgr text =
   let normalized = normalize_for_typing text in
@@ -21,5 +23,6 @@ let type_text ~process_mgr text =
     match Sh.find_executable "wtype" with
     | None -> Eta.Effect.fail (`Wtype_error "wtype not found in PATH")
     | Some wtype ->
-      Sh.run ~process_mgr ~prog:wtype ~args:["--"; normalized]
-      |> Eta.Effect.map_error (fun (`Subprocess_error msg) -> `Wtype_error msg)
+        Sh.run ~process_mgr ~prog:wtype ~args:[ "--"; normalized ]
+        |> Eta.Effect.map_error (fun (`Subprocess_error msg) ->
+            `Wtype_error msg)

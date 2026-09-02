@@ -8,24 +8,24 @@ let normalize value =
   let buffer = Buffer.create (String.length value) in
   String.iter
     (fun c ->
-       let c = Char.lowercase_ascii c in
-       if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') then
-         Buffer.add_char buffer c
-       else if c = ' ' || c = '\n' || c = '\r' || c = '\t' then
-         Buffer.add_char buffer ' ')
+      let c = Char.lowercase_ascii c in
+      if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') then
+        Buffer.add_char buffer c
+      else if c = ' ' || c = '\n' || c = '\r' || c = '\t' then
+        Buffer.add_char buffer ' ')
     value;
-  Buffer.contents buffer
-  |> String.split_on_char ' '
+  Buffer.contents buffer |> String.split_on_char ' '
   |> List.filter (fun part -> part <> "")
   |> String.concat " "
 
 let usage () =
   Printf.eprintf
-    "usage: live_openrouter_translate RAW_S16LE_16K_MONO.pcm EXPECTED_TEXT [MODEL]\n%!";
+    "usage: live_openrouter_translate RAW_S16LE_16K_MONO.pcm EXPECTED_TEXT \
+     [MODEL]\n\
+     %!";
   exit 64
 
-let render_error = function
-  | `Stt_error message -> message
+let render_error = function `Stt_error message -> message
 
 let () =
   if Array.length Sys.argv < 3 || Array.length Sys.argv > 4 then usage ();
@@ -37,47 +37,41 @@ let () =
   in
   let resolved_model =
     Pie.Config.Stt.resolve_model_provider
-      ~default_provider:Pie.Config.Stt.Openrouter
-      model
+      ~default_provider:Pie.Config.Stt.Openrouter model
   in
   if resolved_model.provider <> Pie.Config.Stt.Openrouter then (
     Printf.eprintf "model must resolve to OpenRouter: %s\n%!" model;
-    exit 64
-  );
+    exit 64);
   let pcm = Bytes.of_string (read_file pcm_path) in
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let operation =
-    Pie.Stt.Openrouter.translate_with_prompt
-      ~sw
-      ~net:(Eio.Stdenv.net env)
-      ~model:resolved_model.model
-      ~source_language:"English"
+    Pie.Stt.Openrouter.translate_with_prompt ~sw ~net:(Eio.Stdenv.net env)
+      ~model:resolved_model.model ~source_language:"English"
       ~target_language:"English"
-      ~prompt_template:"Translate the spoken audio from {{source_language}} to {{target_language}}."
-      ~sample_rate:16000
-      pcm
-    |> Eta.Effect.timeout_as
-         (Eta.Duration.seconds 90)
+      ~prompt_template:
+        "Translate the spoken audio from {{source_language}} to \
+         {{target_language}}."
+      ~sample_rate:16000 pcm
+    |> Eta.Effect.timeout_as (Eta.Duration.seconds 90)
          ~on_timeout:(`Stt_error "live OpenRouter translation timed out")
   in
   match Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env) operation with
   | Ok translation ->
-    let expected_normalized = normalize expected in
-    let translation_normalized = normalize translation in
-    let matched = String.equal expected_normalized translation_normalized in
-    Printf.printf "expected=%S\n" expected_normalized;
-    Printf.printf "translation=%S\n" translation;
-    Printf.printf "normalized_translation=%S\n" translation_normalized;
-    Printf.printf "match=%b\n%!" matched;
-    if not matched then exit 2
+      let expected_normalized = normalize expected in
+      let translation_normalized = normalize translation in
+      let matched = String.equal expected_normalized translation_normalized in
+      Printf.printf "expected=%S\n" expected_normalized;
+      Printf.printf "translation=%S\n" translation;
+      Printf.printf "normalized_translation=%S\n" translation_normalized;
+      Printf.printf "match=%b\n%!" matched;
+      if not matched then exit 2
   | Error cause ->
-    let message =
-      Format.asprintf
-        "%a"
-        (Eta.Cause.pp (fun fmt error ->
-           Format.pp_print_string fmt (render_error error)))
-        cause
-    in
-    Printf.eprintf "error=%s\n%!" message;
-    exit 1
+      let message =
+        Format.asprintf "%a"
+          (Eta.Cause.pp (fun fmt error ->
+               Format.pp_print_string fmt (render_error error)))
+          cause
+      in
+      Printf.eprintf "error=%s\n%!" message;
+      exit 1

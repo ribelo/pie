@@ -28,5 +28,5 @@ pie --help
 The expected binary target is:
 
 ```text
-/home/ribelo/.cache/opam/5.2.0+ox/bin/pie
+/home/ribelo/.cache/opam/5.4.0+ox/bin/pie
 ```

@@ -7,21 +7,23 @@ type detector = {
 
 let warning_threshold = 4
 
-let initial () = {
-  active = false;
-  consecutive_zero_chunks = 0;
-  warned_this_hold = false;
-  dead_this_hold = false;
-}
-
-let sync detector is_active =
-  if not is_active then initial ()
-  else if not detector.active then {
-    active = true;
+let initial () =
+  {
+    active = false;
     consecutive_zero_chunks = 0;
     warned_this_hold = false;
     dead_this_hold = false;
   }
+
+let sync detector is_active =
+  if not is_active then initial ()
+  else if not detector.active then
+    {
+      active = true;
+      consecutive_zero_chunks = 0;
+      warned_this_hold = false;
+      dead_this_hold = false;
+    }
   else detector
 
 let is_flatline (pcm : bytes) : bool =
@@ -54,13 +56,22 @@ let process_chunk detector chunk =
       if is_flat then detector.consecutive_zero_chunks + 1 else 0
     in
     if next_consecutive < warning_threshold then
-      { detector = { detector with consecutive_zero_chunks = next_consecutive };
-        warn = false; dead = false; has_input }
+      {
+        detector = { detector with consecutive_zero_chunks = next_consecutive };
+        warn = false;
+        dead = false;
+        has_input;
+      }
     else
-      { detector = {
-          active = true;
-          consecutive_zero_chunks = next_consecutive;
-          warned_this_hold = true;
-          dead_this_hold = true;
-        };
-        warn = true; dead = true; has_input = false }
+      {
+        detector =
+          {
+            active = true;
+            consecutive_zero_chunks = next_consecutive;
+            warned_this_hold = true;
+            dead_this_hold = true;
+          };
+        warn = true;
+        dead = true;
+        has_input = false;
+      }

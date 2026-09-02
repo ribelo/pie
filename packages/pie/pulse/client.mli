@@ -8,7 +8,6 @@ type error =
 
 val error_message : error -> string
 val pp_error : Format.formatter -> error -> unit
-
 val default_request_timeout : Eta.Duration.t
 val record_stream_capacity : int
 
@@ -21,15 +20,15 @@ val with_client :
   ?client_name:string ->
   ?protocol_version:int ->
   ?request_timeout:Eta.Duration.t ->
-  (t -> ('a, [> `Pulse_error of error ] as 'err) Eta.Effect.t) ->
+  (t -> ('a, ([> `Pulse_error of error ] as 'err)) Eta.Effect.t) ->
   ('a, 'err) Eta.Effect.t
 
 val with_record_stream :
   t ->
   ?options:Defs.record_stream_options ->
   (Defs.record_stream_info ->
-   (bytes, [ `Pulse_error of error ]) Eta_stream.Stream.t ->
-   ('a, [> `Pulse_error of error ] as 'err) Eta.Effect.t) ->
+  (bytes, [ `Pulse_error of error ]) Eta_stream.Stream.t ->
+  ('a, ([> `Pulse_error of error ] as 'err)) Eta.Effect.t) ->
   ('a, 'err) Eta.Effect.t
 
 val get_server_info :

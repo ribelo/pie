@@ -84,12 +84,7 @@ module Pa_sample_format : sig
   val s24_32be : int
 end
 
-type sample_spec = {
-  format : int;
-  channels : int;
-  rate : int;
-}
-
+type sample_spec = { format : int; channels : int; rate : int }
 type channel_map = int list
 
 type source_info = {
@@ -161,7 +156,8 @@ type record_stream_info = {
   configured_source_latency_usec : int64;
 }
 
-val default_record_stream_options : ?overrides:record_stream_options -> unit -> record_stream_options
+val default_record_stream_options :
+  ?overrides:record_stream_options -> unit -> record_stream_options
 
 type pcm_record_options = {
   sample_spec : sample_spec;
@@ -169,4 +165,10 @@ type pcm_record_options = {
   source_name : string option;
 }
 
-val make_pcm_record_options : ?channels:int -> rate:int -> fragment_size:int -> source_name:string option -> unit -> pcm_record_options
+val make_pcm_record_options :
+  ?channels:int ->
+  rate:int ->
+  fragment_size:int ->
+  source_name:string option ->
+  unit ->
+  pcm_record_options

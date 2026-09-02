@@ -8,6 +8,7 @@ val openwakeword_data_dir : string
 val wakeword_config_dir : string
 val daemon_socket_path : string
 val recording_state_path : string
+val failed_recordings_dir : string
 val meetings_dir : string
 val stt_config_path : string
 val prompts_dir : string

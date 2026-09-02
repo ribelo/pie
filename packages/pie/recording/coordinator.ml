@@ -28,10 +28,7 @@ type state = {
   updated_at : float;
 }
 
-type t = {
-  persist_path : string;
-  state : state ref;
-}
+type t = { persist_path : string; state : state ref }
 
 let string_of_mode = function
   | Ptt_transcribe -> "ptt-transcribe"
@@ -46,30 +43,24 @@ let mode_of_string = function
   | "meeting-transcribe" -> Some Meeting_transcribe
   | _ -> None
 
-let initial_state now = {
-  enabled = true;
-  mode = None;
-  started_at = None;
-  transcript_path = None;
-  last_error = None;
-  updated_at = now;
-}
+let initial_state now =
+  {
+    enabled = true;
+    mode = None;
+    started_at = None;
+    transcript_path = None;
+    last_error = None;
+    updated_at = now;
+  }
 
 let iso_of_unix seconds =
   let tm = Unix.gmtime seconds in
-  Printf.sprintf "%04d-%02d-%02dT%02d:%02d:%02dZ"
-    (tm.tm_year + 1900)
-    (tm.tm_mon + 1)
-    tm.tm_mday
-    tm.tm_hour
-    tm.tm_min
-    tm.tm_sec
+  Printf.sprintf "%04d-%02d-%02dT%02d:%02d:%02dZ" (tm.tm_year + 1900)
+    (tm.tm_mon + 1) tm.tm_mday tm.tm_hour tm.tm_min tm.tm_sec
 
 let snapshot_of_state state =
   let mode =
-    match state.mode with
-    | Some mode -> string_of_mode mode
-    | None -> "idle"
+    match state.mode with Some mode -> string_of_mode mode | None -> "idle"
   in
   {
     enabled = state.enabled;
@@ -82,15 +73,21 @@ let snapshot_of_state state =
   }
 
 let json_of_snapshot (snapshot : snapshot) =
-  `Assoc [
-    ("enabled", `Bool snapshot.enabled);
-    ("active", `Bool snapshot.active);
-    ("mode", `String snapshot.mode);
-    ("startedAt", (match snapshot.started_at with Some s -> `String s | None -> `Null));
-    ("updatedAt", `String snapshot.updated_at);
-    ("transcriptPath", (match snapshot.transcript_path with Some s -> `String s | None -> `Null));
-    ("lastError", (match snapshot.last_error with Some s -> `String s | None -> `Null));
-  ]
+  `Assoc
+    [
+      ("enabled", `Bool snapshot.enabled);
+      ("active", `Bool snapshot.active);
+      ("mode", `String snapshot.mode);
+      ( "startedAt",
+        match snapshot.started_at with Some s -> `String s | None -> `Null );
+      ("updatedAt", `String snapshot.updated_at);
+      ( "transcriptPath",
+        match snapshot.transcript_path with
+        | Some s -> `String s
+        | None -> `Null );
+      ( "lastError",
+        match snapshot.last_error with Some s -> `String s | None -> `Null );
+    ]
 
 let mkdir_p = Fs.mkdir_p
 
@@ -101,8 +98,9 @@ let write_state t =
   Fun.protect
     ~finally:(fun () -> close_out_noerr oc)
     (fun () ->
-       output_string oc (Yojson.Safe.pretty_to_string (json_of_snapshot snapshot));
-       output_char oc '\n')
+      output_string oc
+        (Yojson.Safe.pretty_to_string (json_of_snapshot snapshot));
+      output_char oc '\n')
 
 (* Best-effort persistence used on every state mutation: the in-memory state
    is authoritative, so a transient write failure is logged rather than
@@ -111,10 +109,7 @@ let persist t =
   try write_state t
   with exn ->
     Process.emit_sync ~level:Error
-      ~attrs:[
-        ("path", t.persist_path);
-        ("error", Printexc.to_string exn);
-      ]
+      ~attrs:[ ("path", t.persist_path); ("error", Printexc.to_string exn) ]
       "failed to write recording state"
 
 let create ?(persist_path = Paths.recording_state_path) () =
@@ -135,84 +130,96 @@ let mutate t f =
 
 let try_start t mode ?transcript_path () =
   mutate t (fun current ->
-    if not current.enabled then
-      (Disabled, current)
-    else
-      match current.mode with
-      | Some active -> (Busy active, current)
-      | None ->
-        let now = Unix.gettimeofday () in
-        (Started mode, {
-          enabled = current.enabled;
-          mode = Some mode;
-          started_at = Some now;
-          transcript_path;
-          last_error = None;
-          updated_at = now;
-        }))
+      if not current.enabled then (Disabled, current)
+      else
+        match current.mode with
+        | Some active -> (Busy active, current)
+        | None ->
+            let now = Unix.gettimeofday () in
+            ( Started mode,
+              {
+                enabled = current.enabled;
+                mode = Some mode;
+                started_at = Some now;
+                transcript_path;
+                last_error = None;
+                updated_at = now;
+              } ))
 
 let stop t mode =
   mutate t (fun current ->
-    match current.mode with
-    | Some active when active = mode ->
-      let now = Unix.gettimeofday () in
-      (true, {
-        enabled = current.enabled;
-        mode = None;
-        started_at = None;
-        transcript_path = None;
-        last_error = current.last_error;
-        updated_at = now;
-      })
-    | _ -> (false, current))
+      match current.mode with
+      | Some active when active = mode ->
+          let now = Unix.gettimeofday () in
+          ( true,
+            {
+              enabled = current.enabled;
+              mode = None;
+              started_at = None;
+              transcript_path = None;
+              last_error = current.last_error;
+              updated_at = now;
+            } )
+      | _ -> (false, current))
 
 let set_enabled t enabled =
   mutate t (fun current ->
-    ((), { current with enabled; updated_at = Unix.gettimeofday () }))
+      ((), { current with enabled; updated_at = Unix.gettimeofday () }))
 
 let toggle_enabled t =
   mutate t (fun current ->
-    let enabled = not current.enabled in
-    (enabled, { current with enabled; updated_at = Unix.gettimeofday () }))
+      let enabled = not current.enabled in
+      (enabled, { current with enabled; updated_at = Unix.gettimeofday () }))
 
 let toggle_meeting t =
   mutate t (fun current ->
-    let now = Unix.gettimeofday () in
-    match current.mode with
-    | Some Meeting_transcribe ->
-      let next = {
-        enabled = current.enabled;
-        mode = None;
-        started_at = None;
-        transcript_path = None;
-        last_error = current.last_error;
-        updated_at = now;
-      } in
-      (snapshot_of_state next, next)
-    | None when current.enabled ->
-      let next = {
-        enabled = current.enabled;
-        mode = Some Meeting_transcribe;
-        started_at = Some now;
-        transcript_path = None;
-        last_error = None;
-        updated_at = now;
-      } in
-      (snapshot_of_state next, next)
-    | _ -> (snapshot_of_state current, current))
+      let now = Unix.gettimeofday () in
+      match current.mode with
+      | Some Meeting_transcribe ->
+          let next =
+            {
+              enabled = current.enabled;
+              mode = None;
+              started_at = None;
+              transcript_path = None;
+              last_error = current.last_error;
+              updated_at = now;
+            }
+          in
+          (snapshot_of_state next, next)
+      | None when current.enabled ->
+          let next =
+            {
+              enabled = current.enabled;
+              mode = Some Meeting_transcribe;
+              started_at = Some now;
+              transcript_path = None;
+              last_error = None;
+              updated_at = now;
+            }
+          in
+          (snapshot_of_state next, next)
+      | _ -> (snapshot_of_state current, current))
 
 let set_error t message =
   mutate t (fun current ->
-    ((), { current with last_error = Some message; updated_at = Unix.gettimeofday () }))
+      ( (),
+        {
+          current with
+          last_error = Some message;
+          updated_at = Unix.gettimeofday ();
+        } ))
 
 let clear t =
   mutate t (fun current ->
-    let next = {
-      enabled = current.enabled;
-      mode = None;
-      started_at = None;
-      transcript_path = None;
-      last_error = None;
-      updated_at = Unix.gettimeofday ();
-    } in
-    ((), next))
+      let next =
+        {
+          enabled = current.enabled;
+          mode = None;
+          started_at = None;
+          transcript_path = None;
+          last_error = None;
+          updated_at = Unix.gettimeofday ();
+        }
+      in
+      ((), next))

@@ -1,17 +1,19 @@
 (** Process door: OTEL scope, stderr logfmt tee, HTTP client, and exit mapping.
 
-    [Eta_eio.run_main] does not expose the Eio environment. This module uses
-    the same public [Exit] verbs and signal-to-interrupt mapping as [run_main],
-    and installs HTTP independently of whether OTEL export is enabled. *)
+    [Eta_eio.run_main] does not expose the Eio environment. This module uses the
+    same public [Exit] verbs and signal-to-interrupt mapping as [run_main], and
+    installs HTTP independently of whether OTEL export is enabled. *)
 
 exception Process_interrupt
 
 let stderr_logger : Eta.Capabilities.logger =
   object
     method log record =
-      try Printf.eprintf "%s\n%!" (Eta_observability.Logger.format_logfmt record)
+      try
+        Printf.eprintf "%s\n%!" (Eta_observability.Logger.format_logfmt record)
       with Invalid_argument _ ->
-        Printf.eprintf "level=error body=\"invalid log attributes\" component=pie\n%!"
+        Printf.eprintf
+          "level=error body=\"invalid log attributes\" component=pie\n%!"
   end
 
 let process_http_client : Eta_http.Client.t option ref = ref None
@@ -92,10 +94,10 @@ let run ~pp_err mk_eff =
         | Ok _ -> 0
         | Error cause when Eta.Cause.is_interrupt_only cause -> 130
         | Error _ as error ->
-          (match Eta.Exit.render_error ~pp_err:pp error with
-           | Some message -> Printf.eprintf "%s\n%!" message
-           | None -> ());
-          Eta.Exit.process_code error ~ok:(fun _ -> 0))
+            (match Eta.Exit.render_error ~pp_err:pp error with
+            | Some message -> Printf.eprintf "%s\n%!" message
+            | None -> ());
+            Eta.Exit.process_code error ~ok:(fun _ -> 0))
   with
   | Process_interrupt -> 130
   | Eio.Cancel.Cancelled _ -> 130

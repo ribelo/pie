@@ -10,10 +10,7 @@ val encode_packet_header : packet_header -> bytes
 val decode_packet_header : bytes -> packet_header
 val frame_packet : ?channel:int -> ?flags:int -> bytes -> bytes
 
-type framed_packet = {
-  header : packet_header;
-  payload : bytes;
-}
+type framed_packet = { header : packet_header; payload : bytes }
 
 val split_framed_packet : bytes -> framed_packet
 

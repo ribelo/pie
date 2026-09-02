@@ -11,6 +11,14 @@ type newline_rule = Input.Text_injection.newline_rule = {
   action : newline_action;
 }
 
+type entry_method = Input.Text_injection.entry_method = Type | Paste
+
+type text_entry_rule = Input.Text_injection.text_entry_rule = {
+  app_id : string option;
+  title_regex : string option;
+  method_ : entry_method;
+}
+
 type t = {
   provider : provider;
   transcription_model : string;
@@ -32,14 +40,12 @@ type t = {
   transcription_prompt : string;
   translation_prompt : string;
   newline_rules : newline_rule list;
+  text_entry_rules : text_entry_rule list;
 }
 
 exception Config_error of string
 
-type resolved_model = {
-  provider : provider;
-  model : string;
-}
+type resolved_model = { provider : provider; model : string }
 
 let provider_of_string = function
   | "codex-realtime" -> Codex_realtime
@@ -54,36 +60,45 @@ let split_first_slash value =
   match String.index_opt value '/' with
   | None -> None
   | Some index ->
-    let prefix = String.sub value 0 index in
-    let suffix = String.sub value (index + 1) (String.length value - index - 1) in
-    Some (prefix, suffix)
+      let prefix = String.sub value 0 index in
+      let suffix =
+        String.sub value (index + 1) (String.length value - index - 1)
+      in
+      Some (prefix, suffix)
 
 let provider_of_string_opt value =
   try Some (provider_of_string value) with Config_error _ -> None
 
 let resolve_model_provider ~default_provider model =
   match split_first_slash model with
-  | Some (prefix, model) ->
-    (match provider_of_string_opt prefix with
-     | Some provider when String.trim model = "" ->
-       raise
-         (Config_error
-            (Printf.sprintf "model for provider %s is empty" prefix))
-     | Some provider -> { provider; model }
-     | None -> { provider = default_provider; model = prefix ^ "/" ^ model })
+  | Some (prefix, model) -> (
+      match provider_of_string_opt prefix with
+      | Some provider when String.trim model = "" ->
+          raise
+            (Config_error
+               (Printf.sprintf "model for provider %s is empty" prefix))
+      | Some provider -> { provider; model }
+      | None -> { provider = default_provider; model = prefix ^ "/" ^ model })
   | None -> { provider = default_provider; model }
 
 let newline_action_of_string = function
-  | "collapse"
-  | "collapse-to-space" -> Collapse_to_space
+  | "collapse" | "collapse-to-space" -> Collapse_to_space
   | "shift-enter" -> Shift_enter
   | "ctrl-j" -> Ctrl_j
-  | s -> raise (Config_error (Printf.sprintf "unknown newline rule action: %s" s))
+  | s ->
+      raise (Config_error (Printf.sprintf "unknown newline rule action: %s" s))
 
 let string_of_newline_action = function
   | Collapse_to_space -> "collapse-to-space"
   | Shift_enter -> "shift-enter"
   | Ctrl_j -> "ctrl-j"
+
+let entry_method_of_string = function
+  | "type" -> Type
+  | "paste" -> Paste
+  | s -> raise (Config_error (Printf.sprintf "unknown text entry method: %s" s))
+
+let string_of_entry_method = function Type -> "type" | Paste -> "paste"
 
 let load_prompt path =
   try
@@ -93,7 +108,8 @@ let load_prompt path =
     close_in ic;
     content
   with Sys_error msg ->
-    raise (Config_error (Printf.sprintf "failed to read prompt %s: %s" path msg))
+    raise
+      (Config_error (Printf.sprintf "failed to read prompt %s: %s" path msg))
 
 let contains_substring ~needle haystack =
   let needle_len = String.length needle in
@@ -114,24 +130,27 @@ let validate_transcription_prompt content =
   if String.length trimmed = 0 then
     raise (Config_error "transcription prompt is empty");
   if not (contains_substring ~needle:"{{language}}" trimmed) then
-    raise (Config_error "transcription prompt missing required placeholder {{language}}")
+    raise
+      (Config_error
+         "transcription prompt missing required placeholder {{language}}")
 
 let validate_translation_prompt content =
   let trimmed = String.trim content in
   if String.length trimmed = 0 then
     raise (Config_error "translation prompt is empty");
-  if not
-       (contains_substring ~needle:"{{source_language}}" trimmed
-        && contains_substring ~needle:"{{target_language}}" trimmed)
+  if
+    not
+      (contains_substring ~needle:"{{source_language}}" trimmed
+      && contains_substring ~needle:"{{target_language}}" trimmed)
   then
     raise
       (Config_error
-         "translation prompt missing required placeholders {{source_language}} and {{target_language}}")
+         "translation prompt missing required placeholders {{source_language}} \
+          and {{target_language}}")
 
 module TT = Toml.Types
 
 let toml_key key = TT.Table.Key.of_string key
-
 let toml_find table key = TT.Table.find_opt (toml_key key) table
 
 let type_error key expected =
@@ -164,37 +183,36 @@ let get_int table key default_val =
 
 let get_optional_string table key =
   match toml_find table key with
-  | Some (TT.TString value) ->
-    (match String.trim value with
-     | "" -> None
-     | trimmed -> Some trimmed)
+  | Some (TT.TString value) -> (
+      match String.trim value with "" -> None | trimmed -> Some trimmed)
   | Some _ -> type_error key "a string"
   | None -> None
 
 let parse_thinking_effort table =
   match get_optional_string table "thinking_effort" with
   | None -> None
-  | Some value ->
-    (match String.lowercase_ascii (String.trim value) with
-     | "" -> raise (Config_error "thinking_effort must not be empty")
-     | "minimal"
-     | "low"
-     | "medium"
-     | "high"
-     | "xhigh" as effort -> Some effort
-     | effort ->
-       raise
-         (Config_error
-            (Printf.sprintf
-               "thinking_effort must be minimal, low, medium, high, or xhigh; got %s"
-               effort)))
+  | Some value -> (
+      match String.lowercase_ascii (String.trim value) with
+      | "" -> raise (Config_error "thinking_effort must not be empty")
+      | ("minimal" | "low" | "medium" | "high" | "xhigh") as effort ->
+          Some effort
+      | effort ->
+          raise
+            (Config_error
+               (Printf.sprintf
+                  "thinking_effort must be minimal, low, medium, high, or \
+                   xhigh; got %s"
+                  effort)))
 
-let validate_title_regex index = function
+let validate_title_regex section index = function
   | None -> ()
-  | Some pattern ->
-    try ignore (Re.Perl.compile_pat pattern)
-    with Re.Perl.Parse_error ->
-      raise (Config_error (Printf.sprintf "newline_rules[%d].title_regex is not a valid regex" index))
+  | Some pattern -> (
+      try ignore (Re.Perl.compile_pat pattern)
+      with Re.Perl.Parse_error ->
+        raise
+          (Config_error
+             (Printf.sprintf "%s[%d].title_regex is not a valid regex" section
+                index)))
 
 let parse_newline_rule index table =
   let app_id = get_optional_string table "app_id" in
@@ -202,11 +220,17 @@ let parse_newline_rule index table =
   let action =
     match get_optional_string table "action" with
     | Some action -> newline_action_of_string action
-    | None -> raise (Config_error (Printf.sprintf "newline_rules[%d].action is required" index))
+    | None ->
+        raise
+          (Config_error
+             (Printf.sprintf "newline_rules[%d].action is required" index))
   in
   if app_id = None && title_regex = None then
-    raise (Config_error (Printf.sprintf "newline_rules[%d] must set app_id or title_regex" index));
-  validate_title_regex index title_regex;
+    raise
+      (Config_error
+         (Printf.sprintf "newline_rules[%d] must set app_id or title_regex"
+            index));
+  validate_title_regex "newline_rules" index title_regex;
   { app_id; title_regex; action }
 
 let parse_newline_rules table =
@@ -215,40 +239,69 @@ let parse_newline_rules table =
   | Some (TT.TArray (TT.NodeTable rules)) -> List.mapi parse_newline_rule rules
   | Some _ -> raise (Config_error "newline_rules must be an array of tables")
 
+let parse_text_entry_rule index table =
+  let app_id = get_optional_string table "app_id" in
+  let title_regex = get_optional_string table "title_regex" in
+  let method_ =
+    match get_optional_string table "method" with
+    | Some method_ -> entry_method_of_string method_
+    | None ->
+        raise
+          (Config_error
+             (Printf.sprintf "text_entry_rules[%d].method is required" index))
+  in
+  if app_id = None && title_regex = None then
+    raise
+      (Config_error
+         (Printf.sprintf "text_entry_rules[%d] must set app_id or title_regex"
+            index));
+  validate_title_regex "text_entry_rules" index title_regex;
+  { app_id; title_regex; method_ }
+
+let parse_text_entry_rules table =
+  match toml_find table "text_entry_rules" with
+  | None -> []
+  | Some (TT.TArray (TT.NodeTable rules)) ->
+      List.mapi parse_text_entry_rule rules
+  | Some _ -> raise (Config_error "text_entry_rules must be an array of tables")
+
 let load_toml config_path =
   try
     match Toml.Parser.from_filename config_path with
     | `Ok table -> table
     | `Error (msg, location) ->
-      raise
-        (Config_error
-           (Printf.sprintf
-              "invalid TOML in %s:%d:%d: %s"
-              config_path
-              location.Toml.Parser.line
-              location.column
-              msg))
+        raise
+          (Config_error
+             (Printf.sprintf "invalid TOML in %s:%d:%d: %s" config_path
+                location.Toml.Parser.line location.column msg))
   with Sys_error _ ->
-    let legacy_json = Filename.concat (Filename.dirname config_path) "stt.json" in
+    let legacy_json =
+      Filename.concat (Filename.dirname config_path) "stt.json"
+    in
     if Sys.file_exists legacy_json then
       raise
         (Config_error
            (Printf.sprintf
-              "STT config moved to TOML at %s; migrate legacy JSON config from %s"
-              config_path
-              legacy_json))
+              "STT config moved to TOML at %s; migrate legacy JSON config from \
+               %s"
+              config_path legacy_json))
     else
-      raise (Config_error (Printf.sprintf "STT config not found at %s" config_path))
+      raise
+        (Config_error (Printf.sprintf "STT config not found at %s" config_path))
 
 let load ?(config_path = Paths.stt_config_path) () : t =
   let table = load_toml config_path in
-  let provider = provider_of_string (get_string table "provider" "codex-realtime") in
+  let provider =
+    provider_of_string (get_string table "provider" "codex-realtime")
+  in
   let default_model =
     match provider with
     | Codex_realtime -> "gpt-realtime-2.1"
     | Openrouter -> "openrouter/xiaomi/mimo-v2.5"
   in
-  let transcription_model = get_string table "transcription_model" default_model in
+  let transcription_model =
+    get_string table "transcription_model" default_model
+  in
   let translation_model = get_string table "translation_model" default_model in
   let ptt_transcribe_keysym = get_int table "ptt_transcribe_keysym" 65478 in
   let ptt_translate_keysym = get_int table "ptt_translate_keysym" 65479 in
@@ -261,12 +314,13 @@ let load ?(config_path = Paths.stt_config_path) () : t =
   if
     ptt_transcribe_keysym = ptt_translate_keysym
     && ptt_transcribe_shift = ptt_translate_shift
-  then
-    raise (Config_error "PTT transcribe and translate bindings must differ");
+  then raise (Config_error "PTT transcribe and translate bindings must differ");
   ignore (resolve_model_provider ~default_provider:provider transcription_model);
   ignore (resolve_model_provider ~default_provider:provider translation_model);
   let prompts_dir = Filename.concat (Filename.dirname config_path) "prompts" in
-  let transcription_prompt_path = Filename.concat prompts_dir "transcription.md" in
+  let transcription_prompt_path =
+    Filename.concat prompts_dir "transcription.md"
+  in
   let translation_prompt_path = Filename.concat prompts_dir "translation.md" in
   let transcription_prompt =
     try load_prompt transcription_prompt_path
@@ -274,7 +328,8 @@ let load ?(config_path = Paths.stt_config_path) () : t =
   in
   let translation_prompt =
     try load_prompt translation_prompt_path
-    with Config_error _ -> "Translate from {{source_language}} to {{target_language}}."
+    with Config_error _ ->
+      "Translate from {{source_language}} to {{target_language}}."
   in
   validate_transcription_prompt transcription_prompt;
   validate_translation_prompt translation_prompt;
@@ -283,14 +338,23 @@ let load ?(config_path = Paths.stt_config_path) () : t =
     transcription_model;
     translation_model;
     transcription_language = get_string table "transcription_language" "English";
-    translation_source_language = get_string table "translation_source_language" "English";
-    translation_target_language = get_string table "translation_target_language" "English";
+    translation_source_language =
+      get_string table "translation_source_language" "English";
+    translation_target_language =
+      get_string table "translation_target_language" "English";
     wakeword_enabled = get_bool table "wakeword_enabled" true;
-    wakeword_dictation_silence_seconds = get_float table "wakeword_dictation_silence_seconds" 3.0;
-    wakeword_dictation_max_seconds = get_float table "wakeword_dictation_max_seconds" 120.0;
-    wakeword_dictation_speech_rms_threshold = get_float table "wakeword_dictation_speech_rms_threshold" 0.01;
-    ptt_min_capture_rms = get_float table "ptt_min_capture_rms" Audio.Pcm.ptt_min_capture_rms_for_stt;
-    ptt_min_capture_peak = get_float table "ptt_min_capture_peak" Audio.Pcm.ptt_min_capture_peak_for_stt;
+    wakeword_dictation_silence_seconds =
+      get_float table "wakeword_dictation_silence_seconds" 3.0;
+    wakeword_dictation_max_seconds =
+      get_float table "wakeword_dictation_max_seconds" 120.0;
+    wakeword_dictation_speech_rms_threshold =
+      get_float table "wakeword_dictation_speech_rms_threshold" 0.01;
+    ptt_min_capture_rms =
+      get_float table "ptt_min_capture_rms"
+        Audio.Pcm.ptt_min_capture_rms_for_stt;
+    ptt_min_capture_peak =
+      get_float table "ptt_min_capture_peak"
+        Audio.Pcm.ptt_min_capture_peak_for_stt;
     ptt_transcribe_keysym;
     ptt_translate_keysym;
     ptt_transcribe_shift;
@@ -299,4 +363,5 @@ let load ?(config_path = Paths.stt_config_path) () : t =
     transcription_prompt;
     translation_prompt;
     newline_rules = parse_newline_rules table;
+    text_entry_rules = parse_text_entry_rules table;
   }

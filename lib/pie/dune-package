@@ -1,0 +1,937 @@
+(lang dune 3.22)
+(name pie)
+(version ae4a0f2-dirty)
+(sections
+ (lib /home/ribelo/projects/ribelo/pie/lib/pie)
+ (libexec /home/ribelo/projects/ribelo/pie/lib/pie)
+ (bin /home/ribelo/projects/ribelo/pie/bin)
+ (doc /home/ribelo/projects/ribelo/pie/doc/pie))
+(files
+ (lib
+  (META
+   assistant/assistant.ml
+   assistant/coeffects.ml
+   assistant/config_slices.ml
+   assistant/env.ml
+   assistant/keyboard_monitor.ml
+   assistant/ptt.ml
+   assistant/pulse_client.ml
+   assistant/recording_coordinator.ml
+   assistant/rpc_server.ml
+   assistant/service.ml
+   assistant/stt_backend.ml
+   assistant/supervision.ml
+   assistant/tree.ml
+   assistant/wake.ml
+   assistant_service/assistant_service.ml
+   assistant_service/client.ml
+   assistant_service/contract.ml
+   assistant_service/server.ml
+   assistant_shim.ml
+   audio/audio.ml
+   audio/pcm.ml
+   audio/pcm.mli
+   commands/assistant.ml
+   commands/commands.ml
+   commands/meter.ml
+   commands/ptt.ml
+   commands/ptt_portal.ml
+   commands/record.ml
+   commands/sources.ml
+   commands/stt_interactive.ml
+   commands/wakeword_telemetry.ml
+   commands/wakeword_train_cmd.ml
+   commands/wakeword_tune_cmd.ml
+   config/config.ml
+   config/stt.ml
+   config/stt.mli
+   context/context.ml
+   context/metadata.ml
+   context/project.ml
+   daemon/client.ml
+   daemon/contract.ml
+   daemon/daemon.ml
+   daemon/server.ml
+   desktop/desktop.ml
+   desktop/notification.ml
+   desktop/notification.mli
+   dune-package
+   fs.ml
+   fs.mli
+   input/input.ml
+   input/text_injection.ml
+   input/text_injection.mli
+   keyboard/keyboard.ml
+   keyboard/monitor.ml
+   niri/niri.ml
+   opam
+   paths.ml
+   paths.mli
+   pie.a
+   pie.cma
+   pie.cmi
+   pie.cms
+   pie.cmsi
+   pie.cmt
+   pie.cmti
+   pie.cmx
+   pie.cmxa
+   pie.ml
+   pie.mli
+   pie__.cmi
+   pie__.cms
+   pie__.cmt
+   pie__.cmx
+   pie__.ml
+   pie__Assistant.cmi
+   pie__Assistant.cms
+   pie__Assistant.cmt
+   pie__Assistant.cmx
+   pie__Assistant__Coeffects.cmi
+   pie__Assistant__Coeffects.cms
+   pie__Assistant__Coeffects.cmt
+   pie__Assistant__Coeffects.cmx
+   pie__Assistant__Config_slices.cmi
+   pie__Assistant__Config_slices.cms
+   pie__Assistant__Config_slices.cmt
+   pie__Assistant__Config_slices.cmx
+   pie__Assistant__Env.cmi
+   pie__Assistant__Env.cms
+   pie__Assistant__Env.cmt
+   pie__Assistant__Env.cmx
+   pie__Assistant__Keyboard_monitor.cmi
+   pie__Assistant__Keyboard_monitor.cms
+   pie__Assistant__Keyboard_monitor.cmt
+   pie__Assistant__Keyboard_monitor.cmx
+   pie__Assistant__Ptt.cmi
+   pie__Assistant__Ptt.cms
+   pie__Assistant__Ptt.cmt
+   pie__Assistant__Ptt.cmx
+   pie__Assistant__Pulse_client.cmi
+   pie__Assistant__Pulse_client.cms
+   pie__Assistant__Pulse_client.cmt
+   pie__Assistant__Pulse_client.cmx
+   pie__Assistant__Recording_coordinator.cmi
+   pie__Assistant__Recording_coordinator.cms
+   pie__Assistant__Recording_coordinator.cmt
+   pie__Assistant__Recording_coordinator.cmx
+   pie__Assistant__Rpc_server.cmi
+   pie__Assistant__Rpc_server.cms
+   pie__Assistant__Rpc_server.cmt
+   pie__Assistant__Rpc_server.cmx
+   pie__Assistant__Service.cmi
+   pie__Assistant__Service.cms
+   pie__Assistant__Service.cmt
+   pie__Assistant__Service.cmx
+   pie__Assistant__Stt_backend.cmi
+   pie__Assistant__Stt_backend.cms
+   pie__Assistant__Stt_backend.cmt
+   pie__Assistant__Stt_backend.cmx
+   pie__Assistant__Supervision.cmi
+   pie__Assistant__Supervision.cms
+   pie__Assistant__Supervision.cmt
+   pie__Assistant__Supervision.cmx
+   pie__Assistant__Tree.cmi
+   pie__Assistant__Tree.cms
+   pie__Assistant__Tree.cmt
+   pie__Assistant__Tree.cmx
+   pie__Assistant__Wake.cmi
+   pie__Assistant__Wake.cms
+   pie__Assistant__Wake.cmt
+   pie__Assistant__Wake.cmx
+   pie__Assistant_service.cmi
+   pie__Assistant_service.cms
+   pie__Assistant_service.cmt
+   pie__Assistant_service.cmx
+   pie__Assistant_service__Client.cmi
+   pie__Assistant_service__Client.cms
+   pie__Assistant_service__Client.cmt
+   pie__Assistant_service__Client.cmx
+   pie__Assistant_service__Contract.cmi
+   pie__Assistant_service__Contract.cms
+   pie__Assistant_service__Contract.cmt
+   pie__Assistant_service__Contract.cmx
+   pie__Assistant_service__Server.cmi
+   pie__Assistant_service__Server.cms
+   pie__Assistant_service__Server.cmt
+   pie__Assistant_service__Server.cmx
+   pie__Assistant_shim.cmi
+   pie__Assistant_shim.cms
+   pie__Assistant_shim.cmt
+   pie__Assistant_shim.cmx
+   pie__Audio.cmi
+   pie__Audio.cms
+   pie__Audio.cmt
+   pie__Audio.cmx
+   pie__Audio__Pcm.cmi
+   pie__Audio__Pcm.cms
+   pie__Audio__Pcm.cmsi
+   pie__Audio__Pcm.cmt
+   pie__Audio__Pcm.cmti
+   pie__Audio__Pcm.cmx
+   pie__Commands.cmi
+   pie__Commands.cms
+   pie__Commands.cmt
+   pie__Commands.cmx
+   pie__Commands__Assistant.cmi
+   pie__Commands__Assistant.cms
+   pie__Commands__Assistant.cmt
+   pie__Commands__Assistant.cmx
+   pie__Commands__Meter.cmi
+   pie__Commands__Meter.cms
+   pie__Commands__Meter.cmt
+   pie__Commands__Meter.cmx
+   pie__Commands__Ptt.cmi
+   pie__Commands__Ptt.cms
+   pie__Commands__Ptt.cmt
+   pie__Commands__Ptt.cmx
+   pie__Commands__Ptt_portal.cmi
+   pie__Commands__Ptt_portal.cms
+   pie__Commands__Ptt_portal.cmt
+   pie__Commands__Ptt_portal.cmx
+   pie__Commands__Record.cmi
+   pie__Commands__Record.cms
+   pie__Commands__Record.cmt
+   pie__Commands__Record.cmx
+   pie__Commands__Sources.cmi
+   pie__Commands__Sources.cms
+   pie__Commands__Sources.cmt
+   pie__Commands__Sources.cmx
+   pie__Commands__Stt_interactive.cmi
+   pie__Commands__Stt_interactive.cms
+   pie__Commands__Stt_interactive.cmt
+   pie__Commands__Stt_interactive.cmx
+   pie__Commands__Wakeword_telemetry.cmi
+   pie__Commands__Wakeword_telemetry.cms
+   pie__Commands__Wakeword_telemetry.cmt
+   pie__Commands__Wakeword_telemetry.cmx
+   pie__Commands__Wakeword_train_cmd.cmi
+   pie__Commands__Wakeword_train_cmd.cms
+   pie__Commands__Wakeword_train_cmd.cmt
+   pie__Commands__Wakeword_train_cmd.cmx
+   pie__Commands__Wakeword_tune_cmd.cmi
+   pie__Commands__Wakeword_tune_cmd.cms
+   pie__Commands__Wakeword_tune_cmd.cmt
+   pie__Commands__Wakeword_tune_cmd.cmx
+   pie__Config.cmi
+   pie__Config.cms
+   pie__Config.cmt
+   pie__Config.cmx
+   pie__Config__Stt.cmi
+   pie__Config__Stt.cms
+   pie__Config__Stt.cmsi
+   pie__Config__Stt.cmt
+   pie__Config__Stt.cmti
+   pie__Config__Stt.cmx
+   pie__Context.cmi
+   pie__Context.cms
+   pie__Context.cmt
+   pie__Context.cmx
+   pie__Context__Metadata.cmi
+   pie__Context__Metadata.cms
+   pie__Context__Metadata.cmt
+   pie__Context__Metadata.cmx
+   pie__Context__Project.cmi
+   pie__Context__Project.cms
+   pie__Context__Project.cmt
+   pie__Context__Project.cmx
+   pie__Daemon.cmi
+   pie__Daemon.cms
+   pie__Daemon.cmt
+   pie__Daemon.cmx
+   pie__Daemon__Client.cmi
+   pie__Daemon__Client.cms
+   pie__Daemon__Client.cmt
+   pie__Daemon__Client.cmx
+   pie__Daemon__Contract.cmi
+   pie__Daemon__Contract.cms
+   pie__Daemon__Contract.cmt
+   pie__Daemon__Contract.cmx
+   pie__Daemon__Server.cmi
+   pie__Daemon__Server.cms
+   pie__Daemon__Server.cmt
+   pie__Daemon__Server.cmx
+   pie__Desktop.cmi
+   pie__Desktop.cms
+   pie__Desktop.cmt
+   pie__Desktop.cmx
+   pie__Desktop__Notification.cmi
+   pie__Desktop__Notification.cms
+   pie__Desktop__Notification.cmsi
+   pie__Desktop__Notification.cmt
+   pie__Desktop__Notification.cmti
+   pie__Desktop__Notification.cmx
+   pie__Fs.cmi
+   pie__Fs.cms
+   pie__Fs.cmsi
+   pie__Fs.cmt
+   pie__Fs.cmti
+   pie__Fs.cmx
+   pie__Input.cmi
+   pie__Input.cms
+   pie__Input.cmt
+   pie__Input.cmx
+   pie__Input__Text_injection.cmi
+   pie__Input__Text_injection.cms
+   pie__Input__Text_injection.cmsi
+   pie__Input__Text_injection.cmt
+   pie__Input__Text_injection.cmti
+   pie__Input__Text_injection.cmx
+   pie__Keyboard.cmi
+   pie__Keyboard.cms
+   pie__Keyboard.cmt
+   pie__Keyboard.cmx
+   pie__Keyboard__Monitor.cmi
+   pie__Keyboard__Monitor.cms
+   pie__Keyboard__Monitor.cmt
+   pie__Keyboard__Monitor.cmx
+   pie__Niri.cmi
+   pie__Niri.cms
+   pie__Niri.cmt
+   pie__Niri.cmx
+   pie__Niri__.cmi
+   pie__Niri__.cms
+   pie__Niri__.cmt
+   pie__Niri__.cmx
+   pie__Niri__.ml
+   pie__Paths.cmi
+   pie__Paths.cms
+   pie__Paths.cmsi
+   pie__Paths.cmt
+   pie__Paths.cmti
+   pie__Paths.cmx
+   pie__Process.cmi
+   pie__Process.cms
+   pie__Process.cmt
+   pie__Process.cmx
+   pie__Ptt.cmi
+   pie__Ptt.cms
+   pie__Ptt.cmt
+   pie__Ptt.cmx
+   pie__Ptt__Capture.cmi
+   pie__Ptt__Capture.cms
+   pie__Ptt__Capture.cmsi
+   pie__Ptt__Capture.cmt
+   pie__Ptt__Capture.cmti
+   pie__Ptt__Capture.cmx
+   pie__Ptt__Dead_input.cmi
+   pie__Ptt__Dead_input.cms
+   pie__Ptt__Dead_input.cmt
+   pie__Ptt__Dead_input.cmx
+   pie__Ptt_loop.cmi
+   pie__Ptt_loop.cms
+   pie__Ptt_loop.cmt
+   pie__Ptt_loop.cmx
+   pie__Pulse.cmi
+   pie__Pulse.cms
+   pie__Pulse.cmt
+   pie__Pulse.cmx
+   pie__Pulse__Client.cmi
+   pie__Pulse__Client.cms
+   pie__Pulse__Client.cmsi
+   pie__Pulse__Client.cmt
+   pie__Pulse__Client.cmti
+   pie__Pulse__Client.cmx
+   pie__Pulse__Commands.cmi
+   pie__Pulse__Commands.cms
+   pie__Pulse__Commands.cmsi
+   pie__Pulse__Commands.cmt
+   pie__Pulse__Commands.cmti
+   pie__Pulse__Commands.cmx
+   pie__Pulse__Defs.cmi
+   pie__Pulse__Defs.cms
+   pie__Pulse__Defs.cmsi
+   pie__Pulse__Defs.cmt
+   pie__Pulse__Defs.cmti
+   pie__Pulse__Defs.cmx
+   pie__Pulse__Protocol.cmi
+   pie__Pulse__Protocol.cms
+   pie__Pulse__Protocol.cmsi
+   pie__Pulse__Protocol.cmt
+   pie__Pulse__Protocol.cmti
+   pie__Pulse__Protocol.cmx
+   pie__Recording.cmi
+   pie__Recording.cms
+   pie__Recording.cmt
+   pie__Recording.cmx
+   pie__Recording__Coordinator.cmi
+   pie__Recording__Coordinator.cms
+   pie__Recording__Coordinator.cmt
+   pie__Recording__Coordinator.cmx
+   pie__Sh.cmi
+   pie__Sh.cms
+   pie__Sh.cmsi
+   pie__Sh.cmt
+   pie__Sh.cmti
+   pie__Sh.cmx
+   pie__Stt.cmi
+   pie__Stt.cms
+   pie__Stt.cmt
+   pie__Stt.cmx
+   pie__Stt__Codex_realtime.cmi
+   pie__Stt__Codex_realtime.cms
+   pie__Stt__Codex_realtime.cmt
+   pie__Stt__Codex_realtime.cmx
+   pie__Stt__Openrouter.cmi
+   pie__Stt__Openrouter.cms
+   pie__Stt__Openrouter.cmt
+   pie__Stt__Openrouter.cmx
+   pie__Wakeword.cmi
+   pie__Wakeword.cms
+   pie__Wakeword.cmt
+   pie__Wakeword.cmx
+   pie__Wakeword__Pipeline.cmi
+   pie__Wakeword__Pipeline.cms
+   pie__Wakeword__Pipeline.cmt
+   pie__Wakeword__Pipeline.cmx
+   pie__Wakeword__Trigger.cmi
+   pie__Wakeword__Trigger.cms
+   pie__Wakeword__Trigger.cmt
+   pie__Wakeword__Trigger.cmx
+   pie__Wayland.cmi
+   pie__Wayland.cms
+   pie__Wayland.cmt
+   pie__Wayland.cmx
+   pie__Wayland__Portal.cmi
+   pie__Wayland__Portal.cms
+   pie__Wayland__Portal.cmt
+   pie__Wayland__Portal.cmx
+   pie__Wayland__Wtype.cmi
+   pie__Wayland__Wtype.cms
+   pie__Wayland__Wtype.cmt
+   pie__Wayland__Wtype.cmx
+   pie__X11.cmi
+   pie__X11.cms
+   pie__X11.cmt
+   pie__X11.cmx
+   pie__X11__Xdotool.cmi
+   pie__X11__Xdotool.cms
+   pie__X11__Xdotool.cmt
+   pie__X11__Xdotool.cmx
+   process.ml
+   ptt/capture.ml
+   ptt/capture.mli
+   ptt/dead_input.ml
+   ptt/ptt.ml
+   ptt_loop.ml
+   pulse/client.ml
+   pulse/client.mli
+   pulse/commands.ml
+   pulse/commands.mli
+   pulse/defs.ml
+   pulse/defs.mli
+   pulse/protocol.ml
+   pulse/protocol.mli
+   pulse/pulse.ml
+   recording/coordinator.ml
+   recording/recording.ml
+   sh.ml
+   sh.mli
+   stt/codex_realtime.ml
+   stt/openrouter.ml
+   stt/stt.ml
+   wakeword/pipeline.ml
+   wakeword/trigger.ml
+   wakeword/wakeword.ml
+   wayland/portal.ml
+   wayland/wayland.ml
+   wayland/wtype.ml
+   x11/x11.ml
+   x11/xdotool.ml))
+ (libexec (pie.cmxs))
+ (bin (pie))
+ (doc (README.md)))
+(library
+ (name pie)
+ (kind normal)
+ (archives (byte pie.cma) (native pie.cmxa))
+ (plugins (byte pie.cma) (native pie.cmxs))
+ (native_archives pie.a)
+ (requires
+  eta
+  eta_ai
+  eta_ai_openrouter
+  eta_component
+  eta_eio
+  eta_http
+  eta_http_eio
+  eta_observability
+  eta_otel_eio
+  eta_stream
+  eio
+  eio_main
+  yojson
+  toml
+  re
+  unix
+  threads)
+ (main_module_name Pie)
+ (modes byte native)
+ (modules
+  (wrapped
+   (group
+    (alias
+     (obj_name pie__)
+     (visibility public)
+     (kind alias)
+     (source (path Pie__) (impl (path pie__.ml-gen))))
+    (name Pie)
+    (modules
+     (group
+      Assistant
+      (alias
+       (obj_name pie__Assistant)
+       (visibility public)
+       (kind (alias (Assistant)))
+       (source (path Assistant Assistant) (impl (path pie__Assistant.ml-gen))))
+      (name Assistant)
+      (modules
+       (module
+        (obj_name pie__Assistant__Coeffects)
+        (visibility public)
+        (source
+         (path Assistant Coeffects)
+         (impl (path assistant/coeffects.ml))))
+       (module
+        (obj_name pie__Assistant__Config_slices)
+        (visibility public)
+        (source
+         (path Assistant Config_slices)
+         (impl (path assistant/config_slices.ml))))
+       (module
+        (obj_name pie__Assistant__Env)
+        (visibility public)
+        (source (path Assistant Env) (impl (path assistant/env.ml))))
+       (module
+        (obj_name pie__Assistant__Keyboard_monitor)
+        (visibility public)
+        (source
+         (path Assistant Keyboard_monitor)
+         (impl (path assistant/keyboard_monitor.ml))))
+       (module
+        (obj_name pie__Assistant__Ptt)
+        (visibility public)
+        (source (path Assistant Ptt) (impl (path assistant/ptt.ml))))
+       (module
+        (obj_name pie__Assistant__Pulse_client)
+        (visibility public)
+        (source
+         (path Assistant Pulse_client)
+         (impl (path assistant/pulse_client.ml))))
+       (module
+        (obj_name pie__Assistant__Recording_coordinator)
+        (visibility public)
+        (source
+         (path Assistant Recording_coordinator)
+         (impl (path assistant/recording_coordinator.ml))))
+       (module
+        (obj_name pie__Assistant__Rpc_server)
+        (visibility public)
+        (source
+         (path Assistant Rpc_server)
+         (impl (path assistant/rpc_server.ml))))
+       (module
+        (obj_name pie__Assistant__Service)
+        (visibility public)
+        (source (path Assistant Service) (impl (path assistant/service.ml))))
+       (module
+        (obj_name pie__Assistant__Stt_backend)
+        (visibility public)
+        (source
+         (path Assistant Stt_backend)
+         (impl (path assistant/stt_backend.ml))))
+       (module
+        (obj_name pie__Assistant__Supervision)
+        (visibility public)
+        (source
+         (path Assistant Supervision)
+         (impl (path assistant/supervision.ml))))
+       (module
+        (obj_name pie__Assistant__Tree)
+        (visibility public)
+        (source (path Assistant Tree) (impl (path assistant/tree.ml))))
+       (module
+        (obj_name pie__Assistant__Wake)
+        (visibility public)
+        (source (path Assistant Wake) (impl (path assistant/wake.ml))))))
+     (group
+      Assistant_service
+      (alias
+       (obj_name pie__Assistant_service)
+       (visibility public)
+       (kind (alias (Assistant_service)))
+       (source
+        (path Assistant_service Assistant_service)
+        (impl (path pie__Assistant_service.ml-gen))))
+      (name Assistant_service)
+      (modules
+       (module
+        (obj_name pie__Assistant_service__Client)
+        (visibility public)
+        (source
+         (path Assistant_service Client)
+         (impl (path assistant_service/client.ml))))
+       (module
+        (obj_name pie__Assistant_service__Contract)
+        (visibility public)
+        (source
+         (path Assistant_service Contract)
+         (impl (path assistant_service/contract.ml))))
+       (module
+        (obj_name pie__Assistant_service__Server)
+        (visibility public)
+        (source
+         (path Assistant_service Server)
+         (impl (path assistant_service/server.ml))))))
+     (module
+      (obj_name pie__Assistant_shim)
+      (visibility public)
+      (source (path Assistant_shim) (impl (path assistant_shim.ml))))
+     (group
+      Audio
+      (alias
+       (obj_name pie__Audio)
+       (visibility public)
+       (kind (alias (Audio)))
+       (source (path Audio Audio) (impl (path pie__Audio.ml-gen))))
+      (name Audio)
+      (modules
+       (module
+        (obj_name pie__Audio__Pcm)
+        (visibility public)
+        (source
+         (path Audio Pcm)
+         (intf (path audio/pcm.mli))
+         (impl (path audio/pcm.ml))))))
+     (group
+      Commands
+      (alias
+       (obj_name pie__Commands)
+       (visibility public)
+       (kind (alias (Commands)))
+       (source (path Commands Commands) (impl (path pie__Commands.ml-gen))))
+      (name Commands)
+      (modules
+       (module
+        (obj_name pie__Commands__Assistant)
+        (visibility public)
+        (source (path Commands Assistant) (impl (path commands/assistant.ml))))
+       (module
+        (obj_name pie__Commands__Meter)
+        (visibility public)
+        (source (path Commands Meter) (impl (path commands/meter.ml))))
+       (module
+        (obj_name pie__Commands__Ptt)
+        (visibility public)
+        (source (path Commands Ptt) (impl (path commands/ptt.ml))))
+       (module
+        (obj_name pie__Commands__Ptt_portal)
+        (visibility public)
+        (source
+         (path Commands Ptt_portal)
+         (impl (path commands/ptt_portal.ml))))
+       (module
+        (obj_name pie__Commands__Record)
+        (visibility public)
+        (source (path Commands Record) (impl (path commands/record.ml))))
+       (module
+        (obj_name pie__Commands__Sources)
+        (visibility public)
+        (source (path Commands Sources) (impl (path commands/sources.ml))))
+       (module
+        (obj_name pie__Commands__Stt_interactive)
+        (visibility public)
+        (source
+         (path Commands Stt_interactive)
+         (impl (path commands/stt_interactive.ml))))
+       (module
+        (obj_name pie__Commands__Wakeword_telemetry)
+        (visibility public)
+        (source
+         (path Commands Wakeword_telemetry)
+         (impl (path commands/wakeword_telemetry.ml))))
+       (module
+        (obj_name pie__Commands__Wakeword_train_cmd)
+        (visibility public)
+        (source
+         (path Commands Wakeword_train_cmd)
+         (impl (path commands/wakeword_train_cmd.ml))))
+       (module
+        (obj_name pie__Commands__Wakeword_tune_cmd)
+        (visibility public)
+        (source
+         (path Commands Wakeword_tune_cmd)
+         (impl (path commands/wakeword_tune_cmd.ml))))))
+     (group
+      Config
+      (alias
+       (obj_name pie__Config)
+       (visibility public)
+       (kind (alias (Config)))
+       (source (path Config Config) (impl (path pie__Config.ml-gen))))
+      (name Config)
+      (modules
+       (module
+        (obj_name pie__Config__Stt)
+        (visibility public)
+        (source
+         (path Config Stt)
+         (intf (path config/stt.mli))
+         (impl (path config/stt.ml))))))
+     (group
+      Context
+      (alias
+       (obj_name pie__Context)
+       (visibility public)
+       (kind (alias (Context)))
+       (source (path Context Context) (impl (path pie__Context.ml-gen))))
+      (name Context)
+      (modules
+       (module
+        (obj_name pie__Context__Metadata)
+        (visibility public)
+        (source (path Context Metadata) (impl (path context/metadata.ml))))
+       (module
+        (obj_name pie__Context__Project)
+        (visibility public)
+        (source (path Context Project) (impl (path context/project.ml))))))
+     (group
+      Daemon
+      (alias
+       (obj_name pie__Daemon)
+       (visibility public)
+       (kind (alias (Daemon)))
+       (source (path Daemon Daemon) (impl (path pie__Daemon.ml-gen))))
+      (name Daemon)
+      (modules
+       (module
+        (obj_name pie__Daemon__Client)
+        (visibility public)
+        (source (path Daemon Client) (impl (path daemon/client.ml))))
+       (module
+        (obj_name pie__Daemon__Contract)
+        (visibility public)
+        (source (path Daemon Contract) (impl (path daemon/contract.ml))))
+       (module
+        (obj_name pie__Daemon__Server)
+        (visibility public)
+        (source (path Daemon Server) (impl (path daemon/server.ml))))))
+     (group
+      Desktop
+      (alias
+       (obj_name pie__Desktop)
+       (visibility public)
+       (kind (alias (Desktop)))
+       (source (path Desktop Desktop) (impl (path pie__Desktop.ml-gen))))
+      (name Desktop)
+      (modules
+       (module
+        (obj_name pie__Desktop__Notification)
+        (visibility public)
+        (source
+         (path Desktop Notification)
+         (intf (path desktop/notification.mli))
+         (impl (path desktop/notification.ml))))))
+     (module
+      (obj_name pie__Fs)
+      (visibility public)
+      (source (path Fs) (intf (path fs.mli)) (impl (path fs.ml))))
+     (group
+      Input
+      (alias
+       (obj_name pie__Input)
+       (visibility public)
+       (kind (alias (Input)))
+       (source (path Input Input) (impl (path pie__Input.ml-gen))))
+      (name Input)
+      (modules
+       (module
+        (obj_name pie__Input__Text_injection)
+        (visibility public)
+        (source
+         (path Input Text_injection)
+         (intf (path input/text_injection.mli))
+         (impl (path input/text_injection.ml))))))
+     (group
+      Keyboard
+      (alias
+       (obj_name pie__Keyboard)
+       (visibility public)
+       (kind (alias (Keyboard)))
+       (source (path Keyboard Keyboard) (impl (path pie__Keyboard.ml-gen))))
+      (name Keyboard)
+      (modules
+       (module
+        (obj_name pie__Keyboard__Monitor)
+        (visibility public)
+        (source (path Keyboard Monitor) (impl (path keyboard/monitor.ml))))))
+     (group
+      Niri
+      (alias
+       (obj_name pie__Niri__)
+       (visibility public)
+       (kind (alias (Niri)))
+       (source (path Pie__Niri__) (impl (path pie__Niri__.ml-gen))))
+      (name Niri)
+      (modules
+       (module
+        (obj_name pie__Niri)
+        (visibility public)
+        (source (path Niri Niri) (impl (path niri/niri.ml))))))
+     (module
+      (obj_name pie__Paths)
+      (visibility public)
+      (source (path Paths) (intf (path paths.mli)) (impl (path paths.ml))))
+     (module
+      (obj_name pie)
+      (visibility public)
+      (source (path Pie) (intf (path pie.mli)) (impl (path pie.ml))))
+     (module
+      (obj_name pie__Process)
+      (visibility public)
+      (source (path Process) (impl (path process.ml))))
+     (group
+      Ptt
+      (alias
+       (obj_name pie__Ptt)
+       (visibility public)
+       (kind (alias (Ptt)))
+       (source (path Ptt Ptt) (impl (path pie__Ptt.ml-gen))))
+      (name Ptt)
+      (modules
+       (module
+        (obj_name pie__Ptt__Capture)
+        (visibility public)
+        (source
+         (path Ptt Capture)
+         (intf (path ptt/capture.mli))
+         (impl (path ptt/capture.ml))))
+       (module
+        (obj_name pie__Ptt__Dead_input)
+        (visibility public)
+        (source (path Ptt Dead_input) (impl (path ptt/dead_input.ml))))))
+     (module
+      (obj_name pie__Ptt_loop)
+      (visibility public)
+      (source (path Ptt_loop) (impl (path ptt_loop.ml))))
+     (group
+      Pulse
+      (alias
+       (obj_name pie__Pulse)
+       (visibility public)
+       (kind (alias (Pulse)))
+       (source (path Pulse Pulse) (impl (path pie__Pulse.ml-gen))))
+      (name Pulse)
+      (modules
+       (module
+        (obj_name pie__Pulse__Client)
+        (visibility public)
+        (source
+         (path Pulse Client)
+         (intf (path pulse/client.mli))
+         (impl (path pulse/client.ml))))
+       (module
+        (obj_name pie__Pulse__Commands)
+        (visibility public)
+        (source
+         (path Pulse Commands)
+         (intf (path pulse/commands.mli))
+         (impl (path pulse/commands.ml))))
+       (module
+        (obj_name pie__Pulse__Defs)
+        (visibility public)
+        (source
+         (path Pulse Defs)
+         (intf (path pulse/defs.mli))
+         (impl (path pulse/defs.ml))))
+       (module
+        (obj_name pie__Pulse__Protocol)
+        (visibility public)
+        (source
+         (path Pulse Protocol)
+         (intf (path pulse/protocol.mli))
+         (impl (path pulse/protocol.ml))))))
+     (group
+      Recording
+      (alias
+       (obj_name pie__Recording)
+       (visibility public)
+       (kind (alias (Recording)))
+       (source (path Recording Recording) (impl (path pie__Recording.ml-gen))))
+      (name Recording)
+      (modules
+       (module
+        (obj_name pie__Recording__Coordinator)
+        (visibility public)
+        (source
+         (path Recording Coordinator)
+         (impl (path recording/coordinator.ml))))))
+     (module
+      (obj_name pie__Sh)
+      (visibility public)
+      (source (path Sh) (intf (path sh.mli)) (impl (path sh.ml))))
+     (group
+      Stt
+      (alias
+       (obj_name pie__Stt)
+       (visibility public)
+       (kind (alias (Stt)))
+       (source (path Stt Stt) (impl (path pie__Stt.ml-gen))))
+      (name Stt)
+      (modules
+       (module
+        (obj_name pie__Stt__Codex_realtime)
+        (visibility public)
+        (source (path Stt Codex_realtime) (impl (path stt/codex_realtime.ml))))
+       (module
+        (obj_name pie__Stt__Openrouter)
+        (visibility public)
+        (source (path Stt Openrouter) (impl (path stt/openrouter.ml))))))
+     (group
+      Wakeword
+      (alias
+       (obj_name pie__Wakeword)
+       (visibility public)
+       (kind (alias (Wakeword)))
+       (source (path Wakeword Wakeword) (impl (path pie__Wakeword.ml-gen))))
+      (name Wakeword)
+      (modules
+       (module
+        (obj_name pie__Wakeword__Pipeline)
+        (visibility public)
+        (source (path Wakeword Pipeline) (impl (path wakeword/pipeline.ml))))
+       (module
+        (obj_name pie__Wakeword__Trigger)
+        (visibility public)
+        (source (path Wakeword Trigger) (impl (path wakeword/trigger.ml))))))
+     (group
+      Wayland
+      (alias
+       (obj_name pie__Wayland)
+       (visibility public)
+       (kind (alias (Wayland)))
+       (source (path Wayland Wayland) (impl (path pie__Wayland.ml-gen))))
+      (name Wayland)
+      (modules
+       (module
+        (obj_name pie__Wayland__Portal)
+        (visibility public)
+        (source (path Wayland Portal) (impl (path wayland/portal.ml))))
+       (module
+        (obj_name pie__Wayland__Wtype)
+        (visibility public)
+        (source (path Wayland Wtype) (impl (path wayland/wtype.ml))))))
+     (group
+      X11
+      (alias
+       (obj_name pie__X11)
+       (visibility public)
+       (kind (alias (X11)))
+       (source (path X11 X11) (impl (path pie__X11.ml-gen))))
+      (name X11)
+      (modules
+       (module
+        (obj_name pie__X11__Xdotool)
+        (visibility public)
+        (source (path X11 Xdotool) (impl (path x11/xdotool.ml))))))))
+   (wrapped true))))
