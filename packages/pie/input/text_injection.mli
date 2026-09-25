@@ -2,11 +2,17 @@ type backend = Wtype | Xdotool
 type session_type = Wayland | X11
 type entry_method = Type | Paste
 
+type outcome = Typed | Clipboard_key_attempted
+(** [Typed] is the Type path. [Clipboard_key_attempted] means the configured
+    Paste path offered text and sent Ctrl-V as a best-effort key; it is not a
+    compositor or target receipt. *)
+
 type result = {
   session_type : session_type;
   backend : backend;
   method_ : entry_method;
   text : string;
+  outcome : outcome;
 }
 
 type newline_action = Collapse_to_space | Shift_enter | Ctrl_j
@@ -54,7 +60,7 @@ val type_text :
   Eta.Effect.t
 
 val inject :
-  ?sw:Eio.Switch.t ->
+  ?clipboard_owner:Wayland.Clipboard.t ->
   ?newline_rules:newline_rule list ->
   ?text_entry_rules:text_entry_rule list ->
   process_mgr:_ Eio.Process.mgr ->

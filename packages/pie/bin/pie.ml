@@ -14,6 +14,7 @@ let render_effect_error = function
   | `Portal_error msg
   | `Daemon_error msg ->
       msg
+  | `Daemon_protocol_error label -> label
   | `Daemon_off -> "daemon is not running"
   | `Closed -> "stream closed"
   | `Timeout -> "operation timed out"
@@ -24,19 +25,15 @@ let pp_effect_error formatter error =
 let run_effect mk_eff = exit (Pie.Process.run ~pp_err:pp_effect_error mk_eff)
 let env_term = Term.const ()
 
-let render_recording_status (snap : Pie.Daemon.Contract.recording_snapshot) =
+let render_recording_status
+    (snap : Pie.Assistant_service.Contract.recording_snapshot) =
   if not snap.enabled then "paused"
   else if not snap.active then "armed"
   else if snap.mode = "idle" then "stale"
   else snap.mode
 
-let render_start_result = function
-  | Pie.Daemon.Contract.Started mode -> mode
-  | Busy mode -> "busy:" ^ mode
-  | Disabled -> "paused"
-  | Error message -> "error:" ^ message
-
-let render_action_result (result : Pie.Daemon.Contract.action_result) =
+let render_action_result (result : Pie.Assistant_service.Contract.action_result)
+    =
   match (String.lowercase_ascii result.action, result.message) with
   | "status", _ -> render_recording_status result.snapshot
   | _, Some message -> message
@@ -47,6 +44,7 @@ let json_string json = Yojson.Safe.to_string json
 let json_of_daemon_error message =
   `Assoc
     [
+      ("phase", `String "offline");
       ("active", `Bool false);
       ("mode", `String "offline");
       ("enabled", `Bool false);
@@ -92,18 +90,15 @@ let record_cmd =
       value & opt float 5.0
       & info [ "d"; "duration" ] ~docv:"SECONDS" ~doc:"Recording duration")
   in
-  let raw_flag =
-    Arg.(value & flag & info [ "raw" ] ~doc:"Disable auto-gain normalization")
-  in
   let doc = "Capture raw PCM audio to a WAV file" in
   let info = Cmd.info "record" ~doc in
   Cmd.v info
     Term.(
-      const (fun output_path duration_sec raw () ->
+      const (fun output_path duration_sec () ->
           run_effect (fun ~env ~sw ->
               Pie.Commands.Record.run ~sw ~net:(Eio.Stdenv.net env)
-                ~clock:(Eio.Stdenv.clock env) ~output_path ~duration_sec ~raw ()))
-      $ output_arg $ duration_arg $ raw_flag $ env_term)
+                ~clock:(Eio.Stdenv.clock env) ~output_path ~duration_sec ()))
+      $ output_arg $ duration_arg $ env_term)
 
 let type_cmd =
   let text_arg =
@@ -144,8 +139,9 @@ let status_cmd =
               let net = Eio.Stdenv.net env in
               let status =
                 let open Eta.Syntax in
-                let* (snap : Pie.Daemon.Contract.recording_snapshot) =
-                  Pie.Daemon.Client.status ~net ~sw ()
+                let* (snap : Pie.Assistant_service.Contract.recording_snapshot)
+                    =
+                  Pie.Assistant_service.Client.status ~net ~sw ()
                 in
                 Eta.Effect.sync (fun () ->
                     Printf.printf "%s\n%!" (render_recording_status snap))
@@ -155,9 +151,8 @@ let status_cmd =
                   match e with
                   | `Daemon_off ->
                       Eta.Effect.sync (fun () -> Printf.printf "off\n%!")
-                  | `Daemon_error msg ->
-                      Eta.Effect.sync (fun () ->
-                          Printf.printf "error=%s\n%!" msg))
+                  | `Daemon_error _ as err -> Eta.Effect.fail err
+                  | `Daemon_protocol_error _ as err -> Eta.Effect.fail err)
                 status))
       $ env_term)
 
@@ -170,7 +165,9 @@ let toggle_cmd =
           run_effect (fun ~env ~sw ->
               let net = Eio.Stdenv.net env in
               let open Eta.Syntax in
-              let* (result : bool) = Pie.Daemon.Client.toggle ~net ~sw () in
+              let* (result : bool) =
+                Pie.Assistant_service.Client.toggle ~net ~sw ()
+              in
               Eta.Effect.sync (fun () ->
                   Printf.printf "%s\n%!" (if result then "armed" else "paused"))))
       $ env_term)
@@ -183,7 +180,7 @@ let pause_cmd =
       const (fun () ->
           run_effect (fun ~env ~sw ->
               let net = Eio.Stdenv.net env in
-              Pie.Daemon.Client.pause ~net ~sw ()))
+              Pie.Assistant_service.Client.pause ~net ~sw ()))
       $ env_term)
 
 let resume_cmd =
@@ -194,7 +191,7 @@ let resume_cmd =
       const (fun () ->
           run_effect (fun ~env ~sw ->
               let net = Eio.Stdenv.net env in
-              Pie.Daemon.Client.resume ~net ~sw ()))
+              Pie.Assistant_service.Client.resume ~net ~sw ()))
       $ env_term)
 
 let retry_cmd =
@@ -206,8 +203,10 @@ let retry_cmd =
           run_effect (fun ~env ~sw ->
               let net = Eio.Stdenv.net env in
               let open Eta.Syntax in
-              let* result = Pie.Daemon.Client.action ~net ~sw "retry" in
-              match result.Pie.Daemon.Contract.accepted with
+              let* result =
+                Pie.Assistant_service.Client.action ~net ~sw "retry"
+              in
+              match result.Pie.Assistant_service.Contract.accepted with
               | true ->
                   Eta.Effect.sync (fun () ->
                       Printf.printf "%s\n%!"
@@ -217,57 +216,6 @@ let retry_cmd =
                     (`Daemon_error
                        (Option.value ~default:"retry was rejected"
                           result.message))))
-      $ env_term)
-
-let meeting_start_cmd =
-  let doc = "Start meeting transcription" in
-  let info = Cmd.info "meeting-start" ~doc in
-  Cmd.v info
-    Term.(
-      const (fun () ->
-          run_effect (fun ~env ~sw ->
-              let net = Eio.Stdenv.net env in
-              let open Eta.Syntax in
-              let* (r : Pie.Daemon.Contract.meeting_start_result) =
-                Pie.Daemon.Client.meeting_start ~net ~sw ()
-              in
-              Eta.Effect.sync (fun () ->
-                  Printf.printf "%s\n%!"
-                    (render_start_result r.Pie.Daemon.Contract.result))))
-      $ env_term)
-
-let meeting_stop_cmd =
-  let doc = "Stop meeting transcription" in
-  let info = Cmd.info "meeting-stop" ~doc in
-  Cmd.v info
-    Term.(
-      const (fun () ->
-          run_effect (fun ~env ~sw ->
-              let net = Eio.Stdenv.net env in
-              let open Eta.Syntax in
-              let* (r : Pie.Daemon.Contract.meeting_stop_result) =
-                Pie.Daemon.Client.meeting_stop ~net ~sw ()
-              in
-              Eta.Effect.sync (fun () ->
-                  if not r.stopped then
-                    Printf.printf "no meeting transcription was active\n%!";
-                  Printf.printf "%s\n%!" (render_recording_status r.snapshot))))
-      $ env_term)
-
-let meeting_toggle_cmd =
-  let doc = "Toggle meeting transcription" in
-  let info = Cmd.info "meeting-toggle" ~doc in
-  Cmd.v info
-    Term.(
-      const (fun () ->
-          run_effect (fun ~env ~sw ->
-              let net = Eio.Stdenv.net env in
-              let open Eta.Syntax in
-              let* (snap : Pie.Daemon.Contract.recording_snapshot) =
-                Pie.Daemon.Client.meeting_toggle ~net ~sw ()
-              in
-              Eta.Effect.sync (fun () ->
-                  Printf.printf "%s\n%!" (render_recording_status snap))))
       $ env_term)
 
 let msg_action_cmd =
@@ -285,7 +233,9 @@ let msg_action_cmd =
           run_effect (fun ~env ~sw ->
               let net = Eio.Stdenv.net env in
               let open Eta.Syntax in
-              let* result = Pie.Daemon.Client.action ~net ~sw action in
+              let* result =
+                Pie.Assistant_service.Client.action ~net ~sw action
+              in
               Eta.Effect.sync (fun () ->
                   Printf.printf "%s\n%!" (render_action_result result))))
       $ action_arg $ env_term)
@@ -303,12 +253,13 @@ let msg_status_cmd =
           run_effect (fun ~env ~sw ->
               let net = Eio.Stdenv.net env in
               let open Eta.Syntax in
-              let* (snap : Pie.Daemon.Contract.recording_snapshot) =
-                Pie.Daemon.Client.status ~net ~sw ()
+              let* (snap : Pie.Assistant_service.Contract.recording_snapshot) =
+                Pie.Assistant_service.Client.status ~net ~sw ()
               in
               Eta.Effect.sync (fun () ->
                   if as_json then
-                    print_jsonl (Pie.Daemon.Contract.json_of_snapshot snap)
+                    print_jsonl
+                      (Pie.Assistant_service.Contract.json_of_snapshot snap)
                   else Printf.printf "%s\n%!" (render_recording_status snap))))
       $ json_flag $ env_term)
 
@@ -334,11 +285,13 @@ let msg_subscribe_cmd =
               let open Eta.Syntax in
               let rec loop last_json =
                 let status =
-                  let* (snap : Pie.Daemon.Contract.recording_snapshot) =
-                    Pie.Daemon.Client.status ~net ~sw ()
+                  let* (snap :
+                         Pie.Assistant_service.Contract.recording_snapshot) =
+                    Pie.Assistant_service.Client.status ~net ~sw ()
                   in
                   let json =
-                    json_string (Pie.Daemon.Contract.json_of_snapshot snap)
+                    json_string
+                      (Pie.Assistant_service.Contract.json_of_snapshot snap)
                   in
                   let* () =
                     Eta.Effect.sync (fun () ->
@@ -354,6 +307,7 @@ let msg_subscribe_cmd =
                         match err with
                         | `Daemon_off -> "daemon is not running"
                         | `Daemon_error msg -> msg
+                        | `Daemon_protocol_error label -> label
                       in
                       let json = json_string (json_of_daemon_error message) in
                       let* () =
@@ -377,101 +331,6 @@ let msg_cmd =
   let info = Cmd.info "msg" ~doc in
   Cmd.group info [ msg_action_cmd; msg_status_cmd; msg_subscribe_cmd ]
 
-let ptt_portal_cmd =
-  let doc = "Register a GlobalShortcuts portal binding" in
-  let info = Cmd.info "ptt-portal" ~doc in
-  Cmd.v info
-    Term.(
-      const (fun () ->
-          run_effect (fun ~env ~sw ->
-              Pie.Commands.Ptt_portal.run
-                ~process_mgr:(Eio.Stdenv.process_mgr env)
-                ()))
-      $ env_term)
-
-let ptt_cmd =
-  let doc = "Push-to-talk capture and transcribe/translate" in
-  let info = Cmd.info "ptt" ~doc in
-  Cmd.v info
-    Term.(
-      const (fun () ->
-          run_effect (fun ~env ~sw ->
-              Pie.Commands.Ptt.run ~sw ~net:(Eio.Stdenv.net env)
-                ~clock:(Eio.Stdenv.clock env)
-                ~process_mgr:(Eio.Stdenv.process_mgr env)
-                ~stdin:(Eio.Stdenv.stdin env) ~mode:`Transcribe ()))
-      $ env_term)
-
-let ptt_transcribe_cmd =
-  let doc = "PTT transcribe mode" in
-  let info = Cmd.info "ptt-transcribe" ~doc in
-  Cmd.v info
-    Term.(
-      const (fun () ->
-          run_effect (fun ~env ~sw ->
-              Pie.Commands.Ptt.run ~sw ~net:(Eio.Stdenv.net env)
-                ~clock:(Eio.Stdenv.clock env)
-                ~process_mgr:(Eio.Stdenv.process_mgr env)
-                ~stdin:(Eio.Stdenv.stdin env) ~mode:`Transcribe ()))
-      $ env_term)
-
-let ptt_translate_cmd =
-  let doc = "PTT translate mode" in
-  let info = Cmd.info "ptt-translate" ~doc in
-  Cmd.v info
-    Term.(
-      const (fun () ->
-          run_effect (fun ~env ~sw ->
-              Pie.Commands.Ptt.run ~sw ~net:(Eio.Stdenv.net env)
-                ~clock:(Eio.Stdenv.clock env)
-                ~process_mgr:(Eio.Stdenv.process_mgr env)
-                ~stdin:(Eio.Stdenv.stdin env) ~mode:`Translate ()))
-      $ env_term)
-
-let stt_interactive_cmd =
-  let doc = "Interactive STT (Enter to start/stop)" in
-  let info = Cmd.info "stt-interactive" ~doc in
-  Cmd.v info
-    Term.(
-      const (fun () ->
-          run_effect (fun ~env ~sw ->
-              Pie.Commands.Stt_interactive.run ~sw ~net:(Eio.Stdenv.net env)
-                ~clock:(Eio.Stdenv.clock env)
-                ~process_mgr:(Eio.Stdenv.process_mgr env)
-                ~stdin:(Eio.Stdenv.stdin env) ()))
-      $ env_term)
-
-let wakeword_cmd =
-  let doc = "Run live wakeword scoring telemetry" in
-  let info = Cmd.info "wakeword" ~doc in
-  Cmd.v info
-    Term.(
-      const (fun () ->
-          run_effect (fun ~env ~sw ->
-              Pie.Commands.Wakeword_telemetry.run ~sw ~net:(Eio.Stdenv.net env)
-                ~clock:(Eio.Stdenv.clock env) ()))
-      $ env_term)
-
-let wakeword_tune_cmd =
-  let doc = "Tune wakeword detection thresholds" in
-  let info = Cmd.info "wakeword-tune" ~doc in
-  Cmd.v info
-    Term.(
-      const (fun () ->
-          run_effect (fun ~env ~sw ->
-              Eta.Effect.sync (fun () -> Pie.Commands.Wakeword_tune_cmd.run ())))
-      $ env_term)
-
-let wakeword_train_cmd =
-  let doc = "Train a custom wakeword model" in
-  let info = Cmd.info "wakeword-train" ~doc in
-  Cmd.v info
-    Term.(
-      const (fun () ->
-          run_effect (fun ~env ~sw ->
-              Eta.Effect.sync (fun () -> Pie.Commands.Wakeword_train_cmd.run ())))
-      $ env_term)
-
 let assistant_term =
   let transcribe_keysym_arg =
     Arg.(
@@ -492,8 +351,9 @@ let assistant_term =
   Term.(
     const (fun ptt_transcribe_keysym ptt_translate_keysym () ->
         run_effect (fun ~env ~sw ->
-            Pie.Commands.Assistant.run ~sw ~net:(Eio.Stdenv.net env)
+            Pie.Assistant.Service.run ~sw ~net:(Eio.Stdenv.net env)
               ~clock:(Eio.Stdenv.clock env)
+              ~mono_clock:(Eio.Stdenv.mono_clock env)
               ~process_mgr:(Eio.Stdenv.process_mgr env)
               ~stdin:(Eio.Stdenv.stdin env) ?ptt_transcribe_keysym
               ?ptt_translate_keysym ()))
@@ -506,8 +366,7 @@ let assistant_cmd =
 
 let default_cmd =
   let doc =
-    "pie voice assistant (run without subcommands for combined wakeword + PTT \
-     mode)"
+    "pie voice assistant (run without subcommands for combined PTT mode)"
   in
   let info =
     Cmd.info "pie" ~version:"0.1.0" ~doc
@@ -520,23 +379,12 @@ let default_cmd =
           `P "$(b,meter) — live RMS / peak level monitor";
           `P "$(b,record) — capture audio to WAV file";
           `P "$(b,type) — send text to the focused app";
-          `P "$(b,ptt-portal) — GlobalShortcuts portal registration";
-          `P "$(b,ptt) — push-to-talk capture";
-          `P "$(b,ptt-transcribe) — PTT transcribe";
-          `P "$(b,ptt-translate) — PTT translate";
-          `P "$(b,stt-interactive) — interactive STT";
-          `P "$(b,wakeword) — live wakeword telemetry";
-          `P "$(b,wakeword-tune) — tune wakeword thresholds";
-          `P "$(b,wakeword-train) — train wakeword model";
           `P "$(b,status) — show daemon status";
           `P "$(b,toggle) — toggle recording";
           `P "$(b,pause) — pause recording";
           `P "$(b,resume) — resume recording";
           `P "$(b,retry) — retry the newest retained failed recording";
           `P "$(b,msg action ACTION) — send an action to the daemon";
-          `P "$(b,meeting-start) — start meeting transcription";
-          `P "$(b,meeting-stop) — stop meeting transcription";
-          `P "$(b,meeting-toggle) — toggle meeting transcription";
         ]
   in
   Cmd.group ~default:assistant_term info
@@ -545,23 +393,12 @@ let default_cmd =
       meter_cmd;
       record_cmd;
       type_cmd;
-      ptt_portal_cmd;
-      ptt_cmd;
-      ptt_transcribe_cmd;
-      ptt_translate_cmd;
-      stt_interactive_cmd;
-      wakeword_cmd;
-      wakeword_tune_cmd;
-      wakeword_train_cmd;
       status_cmd;
       toggle_cmd;
       pause_cmd;
       resume_cmd;
       retry_cmd;
       msg_cmd;
-      meeting_start_cmd;
-      meeting_stop_cmd;
-      meeting_toggle_cmd;
     ]
 
 let () = exit (Cmd.eval default_cmd)

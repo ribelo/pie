@@ -21,21 +21,50 @@ let find_executable name =
   in
   search paths
 
+let exit_category = function
+  | `Exited n -> Printf.sprintf "exit %d" n
+  | `Signaled n -> Printf.sprintf "signaled %d" n
+
+let failure_message ~prog exn =
+  let base = Filename.basename prog in
+  match exn with
+  | Eio.Cancel.Cancelled _ as cancelled -> raise cancelled
+  | Eio.Exn.Multiple _ as multiple -> raise multiple
+  | Eio.Exn.Io (Eio.Process.E (Eio.Process.Child_error status), _) ->
+      Printf.sprintf "%s failed: %s" base (exit_category status)
+  | Eio.Exn.Io (Eio.Process.E (Eio.Process.Executable_not_found _), _) ->
+      Printf.sprintf "%s failed: not found" base
+  | Eio.Exn.Io _ -> Printf.sprintf "%s failed: io-failure" base
+  | Unix.Unix_error (_, "execve", _) ->
+      Printf.sprintf "%s failed: io-failure" base
+  | Failure msg
+    when String.length msg >= 7 && String.sub msg 0 7 = "execve:" ->
+      Printf.sprintf "%s failed: io-failure" base
+  | other -> raise other
+
+module Discard_sink = struct
+  type t = unit
+
+  let single_write () bufs =
+    List.fold_left (fun acc buf -> acc + Cstruct.length buf) 0 bufs
+
+  let copy t ~src = Eio.Flow.Pi.simple_copy ~single_write t ~src
+end
+
+let discarded_stderr =
+  let ops = Eio.Flow.Pi.sink (module Discard_sink) in
+  fun () -> Eio.Resource.T ((), ops)
+
 let run ~process_mgr ~prog ~args =
   Eta.Effect.sync_exn
-    (fun () -> Eio.Process.run process_mgr (prog :: args))
-    ~catch:(function
-      | Eio.Cancel.Cancelled _ as exn -> raise exn
-      | exn ->
-          `Subprocess_error
-            (Printf.sprintf "%s failed: %s" prog (Printexc.to_string exn)))
+    (fun () ->
+      Eio.Process.run process_mgr ~stdout:(discarded_stderr ())
+        ~stderr:(discarded_stderr ()) (prog :: args))
+    ~catch:(fun exn -> `Subprocess_error (failure_message ~prog exn))
 
 let run_capture ~process_mgr ~prog ~args =
   Eta.Effect.sync_exn
     (fun () ->
-      Eio.Process.parse_out process_mgr Eio.Buf_read.take_all (prog :: args))
-    ~catch:(function
-      | Eio.Cancel.Cancelled _ as exn -> raise exn
-      | exn ->
-          `Subprocess_error
-            (Printf.sprintf "%s failed: %s" prog (Printexc.to_string exn)))
+      Eio.Process.parse_out process_mgr Eio.Buf_read.take_all
+        ~stderr:(discarded_stderr ()) (prog :: args))
+    ~catch:(fun exn -> `Subprocess_error (failure_message ~prog exn))

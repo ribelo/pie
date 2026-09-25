@@ -118,32 +118,16 @@ let restore_dbus_env old =
 let test_keyboard_monitor_session_bus_path_abstract_socket () =
   let old = Sys.getenv_opt "DBUS_SESSION_BUS_ADDRESS" in
   Unix.putenv "DBUS_SESSION_BUS_ADDRESS" "unix:abstract=/tmp/dbus-abstract";
-  try
-    let path = Pie.Keyboard.Monitor.session_bus_path () in
-    restore_dbus_env old;
-    (* If we get here, the abstract socket was accepted. *)
-    Alcotest.(check string) "abstract path" "/tmp/dbus-abstract" path
-  with
-  | Invalid_argument msg ->
-      restore_dbus_env old;
-      (* Bug: session_bus_path only recognizes unix:path= and raises
-       invalid_arg for unix:abstract=, which is a valid D-Bus transport
-       on Linux (used by some distributions and container setups). *)
-      Alcotest.fail ("unix:abstract= socket should be supported: " ^ msg)
-  | exn ->
-      restore_dbus_env old;
-      raise exn
-
-let test_keyboard_key_event_parse () =
-  let line =
-    "{\"type\":\"signal\",\"interface\":\"org.freedesktop.a11y.KeyboardMonitor\",\"member\":\"KeyEvent\",\"payload\":{\"type\":\"buuuq\",\"data\":[false,0,65478,0,75]}}"
-  in
-  match Keyboard.Monitor.parse_busctl_json_event line with
-  | Some event ->
-      Alcotest.(check bool) "press" false event.released;
-      Alcotest.(check int) "F9 keysym" 65478 event.keysym;
-      Alcotest.(check int) "keycode" 75 event.keycode
-  | None -> Alcotest.fail "expected KeyEvent"
+  Fun.protect
+    ~finally:(fun () -> restore_dbus_env old)
+    (fun () ->
+      match Pie.Keyboard.Monitor.session_bus_path () with
+      | exception Pie.Keyboard.Monitor.Unsupported_input msg ->
+          Alcotest.(check string)
+            "abstract is not a filesystem path"
+            "unix:abstract is not a filesystem path" msg
+      | path ->
+          Alcotest.failf "abstract must not become a filesystem path: %s" path)
 
 let test_keyboard_dbus_key_event_parse () =
   let set_u16_le bytes off value =
@@ -162,17 +146,23 @@ let test_keyboard_dbus_key_event_parse () =
   set_u32_le body 8 65479;
   set_u32_le body 12 0;
   set_u16_le body 16 68;
+  let owner = ":1.42" in
   let message : Keyboard.Monitor.dbus_message =
     {
       msg_type = 4;
+      serial = 1;
       reply_serial = None;
-      interface = Some "org.freedesktop.a11y.KeyboardMonitor";
+      path = Some Keyboard.Monitor.a11y_path;
+      interface = Some Keyboard.Monitor.a11y_interface;
       member = Some "KeyEvent";
       error_name = None;
+      sender = Some owner;
+      destination = None;
+      body_signature = Some "buuuq";
       body;
     }
   in
-  match Keyboard.Monitor.parse_key_event message with
+  match Keyboard.Monitor.parse_key_event ~owner message with
   | Some event ->
       Alcotest.(check bool) "released" true event.released;
       Alcotest.(check int) "state" 2 event.state;
@@ -190,17 +180,20 @@ let test_recording_coordinator_transitions () =
      Recording.Coordinator.try_start coordinator
        Recording.Coordinator.Ptt_transcribe ()
    with
-  | Recording.Coordinator.Started Recording.Coordinator.Ptt_transcribe -> ()
+  | Recording.Coordinator.Started attempt ->
+      Alcotest.(check bool)
+        "started ptt-transcribe" true
+        (Recording.Coordinator.attempt_mode attempt
+        = Recording.Coordinator.Ptt_transcribe);
+      (match
+         Recording.Coordinator.try_start coordinator
+           Recording.Coordinator.Ptt_translate ()
+       with
+      | Recording.Coordinator.Busy Recording.Coordinator.Ptt_transcribe -> ()
+      | _ -> Alcotest.fail "expected busy ptt-transcribe");
+      Recording.Coordinator.set_enabled coordinator false;
+      ignore (Recording.Coordinator.release coordinator attempt)
   | _ -> Alcotest.fail "expected ptt-transcribe to start");
-  (match
-     Recording.Coordinator.try_start coordinator
-       Recording.Coordinator.Ptt_translate ()
-   with
-  | Recording.Coordinator.Busy Recording.Coordinator.Ptt_transcribe -> ()
-  | _ -> Alcotest.fail "expected busy ptt-transcribe");
-  Recording.Coordinator.set_enabled coordinator false;
-  ignore
-    (Recording.Coordinator.stop coordinator Recording.Coordinator.Ptt_transcribe);
   (match
      Recording.Coordinator.try_start coordinator
        Recording.Coordinator.Ptt_translate ()
@@ -209,26 +202,73 @@ let test_recording_coordinator_transitions () =
   | _ -> Alcotest.fail "expected disabled");
   Sys.remove path
 
+let test_recording_coordinator_release_preserves_newer_same_mode_attempt () =
+  let path = Filename.temp_file "pie-recording-identity" ".json" in
+  Fun.protect
+    ~finally:(fun () -> if Sys.file_exists path then Sys.remove path)
+    (fun () ->
+      let coordinator = Recording.Coordinator.create ~persist_path:path () in
+      let first =
+        match
+          Recording.Coordinator.try_start coordinator
+            Recording.Coordinator.Ptt_transcribe ()
+        with
+        | Recording.Coordinator.Started attempt -> attempt
+        | _ -> Alcotest.fail "expected the first attempt to be admitted"
+      in
+      Alcotest.(check bool)
+        "owner release clears admission" true
+        (Recording.Coordinator.release coordinator first);
+      let second =
+        match
+          Recording.Coordinator.try_start coordinator
+            Recording.Coordinator.Ptt_transcribe ()
+        with
+        | Recording.Coordinator.Started attempt -> attempt
+        | _ -> Alcotest.fail "expected the second same-mode attempt"
+      in
+      Alcotest.(check bool)
+        "stale release does not clear a newer same-mode attempt" false
+        (Recording.Coordinator.release coordinator first);
+      Alcotest.(check bool)
+        "newer attempt still owns admission" true
+        (Recording.Coordinator.snapshot coordinator)
+          .Recording.Coordinator.active;
+      Alcotest.(check bool)
+        "owner release of the newer attempt succeeds" true
+        (Recording.Coordinator.release coordinator second);
+      Alcotest.(check bool)
+        "idle after the owning release" false
+        (Recording.Coordinator.snapshot coordinator)
+          .Recording.Coordinator.active)
+
 let test_daemon_contract_request () =
-  let json = Pie.Daemon.Contract.request_to_json Pie.Daemon.Contract.Status in
-  match Pie.Daemon.Contract.request_of_json json with
+  let json =
+    Pie.Assistant_service.Contract.request_to_json
+      Pie.Assistant_service.Contract.Status
+  in
+  match Pie.Assistant_service.Contract.request_of_json json with
   | Ok request ->
-      Alcotest.(check bool) "request" true (request = Pie.Daemon.Contract.Status)
+      Alcotest.(check bool)
+        "request" true
+        (request = Pie.Assistant_service.Contract.Status)
   | Error msg -> Alcotest.fail msg
 
 let test_daemon_contract_action_request () =
   let json =
-    Pie.Daemon.Contract.request_to_json (Pie.Daemon.Contract.Action "ptt-start")
+    Pie.Assistant_service.Contract.request_to_json
+      (Pie.Assistant_service.Contract.Action "ptt-start")
   in
-  match Pie.Daemon.Contract.request_of_json json with
-  | Ok (Pie.Daemon.Contract.Action action) ->
+  match Pie.Assistant_service.Contract.request_of_json json with
+  | Ok (Pie.Assistant_service.Contract.Action action) ->
       Alcotest.(check string) "action" "ptt-start" action
   | Ok _ -> Alcotest.fail "expected Action request"
   | Error msg -> Alcotest.fail msg
 
 let test_daemon_contract_action_response () =
-  let snapshot : Pie.Daemon.Contract.recording_snapshot =
+  let snapshot : Pie.Assistant_service.Contract.recording_snapshot =
     {
+      phase = Pie.Recording.Phase.Active Pie.Recording.Phase.Processing;
       active = true;
       mode = "ptt-transcribe";
       enabled = true;
@@ -239,20 +279,20 @@ let test_daemon_contract_action_response () =
     }
   in
   let response =
-    Pie.Daemon.Contract.Action_resp
+    Pie.Assistant_service.Contract.Action_resp
       {
         action = "ptt-start";
         accepted = true;
         message = Some "queued";
         snapshot;
       }
-    |> Pie.Daemon.Contract.response_to_json
+    |> Pie.Assistant_service.Contract.response_to_json
   in
   match
-    Pie.Daemon.Contract.response_of_json
-      (Pie.Daemon.Contract.Action "ptt-start") response
+    Pie.Assistant_service.Contract.response_of_json
+      (Pie.Assistant_service.Contract.Action "ptt-start") response
   with
-  | Pie.Daemon.Contract.Action_resp result ->
+  | Ok (Pie.Assistant_service.Contract.Action_resp result) ->
       Alcotest.(check bool) "accepted" true result.accepted;
       Alcotest.(check string)
         "message" "queued"
@@ -260,50 +300,48 @@ let test_daemon_contract_action_response () =
       Alcotest.(check string) "mode" "ptt-transcribe" result.snapshot.mode
   | _ -> Alcotest.fail "expected Action response"
 
-let test_daemon_contract_error_response_parsed_as_success () =
-  let error_json = `Assoc [ ("error", `String "server crashed") ] in
-  let response =
-    Pie.Daemon.Contract.response_of_json Pie.Daemon.Contract.Meeting_start
-      error_json
-  in
-  (* Bug: response_of_json for Meeting_start treats any JSON object as a valid
-     response, even if it contains {"error": ...}. It returns Disabled with a
-     default snapshot, making it impossible for the caller to know the server
-     sent an error. A robust client should check for the "error" field first. *)
-  match response with
-  | Pie.Daemon.Contract.Meeting_start_resp r -> (
-      match r.result with
-      | Pie.Daemon.Contract.Disabled ->
-          Alcotest.fail "error response was silently parsed as Disabled"
-      | _ -> ())
-  | _ -> Alcotest.fail "expected Meeting_start_resp"
+let test_daemon_contract_unknown_method () =
+  match
+    Pie.Assistant_service.Contract.request_of_json
+      (`Assoc [ ("method", `String "MeetingStart") ])
+  with
+  | Error msg ->
+      Alcotest.(check string)
+        "unknown method rejected" "unknown method: MeetingStart" msg
+  | Ok _ -> Alcotest.fail "removed MeetingStart must not decode"
 
 let test_daemon_contract_status_error_swallowed () =
   let error_json = `Assoc [ ("error", `String "server crashed") ] in
   let response =
-    Pie.Daemon.Contract.response_of_json Pie.Daemon.Contract.Status error_json
+    Pie.Assistant_service.Contract.response_of_json
+      Pie.Assistant_service.Contract.Status error_json
   in
   (* Bug: response_of_json for Status treats any JSON object as a valid status
      snapshot. A server error like {"error": "..."} becomes a bogus
      Status_resp with active=false, enabled=false, mode="idle", so the client
      thinks the daemon is paused when it actually crashed. *)
   match response with
-  | Pie.Daemon.Contract.Status_resp _ ->
+  | Ok (Pie.Assistant_service.Contract.Error_resp "server crashed") -> ()
+  | Ok (Pie.Assistant_service.Contract.Status_resp _) ->
       Alcotest.fail "status error response was silently parsed as a snapshot"
-  | _ -> ()
+  | Ok _ -> Alcotest.fail "expected Error_resp"
+  | Error label -> Alcotest.failf "protocol error %s" label
 
 let test_daemon_contract_pause_error_swallowed () =
   let error_json = `Assoc [ ("error", `String "server crashed") ] in
   let response =
-    Pie.Daemon.Contract.response_of_json Pie.Daemon.Contract.Pause error_json
+    Pie.Assistant_service.Contract.response_of_json
+      Pie.Assistant_service.Contract.Pause error_json
   in
   (* Bug: response_of_json for Pause/Resume always returns Pause_resp or
      Resume_resp regardless of the JSON content. A server error is therefore
      indistinguishable from a successful call. *)
   match response with
-  | Pie.Daemon.Contract.Pause_resp ->
+  | Ok (Pie.Assistant_service.Contract.Error_resp "server crashed") -> ()
+  | Ok Pie.Assistant_service.Contract.Pause_resp ->
       Alcotest.fail "pause error response was silently parsed as success"
-  | _ -> ()
+  | Ok _ -> Alcotest.fail "expected Error_resp"
+  | Error label -> Alcotest.failf "protocol error %s" label
 
 let pulse_command_packet packet_type tag body_bytes =
   let envelope_writer = Pulse.Protocol.Tag_struct_writer.create () in
@@ -710,6 +748,57 @@ let test_pulse_record_stream_drains_before_reader_failure () =
   Alcotest.(check (list string))
     "buffered chunks" [ "one"; "two" ] (List.rev !seen)
 
+let test_pulse_record_stream_preserves_pcm_chunk_bytes () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let socket_path =
+    pulse_test_server ~sw ~net:(Eio.Stdenv.net env) "pcm" (fun flow ->
+        pulse_server_handshake flow;
+        let create = pulse_read_command flow in
+        let create_reply =
+          pulse_command_packet Pulse.Defs.Pa_command.reply
+            create.Pulse.Commands.tag
+            (pulse_record_stream_body 7)
+        in
+        Eio.Flow.write flow [ Cstruct.of_bytes create_reply ];
+        let pcm = Bytes.make 4 'A' in
+        Eio.Flow.write flow
+          [ Cstruct.of_bytes (Pulse.Protocol.frame_packet ~channel:7 pcm) ];
+        Bytes.fill pcm 0 4 'B';
+        Eio.Flow.write flow
+          [ Cstruct.of_bytes (Pulse.Protocol.frame_packet ~channel:7 pcm) ];
+        Eio.Flow.shutdown flow `All)
+  in
+  let received = ref [] in
+  let operation =
+    Pulse.Client.with_client ~net:(Eio.Stdenv.net env) ~socket_path
+      ~cookie:(Bytes.make Pulse.Defs.pa_native_cookie_length '\x00')
+      (fun client ->
+        Pulse.Client.with_record_stream client @@ fun _ stream ->
+        Eta_stream.run_for_each
+          (fun chunk ->
+            Eta.Effect.sync (fun () -> received := chunk :: !received))
+          stream)
+  in
+  (match Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env) operation with
+  | Error cause
+    when List.exists
+           (function
+             | `Pulse_error (Pulse.Client.Disconnected _) -> true | _ -> false)
+           (Eta.Cause.failures cause) ->
+      ()
+  | Error _ -> Alcotest.fail "expected typed disconnection"
+  | Ok () -> Alcotest.fail "reader failure unexpectedly succeeded");
+  let chunks = List.rev !received in
+  Alcotest.(check int) "two pcm chunks" 2 (List.length chunks);
+  let first = List.nth chunks 0 in
+  let second = List.nth chunks 1 in
+  Alcotest.(check string) "first pcm bytes" "AAAA" (Bytes.to_string first);
+  Alcotest.(check string) "second pcm bytes" "BBBB" (Bytes.to_string second);
+  Bytes.fill first 0 (Bytes.length first) 'Z';
+  Alcotest.(check string)
+    "second chunk isolated from first mutation" "BBBB" (Bytes.to_string second)
+
 (* pulse-tg9e, pulse-4kja *)
 let test_pulse_record_cleanup_preserves_body_result () =
   Eio_main.run @@ fun env ->
@@ -742,8 +831,9 @@ let test_pulse_record_cleanup_preserves_body_result () =
         cause
 
 let test_daemon_contract_response () =
-  let snap : Pie.Daemon.Contract.recording_snapshot =
+  let snap : Pie.Assistant_service.Contract.recording_snapshot =
     {
+      phase = Pie.Recording.Phase.Active Pie.Recording.Phase.Processing;
       active = true;
       mode = "ptt-transcribe";
       enabled = true;
@@ -754,23 +844,26 @@ let test_daemon_contract_response () =
     }
   in
   let response =
-    Pie.Daemon.Contract.response_to_json (Pie.Daemon.Contract.Status_resp snap)
+    Pie.Assistant_service.Contract.response_to_json
+      (Pie.Assistant_service.Contract.Status_resp snap)
   in
   (match
-     Pie.Daemon.Contract.response_of_json Pie.Daemon.Contract.Status response
+     Pie.Assistant_service.Contract.response_of_json
+       Pie.Assistant_service.Contract.Status response
    with
-  | Pie.Daemon.Contract.Status_resp decoded ->
+  | Ok (Pie.Assistant_service.Contract.Status_resp decoded) ->
       Alcotest.(check bool) "active" true decoded.active;
       Alcotest.(check string) "mode" "ptt-transcribe" decoded.mode
   | _ -> Alcotest.fail "expected status response");
   let toggle_response =
-    Pie.Daemon.Contract.response_to_json (Pie.Daemon.Contract.Toggle_resp true)
+    Pie.Assistant_service.Contract.response_to_json
+      (Pie.Assistant_service.Contract.Toggle_resp true)
   in
   match
-    Pie.Daemon.Contract.response_of_json Pie.Daemon.Contract.Toggle
-      toggle_response
+    Pie.Assistant_service.Contract.response_of_json
+      Pie.Assistant_service.Contract.Toggle toggle_response
   with
-  | Pie.Daemon.Contract.Toggle_resp true -> ()
+  | Ok (Pie.Assistant_service.Contract.Toggle_resp true) -> ()
   | _ -> Alcotest.fail "expected toggle bool response"
 
 let test_daemon_server_state () =
@@ -789,21 +882,25 @@ let test_daemon_server_state () =
   (try Sys.remove socket_path with Sys_error _ -> ());
   (try Sys.remove persist_path with Sys_error _ -> ());
   let coordinator = Pie.Recording.Coordinator.create ~persist_path () in
-  Pie.Daemon.Server.start ~sw ~net:(Eio.Stdenv.net env) ~socket_path coordinator;
+  Pie.Assistant_service.Server.start ~sw ~net:(Eio.Stdenv.net env)
+    ~mono_clock:(Eio.Stdenv.mono_clock env)
+    ~socket_path coordinator;
   let send req =
     let flow = Eio.Net.connect ~sw (Eio.Stdenv.net env) (`Unix socket_path) in
     Fun.protect
       ~finally:(fun () -> Eio.Flow.close flow)
       (fun () ->
         let payload =
-          Yojson.Safe.to_string (Pie.Daemon.Contract.request_to_json req) ^ "\n"
+          Yojson.Safe.to_string
+            (Pie.Assistant_service.Contract.request_to_json req)
+          ^ "\n"
         in
         Eio.Flow.write flow [ Cstruct.of_string payload ];
         let reader = Eio.Buf_read.of_flow ~max_size:65536 flow in
         Yojson.Safe.from_string (Eio.Buf_read.line reader))
   in
-  ignore (send Pie.Daemon.Contract.Pause);
-  (match send Pie.Daemon.Contract.Status with
+  ignore (send Pie.Assistant_service.Contract.Pause);
+  (match send Pie.Assistant_service.Contract.Status with
   | `Assoc fields ->
       Alcotest.(check bool)
         "paused" false
@@ -811,7 +908,7 @@ let test_daemon_server_state () =
         | Some (`Bool b) -> b
         | _ -> true)
   | _ -> Alcotest.fail "status value must be object");
-  (match send Pie.Daemon.Contract.Toggle with
+  (match send Pie.Assistant_service.Contract.Toggle with
   | `Assoc fields ->
       Alcotest.(check bool)
         "toggle enabled" true
@@ -819,14 +916,6 @@ let test_daemon_server_state () =
         | Some (`Bool b) -> b
         | _ -> false)
   | _ -> Alcotest.fail "toggle should return enabled=true");
-  (match send Pie.Daemon.Contract.Meeting_toggle with
-  | `Assoc fields ->
-      Alcotest.(check string)
-        "meeting mode" "meeting-transcribe"
-        (match List.assoc_opt "mode" fields with
-        | Some (`String s) -> s
-        | _ -> "")
-  | _ -> Alcotest.fail "meeting value must be object");
   try Sys.remove persist_path with Sys_error _ -> ()
 
 let test_daemon_server_action_handler () =
@@ -849,11 +938,12 @@ let test_daemon_server_action_handler () =
   let action_handler action =
     seen := action :: !seen;
     {
-      Pie.Daemon.Contract.action;
+      Pie.Assistant_service.Contract.action;
       accepted = true;
       message = Some "queued";
       snapshot =
         {
+          phase = Pie.Recording.Phase.Ready;
           active = false;
           mode = "idle";
           enabled = true;
@@ -864,8 +954,9 @@ let test_daemon_server_action_handler () =
         };
     }
   in
-  Pie.Daemon.Server.start ~sw ~net:(Eio.Stdenv.net env) ~socket_path
-    ~action_handler coordinator;
+  Pie.Assistant_service.Server.start ~sw ~net:(Eio.Stdenv.net env)
+    ~mono_clock:(Eio.Stdenv.mono_clock env)
+    ~socket_path ~action_handler coordinator;
   let flow = Eio.Net.connect ~sw (Eio.Stdenv.net env) (`Unix socket_path) in
   let response =
     Fun.protect
@@ -873,8 +964,8 @@ let test_daemon_server_action_handler () =
       (fun () ->
         let payload =
           Yojson.Safe.to_string
-            (Pie.Daemon.Contract.request_to_json
-               (Pie.Daemon.Contract.Action "ptt-start"))
+            (Pie.Assistant_service.Contract.request_to_json
+               (Pie.Assistant_service.Contract.Action "ptt-start"))
           ^ "\n"
         in
         Eio.Flow.write flow [ Cstruct.of_string payload ];
@@ -898,7 +989,7 @@ let test_daemon_server_action_handler () =
   | _ -> Alcotest.fail "expected action response object");
   try Sys.remove persist_path with Sys_error _ -> ()
 
-let test_daemon_server_meeting_stop_no_failure_signal () =
+let test_daemon_server_unknown_meeting_method () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let socket_path =
@@ -914,11 +1005,12 @@ let test_daemon_server_meeting_stop_no_failure_signal () =
   (try Sys.remove socket_path with Sys_error _ -> ());
   (try Sys.remove persist_path with Sys_error _ -> ());
   let coordinator = Pie.Recording.Coordinator.create ~persist_path () in
-  (* Start PTT transcribe mode *)
   ignore
     (Pie.Recording.Coordinator.try_start coordinator
        Pie.Recording.Coordinator.Ptt_transcribe ());
-  Pie.Daemon.Server.start ~sw ~net:(Eio.Stdenv.net env) ~socket_path coordinator;
+  Pie.Assistant_service.Server.start ~sw ~net:(Eio.Stdenv.net env)
+    ~mono_clock:(Eio.Stdenv.mono_clock env)
+    ~socket_path coordinator;
   let send method_str =
     let flow = Eio.Net.connect ~sw (Eio.Stdenv.net env) (`Unix socket_path) in
     Fun.protect
@@ -934,26 +1026,20 @@ let test_daemon_server_meeting_stop_no_failure_signal () =
   in
   (match send "MeetingStop" with
   | `Assoc fields ->
-      let active =
-        match List.assoc_opt "active" fields with
-        | Some (`Bool b) -> b
-        | _ -> false
-      in
-      let mode =
-        match List.assoc_opt "mode" fields with
+      Alcotest.(check string)
+        "unknown method rejected"
+        Pie.Assistant_service.Server.err_malformed_request
+        (match List.assoc_opt "error" fields with
         | Some (`String s) -> s
-        | _ -> ""
-      in
-      (* The coordinator is in PTT_transcribe mode, so Meeting_stop returns
-        false internally but the server ignores this and returns a snapshot
-        showing the current state. The client has no way to know the stop
-        had no effect because there's no success/failure indicator. *)
-      Alcotest.(check bool) "still active" true active;
-      Alcotest.(check string) "still ptt-transcribe" "ptt-transcribe" mode;
+        | _ -> "");
       Alcotest.(check bool)
-        "MeetingStop response should indicate when no meeting was active" true
-        (List.mem_assoc "stopped" fields)
-  | _ -> Alcotest.fail "expected JSON object");
+        "no admission change field" false
+        (List.mem_assoc "active" fields)
+  | _ -> Alcotest.fail "expected JSON error object");
+  Alcotest.(check bool)
+    "ptt admission unchanged" true
+    (Pie.Recording.Coordinator.snapshot coordinator)
+      .Pie.Recording.Coordinator.active;
   try Sys.remove persist_path with Sys_error _ -> ()
 
 let test_codex_realtime_url_builders () =
@@ -997,19 +1083,19 @@ let test_codex_realtime_headers () =
     (List.assoc_opt "OpenAI-Beta" headers)
 
 let test_codex_realtime_receive_stop_modes () =
-  let transcript_done = Stt.Codex_realtime.Transcript_done "text" in
+  let transcript_final = Stt.Codex_realtime.Transcript_final "text" in
   Alcotest.(check bool)
-    "transcription stops on transcript" true
+    "transcription stops on transcript final" true
     (Stt.Codex_realtime.event_should_stop ~mode:Stt.Codex_realtime.Transcription
-       transcript_done);
+       transcript_final);
   Alcotest.(check bool)
-    "conversation waits for response.done" false
+    "conversation waits for response terminal" false
     (Stt.Codex_realtime.event_should_stop ~mode:Stt.Codex_realtime.Conversation
-       transcript_done);
+       transcript_final);
   Alcotest.(check bool)
-    "conversation stops on response.done" true
+    "conversation stops on completed terminal" true
     (Stt.Codex_realtime.event_should_stop ~mode:Stt.Codex_realtime.Conversation
-       Stt.Codex_realtime.Response_done)
+       (Stt.Codex_realtime.Response_terminal Stt.Codex_realtime.Completed))
 
 let test_codex_realtime_transcription_session_update () =
   match
@@ -1151,63 +1237,6 @@ let test_speech_operation_deadlines_are_typed () =
     "OpenRouter response operation timed out after 120 seconds"
     (run (Stt.Openrouter.with_response_operation_timeout Eta.Effect.never))
 
-(* codex-m71s: callback completion is represented by Eta.Effect.async.
-   codex-3y5k: the registered canceler runs at most once. *)
-let test_codex_async_completion_first_result_wins () =
-  Eio_main.run @@ fun env ->
-  Eio.Switch.run @@ fun sw ->
-  let completion =
-    Stt.Codex_realtime.Async_completion.create ~canceler:Eta.Effect.unit ()
-  in
-  let operation =
-    let* first =
-      Eta.Effect.sync (fun () ->
-          Stt.Codex_realtime.Async_completion.resolve completion
-            (Eta.Exit.ok "first"))
-    in
-    let* second =
-      Eta.Effect.sync (fun () ->
-          Stt.Codex_realtime.Async_completion.resolve completion
-            (Eta.Exit.ok "second"))
-    in
-    let* value = Stt.Codex_realtime.Async_completion.await completion in
-    Eta.Effect.pure (first, second, value)
-  in
-  match Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env) operation with
-  | Ok (first, second, value) ->
-      Alcotest.(check bool) "first resolution accepted" true first;
-      Alcotest.(check bool) "duplicate resolution dropped" false second;
-      Alcotest.(check string) "first result" "first" value
-  | Error _ -> Alcotest.fail "async completion unexpectedly failed"
-
-(* codex-w1jx, codex-3y5k *)
-let test_codex_async_completion_interruption_runs_canceler_once () =
-  Eio_main.run @@ fun env ->
-  Eio.Switch.run @@ fun sw ->
-  let cancellations = ref 0 in
-  let interrupted = ref false in
-  let completion =
-    Stt.Codex_realtime.Async_completion.create
-      ~canceler:(Eta.Effect.sync (fun () -> incr cancellations))
-      ()
-  in
-  let pending =
-    Stt.Codex_realtime.Async_completion.await completion
-    |> Eta.Effect.on_interrupt (fun _ ->
-        Eta.Effect.sync (fun () -> interrupted := true))
-    |> Eta.Effect.map (fun _ -> `Completion)
-  in
-  let winner = Eta.Effect.delay (Eta.Duration.ms 1) (Eta.Effect.pure `Timer) in
-  (match
-     Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env)
-       (Eta.Effect.race [ pending; winner ])
-   with
-  | Ok `Timer -> ()
-  | Ok `Completion -> Alcotest.fail "pending callback unexpectedly completed"
-  | Error _ -> Alcotest.fail "callback interruption race failed");
-  Alcotest.(check bool) "typed interruption observed" true !interrupted;
-  Alcotest.(check int) "canceler count" 1 !cancellations
-
 let tcp_port = function
   | `Tcp (_, port) -> port
   | `Unix _ -> Alcotest.fail "expected TCP listener"
@@ -1321,6 +1350,16 @@ let write_ws_close flow =
     { fin = true; opcode = Close; payload = close_payload 1000 "" }
   |> Bytes.to_string
   |> fun encoded -> Eio.Flow.copy_string encoded flow
+
+let drain_ws_until_client_eof ~clock flow =
+  let buf = Cstruct.create 4096 in
+  let rec loop () =
+    match Eio.Flow.single_read flow buf with
+    | 0 -> ()
+    | _ -> loop ()
+    | exception End_of_file -> ()
+  in
+  Eio.Time.with_timeout_exn clock 4.0 loop
 
 let write_ws_switching_response flow key =
   let response =
@@ -1462,7 +1501,7 @@ let test_codex_realtime_translate_nonconv_drops_prompt_e2e () =
       | _ -> Alcotest.fail "expected session object")
   | _ -> Alcotest.fail "expected JSON object"
 
-let run_realtime_error_ws_server flow =
+let run_realtime_error_ws_server ~clock flow =
   let head = read_http_head flow in
   Alcotest.(check (option string))
     "request target" (Some "/v1/realtime?model=gpt-realtime-2")
@@ -1489,7 +1528,7 @@ let run_realtime_error_ws_server flow =
   write_ws_text flow
     {|{"type":"error","error":{"message":"boom","code":"bad_request"}}|};
   write_ws_close flow;
-  try Eio.Flow.shutdown flow `Send with _ -> ()
+  drain_ws_until_client_eof ~clock flow
 
 let test_codex_realtime_stream_reports_server_error_e2e () =
   Eio_main.run @@ fun env ->
@@ -1502,7 +1541,7 @@ let test_codex_realtime_stream_reports_server_error_e2e () =
   Eio.Fiber.fork ~sw (fun () ->
       Eio.Switch.run @@ fun conn_sw ->
       let flow, _addr = Eio.Net.accept ~sw:conn_sw socket in
-      run_realtime_error_ws_server flow);
+      run_realtime_error_ws_server ~clock:(Eio.Stdenv.clock env) flow);
   let url =
     Printf.sprintf "ws://127.0.0.1:%d/v1/realtime?model=gpt-realtime-2" port
   in
@@ -1530,7 +1569,7 @@ let test_codex_realtime_stream_reports_server_error_e2e () =
   match Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env) operation with
   | Error (Eta.Cause.Fail (`Stt_error message)) ->
       Alcotest.(check string)
-        "server error" "Codex realtime server error: boom (bad_request)" message
+        "server error" "Codex realtime server error" message
   | Error cause ->
       Alcotest.failf "expected server error, got cause: %a"
         (Eta.Cause.pp pp_stt_error)
@@ -1549,64 +1588,746 @@ let temp_dir prefix =
   Unix.mkdir path 0o700;
   path
 
+let require_store dir =
+  match Recording.Retry_store.Active.open_store ~root:dir with
+  | Ok store -> store
+  | Error (`Retry_store msg) -> Alcotest.fail msg
+
+let require_owner ~dir ~coordinator ~attempt mode =
+  let store = require_store dir in
+  match
+    Assistant.Service.create_attempt_owner ~store ~coordinator ~attempt mode
+  with
+  | Ok owner -> owner
+  | Error (`Ptt_error msg) -> Alcotest.fail msg
+
+let peek_audio_bytes store =
+  match Recording.Retry_store.Active.peek store with
+  | Error (`Retry_store msg) -> Alcotest.fail msg
+  | Ok None -> Alcotest.fail "expected retained audio"
+  | Ok (Some (Recording.Retry_store.Active.Text _)) ->
+      Alcotest.fail "expected Audio candidate"
+  | Ok (Some (Recording.Retry_store.Active.Audio { generation; _ })) -> (
+      match Recording.Retry_store.Active.load_audio store generation with
+      | Ok bytes -> bytes
+      | Error (`Retry_store msg) -> Alcotest.fail msg)
+
+let peek_none store =
+  match Recording.Retry_store.Active.peek store with
+  | Ok None -> true
+  | Ok (Some _) -> false
+  | Error (`Retry_store msg) -> Alcotest.fail msg
+
 let test_retry_store_retains_and_discards_recordings () =
   let dir = temp_dir "pie-retry-store" in
-  let recording =
-    Recording.Retry_store.create ~dir Recording.Retry_store.Transcribe
+  let store = require_store dir in
+  let writer =
+    match
+      Recording.Retry_store.Active.open_audio_writer store
+        ~mode:Recording.Retry_store.Transcribe
+    with
+    | Ok writer -> writer
+    | Error (`Retry_store msg) -> Alcotest.fail msg
   in
-  Recording.Retry_store.append recording (Bytes.of_string "first");
-  Recording.Retry_store.append recording (Bytes.of_string "-second");
-  Recording.Retry_store.close recording;
-  let pending =
-    match Recording.Retry_store.latest ~dir () with
-    | Some pending -> pending
-    | None -> Alcotest.fail "expected retained recording"
+  (match
+     Recording.Retry_store.Active.append_audio writer
+       (Bytes.of_string "first-second")
+   with
+  | Ok () -> ()
+  | Error (`Retry_store msg) -> Alcotest.fail msg);
+  (match Recording.Retry_store.Active.close_writer writer with
+  | Ok () -> ()
+  | Error (`Retry_store msg) -> Alcotest.fail msg);
+  let generation =
+    match Recording.Retry_store.Active.publish_audio store writer with
+    | Ok generation -> generation
+    | Error (`Retry_store msg) -> Alcotest.fail msg
   in
-  Alcotest.(check string)
-    "mode" "transcribe"
-    (Recording.Retry_store.string_of_mode pending.mode);
   Alcotest.(check string)
     "captured bytes" "first-second"
-    (Bytes.to_string pending.pcm_bytes);
-  Recording.Retry_store.discard pending.path;
-  Alcotest.(check bool)
-    "discard after successful retry" true
-    (Recording.Retry_store.latest ~dir () = None);
-  Unix.rmdir dir
+    (Bytes.to_string (peek_audio_bytes store));
+  (match Recording.Retry_store.Active.clear store generation with
+  | Ok () -> ()
+  | Error (`Retry_store msg) -> Alcotest.fail msg);
+  Alcotest.(check bool) "clear after successful retry" true (peek_none store);
+  let rec rm path =
+    match Unix.lstat path with
+    | { st_kind = Unix.S_DIR; _ } ->
+        Array.iter
+          (fun n -> if n <> "." && n <> ".." then rm (Filename.concat path n))
+          (Sys.readdir path);
+        Unix.rmdir path
+    | _ -> Unix.unlink path
+  in
+  rm dir
+
+let pp_ptt_error formatter = function
+  | `Ptt_error message -> Format.pp_print_string formatter message
+  | `Pulse_error error ->
+      Format.pp_print_string formatter (Pulse.Client.error_message error)
+
+let cause_contains cause needle =
+  let rendered = Format.asprintf "%a" (Eta.Cause.pp pp_ptt_error) cause in
+  let rec loop i =
+    i <= String.length rendered - String.length needle
+    && (String.sub rendered i (String.length needle) = needle || loop (i + 1))
+  in
+  loop 0
+
+let openrouter_clip_config () : Pie.Config.Stt.t =
+  {
+    provider = Pie.Config.Stt.Openrouter;
+    transcription_model = "openrouter/google/gemini-3.1-flash-lite";
+    translation_model = "openrouter/google/gemini-3.1-flash-lite";
+    transcription_language = "Polish";
+    translation_source_language = "Polish";
+    translation_target_language = "English";
+    ptt_min_capture_rms = 0.001;
+    ptt_min_capture_peak = 0.008;
+    ptt_transcribe_keysym = 65516;
+    ptt_translate_keysym = 65508;
+    ptt_transcribe_shift = true;
+    ptt_translate_shift = false;
+    thinking_effort = Some "minimal";
+    transcription_prompt = "Transcribe in {{language}}.";
+    translation_prompt =
+      "Translate from {{source_language}} to {{target_language}}.";
+    newline_rules = [];
+    text_entry_rules = [];
+  }
+
+let rec remove_dir dir =
+  match Unix.lstat dir with
+  | { st_kind = Unix.S_DIR; _ } ->
+      Array.iter
+        (fun name ->
+          if name <> "." && name <> ".." then
+            remove_dir (Filename.concat dir name))
+        (Sys.readdir dir);
+      Unix.rmdir dir
+  | _ -> Unix.unlink dir
 
 let test_failed_processing_retains_captured_audio () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let dir = temp_dir "pie-failed-capture" in
-  let base_handle : Ptt_loop.handle =
-    {
-      offer = (fun _ -> Eta.Effect.unit);
-      finish = (fun _ -> Eta.Effect.fail (`Ptt_error "STT unavailable"));
-      cancel = Eta.Effect.unit;
-    }
+  let persist_path = Filename.concat dir "recording-state.json" in
+  let coordinator = Recording.Coordinator.create ~persist_path () in
+  let attempt =
+    match
+      Recording.Coordinator.try_start coordinator
+        Recording.Coordinator.Ptt_transcribe ()
+    with
+    | Recording.Coordinator.Started attempt -> attempt
+    | _ -> Alcotest.fail "expected the attempt to be admitted"
   in
-  let handle =
-    Assistant.Service.retain_handle ~dir Assistant.Service.Transcribe
-      base_handle
+  let owner =
+    require_owner ~dir ~coordinator ~attempt Assistant.Service.Transcribe
   in
+  let stt _config _mode _bytes =
+    Eta.Effect.fail (`Ptt_error "STT unavailable")
+  in
+  let deliver _config _mode _text = Eta.Effect.unit in
+  let inner =
+    Assistant.Service.make_clip_handle ~owner ~stt ~deliver
+      ~config:(openrouter_clip_config ())
+      Assistant.Service.Transcribe
+  in
+  let handle = Assistant.Service.attempt_handle owner inner in
   let pcm_bytes = Bytes.of_string "captured-audio" in
   let operation =
-    let* () = handle.offer pcm_bytes in
-    handle.finish { Ptt_loop.duration_ms = 500; pcm_bytes }
+    Assistant.Service.run_acquired_attempt ~attempt
+      ~on_settle:(Assistant.Service.settle_attempt owner)
+      (let* () = handle.offer pcm_bytes in
+       match handle.finish with
+       | Ptt_loop.Buffered f -> f { Ptt_loop.duration_ms = 500; pcm_bytes }
+       | Ptt_loop.Streaming _ -> Alcotest.fail "expected Buffered finish")
   in
   (match Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env) operation with
-  | Error _ -> ()
-  | Ok () -> Alcotest.fail "expected processing failure");
-  let pending =
-    match Recording.Retry_store.latest ~dir () with
-    | Some pending -> pending
-    | None -> Alcotest.fail "processing failure discarded the capture"
-  in
+  | Ok () -> Alcotest.fail "expected processing failure"
+  | Error cause ->
+      Alcotest.(check bool)
+        "preserves STT unavailable" true
+        (cause_contains cause "STT unavailable"));
+  Alcotest.(check bool)
+    "failed finish releases admission" false
+    (Recording.Coordinator.snapshot coordinator).Recording.Coordinator.active;
+  let store = require_store dir in
   Alcotest.(check string)
-    "retained PCM" "captured-audio"
-    (Bytes.to_string pending.pcm_bytes);
-  Recording.Retry_store.discard pending.path;
-  Unix.rmdir dir
+    "retained published Audio" "captured-audio"
+    (Bytes.to_string (peek_audio_bytes store));
+  remove_dir dir
+
+let test_setup_failure_releases_admission_and_preserves_error () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let dir = temp_dir "pie-setup-failure" in
+  let persist_path = Filename.concat dir "recording-state.json" in
+  let coordinator = Recording.Coordinator.create ~persist_path () in
+  let attempt =
+    match
+      Recording.Coordinator.try_start coordinator
+        Recording.Coordinator.Ptt_transcribe ()
+    with
+    | Recording.Coordinator.Started attempt -> attempt
+    | _ -> Alcotest.fail "expected the attempt to be admitted"
+  in
+  let owner =
+    require_owner ~dir ~coordinator ~attempt Assistant.Service.Transcribe
+  in
+  let operation =
+    Assistant.Service.run_acquired_attempt ~attempt
+      ~on_settle:(Assistant.Service.settle_attempt owner)
+      (Eta.Effect.fail (`Ptt_error "synthetic setup failure"))
+  in
+  (match Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env) operation with
+  | Ok () -> Alcotest.fail "setup failure was erased"
+  | Error cause ->
+      Alcotest.(check bool)
+        "preserves the setup failure" true
+        (cause_contains cause "synthetic setup failure"));
+  Alcotest.(check bool)
+    "setup failure releases admission" false
+    (Recording.Coordinator.snapshot coordinator).Recording.Coordinator.active;
+  Alcotest.(check bool)
+    "setup failure does not publish" true
+    (peek_none (require_store dir));
+  (match
+     Recording.Coordinator.try_start coordinator
+       Recording.Coordinator.Ptt_transcribe ()
+   with
+  | Recording.Coordinator.Started _ -> ()
+  | _ -> Alcotest.fail "expected a subsequent attempt after setup failure");
+  remove_dir dir
+
+let test_settle_attempt_construction_does_not_run_duties () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let dir = temp_dir "pie-settle-blueprint" in
+  let persist_path = Filename.concat dir "recording-state.json" in
+  let coordinator = Recording.Coordinator.create ~persist_path () in
+  let attempt =
+    match
+      Recording.Coordinator.try_start coordinator
+        Recording.Coordinator.Ptt_transcribe ()
+    with
+    | Recording.Coordinator.Started attempt -> attempt
+    | _ -> Alcotest.fail "expected the attempt to be admitted"
+  in
+  let owner =
+    require_owner ~dir ~coordinator ~attempt Assistant.Service.Transcribe
+  in
+  let store = require_store dir in
+  let handle =
+    Assistant.Service.attempt_handle owner
+      {
+        Ptt_loop.offer = (fun _ -> Eta.Effect.unit);
+        finish = Ptt_loop.Buffered (fun _ -> Eta.Effect.unit);
+        cancel = Eta.Effect.unit;
+      }
+  in
+  let pcm_bytes = Bytes.of_string "captured-audio" in
+  (match
+     Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env) (handle.offer pcm_bytes)
+   with
+  | Ok () -> ()
+  | Error cause ->
+      Alcotest.failf "offer failed: %a" (Eta.Cause.pp pp_ptt_error) cause);
+  Alcotest.(check bool)
+    "unpublished draft is not a recovery candidate" true (peek_none store);
+  Alcotest.(check bool)
+    "admitted before cleanup" true
+    (Recording.Coordinator.snapshot coordinator).Recording.Coordinator.active;
+  let abandoned = Assistant.Service.settle_attempt owner in
+  let (_ : (unit, [ `Ptt_error of string ]) Eta.Effect.t) = abandoned in
+  Alcotest.(check bool)
+    "abandoned blueprint leaves admission" true
+    (Recording.Coordinator.snapshot coordinator).Recording.Coordinator.active;
+  Alcotest.(check bool)
+    "abandoned blueprint does not publish" true (peek_none store);
+  (match
+     Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env)
+       (Assistant.Service.settle_attempt owner)
+   with
+  | Ok () -> ()
+  | Error cause ->
+      Alcotest.failf "executed cleanup failed: %a"
+        (Eta.Cause.pp pp_ptt_error)
+        cause);
+  Alcotest.(check bool)
+    "executed cleanup releases admission" false
+    (Recording.Coordinator.snapshot coordinator).Recording.Coordinator.active;
+  Alcotest.(check bool)
+    "executed cleanup does not publish abort" true (peek_none store);
+  (match
+     Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env)
+       (Assistant.Service.settle_attempt owner)
+   with
+  | Ok () -> ()
+  | Error cause ->
+      Alcotest.failf "repeated cleanup failed: %a"
+        (Eta.Cause.pp pp_ptt_error)
+        cause);
+  Alcotest.(check bool)
+    "repeated cleanup stays idle" false
+    (Recording.Coordinator.snapshot coordinator).Recording.Coordinator.active;
+  Alcotest.(check bool)
+    "repeated cleanup still unpublished" true (peek_none store);
+  remove_dir dir
+
+let test_buffered_clip_cancellation_settles_after_offer () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let clock = Eio.Stdenv.clock env in
+  let dir = temp_dir "pie-clip-cancel" in
+  let persist_path = Filename.concat dir "recording-state.json" in
+  let coordinator = Recording.Coordinator.create ~persist_path () in
+  let observed = ref None in
+  let offered, resolve_offered = Eio.Promise.create () in
+  let stop, resolve_stop = Eio.Promise.create () in
+  let pcm_bytes = Bytes.of_string "captured-audio" in
+  let waiting =
+    (let* press =
+       Assistant.Service.on_press ~sw ~net:(Eio.Stdenv.net env)
+         ~process_mgr:(Eio.Stdenv.process_mgr env)
+         ~coordinator ~retry_dir:dir
+         ~config:(openrouter_clip_config ())
+         "transcribe"
+     in
+     match press with
+     | Ptt_loop.Handle _ ->
+         Eta.Effect.fail
+           (`Ptt_error "buffered clip attempt returned Handle without Scoped")
+     | Ptt_loop.Skip ->
+         Eta.Effect.fail (`Ptt_error "buffered clip attempt skipped")
+     | Ptt_loop.Scoped with_handle ->
+         with_handle (fun handle ->
+             let* () = handle.offer pcm_bytes in
+             let* () =
+               Eta.Effect.sync (fun () ->
+                   Eio.Promise.resolve resolve_offered ())
+             in
+             Eta.Effect.never))
+    |> Eta.Effect.on_exit (fun exit ->
+        Eta.Effect.sync (fun () -> observed := Some exit))
+  in
+  let cancel_after_offer =
+    Eta.Effect.sync (fun () ->
+        Eio.Promise.await offered;
+        Eio.Promise.resolve resolve_stop ())
+  in
+  let stop_signal =
+    Eta.Effect.sync (fun () -> Eio.Promise.await stop)
+    |> Eta.Effect.map (fun () -> `Stop)
+  in
+  let operation =
+    Eta.Effect.par cancel_after_offer
+      (Eta.Effect.race
+         [ waiting |> Eta.Effect.map (fun () -> `Body); stop_signal ])
+    |> Eta.Effect.timeout_as (Eta.Duration.seconds 5)
+         ~on_timeout:(`Ptt_error "harness timeout")
+  in
+  (match Eta_eio.run_once ~sw ~clock operation with
+  | Error cause when cause_contains cause "harness timeout" ->
+      Alcotest.fail "cancellation did not complete before harness timeout"
+  | Error cause ->
+      Alcotest.failf "cancellation race failed: %a"
+        (Eta.Cause.pp pp_ptt_error)
+        cause
+  | Ok (_, `Body) -> Alcotest.fail "waiting body completed before cancellation"
+  | Ok (_, `Stop) -> ());
+  (match !observed with
+  | None -> Alcotest.fail "cancelled body did not run on_exit"
+  | Some (Eta.Exit.Ok _) -> Alcotest.fail "cancelled body succeeded"
+  | Some (Eta.Exit.Error cause) ->
+      Alcotest.(check bool)
+        "cancellation stays interruption" true
+        (Eta.Cause.is_interrupt_only cause));
+  Alcotest.(check bool)
+    "cancellation releases admission" false
+    (Recording.Coordinator.snapshot coordinator).Recording.Coordinator.active;
+  Alcotest.(check bool)
+    "abort does not publish a recovery candidate" true
+    (peek_none (require_store dir));
+  remove_dir dir
+
+let test_buffered_clip_defect_settles_after_offer () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let dir = temp_dir "pie-clip-defect" in
+  let persist_path = Filename.concat dir "recording-state.json" in
+  let coordinator = Recording.Coordinator.create ~persist_path () in
+  let pcm_bytes = Bytes.of_string "captured-audio" in
+  let operation =
+    let* press =
+      Assistant.Service.on_press ~sw ~net:(Eio.Stdenv.net env)
+        ~process_mgr:(Eio.Stdenv.process_mgr env)
+        ~coordinator ~retry_dir:dir
+        ~config:(openrouter_clip_config ())
+        "transcribe"
+    in
+    match press with
+    | Ptt_loop.Handle _ ->
+        Eta.Effect.fail
+          (`Ptt_error "buffered clip attempt returned Handle without Scoped")
+    | Ptt_loop.Skip ->
+        Eta.Effect.fail (`Ptt_error "buffered clip attempt skipped")
+    | Ptt_loop.Scoped with_handle ->
+        with_handle (fun handle ->
+            let* () = handle.offer pcm_bytes in
+            Eta.Effect.sync (fun () -> failwith "synthetic defect"))
+  in
+  (match Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env) operation with
+  | Ok () -> Alcotest.fail "defect was erased"
+  | Error cause ->
+      Alcotest.(check bool)
+        "defect is not interruption" false
+        (Eta.Cause.is_interrupt_only cause);
+      Alcotest.(check bool)
+        "preserves synthetic defect" true
+        (cause_contains cause "synthetic defect"));
+  Alcotest.(check bool)
+    "defect releases admission" false
+    (Recording.Coordinator.snapshot coordinator).Recording.Coordinator.active;
+  Alcotest.(check bool)
+    "defect abort does not publish" true
+    (peek_none (require_store dir));
+  remove_dir dir
+
+let test_on_press_construction_does_not_admit () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let dir = temp_dir "pie-on-press-construct" in
+  let persist_path = Filename.concat dir "recording-state.json" in
+  let coordinator = Recording.Coordinator.create ~persist_path () in
+  Alcotest.(check bool)
+    "idle before construction" false
+    (Recording.Coordinator.snapshot coordinator).Recording.Coordinator.active;
+  let blueprint =
+    Assistant.Service.on_press ~sw ~net:(Eio.Stdenv.net env)
+      ~process_mgr:(Eio.Stdenv.process_mgr env)
+      ~coordinator
+      ~config:(openrouter_clip_config ())
+      "transcribe"
+  in
+  let (_ : (Ptt_loop.press_result, [ `Ptt_error of string ]) Eta.Effect.t) =
+    blueprint
+  in
+  Alcotest.(check bool)
+    "constructing on_press does not admit without execution" false
+    (Recording.Coordinator.snapshot coordinator).Recording.Coordinator.active;
+  remove_dir dir
+
+let test_on_press_execution_admits () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let dir = temp_dir "pie-on-press-exec" in
+  let persist_path = Filename.concat dir "recording-state.json" in
+  let coordinator = Recording.Coordinator.create ~persist_path () in
+  let blueprint =
+    Assistant.Service.on_press ~sw ~net:(Eio.Stdenv.net env)
+      ~process_mgr:(Eio.Stdenv.process_mgr env)
+      ~coordinator ~retry_dir:dir
+      ~config:(openrouter_clip_config ())
+      "transcribe"
+  in
+  Alcotest.(check bool)
+    "idle before execution" false
+    (Recording.Coordinator.snapshot coordinator).Recording.Coordinator.active;
+  (match Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env) blueprint with
+  | Error cause ->
+      Alcotest.failf "on_press execution failed: %a"
+        (Eta.Cause.pp pp_ptt_error)
+        cause
+  | Ok Ptt_loop.Skip -> Alcotest.fail "expected admission"
+  | Ok (Ptt_loop.Handle _) ->
+      Alcotest.fail "buffered clip attempt must remain Scoped"
+  | Ok (Ptt_loop.Scoped _) -> ());
+  Alcotest.(check bool)
+    "execution admits" true
+    (Recording.Coordinator.snapshot coordinator).Recording.Coordinator.active;
+  remove_dir dir
+
+let test_on_press_busy_and_disabled_at_execution () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let dir = temp_dir "pie-on-press-busy" in
+  let persist_path = Filename.concat dir "recording-state.json" in
+  let coordinator = Recording.Coordinator.create ~persist_path () in
+  let net = Eio.Stdenv.net env in
+  let process_mgr = Eio.Stdenv.process_mgr env in
+  let clock = Eio.Stdenv.clock env in
+  let press () =
+    Assistant.Service.on_press ~sw ~net ~process_mgr ~coordinator ~retry_dir:dir
+      ~config:(openrouter_clip_config ())
+      "transcribe"
+  in
+  let first = press () in
+  let second = press () in
+  Alcotest.(check bool)
+    "constructed pair leaves coordinator idle" false
+    (Recording.Coordinator.snapshot coordinator).Recording.Coordinator.active;
+  (match Eta_eio.run_once ~sw ~clock first with
+  | Ok (Ptt_loop.Scoped _) -> ()
+  | Ok _ -> Alcotest.fail "first execution should admit a Scoped handle"
+  | Error cause ->
+      Alcotest.failf "first execution failed: %a"
+        (Eta.Cause.pp pp_ptt_error)
+        cause);
+  (match Eta_eio.run_once ~sw ~clock second with
+  | Ok Ptt_loop.Skip -> ()
+  | Ok _ -> Alcotest.fail "second execution should see busy admission"
+  | Error cause ->
+      Alcotest.failf "busy check became an error: %a"
+        (Eta.Cause.pp pp_ptt_error)
+        cause);
+  Alcotest.(check bool)
+    "first attempt still owns admission" true
+    (Recording.Coordinator.snapshot coordinator).Recording.Coordinator.active;
+  Recording.Coordinator.set_enabled coordinator false;
+  let while_enabled = press () in
+  (match Eta_eio.run_once ~sw ~clock while_enabled with
+  | Ok Ptt_loop.Skip -> ()
+  | Ok _ -> Alcotest.fail "disabled execution should skip"
+  | Error cause ->
+      Alcotest.failf "disabled check became an error: %a"
+        (Eta.Cause.pp pp_ptt_error)
+        cause);
+  Recording.Coordinator.set_enabled coordinator false;
+  let constructed_while_disabled = press () in
+  Recording.Coordinator.set_enabled coordinator true;
+  (match Recording.Coordinator.current_attempt coordinator with
+  | Some attempt -> ignore (Recording.Coordinator.release coordinator attempt)
+  | None -> ());
+  (match Eta_eio.run_once ~sw ~clock constructed_while_disabled with
+  | Ok (Ptt_loop.Scoped _) -> ()
+  | Ok Ptt_loop.Skip ->
+      Alcotest.fail "disabled snapshot must be read at execution"
+  | Ok _ -> Alcotest.fail "expected Scoped after enabling"
+  | Error cause ->
+      Alcotest.failf "enabled execution failed: %a"
+        (Eta.Cause.pp pp_ptt_error)
+        cause);
+  Alcotest.(check bool)
+    "execution after enable admits" true
+    (Recording.Coordinator.snapshot coordinator).Recording.Coordinator.active;
+  remove_dir dir
+
+let test_on_press_constructor_failure_releases_without_clearing_other_attempt ()
+    =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let dir = temp_dir "pie-on-press-ctor" in
+  let persist_path = Filename.concat dir "recording-state.json" in
+  let coordinator = Recording.Coordinator.create ~persist_path () in
+  let config =
+    { (openrouter_clip_config ()) with transcription_model = "openrouter/" }
+  in
+  let blueprint =
+    Assistant.Service.on_press ~sw ~net:(Eio.Stdenv.net env)
+      ~process_mgr:(Eio.Stdenv.process_mgr env)
+      ~coordinator ~retry_dir:dir ~config "transcribe"
+  in
+  Alcotest.(check bool)
+    "constructor blueprint is idle" false
+    (Recording.Coordinator.snapshot coordinator).Recording.Coordinator.active;
+  (match Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env) blueprint with
+  | Ok Ptt_loop.Skip | Ok (Ptt_loop.Handle _) ->
+      Alcotest.fail "empty model should not Skip/Handle"
+  | Ok (Ptt_loop.Scoped with_handle) -> (
+      Alcotest.(check bool)
+        "on_press admits before deferred handle construction" true
+        (Recording.Coordinator.snapshot coordinator)
+          .Recording.Coordinator.active;
+      match
+        Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env)
+          (with_handle (fun _ -> Eta.Effect.unit))
+      with
+      | Ok _ -> Alcotest.fail "empty model should fail handle construction"
+      | Error cause -> (
+          match Eta.Cause.failures cause with
+          | [ `Ptt_error "config:model" ] ->
+              Alcotest.(check bool)
+                "constructor failure is not interruption" false
+                (Eta.Cause.is_interrupt_only cause)
+          | _ ->
+              Alcotest.failf "expected exact Fail config:model, got %a"
+                (Eta.Cause.pp pp_ptt_error)
+                cause))
+  | Error cause -> (
+      match Eta.Cause.failures cause with
+      | [ `Ptt_error "config:model" ] ->
+          Alcotest.(check bool)
+            "constructor failure is not interruption" false
+            (Eta.Cause.is_interrupt_only cause)
+      | _ ->
+          Alcotest.failf "expected exact Fail config:model, got %a"
+            (Eta.Cause.pp pp_ptt_error)
+            cause));
+  Alcotest.(check bool)
+    "constructor failure releases reservation" false
+    (Recording.Coordinator.snapshot coordinator).Recording.Coordinator.active;
+  let other =
+    match
+      Recording.Coordinator.try_start coordinator
+        Recording.Coordinator.Ptt_transcribe ()
+    with
+    | Recording.Coordinator.Started attempt -> attempt
+    | _ -> Alcotest.fail "expected a later attempt after constructor failure"
+  in
+  Alcotest.(check bool)
+    "later same-mode attempt remains admitted" true
+    (Recording.Coordinator.snapshot coordinator).Recording.Coordinator.active;
+  Alcotest.(check bool)
+    "failed construction did not clear the later attempt" true
+    (Recording.Coordinator.attempt_mode other
+    = Recording.Coordinator.Ptt_transcribe);
+  remove_dir dir
+
+let even_hold_pcm = Bytes.of_string "captured-audio"
+
+let fake_provider_handle () : Ptt_loop.handle =
+  {
+    offer = (fun _ -> Eta.Effect.unit);
+    finish = Ptt_loop.Buffered (fun _ -> Eta.Effect.unit);
+    cancel = Eta.Effect.unit;
+  }
+
+let assert_busy coordinator =
+  match
+    Recording.Coordinator.try_start coordinator
+      Recording.Coordinator.Ptt_transcribe ()
+  with
+  | Recording.Coordinator.Busy _ -> ()
+  | Recording.Coordinator.Disabled ->
+      Alcotest.fail "expected Busy, got Disabled"
+  | Recording.Coordinator.Started _ ->
+      Alcotest.fail "admission released before outer scope finalizer"
+
+let test_attempt_handle_finish_holds_until_outer_settle () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let dir = temp_dir "pie-hold-finish" in
+  let persist_path = Filename.concat dir "recording-state.json" in
+  let coordinator = Recording.Coordinator.create ~persist_path () in
+  let attempt =
+    match
+      Recording.Coordinator.try_start coordinator
+        Recording.Coordinator.Ptt_transcribe ()
+    with
+    | Recording.Coordinator.Started attempt -> attempt
+    | _ -> Alcotest.fail "expected the attempt to be admitted"
+  in
+  let owner =
+    require_owner ~dir ~coordinator ~attempt Assistant.Service.Transcribe
+  in
+  let entered, resolve_entered = Eio.Promise.create () in
+  let held, resolve_held = Eio.Promise.create () in
+  let handle =
+    Assistant.Service.attempt_handle owner (fake_provider_handle ())
+  in
+  let body =
+    let* () = handle.offer even_hold_pcm in
+    let* () =
+      match handle.finish with
+      | Ptt_loop.Buffered f ->
+          f { Ptt_loop.duration_ms = 1; pcm_bytes = even_hold_pcm }
+      | Ptt_loop.Streaming _ -> Alcotest.fail "expected Buffered finish"
+    in
+    let* () =
+      Eta.Effect.sync (fun () -> Eio.Promise.resolve resolve_entered ())
+    in
+    Eta.Effect.sync (fun () -> Eio.Promise.await held)
+  in
+  let checker =
+    Eta.Effect.sync (fun () ->
+        Eio.Promise.await entered;
+        assert_busy coordinator;
+        Eio.Promise.resolve resolve_held ())
+  in
+  let operation =
+    Eta.Effect.par
+      (Assistant.Service.run_acquired_attempt ~attempt
+         ~on_settle:(Assistant.Service.settle_attempt owner)
+         body)
+      checker
+  in
+  (match Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env) operation with
+  | Ok _ -> ()
+  | Error cause ->
+      Alcotest.failf "outer finish hold failed: %a"
+        (Eta.Cause.pp pp_ptt_error)
+        cause);
+  (match
+     Recording.Coordinator.try_start coordinator
+       Recording.Coordinator.Ptt_transcribe ()
+   with
+  | Recording.Coordinator.Started _ -> ()
+  | _ -> Alcotest.fail "expected admission free after outer settle");
+  Alcotest.(check bool)
+    "finish abort does not publish" true
+    (peek_none (require_store dir));
+  remove_dir dir
+
+let test_attempt_handle_cancel_holds_until_outer_settle () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let dir = temp_dir "pie-hold-cancel" in
+  let persist_path = Filename.concat dir "recording-state.json" in
+  let coordinator = Recording.Coordinator.create ~persist_path () in
+  let attempt =
+    match
+      Recording.Coordinator.try_start coordinator
+        Recording.Coordinator.Ptt_transcribe ()
+    with
+    | Recording.Coordinator.Started attempt -> attempt
+    | _ -> Alcotest.fail "expected the attempt to be admitted"
+  in
+  let owner =
+    require_owner ~dir ~coordinator ~attempt Assistant.Service.Transcribe
+  in
+  let entered, resolve_entered = Eio.Promise.create () in
+  let held, resolve_held = Eio.Promise.create () in
+  let handle =
+    Assistant.Service.attempt_handle owner (fake_provider_handle ())
+  in
+  let body =
+    let* () = handle.offer even_hold_pcm in
+    let* () = handle.cancel in
+    let* () =
+      Eta.Effect.sync (fun () -> Eio.Promise.resolve resolve_entered ())
+    in
+    Eta.Effect.sync (fun () -> Eio.Promise.await held)
+  in
+  let checker =
+    Eta.Effect.sync (fun () ->
+        Eio.Promise.await entered;
+        assert_busy coordinator;
+        Eio.Promise.resolve resolve_held ())
+  in
+  let operation =
+    Eta.Effect.par
+      (Assistant.Service.run_acquired_attempt ~attempt
+         ~on_settle:(Assistant.Service.settle_attempt owner)
+         body)
+      checker
+  in
+  (match Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env) operation with
+  | Ok _ -> ()
+  | Error cause ->
+      Alcotest.failf "outer cancel hold failed: %a"
+        (Eta.Cause.pp pp_ptt_error)
+        cause);
+  (match
+     Recording.Coordinator.try_start coordinator
+       Recording.Coordinator.Ptt_transcribe ()
+   with
+  | Recording.Coordinator.Started _ -> ()
+  | _ -> Alcotest.fail "expected admission free after outer settle");
+  Alcotest.(check bool)
+    "cancel abort does not publish" true
+    (peek_none (require_store dir));
+  remove_dir dir
 
 let test_recording_coordinator_persist_error_swallowed () =
   let base = temp_dir "pie-coordinator-persist" in
@@ -1625,30 +2346,19 @@ let test_recording_coordinator_persist_error_swallowed () =
 let test_recording_coordinator_stop_clears_error () =
   let path = Filename.temp_file "pie-recording" ".json" in
   let coordinator = Recording.Coordinator.create ~persist_path:path () in
-  (* Start a meeting, set an error, then stop via toggle_meeting *)
-  ignore
-    (Recording.Coordinator.try_start coordinator
-       Recording.Coordinator.Meeting_transcribe ());
-  Recording.Coordinator.set_error coordinator "toggle-stops-meeting";
-  let snap_toggle = Recording.Coordinator.toggle_meeting coordinator in
-  (* toggle_meeting preserves last_error when stopping *)
-  Alcotest.(check (option string))
-    "toggle_meeting preserves last_error" (Some "toggle-stops-meeting")
-    snap_toggle.Recording.Coordinator.last_error;
-  (* Now start fresh and stop via stop *)
-  ignore
-    (Recording.Coordinator.try_start coordinator
-       Recording.Coordinator.Meeting_transcribe ());
+  let attempt =
+    match
+      Recording.Coordinator.try_start coordinator
+        Recording.Coordinator.Ptt_transcribe ()
+    with
+    | Recording.Coordinator.Started attempt -> attempt
+    | _ -> Alcotest.fail "expected start"
+  in
   Recording.Coordinator.set_error coordinator "stop-clears-it";
-  ignore
-    (Recording.Coordinator.stop coordinator
-       Recording.Coordinator.Meeting_transcribe);
+  ignore (Recording.Coordinator.release coordinator attempt);
   let snap_stop = Recording.Coordinator.snapshot coordinator in
-  (* Bug: stop clears last_error, but toggle_meeting preserves it.
-     The behavior should be consistent — either both should clear or
-     both should preserve the error on stop. *)
   Alcotest.(check (option string))
-    "stop should also preserve last_error" (Some "stop-clears-it")
+    "identity release preserves last_error" (Some "stop-clears-it")
     snap_stop.Recording.Coordinator.last_error;
   Sys.remove path
 
@@ -1661,39 +2371,12 @@ let test_daemon_server_mkdir_p_silently_accepts_file () =
      existing regular file it silently returns () instead of raising EEXIST.
      Fs.mkdir_p was fixed but this copy was missed. *)
   try
-    Pie.Daemon.Server.mkdir_p file_path;
+    Pie.Assistant_service.Server.mkdir_p file_path;
     Alcotest.fail
       "mkdir_p should raise EEXIST for an existing file, not silently return"
   with
   | Unix.Unix_error (Unix.EEXIST, _, _) -> ()
   | exn -> Alcotest.failf "unexpected exception: %s" (Printexc.to_string exn)
-
-let test_assistant_prompt_value_utf8_truncation () =
-  (* Build a 201-byte string: 199 ASCII chars followed by a 2-byte UTF-8
-     character 'e' (C3 A9). A naive String.sub cap at 200 bytes slices inside
-     that 2-byte sequence, leaving a dangling C3 lead byte and producing an
-     invalid encoding the receiving API may reject. A correct truncation backs
-     off to the character boundary, dropping the split character entirely, so
-     the result is a valid UTF-8 string of at most 200 bytes (here 199). *)
-  let prefix = String.make 199 'x' in
-  let input = prefix ^ "\195\169" in
-  (* 'e' = two bytes *)
-  match Pie.Commands.Assistant.prompt_value (Some input) with
-  | None -> Alcotest.fail "prompt_value returned None"
-  | Some truncated ->
-      Alcotest.(check bool)
-        "at most 200 bytes" true
-        (String.length truncated <= 200);
-      Alcotest.(check bool)
-        "actually truncated" true
-        (String.length truncated < String.length input);
-      let last_byte = Char.code truncated.[String.length truncated - 1] in
-      (* The result must not end inside a multi-byte UTF-8 sequence: the final
-       byte is neither a lead byte (>= 0xC0) nor a continuation byte
-       (0x80..0xBF). For this input it is the ASCII 'x'. *)
-      Alcotest.(check bool)
-        "truncation should not split a UTF-8 character" true (last_byte < 128);
-      Alcotest.(check string) "keeps the complete leading run" prefix truncated
 
 let test_pulse_parse_error_code_short_payload () =
   (* Bug: parse_error_code calls Protocol.Tag_struct_reader.get_u32 without
@@ -1738,32 +2421,13 @@ let test_pulse_parse_command_envelope_short_payload () =
     "short payload returns None instead of crashing" true
     (Pie.Pulse.Commands.parse_command_envelope (Bytes.make 3 '\x00') = None)
 
-let test_daemon_contract_meeting_toggle_no_indicator () =
-  let snap : Pie.Daemon.Contract.recording_snapshot =
-    {
-      active = true;
-      mode = "ptt-transcribe";
-      enabled = true;
-      started_at = None;
-      updated_at = None;
-      transcript_path = None;
-      last_error = None;
-    }
-  in
-  let json =
-    Pie.Daemon.Contract.response_to_json
-      (Pie.Daemon.Contract.Meeting_toggle_resp snap)
-  in
-  match json with
-  | `Assoc fields ->
-      (* Bug: Meeting_stop_resp now includes a "stopped" boolean so callers
-       can tell whether the stop had any effect. Meeting_toggle_resp only
-       carries a snapshot with no "toggled" or success indicator. The
-       caller has no programmatic way to know if toggle changed anything. *)
-      Alcotest.(check bool)
-        "meeting toggle response should include a success indicator" true
-        (List.mem_assoc "toggled" fields || List.mem_assoc "changed" fields)
-  | _ -> Alcotest.fail "expected JSON object"
+let test_daemon_contract_pause_rejects_non_object () =
+  match
+    Pie.Assistant_service.Contract.response_of_json
+      Pie.Assistant_service.Contract.Pause (`String "ok")
+  with
+  | Error label -> Alcotest.(check string) "not-object" "not-object" label
+  | Ok _ -> Alcotest.fail "Pause scalar must be a protocol error"
 
 let test_codex_realtime_translation_ignores_prompt () =
   let update =
@@ -1803,29 +2467,6 @@ action = "ctrl-j"
   | _ -> Alcotest.fail "whitespace-only app_id should be rejected, not loaded"
   | exception Pie.Config.Stt.Config_error _ -> ()
 
-let test_assistant_focused_window_prompt_context () =
-  let window : Pie.Niri.window_info =
-    {
-      id = 7;
-      title = Some "  Project   notes\nDraft  ";
-      app_id = Some "org.editor";
-      pid = None;
-      workspace_id = None;
-    }
-  in
-  let prompt =
-    Pie.Commands.Assistant.append_focused_window_context
-      "Transcribe in {{language}}." (Some window)
-  in
-  Alcotest.(check string)
-    "prompt context"
-    "Transcribe in {{language}}.\n\n\
-     Focused window context:\n\
-     - app_id: org.editor\n\
-     - title: Project notes Draft\n\
-     Use this as context only when it helps disambiguate the audio."
-    prompt
-
 let json_member name = function
   | `Assoc fields -> (
       match List.assoc_opt name fields with
@@ -1847,10 +2488,6 @@ let test_assistant_startup_config_json () =
       transcription_language = "Polish";
       translation_source_language = "Polish";
       translation_target_language = "English";
-      wakeword_enabled = false;
-      wakeword_dictation_silence_seconds = 3.0;
-      wakeword_dictation_max_seconds = 120.0;
-      wakeword_dictation_speech_rms_threshold = 0.01;
       ptt_min_capture_rms = 0.001;
       ptt_min_capture_peak = 0.008;
       ptt_transcribe_keysym = 65516;
@@ -1880,7 +2517,7 @@ let test_assistant_startup_config_json () =
     }
   in
   let report =
-    Pie.Commands.Assistant.startup_config_json ~config_path:"/tmp/stt.toml"
+    Pie.Assistant.Service.startup_config_json ~config_path:"/tmp/stt.toml"
       ~config ~ptt_transcribe_keysym:65478 ~ptt_translate_keysym:65479
       ~min_duration_ms:120 ()
   in
@@ -1894,9 +2531,12 @@ let test_assistant_startup_config_json () =
   Alcotest.(check string)
     "thinking effort" "minimal"
     (json_string "thinking_effort" json);
-  Alcotest.(check string)
-    "prompt" "Transcribe in {{language}}."
-    (json_string "transcription_prompt" json);
+  (match json with
+  | `Assoc fields ->
+      Alcotest.(check bool)
+        "no ambient transcription_prompt in report" false
+        (List.mem_assoc "transcription_prompt" fields)
+  | _ -> Alcotest.fail "expected object");
   let transcription_model = json_member "transcription_model" json in
   Alcotest.(check string)
     "configured model" "openrouter/google/gemini-3.1-flash-lite"
@@ -1923,268 +2563,6 @@ let test_assistant_startup_config_json () =
       Alcotest.(check string) "entry method" "paste" (json_string "method" rule)
   | _ -> Alcotest.fail "expected one text entry rule"
 
-let test_assistant_project_context_prompt_context () =
-  let dir = temp_dir "pie-project-context" in
-  let project_dir = Filename.concat dir "project" in
-  let nested_dir = Filename.concat project_dir "src" in
-  let pie_dir = Filename.concat project_dir ".pie" in
-  Unix.mkdir project_dir 0o700;
-  Unix.mkdir nested_dir 0o700;
-  Unix.mkdir pie_dir 0o700;
-  write_file
-    (Filename.concat pie_dir "context.md")
-    "Use Eta for the internal effect library.\n\
-     Glossary: pie means push-to-talk assistant.";
-  let context = Pie.Context.Project.load_for_cwd nested_dir in
-  let prompt =
-    Pie.Context.Project.append_to_prompt "Translate to {{target_language}}."
-      context
-  in
-  Alcotest.(check string)
-    "project context"
-    "Translate to {{target_language}}.\n\n\
-     Project context from .pie/context.md:\n\
-     Use Eta for the internal effect library.\n\
-     Glossary: pie means push-to-talk assistant."
-    prompt
-
-let test_assistant_project_context_missing_is_empty () =
-  let dir = temp_dir "pie-project-context" in
-  let context = Pie.Context.Project.load_for_cwd dir in
-  let prompt =
-    Pie.Context.Project.append_to_prompt "Translate to {{target_language}}."
-      context
-  in
-  Alcotest.(check string)
-    "no project context placeholder" "Translate to {{target_language}}." prompt
-
-let test_project_context_relative_cwd_traversal () =
-  let dir = temp_dir "pie-project-context-relative" in
-  let pie_dir = Filename.concat dir ".pie" in
-  Unix.mkdir pie_dir 0o700;
-  write_file (Filename.concat pie_dir "context.md") "Project context.";
-  let old_cwd = Sys.getcwd () in
-  Sys.chdir dir;
-  try
-    Unix.mkdir "subdir" 0o700;
-    Sys.chdir "subdir";
-    let context = Pie.Context.Project.load_for_cwd "." in
-    Sys.chdir old_cwd;
-    (* Bug: find_context_file uses Filename.dirname which returns "." for ".",
-       so it never traverses parent directories when given a relative path.
-       The context file at ../.pie/context.md should be found. *)
-    Alcotest.(check (option string))
-      "relative cwd should traverse parents to find context"
-      (Some "Project context.") context
-  with exn ->
-    Sys.chdir old_cwd;
-    raise exn
-
-let test_assistant_project_context_empty_file_is_empty () =
-  let dir = temp_dir "pie-project-context" in
-  let pie_dir = Filename.concat dir ".pie" in
-  Unix.mkdir pie_dir 0o700;
-  write_file (Filename.concat pie_dir "context.md") "  \n\t  ";
-  let context = Pie.Context.Project.load_for_cwd dir in
-  let prompt =
-    Pie.Context.Project.append_to_prompt "Translate to {{target_language}}."
-      context
-  in
-  Alcotest.(check string)
-    "empty project context" "Translate to {{target_language}}." prompt
-
-let process ?(ppid = 0) ?(pgrp = 0) ?(tty_nr = 0) ?(tpgid = 0) ?cwd pid =
-  { Pie.Context.Project.pid; ppid; pgrp; tty_nr; tpgid; depth = 0; cwd }
-
-let test_project_context_prefers_foreground_terminal_cwd () =
-  let processes =
-    [
-      process 10 ~cwd:"/home/ribelo";
-      process 11 ~ppid:10 ~pgrp:11 ~tty_nr:34816 ~tpgid:12
-        ~cwd:"/home/ribelo/projects/pie";
-      process 12 ~ppid:11 ~pgrp:12 ~tty_nr:34816 ~tpgid:12
-        ~cwd:"/home/ribelo/projects/pie/subdir";
-    ]
-  in
-  Alcotest.(check (option string))
-    "foreground cwd" (Some "/home/ribelo/projects/pie/subdir")
-    (Pie.Context.Project.cwd_from_processes ~root_pid:10
-       ~root_cwd:(Some "/home/ribelo") processes)
-
-let test_project_context_falls_back_to_root_cwd () =
-  let processes =
-    [ process 10 ~cwd:"/home/ribelo/projects/gui-app"; process 11 ~ppid:10 ]
-  in
-  Alcotest.(check (option string))
-    "root cwd" (Some "/home/ribelo/projects/gui-app")
-    (Pie.Context.Project.cwd_from_processes ~root_pid:10
-       ~root_cwd:(Some "/home/ribelo/projects/gui-app") processes)
-
-let test_project_metadata_package_json () =
-  let dir = temp_dir "pie-project-metadata" in
-  write_file
-    (Filename.concat dir "package.json")
-    {|{"name":"web-tool","description":"TypeScript UI tool"}|};
-  let prompt =
-    Pie.Context.Metadata.load_for_cwd dir
-    |> Pie.Context.Metadata.append_to_prompt "Base prompt."
-  in
-  Alcotest.(check string)
-    "package.json metadata"
-    "Base prompt.\n\n\
-     Project metadata for transcription and translation disambiguation:\n\
-     Use this metadata to choose words, spellings, identifiers, and technical \
-     terms that best fit the project context. Do not mention this metadata in \
-     the output unless it is actually spoken or needed for the requested \
-     translation.\n\
-     - manifest: package.json\n\
-     - language: TypeScript\n\
-     - package: web-tool\n\
-     - description: TypeScript UI tool"
-    prompt
-
-let test_project_metadata_cargo_toml () =
-  let dir = temp_dir "pie-project-metadata" in
-  write_file
-    (Filename.concat dir "Cargo.toml")
-    {toml|[package]
-name = "rust-tool"
-description = "Rust CLI"
-|toml};
-  let prompt =
-    Pie.Context.Metadata.load_for_cwd dir
-    |> Pie.Context.Metadata.append_to_prompt "Base prompt."
-  in
-  Alcotest.(check string)
-    "Cargo.toml metadata"
-    "Base prompt.\n\n\
-     Project metadata for transcription and translation disambiguation:\n\
-     Use this metadata to choose words, spellings, identifiers, and technical \
-     terms that best fit the project context. Do not mention this metadata in \
-     the output unless it is actually spoken or needed for the requested \
-     translation.\n\
-     - manifest: Cargo.toml\n\
-     - language: Rust\n\
-     - package: rust-tool\n\
-     - description: Rust CLI"
-    prompt
-
-let test_project_metadata_pyproject_toml () =
-  let dir = temp_dir "pie-project-metadata" in
-  write_file
-    (Filename.concat dir "pyproject.toml")
-    {toml|[project]
-name = "python-tool"
-description = "Python service"
-
-[tool.uv]
-|toml};
-  let prompt =
-    Pie.Context.Metadata.load_for_cwd dir
-    |> Pie.Context.Metadata.append_to_prompt "Base prompt."
-  in
-  Alcotest.(check string)
-    "pyproject.toml metadata"
-    "Base prompt.\n\n\
-     Project metadata for transcription and translation disambiguation:\n\
-     Use this metadata to choose words, spellings, identifiers, and technical \
-     terms that best fit the project context. Do not mention this metadata in \
-     the output unless it is actually spoken or needed for the requested \
-     translation.\n\
-     - manifest: pyproject.toml\n\
-     - language: Python\n\
-     - package: python-tool\n\
-     - description: Python service"
-    prompt
-
-let test_project_metadata_dune_project () =
-  let dir = temp_dir "pie-project-metadata" in
-  write_file
-    (Filename.concat dir "dune-project")
-    {|(lang dune 3.21)
-(name pie)
-(package
- (name pie)
- (synopsis "Pie")
- (description "Pie OCaml library."))
-|};
-  let prompt =
-    Pie.Context.Metadata.load_for_cwd dir
-    |> Pie.Context.Metadata.append_to_prompt "Base prompt."
-  in
-  Alcotest.(check string)
-    "dune-project metadata"
-    "Base prompt.\n\n\
-     Project metadata for transcription and translation disambiguation:\n\
-     Use this metadata to choose words, spellings, identifiers, and technical \
-     terms that best fit the project context. Do not mention this metadata in \
-     the output unless it is actually spoken or needed for the requested \
-     translation.\n\
-     - manifest: dune-project\n\
-     - language: OCaml\n\
-     - package: pie\n\
-     - description: Pie OCaml library."
-    prompt
-
-let test_project_metadata_opam_without_dune_project () =
-  let dir = temp_dir "pie-project-metadata" in
-  write_file
-    (Filename.concat dir "sample.opam")
-    {|opam-version: "2.0"
-synopsis: "Sample"
-description: "Sample OCaml package"
-|};
-  let prompt =
-    Pie.Context.Metadata.load_for_cwd dir
-    |> Pie.Context.Metadata.append_to_prompt "Base prompt."
-  in
-  Alcotest.(check string)
-    "opam metadata"
-    "Base prompt.\n\n\
-     Project metadata for transcription and translation disambiguation:\n\
-     Use this metadata to choose words, spellings, identifiers, and technical \
-     terms that best fit the project context. Do not mention this metadata in \
-     the output unless it is actually spoken or needed for the requested \
-     translation.\n\
-     - manifest: sample.opam\n\
-     - language: OCaml\n\
-     - package: sample\n\
-     - description: Sample OCaml package"
-    prompt
-
-let test_project_metadata_exact_directory_only () =
-  let dir = temp_dir "pie-project-metadata" in
-  let child = Filename.concat dir "child" in
-  Unix.mkdir child 0o700;
-  write_file
-    (Filename.concat dir "package.json")
-    {|{"name":"parent","description":"Parent package"}|};
-  let prompt =
-    Pie.Context.Metadata.load_for_cwd child
-    |> Pie.Context.Metadata.append_to_prompt "Base prompt."
-  in
-  Alcotest.(check string) "no parent metadata" "Base prompt." prompt
-
-let test_project_metadata_manifest_without_description () =
-  let dir = temp_dir "pie-project-metadata" in
-  write_file (Filename.concat dir "pyproject.toml") {toml|[tool.uv]
-|toml};
-  let prompt =
-    Pie.Context.Metadata.load_for_cwd dir
-    |> Pie.Context.Metadata.append_to_prompt "Base prompt."
-  in
-  Alcotest.(check string)
-    "language only"
-    "Base prompt.\n\n\
-     Project metadata for transcription and translation disambiguation:\n\
-     Use this metadata to choose words, spellings, identifiers, and technical \
-     terms that best fit the project context. Do not mention this metadata in \
-     the output unless it is actually spoken or needed for the requested \
-     translation.\n\
-     - manifest: pyproject.toml\n\
-     - language: Python"
-    prompt
-
 let test_stt_config_loads_toml_newline_rules () =
   let dir = temp_dir "pie-stt-config" in
   let prompts_dir = Filename.concat dir "prompts" in
@@ -2204,10 +2582,6 @@ translation_model = "gpt-realtime-2"
 transcription_language = "Polish"
 translation_source_language = "Polish"
 translation_target_language = "English"
-wakeword_enabled = false
-wakeword_dictation_silence_seconds = 3.0
-wakeword_dictation_max_seconds = 120.0
-wakeword_dictation_speech_rms_threshold = 0.01
 ptt_min_capture_rms = 0.001
 ptt_min_capture_peak = 0.008
 ptt_transcribe_keysym = 65516
@@ -2230,7 +2604,6 @@ app_id = "slack"
 method = "paste"
 |toml};
   let config = Pie.Config.Stt.load ~config_path () in
-  Alcotest.(check bool) "wakeword" false config.wakeword_enabled;
   Alcotest.(check (float 0.00001)) "ptt rms" 0.001 config.ptt_min_capture_rms;
   Alcotest.(check (float 0.00001)) "ptt peak" 0.008 config.ptt_min_capture_peak;
   Alcotest.(check int)
@@ -2277,13 +2650,14 @@ let test_stt_config_defaults_to_gpt_realtime_2_1 () =
     "translation model" "gpt-realtime-2.1" config.translation_model
 
 let test_assistant_hot_reloads_keysyms_and_releases_original_hold () =
-  let binding keysym shift : Pie.Commands.Assistant.ptt_binding =
+  let binding keysym shift : Pie.Assistant.Service.ptt_binding =
     { keysym; shift }
   in
   let bindings = ref (binding 65478 false, binding 65479 false) in
   let recognize =
-    Pie.Commands.Assistant.make_live_recognizer ~load_bindings:(fun () ->
-        !bindings)
+    Pie.Assistant.Service.make_live_recognizer
+      ~load_bindings:(fun () -> !bindings)
+      ()
   in
   let event keysym released : Pie.Keyboard.Monitor.key_event =
     { released; state = 0; keysym; unichar = 0; keycode = 42 }
@@ -2302,12 +2676,13 @@ let test_assistant_hot_reloads_keysyms_and_releases_original_hold () =
   check (Some (Pie.Ptt_loop.Press "translate")) (recognize (event 65508 false))
 
 let test_assistant_distinguishes_shift_right_control () =
-  let binding keysym shift : Pie.Commands.Assistant.ptt_binding =
+  let binding keysym shift : Pie.Assistant.Service.ptt_binding =
     { keysym; shift }
   in
   let recognize =
-    Pie.Commands.Assistant.make_live_recognizer ~load_bindings:(fun () ->
-        (binding 65508 true, binding 65508 false))
+    Pie.Assistant.Service.make_live_recognizer
+      ~load_bindings:(fun () -> (binding 65508 true, binding 65508 false))
+      ()
   in
   let event state keycode released : Pie.Keyboard.Monitor.key_event =
     { released; state; keysym = 65508; unichar = 0; keycode }
@@ -2323,38 +2698,45 @@ let test_assistant_distinguishes_shift_right_control () =
 let test_assistant_mod5_chords_latch () =
   let coordinator = Pie.Recording.Coordinator.create () in
   let latch_keycode = ref None in
-  let recognize event =
-    Pie.Assistant.Service.recognize_robust ~coordinator ~latch_keycode
-      ~transcribe_keysym:65508 ~transcribe_shift:true ~translate_keysym:65508
-      ~translate_shift:false event
+  let binding keysym shift : Pie.Assistant.Service.ptt_binding =
+    { keysym; shift }
   in
-  let event ~state ~keysym ~released : Pie.Keyboard.Monitor.key_event =
-    { released; state; keysym; unichar = 0; keycode = 42 }
+  let recognize =
+    Pie.Assistant.Service.make_live_recognizer ~coordinator ~latch_keycode
+      ~load_bindings:(fun () -> (binding 65508 true, binding 65508 false))
+      ()
+  in
+  let event ~state ~keysym ~keycode ~released : Pie.Keyboard.Monitor.key_event =
+    { released; state; keysym; unichar = 0; keycode }
   in
   Alcotest.(check bool)
     "Mod5 plus Right Control starts translation latch" true
-    (recognize (event ~state:128 ~keysym:65508 ~released:false)
+    (recognize (event ~state:128 ~keysym:65508 ~keycode:42 ~released:false)
     = Some (Pie.Ptt_loop.Press "translate"));
   Alcotest.(check bool)
     "releasing Right Control does not stop translation latch" true
-    (recognize (event ~state:4 ~keysym:65508 ~released:true) = None);
-  ignore
-    (Pie.Recording.Coordinator.try_start coordinator
-       Pie.Recording.Coordinator.Ptt_translate ());
+    (recognize (event ~state:4 ~keysym:65508 ~keycode:42 ~released:true) = None);
+  let translate_attempt =
+    match
+      Pie.Recording.Coordinator.try_start coordinator
+        Pie.Recording.Coordinator.Ptt_translate ()
+    with
+    | Pie.Recording.Coordinator.Started attempt -> attempt
+    | _ -> Alcotest.fail "expected translate admission"
+  in
   Alcotest.(check bool)
     "second Mod5 plus Right Control stops translation latch" true
-    (recognize (event ~state:128 ~keysym:65508 ~released:false)
+    (recognize (event ~state:128 ~keysym:65508 ~keycode:42 ~released:false)
     = Some (Pie.Ptt_loop.Release "translate"));
-  ignore
-    (Pie.Recording.Coordinator.stop coordinator
-       Pie.Recording.Coordinator.Ptt_translate);
+  ignore (Pie.Recording.Coordinator.release coordinator translate_attempt);
   Alcotest.(check bool)
     "Mod5 plus Right Shift starts transcription latch" true
-    (recognize (event ~state:129 ~keysym:65506 ~released:false)
+    (recognize (event ~state:129 ~keysym:65506 ~keycode:43 ~released:false)
     = Some (Pie.Ptt_loop.Press "transcribe"));
   Alcotest.(check bool)
     "releasing Right Shift does not stop transcription latch" true
-    (recognize (event ~state:128 ~keysym:65506 ~released:true) = None)
+    (recognize (event ~state:128 ~keysym:65506 ~keycode:43 ~released:true)
+    = None)
 
 let test_assistant_rejects_colliding_effective_keysyms () =
   let dir = temp_dir "pie-stt-config-keysyms" in
@@ -2363,7 +2745,7 @@ let test_assistant_rejects_colliding_effective_keysyms () =
     "ptt_transcribe_keysym = 10\nptt_translate_keysym = 20\n";
   let config = Pie.Config.Stt.load ~config_path () in
   match
-    Pie.Commands.Assistant.effective_bindings ~ptt_transcribe_keysym:20 config
+    Pie.Assistant.Service.effective_bindings ~ptt_transcribe_keysym:20 config
   with
   | _ -> Alcotest.fail "effective CLI and config keysyms must not collide"
   | exception Pie.Config.Stt.Config_error _ -> ()
@@ -2534,9 +2916,13 @@ let test_text_injection_entry_method_rules () =
        ~newline_action:Pie.Input.Text_injection.Collapse_to_space
        " first\nsecond ")
 
-let test_wayland_clipboard_paste_restores_previous_text () =
+let test_wayland_clipboard_paste_ignores_previous previous_types () =
   let base = temp_dir "pie-clipboard" in
   let old_path = Option.value ~default:"" (Sys.getenv_opt "PATH") in
+  let old_session = Sys.getenv_opt "XDG_SESSION_TYPE" in
+  let old_wayland = Sys.getenv_opt "WAYLAND_DISPLAY" in
+  let old_desktop = Sys.getenv_opt "XDG_CURRENT_DESKTOP" in
+  let old_niri = Sys.getenv_opt "NIRI_SOCKET" in
   let shell = Option.value ~default:"/bin/sh" (Pie.Sh.find_executable "sh") in
   let script name body =
     let path = Filename.concat base name in
@@ -2545,88 +2931,163 @@ let test_wayland_clipboard_paste_restores_previous_text () =
   in
   script "wl-paste"
     {script|
-if [ "$1" = "--list-types" ]; then
-  printf '%s\n' 'text/plain;charset=utf-8' 'text/plain'
-else
-  printf '%s' 'previous clipboard'
-fi
+printf '%s' "$PIE_CLIPBOARD_PREVIOUS_TYPES"
+touch "$PIE_CLIPBOARD_TEST_DIR/inspected"
 |script};
   script "wl-copy"
     {script|
-case " $* " in
-  *" --paste-once "*)
-    cat > "$PIE_CLIPBOARD_TEST_DIR/transcript"
-    touch "$PIE_CLIPBOARD_TEST_DIR/owner"
-    # An eager clipboard manager consumes the one allowed request first.
-    rm "$PIE_CLIPBOARD_TEST_DIR/owner"
-    ;;
-  *" --foreground "*)
-    cat > "$PIE_CLIPBOARD_TEST_DIR/transcript"
-    touch "$PIE_CLIPBOARD_TEST_DIR/owner"
-    while :; do sleep 0.01; done
-    ;;
-  *" --clear "*)
-    rm -f "$PIE_CLIPBOARD_TEST_DIR/owner"
-    touch "$PIE_CLIPBOARD_TEST_DIR/cleared"
-    ;;
-  *)
-    cat > "$PIE_CLIPBOARD_TEST_DIR/restored"
-    rm -f "$PIE_CLIPBOARD_TEST_DIR/owner"
-    ;;
-esac
+printf '%s\n' "$*" > "$PIE_CLIPBOARD_TEST_DIR/copy-args"
+cat > "$PIE_CLIPBOARD_TEST_DIR/copy-stdin"
+while :; do sleep 0.05; done
 |script};
   script "wtype"
     {script|
-if [ -e "$PIE_CLIPBOARD_TEST_DIR/owner" ]; then
-  cp "$PIE_CLIPBOARD_TEST_DIR/transcript" "$PIE_CLIPBOARD_TEST_DIR/pasted"
-fi
-touch "$PIE_CLIPBOARD_TEST_DIR/requested"
 printf '%s\n' "$*" > "$PIE_CLIPBOARD_TEST_DIR/wtype-args"
+|script};
+  script "niri"
+    {script|
+printf '%s\n' '{"id":1,"title":"t","app_id":"app"}'
 |script};
   Unix.putenv "PATH" (base ^ ":" ^ old_path);
   Unix.putenv "PIE_CLIPBOARD_TEST_DIR" base;
+  Unix.putenv "PIE_CLIPBOARD_PREVIOUS_TYPES" previous_types;
+  Unix.putenv "XDG_SESSION_TYPE" "wayland";
+  Unix.putenv "WAYLAND_DISPLAY" "pie-fake";
+  Unix.putenv "XDG_CURRENT_DESKTOP" "niri";
+  Unix.putenv "NIRI_SOCKET" (Filename.concat base "niri.sock");
   Fun.protect
     ~finally:(fun () ->
       Unix.putenv "PATH" old_path;
-      Unix.putenv "PIE_CLIPBOARD_TEST_DIR" "")
+      Unix.putenv "PIE_CLIPBOARD_TEST_DIR" "";
+      Unix.putenv "PIE_CLIPBOARD_PREVIOUS_TYPES" "";
+      Unix.putenv "XDG_SESSION_TYPE" (Option.value old_session ~default:"");
+      Unix.putenv "WAYLAND_DISPLAY" (Option.value old_wayland ~default:"");
+      Unix.putenv "XDG_CURRENT_DESKTOP" (Option.value old_desktop ~default:"");
+      Unix.putenv "NIRI_SOCKET" (Option.value old_niri ~default:""))
     (fun () ->
       Eio_main.run @@ fun env ->
       Eio.Switch.run @@ fun sw ->
+      let owner =
+        Pie.Wayland.Clipboard.create ~sw
+          ~process_mgr:(Eio.Stdenv.process_mgr env)
+          ()
+      in
+      let paste_rules =
+        [
+          {
+            Pie.Input.Text_injection.app_id = None;
+            title_regex = None;
+            method_ = Paste;
+          };
+        ]
+      in
       let operation =
-        Pie.Wayland.Clipboard.paste ~sw
+        Pie.Input.Text_injection.inject ~clipboard_owner:owner
+          ~text_entry_rules:paste_rules
           ~process_mgr:(Eio.Stdenv.process_mgr env)
           "first\nsecond"
       in
       match Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env) operation with
-      | Ok () ->
+      | Ok result ->
+          Eio.Time.sleep (Eio.Stdenv.clock env) 0.1;
+          Alcotest.(check bool)
+            "previous offer not inspected" false
+            (Sys.file_exists (Filename.concat base "inspected"));
           Alcotest.(check string)
-            "atomic transcript" "first\nsecond"
+            "offered transcript" "first\nsecond"
             (In_channel.with_open_bin
-               (Filename.concat base "transcript")
+               (Filename.concat base "copy-stdin")
                In_channel.input_all);
           Alcotest.(check string)
-            "target received transcript despite eager clipboard manager"
-            "first\nsecond"
+            "foreground offer of plain text"
+            "--foreground --type text/plain;charset=utf-8\n"
             (In_channel.with_open_bin
-               (Filename.concat base "pasted")
+               (Filename.concat base "copy-args")
                In_channel.input_all);
           Alcotest.(check string)
-            "restored prior text" "previous clipboard"
-            (In_channel.with_open_bin
-               (Filename.concat base "restored")
-               In_channel.input_all);
-          Alcotest.(check string)
-            "only ctrl-v" "-M ctrl -k v -m ctrl\n"
+            "one ctrl-v" "-M ctrl -k v -m ctrl\n"
             (In_channel.with_open_bin
                (Filename.concat base "wtype-args")
-               In_channel.input_all)
+               In_channel.input_all);
+          Alcotest.(check bool)
+            "paste key attempted" true
+            (result.outcome = Pie.Input.Text_injection.Clipboard_key_attempted)
       | Error cause ->
           let pp_error ppf = function
-            | `Clipboard_error message | `Wtype_error message ->
+            | `Clipboard_error message
+            | `Wtype_error message
+            | `Injection_error message ->
                 Format.pp_print_string ppf message
+            | _ -> Format.pp_print_string ppf "error"
           in
           Alcotest.failf "clipboard paste failed: %a" (Eta.Cause.pp pp_error)
             cause)
+
+let test_wayland_clipboard_paste_reports_offer_failure () =
+  let base = temp_dir "pie-clipboard-failure" in
+  let old_path = Option.value ~default:"" (Sys.getenv_opt "PATH") in
+  let old_session = Sys.getenv_opt "XDG_SESSION_TYPE" in
+  let old_wayland = Sys.getenv_opt "WAYLAND_DISPLAY" in
+  let old_desktop = Sys.getenv_opt "XDG_CURRENT_DESKTOP" in
+  let old_niri = Sys.getenv_opt "NIRI_SOCKET" in
+  let shell = Option.value ~default:"/bin/sh" (Pie.Sh.find_executable "sh") in
+  let script name body =
+    let path = Filename.concat base name in
+    write_file path ("#!" ^ shell ^ "\nset -eu\n" ^ body);
+    Unix.chmod path 0o700
+  in
+  script "wtype"
+    {script|
+printf '%s\n' "$*" > "$PIE_CLIPBOARD_TEST_DIR/wtype-args"
+|script};
+  script "niri"
+    {script|
+printf '%s\n' '{"id":1,"title":"t","app_id":"app"}'
+|script};
+  Unix.putenv "PATH" (base ^ ":" ^ old_path);
+  Unix.putenv "PIE_CLIPBOARD_TEST_DIR" base;
+  Unix.putenv "XDG_SESSION_TYPE" "wayland";
+  Unix.putenv "WAYLAND_DISPLAY" "pie-fake";
+  Unix.putenv "XDG_CURRENT_DESKTOP" "niri";
+  Unix.putenv "NIRI_SOCKET" (Filename.concat base "niri.sock");
+  Fun.protect
+    ~finally:(fun () ->
+      Unix.putenv "PATH" old_path;
+      Unix.putenv "PIE_CLIPBOARD_TEST_DIR" "";
+      Unix.putenv "XDG_SESSION_TYPE" (Option.value old_session ~default:"");
+      Unix.putenv "WAYLAND_DISPLAY" (Option.value old_wayland ~default:"");
+      Unix.putenv "XDG_CURRENT_DESKTOP" (Option.value old_desktop ~default:"");
+      Unix.putenv "NIRI_SOCKET" (Option.value old_niri ~default:""))
+    (fun () ->
+      Eio_main.run @@ fun env ->
+      Eio.Switch.run @@ fun sw ->
+      let owner =
+        Pie.Wayland.Clipboard.create ~sw
+          ~process_mgr:(Eio.Stdenv.process_mgr env)
+          ~copy_program:(Filename.concat base "missing-wl-copy")
+          ()
+      in
+      let paste_rules =
+        [
+          {
+            Pie.Input.Text_injection.app_id = None;
+            title_regex = None;
+            method_ = Paste;
+          };
+        ]
+      in
+      let operation =
+        Pie.Input.Text_injection.inject ~clipboard_owner:owner
+          ~text_entry_rules:paste_rules
+          ~process_mgr:(Eio.Stdenv.process_mgr env)
+          "first\nsecond"
+      in
+      match Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env) operation with
+      | Ok _ -> Alcotest.fail "a failed offer was reported as a paste"
+      | Error _ ->
+          Alcotest.(check bool)
+            "no key dispatch without a live offer" false
+            (Sys.file_exists (Filename.concat base "wtype-args")))
 
 let test_ptt_loop_continues_after_finish () =
   Eio_main.run @@ fun env ->
@@ -2664,10 +3125,11 @@ let test_ptt_loop_continues_after_finish () =
     {
       Pie.Ptt_loop.offer = (fun _ -> Eta.Effect.unit);
       finish =
-        (fun _ ->
-          let* () = Eta.Effect.sync (fun () -> incr finishes) in
-          if !finishes = 2 then Eta.Effect.fail (`Ptt_error "done")
-          else Eta.Effect.unit);
+        Ptt_loop.Buffered
+          (fun _ ->
+            let* () = Eta.Effect.sync (fun () -> incr finishes) in
+            if !finishes = 2 then Eta.Effect.fail (`Ptt_error "done")
+            else Eta.Effect.unit);
       cancel = Eta.Effect.unit;
     }
   in
@@ -2695,11 +3157,14 @@ let test_ptt_loop_continues_after_finish () =
       on_release = (fun _ -> Eta.Effect.unit);
       on_abort = Eta.Effect.pure false;
       on_dead_input = Eta.Effect.unit;
+      admission_active = (fun () -> false);
     }
   in
   let operation =
-    Pie.Ptt_loop.run ~keyboard
-      ~audio:(Eta_stream.Stream.from_eio_stream audio)
+    Pie.Ptt_loop.run
+      ~mono_clock:(Eio.Stdenv.mono_clock env)
+      ~keyboard
+      ~audio:(Eta_stream_eio.Stream.from_eio_stream audio)
       config
     |> Eta.Effect.timeout_as (Eta.Duration.seconds 7)
          ~on_timeout:(`Ptt_error "timeout")
@@ -2731,9 +3196,10 @@ let test_ptt_loop_control_stream_triggers_capture () =
     {
       Pie.Ptt_loop.offer = (fun _ -> Eta.Effect.unit);
       finish =
-        (fun _ ->
-          let* () = Eta.Effect.sync (fun () -> incr finishes) in
-          Eta.Effect.fail (`Ptt_error "done"));
+        Ptt_loop.Buffered
+          (fun _ ->
+            let* () = Eta.Effect.sync (fun () -> incr finishes) in
+            Eta.Effect.fail (`Ptt_error "done"));
       cancel = Eta.Effect.unit;
     }
   in
@@ -2755,12 +3221,15 @@ let test_ptt_loop_control_stream_triggers_capture () =
       on_release = (fun _ -> Eta.Effect.unit);
       on_abort = Eta.Effect.pure false;
       on_dead_input = Eta.Effect.unit;
+      admission_active = (fun () -> false);
     }
   in
   let result =
     Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env)
-      (Pie.Ptt_loop.run ~control ~keyboard
-         ~audio:(Eta_stream.Stream.from_eio_stream audio)
+      (Pie.Ptt_loop.run
+         ~mono_clock:(Eio.Stdenv.mono_clock env)
+         ~control ~keyboard
+         ~audio:(Eta_stream_eio.Stream.from_eio_stream audio)
          config
       |> Eta.Effect.timeout_as (Eta.Duration.seconds 5)
            ~on_timeout:(`Ptt_error "timeout"))
@@ -2802,9 +3271,10 @@ let test_ptt_loop_post_roll_repress_continues_capture () =
           Eta.Effect.sync (fun () ->
               offered := Bytes.to_string chunk :: !offered));
       finish =
-        (fun _ ->
-          let* () = Eta.Effect.sync (fun () -> incr finishes) in
-          Eta.Effect.fail (`Ptt_error "done"));
+        Ptt_loop.Buffered
+          (fun _ ->
+            let* () = Eta.Effect.sync (fun () -> incr finishes) in
+            Eta.Effect.fail (`Ptt_error "done"));
       cancel = Eta.Effect.unit;
     }
   in
@@ -2832,12 +3302,15 @@ let test_ptt_loop_post_roll_repress_continues_capture () =
       on_release = (fun _ -> Eta.Effect.unit);
       on_abort = Eta.Effect.pure false;
       on_dead_input = Eta.Effect.unit;
+      admission_active = (fun () -> false);
     }
   in
   let result =
     Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env)
-      (Pie.Ptt_loop.run ~keyboard
-         ~audio:(Eta_stream.Stream.from_eio_stream audio)
+      (Pie.Ptt_loop.run
+         ~mono_clock:(Eio.Stdenv.mono_clock env)
+         ~keyboard
+         ~audio:(Eta_stream_eio.Stream.from_eio_stream audio)
          config
       |> Eta.Effect.timeout_as (Eta.Duration.seconds 5)
            ~on_timeout:(`Ptt_error "timeout"))
@@ -2874,7 +3347,8 @@ let test_ptt_loop_scoped_handle_lifetime () =
   let handle =
     {
       Pie.Ptt_loop.offer = (fun _ -> Eta.Effect.sync (fun () -> incr offers));
-      finish = (fun _ -> Eta.Effect.sync (fun () -> incr finishes));
+      finish =
+        Ptt_loop.Buffered (fun _ -> Eta.Effect.sync (fun () -> incr finishes));
       cancel = Eta.Effect.sync (fun () -> incr cancels);
     }
   in
@@ -2906,11 +3380,14 @@ let test_ptt_loop_scoped_handle_lifetime () =
       on_release = (fun _ -> Eta.Effect.unit);
       on_abort = Eta.Effect.pure false;
       on_dead_input = Eta.Effect.unit;
+      admission_active = (fun () -> false);
     }
   in
   let operation =
-    Pie.Ptt_loop.run ~keyboard
-      ~audio:(Eta_stream.Stream.from_eio_stream audio)
+    Pie.Ptt_loop.run
+      ~mono_clock:(Eio.Stdenv.mono_clock env)
+      ~keyboard
+      ~audio:(Eta_stream_eio.Stream.from_eio_stream audio)
       config
     |> Eta.Effect.timeout_as (Eta.Duration.seconds 5)
          ~on_timeout:(`Ptt_error "timeout")
@@ -2925,6 +3402,1223 @@ let test_ptt_loop_scoped_handle_lifetime () =
   | Error _ -> ()
   | Ok () ->
       Alcotest.fail "expected timeout after scoped capture returns to idle"
+
+let test_ptt_loop_rejects_busy_press_and_accepts_fresh_cycle () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let clock = Eio.Stdenv.clock env in
+  let started, resolve_started = Eio.Promise.create () in
+  let offered, resolve_offered = Eio.Promise.create () in
+  let finishing, resolve_finishing = Eio.Promise.create () in
+  let resume, resolve_resume = Eio.Promise.create () in
+  let first_finished, resolve_first_finished = Eio.Promise.create () in
+  let offered_once = ref false in
+  let calls = ref 0 in
+  let finishes = ref 0 in
+  let admitted = ref None in
+  let dir = temp_dir "pie-ptt-busy-finish" in
+  let persist_path = Filename.concat dir "recording-state.json" in
+  let coordinator = Recording.Coordinator.create ~persist_path () in
+  let keyboard = Pie.Keyboard.Monitor.create () in
+  let control = Eio.Stream.create 16 in
+  let audio = Eio.Stream.create 16 in
+  let chunk = Bytes.make 320 (Char.chr 1) in
+  let release_admitted () =
+    match !admitted with
+    | None -> ()
+    | Some attempt ->
+        ignore (Recording.Coordinator.release coordinator attempt);
+        admitted := None
+  in
+  let handle : Pie.Ptt_loop.handle =
+    {
+      offer =
+        (fun _ ->
+          Eta.Effect.sync (fun () ->
+              if not !offered_once then (
+                offered_once := true;
+                Eio.Promise.resolve resolve_offered ())));
+      finish =
+        Ptt_loop.Buffered
+          (fun _ ->
+            Eta.Effect.sync (fun () ->
+                incr finishes;
+                if !finishes = 1 then (
+                  Eio.Promise.resolve resolve_finishing ();
+                  Eio.Promise.await resume;
+                  Eio.Promise.resolve resolve_first_finished ());
+                release_admitted ()));
+      cancel = Eta.Effect.sync (fun () -> release_admitted ());
+    }
+  in
+  let config : Pie.Ptt_loop.config =
+    {
+      recognize = (fun _ -> None);
+      min_duration_ms = 0;
+      capture_thresholds = (fun () -> (0., 0.));
+      log_prefix = (fun mode -> mode);
+      source = None;
+      on_ready = Eta.Effect.unit;
+      on_press =
+        (fun _ ->
+          Eta.Effect.sync (fun () ->
+              incr calls;
+              match
+                Recording.Coordinator.try_start coordinator
+                  Recording.Coordinator.Ptt_transcribe ()
+              with
+              | Recording.Coordinator.Started attempt ->
+                  admitted := Some attempt;
+                  if !calls = 1 then Eio.Promise.resolve resolve_started ();
+                  Pie.Ptt_loop.Handle handle
+              | _ -> Pie.Ptt_loop.Skip));
+      on_release = (fun _ -> Eta.Effect.unit);
+      on_abort = Eta.Effect.pure false;
+      on_dead_input = Eta.Effect.unit;
+      admission_active = (fun () -> Recording.Coordinator.is_active coordinator);
+    }
+  in
+  Eio.Fiber.fork ~sw (fun () ->
+      Eio.Stream.add control (Pie.Ptt_loop.Press "transcribe");
+      Eio.Promise.await started;
+      Eio.Stream.add audio chunk;
+      Eio.Promise.await offered;
+      Eio.Stream.add control (Pie.Ptt_loop.Release "transcribe");
+      Eio.Promise.await finishing;
+      Eio.Stream.add control (Pie.Ptt_loop.Press "transcribe");
+      Eio.Stream.add control (Pie.Ptt_loop.Release "transcribe");
+      Alcotest.(check int)
+        "busy press is not admitted while finish is gated" 1 !calls;
+      Eio.Promise.resolve resolve_resume ();
+      Eio.Promise.await first_finished;
+      Eio.Time.sleep clock 0.1;
+      Alcotest.(check int)
+        "busy cycle is not replayed after settlement" 1 !calls;
+      Eio.Stream.add control (Pie.Ptt_loop.Press "transcribe");
+      Eio.Stream.add audio chunk;
+      Eio.Stream.add control (Pie.Ptt_loop.Release "transcribe"));
+  let result =
+    Eta_eio.run_once ~sw ~clock
+      (Pie.Ptt_loop.run
+         ~mono_clock:(Eio.Stdenv.mono_clock env)
+         ~control ~keyboard
+         ~audio:(Eta_stream_eio.Stream.from_eio_stream audio)
+         config
+      |> Eta.Effect.timeout_as (Eta.Duration.seconds 8)
+           ~on_timeout:(`Ptt_error "timeout"))
+  in
+  Alcotest.(check int) "fresh cycle after settlement is admitted" 2 !calls;
+  Alcotest.(check int) "both admitted cycles finished" 2 !finishes;
+  remove_dir dir;
+  match result with
+  | Ok () -> Alcotest.fail "expected the loop to settle by timeout"
+  | Error cause ->
+      Alcotest.(check bool)
+        "loop ended by local timeout" true
+        (cause_contains cause "timeout")
+
+let test_ptt_loop_scoped_setup_failure_allows_subsequent_press () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let clock = Eio.Stdenv.clock env in
+  let second_started, resolve_second_started = Eio.Promise.create () in
+  let calls = ref 0 in
+  let finishes = ref 0 in
+  let keyboard = Pie.Keyboard.Monitor.create () in
+  let control = Eio.Stream.create 16 in
+  let audio = Eio.Stream.create 16 in
+  let chunk = Bytes.make 320 (Char.chr 1) in
+  let handle : Pie.Ptt_loop.handle =
+    {
+      offer = (fun _ -> Eta.Effect.unit);
+      finish =
+        Ptt_loop.Buffered (fun _ -> Eta.Effect.sync (fun () -> incr finishes));
+      cancel = Eta.Effect.unit;
+    }
+  in
+  let config : Pie.Ptt_loop.config =
+    {
+      recognize = (fun _ -> None);
+      min_duration_ms = 0;
+      capture_thresholds = (fun () -> (0., 0.));
+      log_prefix = (fun mode -> mode);
+      source = None;
+      on_ready = Eta.Effect.unit;
+      on_press =
+        (fun _ ->
+          Eta.Effect.sync (fun () ->
+              incr calls;
+              if !calls = 1 then
+                Pie.Ptt_loop.Scoped
+                  (fun _use ->
+                    Eta.Effect.fail (`Ptt_error "synthetic setup failure"))
+              else (
+                Eio.Promise.resolve resolve_second_started ();
+                Pie.Ptt_loop.Handle handle)));
+      on_release = (fun _ -> Eta.Effect.unit);
+      on_abort = Eta.Effect.pure false;
+      on_dead_input = Eta.Effect.unit;
+      admission_active = (fun () -> false);
+    }
+  in
+  Eio.Stream.add control (Pie.Ptt_loop.Press "transcribe");
+  Eio.Stream.add control (Pie.Ptt_loop.Press "transcribe");
+  Eio.Fiber.fork ~sw (fun () ->
+      Eio.Promise.await second_started;
+      Eio.Stream.add audio chunk;
+      Eio.Stream.add control (Pie.Ptt_loop.Release "transcribe"));
+  let result =
+    Eta_eio.run_once ~sw ~clock
+      (Pie.Ptt_loop.run
+         ~mono_clock:(Eio.Stdenv.mono_clock env)
+         ~control ~keyboard
+         ~audio:(Eta_stream_eio.Stream.from_eio_stream audio)
+         config
+      |> Eta.Effect.timeout_as (Eta.Duration.seconds 8)
+           ~on_timeout:(`Ptt_error "timeout"))
+  in
+  Alcotest.(check int)
+    "setup failure does not consume the subsequent press" 2 !calls;
+  Alcotest.(check int) "subsequent press completed capture" 1 !finishes;
+  match result with
+  | Ok () -> Alcotest.fail "expected the loop to settle by timeout"
+  | Error cause ->
+      Alcotest.(check bool)
+        "loop ended by local timeout" true
+        (cause_contains cause "timeout")
+
+let test_ptt_loop_press_during_gated_on_press_is_not_replayed () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let clock = Eio.Stdenv.clock env in
+  let entered, resolve_entered = Eio.Promise.create () in
+  let admit, resolve_admit = Eio.Promise.create () in
+  let offered, resolve_offered = Eio.Promise.create () in
+  let finishing, resolve_finishing = Eio.Promise.create () in
+  let resume, resolve_resume = Eio.Promise.create () in
+  let first_finished, resolve_first_finished = Eio.Promise.create () in
+  let offered_once = ref false in
+  let calls = ref 0 in
+  let finishes = ref 0 in
+  let admitted = ref None in
+  let dir = temp_dir "pie-gated-on-press" in
+  let persist_path = Filename.concat dir "recording-state.json" in
+  let coordinator = Recording.Coordinator.create ~persist_path () in
+  let keyboard = Pie.Keyboard.Monitor.create () in
+  let control = Eio.Stream.create 16 in
+  let audio = Eio.Stream.create 16 in
+  let chunk = Bytes.make 320 (Char.chr 1) in
+  let handle : Pie.Ptt_loop.handle =
+    {
+      offer =
+        (fun _ ->
+          Eta.Effect.sync (fun () ->
+              if not !offered_once then (
+                offered_once := true;
+                Eio.Promise.resolve resolve_offered ())));
+      finish =
+        Ptt_loop.Buffered
+          (fun _ ->
+            Eta.Effect.sync (fun () ->
+                incr finishes;
+                if !finishes = 1 then (
+                  Eio.Promise.resolve resolve_finishing ();
+                  Eio.Promise.await resume;
+                  Eio.Promise.resolve resolve_first_finished ())));
+      cancel = Eta.Effect.unit;
+    }
+  in
+  let config : Pie.Ptt_loop.config =
+    {
+      recognize = (fun _ -> None);
+      min_duration_ms = 0;
+      capture_thresholds = (fun () -> (0., 0.));
+      log_prefix = (fun mode -> mode);
+      source = None;
+      on_ready = Eta.Effect.unit;
+      on_press =
+        (fun _ ->
+          Eta.Effect.sync (fun () ->
+              incr calls;
+              match
+                Recording.Coordinator.try_start coordinator
+                  Recording.Coordinator.Ptt_transcribe ()
+              with
+              | Recording.Coordinator.Started attempt ->
+                  admitted := Some attempt;
+                  Eio.Promise.resolve resolve_entered ();
+                  Eio.Promise.await admit;
+                  Pie.Ptt_loop.Handle handle
+              | _ -> Pie.Ptt_loop.Skip));
+      on_release = (fun _ -> Eta.Effect.unit);
+      on_abort = Eta.Effect.pure false;
+      on_dead_input = Eta.Effect.unit;
+      admission_active = (fun () -> Recording.Coordinator.is_active coordinator);
+    }
+  in
+  Eio.Fiber.fork ~sw (fun () ->
+      Eio.Stream.add control (Pie.Ptt_loop.Press "transcribe");
+      Eio.Promise.await entered;
+      Eio.Stream.add control (Pie.Ptt_loop.Press "transcribe");
+      Eio.Promise.resolve resolve_admit ();
+      Eio.Stream.add audio chunk;
+      Eio.Promise.await offered;
+      Eio.Stream.add control (Pie.Ptt_loop.Release "transcribe");
+      Eio.Promise.await finishing;
+      (match !admitted with
+      | Some attempt ->
+          ignore (Recording.Coordinator.release coordinator attempt)
+      | None -> ());
+      Eio.Promise.resolve resolve_resume ();
+      Eio.Promise.await first_finished;
+      Eio.Time.sleep clock 0.1);
+  let result =
+    Eta_eio.run_once ~sw ~clock
+      (Pie.Ptt_loop.run
+         ~mono_clock:(Eio.Stdenv.mono_clock env)
+         ~control ~keyboard
+         ~audio:(Eta_stream_eio.Stream.from_eio_stream audio)
+         config
+      |> Eta.Effect.timeout_as (Eta.Duration.seconds 8)
+           ~on_timeout:(`Ptt_error "timeout"))
+  in
+  Alcotest.(check int)
+    "press during gated on_press is not a later attempt" 1 !calls;
+  Alcotest.(check int) "one admitted capture finished" 1 !finishes;
+  Array.iter
+    (fun name ->
+      try Sys.remove (Filename.concat dir name) with Sys_error _ -> ())
+    (Sys.readdir dir);
+  Unix.rmdir dir;
+  match result with
+  | Ok () -> Alcotest.fail "expected the loop to settle by timeout"
+  | Error cause ->
+      Alcotest.(check bool)
+        "loop ended by local timeout" true
+        (cause_contains cause "timeout")
+
+let emit_test_key keyboard released =
+  Pie.Keyboard.Monitor.emit keyboard
+    { released; state = 0; keysym = 1; unichar = 0; keycode = 1 }
+
+let recognize_test_key event =
+  if event.Pie.Keyboard.Monitor.keysym = 1 then
+    Some
+      (if event.released then Pie.Ptt_loop.Release "test"
+       else Pie.Ptt_loop.Press "test")
+  else None
+
+let test_ptt_loop_retry_admission_rejects_busy_control_cycle () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let clock = Eio.Stdenv.clock env in
+  let ready, resolve_ready = Eio.Promise.create () in
+  let stamped, resolve_stamped = Eio.Promise.create () in
+  let arm_stamp = Atomic.make false in
+  let calls = ref 0 in
+  let finishes = ref 0 in
+  let dir = temp_dir "pie-ptt-retry-control" in
+  let persist_path = Filename.concat dir "recording-state.json" in
+  let coordinator = Recording.Coordinator.create ~persist_path () in
+  let retry =
+    match
+      Recording.Coordinator.try_start coordinator
+        Recording.Coordinator.Ptt_transcribe ()
+    with
+    | Recording.Coordinator.Started attempt -> attempt
+    | _ -> Alcotest.fail "expected retry to occupy admission"
+  in
+  let keyboard = Pie.Keyboard.Monitor.create () in
+  let control = Eio.Stream.create 16 in
+  let audio = Eio.Stream.create 16 in
+  let chunk = Bytes.make 320 (Char.chr 1) in
+  let config : Pie.Ptt_loop.config =
+    {
+      recognize = (fun _ -> None);
+      min_duration_ms = 0;
+      capture_thresholds = (fun () -> (0., 0.));
+      log_prefix = (fun mode -> mode);
+      source = None;
+      on_ready =
+        Eta.Effect.sync (fun () -> Eio.Promise.resolve resolve_ready ());
+      on_press =
+        (fun _ ->
+          Eta.Effect.sync (fun () ->
+              incr calls;
+              match
+                Recording.Coordinator.try_start coordinator
+                  Recording.Coordinator.Ptt_transcribe ()
+              with
+              | Recording.Coordinator.Started attempt ->
+                  Pie.Ptt_loop.Handle
+                    {
+                      offer = (fun _ -> Eta.Effect.unit);
+                      finish =
+                        Ptt_loop.Buffered
+                          (fun _ ->
+                            Eta.Effect.sync (fun () ->
+                                incr finishes;
+                                ignore
+                                  (Recording.Coordinator.release coordinator
+                                     attempt)));
+                      cancel =
+                        Eta.Effect.sync (fun () ->
+                            ignore
+                              (Recording.Coordinator.release coordinator attempt));
+                    }
+              | _ -> Pie.Ptt_loop.Skip));
+      on_release = (fun _ -> Eta.Effect.unit);
+      on_abort = Eta.Effect.pure false;
+      on_dead_input = Eta.Effect.unit;
+      admission_active =
+        (fun () ->
+          let active = Recording.Coordinator.is_active coordinator in
+          if Atomic.get arm_stamp && active then (
+            Atomic.set arm_stamp false;
+            Eio.Promise.resolve resolve_stamped ());
+          active);
+    }
+  in
+  Eio.Fiber.fork ~sw (fun () ->
+      Eio.Promise.await ready;
+      Atomic.set arm_stamp true;
+      Eio.Stream.add control (Pie.Ptt_loop.Press "transcribe");
+      Eio.Promise.await stamped;
+      Eio.Stream.add control (Pie.Ptt_loop.Release "transcribe");
+      ignore (Recording.Coordinator.release coordinator retry);
+      Alcotest.(check int)
+        "retry-occupied cycle is not admitted after retry release" 0 !calls;
+      Eio.Stream.add control (Pie.Ptt_loop.Press "transcribe");
+      Eio.Stream.add audio chunk;
+      Eio.Stream.add control (Pie.Ptt_loop.Release "transcribe"));
+  let result =
+    Eta_eio.run_once ~sw ~clock
+      (Pie.Ptt_loop.run
+         ~mono_clock:(Eio.Stdenv.mono_clock env)
+         ~control ~keyboard
+         ~audio:(Eta_stream_eio.Stream.from_eio_stream audio)
+         config
+      |> Eta.Effect.timeout_as (Eta.Duration.seconds 5)
+           ~on_timeout:(`Ptt_error "timeout"))
+  in
+  Alcotest.(check int) "fresh cycle after retry release is admitted" 1 !calls;
+  Alcotest.(check int) "fresh cycle finished" 1 !finishes;
+  remove_dir dir;
+  match result with
+  | Ok () -> Alcotest.fail "expected the loop to settle by timeout"
+  | Error cause ->
+      Alcotest.(check bool)
+        "loop ended by local timeout" true
+        (cause_contains cause "timeout")
+
+let test_ptt_loop_retry_admission_rejects_busy_keyboard_cycle () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let clock = Eio.Stdenv.clock env in
+  let ready, resolve_ready = Eio.Promise.create () in
+  let stamped, resolve_stamped = Eio.Promise.create () in
+  let arm_stamp = Atomic.make false in
+  let calls = ref 0 in
+  let finishes = ref 0 in
+  let dir = temp_dir "pie-ptt-retry-keyboard" in
+  let persist_path = Filename.concat dir "recording-state.json" in
+  let coordinator = Recording.Coordinator.create ~persist_path () in
+  let retry =
+    match
+      Recording.Coordinator.try_start coordinator
+        Recording.Coordinator.Ptt_transcribe ()
+    with
+    | Recording.Coordinator.Started attempt -> attempt
+    | _ -> Alcotest.fail "expected retry to occupy admission"
+  in
+  let keyboard = Pie.Keyboard.Monitor.create () in
+  let audio = Eio.Stream.create 16 in
+  let chunk = Bytes.make 320 (Char.chr 1) in
+  let config : Pie.Ptt_loop.config =
+    {
+      recognize = recognize_test_key;
+      min_duration_ms = 0;
+      capture_thresholds = (fun () -> (0., 0.));
+      log_prefix = (fun mode -> mode);
+      source = None;
+      on_ready =
+        Eta.Effect.sync (fun () -> Eio.Promise.resolve resolve_ready ());
+      on_press =
+        (fun _ ->
+          Eta.Effect.sync (fun () ->
+              incr calls;
+              match
+                Recording.Coordinator.try_start coordinator
+                  Recording.Coordinator.Ptt_transcribe ()
+              with
+              | Recording.Coordinator.Started attempt ->
+                  Pie.Ptt_loop.Handle
+                    {
+                      offer = (fun _ -> Eta.Effect.unit);
+                      finish =
+                        Ptt_loop.Buffered
+                          (fun _ ->
+                            Eta.Effect.sync (fun () ->
+                                incr finishes;
+                                ignore
+                                  (Recording.Coordinator.release coordinator
+                                     attempt)));
+                      cancel =
+                        Eta.Effect.sync (fun () ->
+                            ignore
+                              (Recording.Coordinator.release coordinator attempt));
+                    }
+              | _ -> Pie.Ptt_loop.Skip));
+      on_release = (fun _ -> Eta.Effect.unit);
+      on_abort = Eta.Effect.pure false;
+      on_dead_input = Eta.Effect.unit;
+      admission_active =
+        (fun () ->
+          let active = Recording.Coordinator.is_active coordinator in
+          if Atomic.get arm_stamp && active then (
+            Atomic.set arm_stamp false;
+            Eio.Promise.resolve resolve_stamped ());
+          active);
+    }
+  in
+  Eio.Fiber.fork ~sw (fun () ->
+      Eio.Promise.await ready;
+      Atomic.set arm_stamp true;
+      emit_test_key keyboard false;
+      Eio.Promise.await stamped;
+      emit_test_key keyboard true;
+      ignore (Recording.Coordinator.release coordinator retry);
+      Alcotest.(check int)
+        "retry-occupied keyboard cycle is not admitted after retry release" 0
+        !calls;
+      emit_test_key keyboard false;
+      Eio.Stream.add audio chunk;
+      emit_test_key keyboard true);
+  let result =
+    Eta_eio.run_once ~sw ~clock
+      (Pie.Ptt_loop.run
+         ~mono_clock:(Eio.Stdenv.mono_clock env)
+         ~keyboard
+         ~audio:(Eta_stream_eio.Stream.from_eio_stream audio)
+         config
+      |> Eta.Effect.timeout_as (Eta.Duration.seconds 5)
+           ~on_timeout:(`Ptt_error "timeout"))
+  in
+  Alcotest.(check int)
+    "fresh keyboard cycle after retry release is admitted" 1 !calls;
+  Alcotest.(check int) "fresh keyboard cycle finished" 1 !finishes;
+  remove_dir dir;
+  match result with
+  | Ok () -> Alcotest.fail "expected the loop to settle by timeout"
+  | Error cause ->
+      Alcotest.(check bool)
+        "loop ended by local timeout" true
+        (cause_contains cause "timeout")
+
+let test_ptt_loop_failed_on_press_does_not_replay_busy_control_cycle () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let clock = Eio.Stdenv.clock env in
+  let ready, resolve_ready = Eio.Promise.create () in
+  let entered, resolve_entered = Eio.Promise.create () in
+  let proceed, resolve_proceed = Eio.Promise.create () in
+  let failed, resolve_failed = Eio.Promise.create () in
+  let stamped, resolve_stamped = Eio.Promise.create () in
+  let arm_stamp = Atomic.make false in
+  let calls = ref 0 in
+  let finishes = ref 0 in
+  let dir = temp_dir "pie-ptt-fail-control" in
+  let persist_path = Filename.concat dir "recording-state.json" in
+  let coordinator = Recording.Coordinator.create ~persist_path () in
+  let keyboard = Pie.Keyboard.Monitor.create () in
+  let control = Eio.Stream.create 16 in
+  let audio = Eio.Stream.create 16 in
+  let chunk = Bytes.make 320 (Char.chr 1) in
+  let config : Pie.Ptt_loop.config =
+    {
+      recognize = (fun _ -> None);
+      min_duration_ms = 0;
+      capture_thresholds = (fun () -> (0., 0.));
+      log_prefix = (fun mode -> mode);
+      source = None;
+      on_ready =
+        Eta.Effect.sync (fun () -> Eio.Promise.resolve resolve_ready ());
+      on_press =
+        (fun _ ->
+          incr calls;
+          if !calls = 1 then
+            Eta.Effect.sync (fun () ->
+                match
+                  Recording.Coordinator.try_start coordinator
+                    Recording.Coordinator.Ptt_transcribe ()
+                with
+                | Recording.Coordinator.Started attempt ->
+                    Eio.Promise.resolve resolve_entered ();
+                    Eio.Promise.await proceed;
+                    ignore (Recording.Coordinator.release coordinator attempt);
+                    Eio.Promise.resolve resolve_failed ();
+                    `Fail
+                | _ -> `Skip)
+            |> Eta.Effect.bind (function
+              | `Skip -> Eta.Effect.pure Pie.Ptt_loop.Skip
+              | `Fail ->
+                  Eta.Effect.fail (`Ptt_error "setup failed before handle"))
+          else
+            Eta.Effect.sync (fun () ->
+                match
+                  Recording.Coordinator.try_start coordinator
+                    Recording.Coordinator.Ptt_transcribe ()
+                with
+                | Recording.Coordinator.Started attempt ->
+                    Pie.Ptt_loop.Handle
+                      {
+                        offer = (fun _ -> Eta.Effect.unit);
+                        finish =
+                          Ptt_loop.Buffered
+                            (fun _ ->
+                              Eta.Effect.sync (fun () ->
+                                  incr finishes;
+                                  ignore
+                                    (Recording.Coordinator.release coordinator
+                                       attempt)));
+                        cancel =
+                          Eta.Effect.sync (fun () ->
+                              ignore
+                                (Recording.Coordinator.release coordinator
+                                   attempt));
+                      }
+                | _ -> Pie.Ptt_loop.Skip));
+      on_release = (fun _ -> Eta.Effect.unit);
+      on_abort = Eta.Effect.pure false;
+      on_dead_input = Eta.Effect.unit;
+      admission_active =
+        (fun () ->
+          let active = Recording.Coordinator.is_active coordinator in
+          if Atomic.get arm_stamp && active then (
+            Atomic.set arm_stamp false;
+            Eio.Promise.resolve resolve_stamped ());
+          active);
+    }
+  in
+  Eio.Fiber.fork ~sw (fun () ->
+      Eio.Promise.await ready;
+      Eio.Stream.add control (Pie.Ptt_loop.Press "transcribe");
+      Eio.Promise.await entered;
+      Atomic.set arm_stamp true;
+      Eio.Stream.add control (Pie.Ptt_loop.Press "transcribe");
+      Eio.Promise.await stamped;
+      Eio.Stream.add control (Pie.Ptt_loop.Release "transcribe");
+      Eio.Promise.resolve resolve_proceed ();
+      Eio.Promise.await failed;
+      Alcotest.(check int)
+        "busy cycle during failed on_press is not replayed" 1 !calls;
+      Eio.Stream.add control (Pie.Ptt_loop.Press "transcribe");
+      Eio.Stream.add audio chunk;
+      Eio.Stream.add control (Pie.Ptt_loop.Release "transcribe"));
+  let result =
+    Eta_eio.run_once ~sw ~clock
+      (Pie.Ptt_loop.run
+         ~mono_clock:(Eio.Stdenv.mono_clock env)
+         ~control ~keyboard
+         ~audio:(Eta_stream_eio.Stream.from_eio_stream audio)
+         config
+      |> Eta.Effect.timeout_as (Eta.Duration.seconds 5)
+           ~on_timeout:(`Ptt_error "timeout"))
+  in
+  Alcotest.(check int) "fresh cycle after failed on_press is admitted" 2 !calls;
+  Alcotest.(check int) "fresh cycle finished" 1 !finishes;
+  remove_dir dir;
+  match result with
+  | Ok () -> Alcotest.fail "expected the loop to settle by timeout"
+  | Error cause ->
+      Alcotest.(check bool)
+        "loop ended by local timeout" true
+        (cause_contains cause "timeout")
+
+let test_ptt_loop_failed_on_press_does_not_replay_busy_keyboard_cycle () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let clock = Eio.Stdenv.clock env in
+  let ready, resolve_ready = Eio.Promise.create () in
+  let entered, resolve_entered = Eio.Promise.create () in
+  let proceed, resolve_proceed = Eio.Promise.create () in
+  let failed, resolve_failed = Eio.Promise.create () in
+  let stamped, resolve_stamped = Eio.Promise.create () in
+  let arm_stamp = Atomic.make false in
+  let calls = ref 0 in
+  let finishes = ref 0 in
+  let dir = temp_dir "pie-ptt-fail-keyboard" in
+  let persist_path = Filename.concat dir "recording-state.json" in
+  let coordinator = Recording.Coordinator.create ~persist_path () in
+  let keyboard = Pie.Keyboard.Monitor.create () in
+  let audio = Eio.Stream.create 16 in
+  let chunk = Bytes.make 320 (Char.chr 1) in
+  let config : Pie.Ptt_loop.config =
+    {
+      recognize = recognize_test_key;
+      min_duration_ms = 0;
+      capture_thresholds = (fun () -> (0., 0.));
+      log_prefix = (fun mode -> mode);
+      source = None;
+      on_ready =
+        Eta.Effect.sync (fun () -> Eio.Promise.resolve resolve_ready ());
+      on_press =
+        (fun _ ->
+          incr calls;
+          if !calls = 1 then
+            Eta.Effect.sync (fun () ->
+                match
+                  Recording.Coordinator.try_start coordinator
+                    Recording.Coordinator.Ptt_transcribe ()
+                with
+                | Recording.Coordinator.Started attempt ->
+                    Eio.Promise.resolve resolve_entered ();
+                    Eio.Promise.await proceed;
+                    ignore (Recording.Coordinator.release coordinator attempt);
+                    Eio.Promise.resolve resolve_failed ();
+                    `Fail
+                | _ -> `Skip)
+            |> Eta.Effect.bind (function
+              | `Skip -> Eta.Effect.pure Pie.Ptt_loop.Skip
+              | `Fail ->
+                  Eta.Effect.fail (`Ptt_error "setup failed before handle"))
+          else
+            Eta.Effect.sync (fun () ->
+                match
+                  Recording.Coordinator.try_start coordinator
+                    Recording.Coordinator.Ptt_transcribe ()
+                with
+                | Recording.Coordinator.Started attempt ->
+                    Pie.Ptt_loop.Handle
+                      {
+                        offer = (fun _ -> Eta.Effect.unit);
+                        finish =
+                          Ptt_loop.Buffered
+                            (fun _ ->
+                              Eta.Effect.sync (fun () ->
+                                  incr finishes;
+                                  ignore
+                                    (Recording.Coordinator.release coordinator
+                                       attempt)));
+                        cancel =
+                          Eta.Effect.sync (fun () ->
+                              ignore
+                                (Recording.Coordinator.release coordinator
+                                   attempt));
+                      }
+                | _ -> Pie.Ptt_loop.Skip));
+      on_release = (fun _ -> Eta.Effect.unit);
+      on_abort = Eta.Effect.pure false;
+      on_dead_input = Eta.Effect.unit;
+      admission_active =
+        (fun () ->
+          let active = Recording.Coordinator.is_active coordinator in
+          if Atomic.get arm_stamp && active then (
+            Atomic.set arm_stamp false;
+            Eio.Promise.resolve resolve_stamped ());
+          active);
+    }
+  in
+  Eio.Fiber.fork ~sw (fun () ->
+      Eio.Promise.await ready;
+      emit_test_key keyboard false;
+      Eio.Promise.await entered;
+      Atomic.set arm_stamp true;
+      emit_test_key keyboard false;
+      Eio.Promise.await stamped;
+      emit_test_key keyboard true;
+      Eio.Promise.resolve resolve_proceed ();
+      Eio.Promise.await failed;
+      Alcotest.(check int)
+        "busy keyboard cycle during failed on_press is not replayed" 1 !calls;
+      emit_test_key keyboard false;
+      Eio.Stream.add audio chunk;
+      emit_test_key keyboard true);
+  let result =
+    Eta_eio.run_once ~sw ~clock
+      (Pie.Ptt_loop.run
+         ~mono_clock:(Eio.Stdenv.mono_clock env)
+         ~keyboard
+         ~audio:(Eta_stream_eio.Stream.from_eio_stream audio)
+         config
+      |> Eta.Effect.timeout_as (Eta.Duration.seconds 5)
+           ~on_timeout:(`Ptt_error "timeout"))
+  in
+  Alcotest.(check int)
+    "fresh keyboard cycle after failed on_press is admitted" 2 !calls;
+  Alcotest.(check int) "fresh keyboard cycle finished" 1 !finishes;
+  remove_dir dir;
+  match result with
+  | Ok () -> Alcotest.fail "expected the loop to settle by timeout"
+  | Error cause ->
+      Alcotest.(check bool)
+        "loop ended by local timeout" true
+        (cause_contains cause "timeout")
+
+let ptt_flood_sentinel = Bytes.make 1 '\255'
+
+let ptt_audio_with_flood_ingress_ack audio resolve_ingress =
+  let signaled = Atomic.make false in
+  Eta_stream_eio.Stream.from_eio_stream audio
+  |> Eta_stream.Stream.map_effect (fun chunk ->
+      Eta.Effect.sync (fun () ->
+          if
+            Bytes.length chunk = 1
+            && Bytes.get chunk 0 = '\255'
+            && Atomic.compare_and_set signaled false true
+          then Eio.Promise.resolve resolve_ingress ();
+          chunk))
+  |> Eta_stream.Stream.filter (fun chunk ->
+      not (Bytes.length chunk = 1 && Bytes.get chunk 0 = '\255'))
+
+let test_ptt_loop_processing_keeps_input_live_during_finish () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let clock = Eio.Stdenv.clock env in
+  let ready, resolve_ready = Eio.Promise.create () in
+  let started, resolve_started = Eio.Promise.create () in
+  let finishing, resolve_finishing = Eio.Promise.create () in
+  let resume, resolve_resume = Eio.Promise.create () in
+  let flood_ingressed, resolve_flood_ingressed = Eio.Promise.create () in
+  let control_ingressed, resolve_control_ingressed = Eio.Promise.create () in
+  let control_ack_phase = Atomic.make false in
+  let control_ingress = Atomic.make 0 in
+  let expected_busy_ingress = 32 in
+  let calls = ref 0 in
+  let finishes = ref 0 in
+  let offered = ref [] in
+  let dir = temp_dir "pie-ptt-processing-live" in
+  let persist_path = Filename.concat dir "recording-state.json" in
+  let coordinator = Recording.Coordinator.create ~persist_path () in
+  let keyboard = Pie.Keyboard.Monitor.create () in
+  let control = Eio.Stream.create 16 in
+  let audio = Eio.Stream.create 2048 in
+  let capture_chunk = Bytes.make 320 (Char.chr 1) in
+  let flood_chunk = Bytes.make 4 (Char.chr 2) in
+  let fresh_chunk = Bytes.make 320 (Char.chr 3) in
+  let config : Pie.Ptt_loop.config =
+    {
+      recognize = recognize_test_key;
+      min_duration_ms = 0;
+      capture_thresholds = (fun () -> (0., 0.));
+      log_prefix = (fun mode -> mode);
+      source = None;
+      on_ready =
+        Eta.Effect.sync (fun () -> Eio.Promise.resolve resolve_ready ());
+      on_press =
+        (fun _ ->
+          Eta.Effect.sync (fun () ->
+              incr calls;
+              match
+                Recording.Coordinator.try_start coordinator
+                  Recording.Coordinator.Ptt_transcribe ()
+              with
+              | Recording.Coordinator.Started attempt ->
+                  if !calls = 1 then Eio.Promise.resolve resolve_started ();
+                  Pie.Ptt_loop.Handle
+                    {
+                      offer =
+                        (fun chunk ->
+                          Eta.Effect.sync (fun () ->
+                              offered := Bytes.get chunk 0 :: !offered));
+                      finish =
+                        Ptt_loop.Buffered
+                          (fun _ ->
+                            Eta.Effect.sync (fun () ->
+                                incr finishes;
+                                if !finishes = 1 then (
+                                  Eio.Promise.resolve resolve_finishing ();
+                                  Eio.Promise.await resume);
+                                ignore
+                                  (Recording.Coordinator.release coordinator
+                                     attempt)));
+                      cancel =
+                        Eta.Effect.sync (fun () ->
+                            ignore
+                              (Recording.Coordinator.release coordinator attempt));
+                    }
+              | _ -> Pie.Ptt_loop.Skip));
+      on_release = (fun _ -> Eta.Effect.unit);
+      on_abort = Eta.Effect.pure false;
+      on_dead_input = Eta.Effect.unit;
+      admission_active =
+        (fun () ->
+          let active = Recording.Coordinator.is_active coordinator in
+          (if Atomic.get control_ack_phase then
+             let n = Atomic.fetch_and_add control_ingress 1 + 1 in
+             if n = expected_busy_ingress && active then
+               Eio.Promise.resolve resolve_control_ingressed ());
+          active);
+    }
+  in
+  Eio.Fiber.fork ~sw (fun () ->
+      Eio.Promise.await ready;
+      Eio.Stream.add control (Pie.Ptt_loop.Press "transcribe");
+      Eio.Promise.await started;
+      Eio.Stream.add audio capture_chunk;
+      Eio.Stream.add control (Pie.Ptt_loop.Release "transcribe");
+      Eio.Promise.await finishing;
+      for _ = 1 to 1100 do
+        Eio.Stream.add audio flood_chunk
+      done;
+      Eio.Stream.add audio ptt_flood_sentinel;
+      Eio.Promise.await flood_ingressed;
+      Atomic.set control_ack_phase true;
+      for _ = 1 to 8 do
+        Eio.Stream.add control (Pie.Ptt_loop.Press "transcribe");
+        emit_test_key keyboard false;
+        Eio.Stream.add control (Pie.Ptt_loop.Release "transcribe");
+        emit_test_key keyboard true
+      done;
+      Eio.Promise.await control_ingressed;
+      Atomic.set control_ack_phase false;
+      Eio.Promise.resolve resolve_resume ();
+      Eio.Stream.add control (Pie.Ptt_loop.Press "transcribe");
+      Eio.Stream.add audio fresh_chunk;
+      Eio.Stream.add control (Pie.Ptt_loop.Release "transcribe"));
+  let result =
+    Eta_eio.run_once ~sw ~clock
+      (Pie.Ptt_loop.run
+         ~mono_clock:(Eio.Stdenv.mono_clock env)
+         ~control ~keyboard
+         ~audio:(ptt_audio_with_flood_ingress_ack audio resolve_flood_ingressed)
+         config
+      |> Eta.Effect.timeout_as (Eta.Duration.seconds 8)
+           ~on_timeout:(`Ptt_error "timeout"))
+  in
+  Alcotest.(check int) "no extra on_press during gated finish" 2 !calls;
+  Alcotest.(check int) "two finishes" 2 !finishes;
+  Alcotest.(check bool)
+    "flood audio was not offered" true
+    (not (List.mem '\002' !offered));
+  Alcotest.(check bool)
+    "fresh capture offered only post-finish audio" true
+    (List.mem '\003' !offered);
+  remove_dir dir;
+  match result with
+  | Ok () -> Alcotest.fail "expected the loop to settle by timeout"
+  | Error cause ->
+      Alcotest.(check bool)
+        "loop ended by local timeout" true
+        (cause_contains cause "timeout")
+
+let test_ptt_loop_processing_preserves_fresh_press_pending () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let clock = Eio.Stdenv.clock env in
+  let ready, resolve_ready = Eio.Promise.create () in
+  let started, resolve_started = Eio.Promise.create () in
+  let finishing, resolve_finishing = Eio.Promise.create () in
+  let resume, resolve_resume = Eio.Promise.create () in
+  let stamped, resolve_stamped = Eio.Promise.create () in
+  let arm_stamp = Atomic.make false in
+  let calls = ref 0 in
+  let finishes = ref 0 in
+  let dir = temp_dir "pie-ptt-processing-pending" in
+  let persist_path = Filename.concat dir "recording-state.json" in
+  let coordinator = Recording.Coordinator.create ~persist_path () in
+  let admitted = ref None in
+  let keyboard = Pie.Keyboard.Monitor.create () in
+  let control = Eio.Stream.create 16 in
+  let audio = Eio.Stream.create 16 in
+  let chunk = Bytes.make 320 (Char.chr 1) in
+  let config : Pie.Ptt_loop.config =
+    {
+      recognize = (fun _ -> None);
+      min_duration_ms = 0;
+      capture_thresholds = (fun () -> (0., 0.));
+      log_prefix = (fun mode -> mode);
+      source = None;
+      on_ready =
+        Eta.Effect.sync (fun () -> Eio.Promise.resolve resolve_ready ());
+      on_press =
+        (fun _ ->
+          Eta.Effect.sync (fun () ->
+              incr calls;
+              match
+                Recording.Coordinator.try_start coordinator
+                  Recording.Coordinator.Ptt_transcribe ()
+              with
+              | Recording.Coordinator.Started attempt ->
+                  admitted := Some attempt;
+                  if !calls = 1 then Eio.Promise.resolve resolve_started ();
+                  Pie.Ptt_loop.Handle
+                    {
+                      offer = (fun _ -> Eta.Effect.unit);
+                      finish =
+                        Ptt_loop.Buffered
+                          (fun _ ->
+                            Eta.Effect.sync (fun () ->
+                                incr finishes;
+                                if !finishes = 1 then (
+                                  Eio.Promise.resolve resolve_finishing ();
+                                  Eio.Promise.await resume);
+                                (match !admitted with
+                                | Some current ->
+                                    ignore
+                                      (Recording.Coordinator.release coordinator
+                                         current)
+                                | None -> ());
+                                admitted := None));
+                      cancel =
+                        Eta.Effect.sync (fun () ->
+                            match !admitted with
+                            | Some current ->
+                                ignore
+                                  (Recording.Coordinator.release coordinator
+                                     current)
+                            | None -> ());
+                    }
+              | _ -> Pie.Ptt_loop.Skip));
+      on_release = (fun _ -> Eta.Effect.unit);
+      on_abort = Eta.Effect.pure false;
+      on_dead_input = Eta.Effect.unit;
+      admission_active =
+        (fun () ->
+          let active = Recording.Coordinator.is_active coordinator in
+          if Atomic.get arm_stamp && not active then (
+            Atomic.set arm_stamp false;
+            Eio.Promise.resolve resolve_stamped ());
+          active);
+    }
+  in
+  Eio.Fiber.fork ~sw (fun () ->
+      Eio.Promise.await ready;
+      Eio.Stream.add control (Pie.Ptt_loop.Press "transcribe");
+      Eio.Promise.await started;
+      Eio.Stream.add audio chunk;
+      Eio.Stream.add control (Pie.Ptt_loop.Release "transcribe");
+      Eio.Promise.await finishing;
+      (match !admitted with
+      | Some attempt ->
+          ignore (Recording.Coordinator.release coordinator attempt);
+          admitted := None
+      | None -> ());
+      Atomic.set arm_stamp true;
+      Eio.Stream.add control (Pie.Ptt_loop.Press "transcribe");
+      Eio.Promise.await stamped;
+      Eio.Promise.resolve resolve_resume ();
+      Eio.Stream.add audio chunk;
+      Eio.Stream.add control (Pie.Ptt_loop.Release "transcribe"));
+  let result =
+    Eta_eio.run_once ~sw ~clock
+      (Pie.Ptt_loop.run
+         ~mono_clock:(Eio.Stdenv.mono_clock env)
+         ~control ~keyboard
+         ~audio:(Eta_stream_eio.Stream.from_eio_stream audio)
+         config
+      |> Eta.Effect.timeout_as (Eta.Duration.seconds 8)
+           ~on_timeout:(`Ptt_error "timeout"))
+  in
+  Alcotest.(check int)
+    "fresh press during finish handoff is admitted once" 2 !calls;
+  Alcotest.(check int) "handoff cycle finished" 2 !finishes;
+  remove_dir dir;
+  match result with
+  | Ok () -> Alcotest.fail "expected the loop to settle by timeout"
+  | Error cause ->
+      Alcotest.(check bool)
+        "loop ended by local timeout" true
+        (cause_contains cause "timeout")
+
+let test_ptt_loop_processing_join_preserves_finish_failure () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let clock = Eio.Stdenv.clock env in
+  let ready, resolve_ready = Eio.Promise.create () in
+  let started, resolve_started = Eio.Promise.create () in
+  let finishing, resolve_finishing = Eio.Promise.create () in
+  let resume, resolve_resume = Eio.Promise.create () in
+  let flood_ingressed, resolve_flood_ingressed = Eio.Promise.create () in
+  let calls = ref 0 in
+  let finishes = ref 0 in
+  let offered = ref [] in
+  let dir = temp_dir "pie-ptt-processing-fail" in
+  let persist_path = Filename.concat dir "recording-state.json" in
+  let coordinator = Recording.Coordinator.create ~persist_path () in
+  let keyboard = Pie.Keyboard.Monitor.create () in
+  let control = Eio.Stream.create 16 in
+  let audio = Eio.Stream.create 2048 in
+  let capture_chunk = Bytes.make 320 (Char.chr 1) in
+  let flood_chunk = Bytes.make 4 (Char.chr 2) in
+  let fresh_chunk = Bytes.make 320 (Char.chr 3) in
+  let config : Pie.Ptt_loop.config =
+    {
+      recognize = (fun _ -> None);
+      min_duration_ms = 0;
+      capture_thresholds = (fun () -> (0., 0.));
+      log_prefix = (fun mode -> mode);
+      source = None;
+      on_ready =
+        Eta.Effect.sync (fun () -> Eio.Promise.resolve resolve_ready ());
+      on_press =
+        (fun _ ->
+          Eta.Effect.sync (fun () ->
+              incr calls;
+              match
+                Recording.Coordinator.try_start coordinator
+                  Recording.Coordinator.Ptt_transcribe ()
+              with
+              | Recording.Coordinator.Started attempt ->
+                  if !calls = 1 then Eio.Promise.resolve resolve_started ();
+                  Pie.Ptt_loop.Handle
+                    {
+                      offer =
+                        (fun chunk ->
+                          Eta.Effect.sync (fun () ->
+                              offered := Bytes.get chunk 0 :: !offered));
+                      finish =
+                        Ptt_loop.Buffered
+                          (fun _ ->
+                            let* () =
+                              Eta.Effect.sync (fun () ->
+                                  incr finishes;
+                                  if !finishes = 1 then (
+                                    Eio.Promise.resolve resolve_finishing ();
+                                    Eio.Promise.await resume);
+                                  ignore
+                                    (Recording.Coordinator.release coordinator
+                                       attempt))
+                            in
+                            if !finishes = 1 then
+                              Eta.Effect.fail
+                                (`Ptt_error "provider failed during processing")
+                            else Eta.Effect.unit);
+                      cancel =
+                        Eta.Effect.sync (fun () ->
+                            ignore
+                              (Recording.Coordinator.release coordinator attempt));
+                    }
+              | _ -> Pie.Ptt_loop.Skip));
+      on_release = (fun _ -> Eta.Effect.unit);
+      on_abort = Eta.Effect.pure false;
+      on_dead_input = Eta.Effect.unit;
+      admission_active = (fun () -> Recording.Coordinator.is_active coordinator);
+    }
+  in
+  Eio.Fiber.fork ~sw (fun () ->
+      Eio.Promise.await ready;
+      Eio.Stream.add control (Pie.Ptt_loop.Press "transcribe");
+      Eio.Promise.await started;
+      Eio.Stream.add audio capture_chunk;
+      Eio.Stream.add control (Pie.Ptt_loop.Release "transcribe");
+      Eio.Promise.await finishing;
+      for _ = 1 to 1100 do
+        Eio.Stream.add audio flood_chunk
+      done;
+      Eio.Stream.add audio ptt_flood_sentinel;
+      Eio.Promise.await flood_ingressed;
+      Eio.Promise.resolve resolve_resume ();
+      Eio.Stream.add control (Pie.Ptt_loop.Press "transcribe");
+      Eio.Stream.add audio fresh_chunk;
+      Eio.Stream.add control (Pie.Ptt_loop.Release "transcribe"));
+  let result =
+    Eta_eio.run_once ~sw ~clock
+      (Pie.Ptt_loop.run
+         ~mono_clock:(Eio.Stdenv.mono_clock env)
+         ~control ~keyboard
+         ~audio:(ptt_audio_with_flood_ingress_ack audio resolve_flood_ingressed)
+         config
+      |> Eta.Effect.timeout_as (Eta.Duration.seconds 8)
+           ~on_timeout:(`Ptt_error "timeout"))
+  in
+  Alcotest.(check int) "failed finish did not extra-admit" 2 !calls;
+  Alcotest.(check bool)
+    "failed processing did not offer flood audio" true
+    (not (List.mem '\002' !offered));
+  Alcotest.(check bool)
+    "next capture did not receive old flood audio" true
+    (List.mem '\003' !offered);
+  remove_dir dir;
+  match result with
+  | Ok () -> Alcotest.fail "expected the loop to settle by timeout"
+  | Error cause ->
+      Alcotest.(check bool)
+        "loop ended by local timeout" true
+        (cause_contains cause "timeout")
+
+let dump_exit = function
+  | None -> "None"
+  | Some (Eta.Exit.Ok _) -> "Ok"
+  | Some (Eta.Exit.Error cause) ->
+      Printf.sprintf "Error(interrupt_only=%b cause=%s)"
+        (Eta.Cause.is_interrupt_only cause)
+        (Format.asprintf "%a" (Eta.Cause.pp pp_ptt_error) cause)
+
+let assert_with_background_clean_cancel ~label result body_exit bg_exit =
+  let mismatch () =
+    Alcotest.failf "%s markers body=%s bg=%s result=%s" label
+      (dump_exit body_exit) (dump_exit bg_exit) (dump_exit (Some result))
+  in
+  (match body_exit with Some (Eta.Exit.Ok _) -> () | _ -> mismatch ());
+  (match result with Eta.Exit.Ok () -> () | Eta.Exit.Error _ -> mismatch ());
+  match bg_exit with
+  | Some (Eta.Exit.Error cause) when Eta.Cause.is_interrupt_only cause -> ()
+  | _ -> mismatch ()
+
+let test_with_background_cancels_sync_stream_take () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let clock = Eio.Stdenv.clock env in
+  let empty = Eio.Stream.create 1 in
+  let bg_exit = ref None in
+  let body_exit = ref None in
+  let body_started, resolve_body_started = Eio.Promise.create () in
+  let resume, resolve_resume = Eio.Promise.create () in
+  let background =
+    Eta.Effect.sync (fun () -> ignore (Eio.Stream.take empty))
+    |> Eta.Effect.on_exit (fun exit ->
+        Eta.Effect.sync (fun () -> bg_exit := Some exit))
+  in
+  let body () =
+    Eta.Effect.sync (fun () ->
+        Eio.Promise.resolve resolve_body_started ();
+        Eio.Promise.await resume)
+    |> Eta.Effect.on_exit (fun exit ->
+        Eta.Effect.sync (fun () -> body_exit := Some exit))
+  in
+  Eio.Fiber.fork ~sw (fun () ->
+      Eio.Promise.await body_started;
+      Eio.Promise.resolve resolve_resume ());
+  let result =
+    Eta_eio.run_once ~sw ~clock
+      (Eta.Effect.with_background ~name:"diag.sync.take" background body
+      |> Eta.Effect.timeout_as (Eta.Duration.seconds 1)
+           ~on_timeout:(`Ptt_error "harness timeout"))
+  in
+  assert_with_background_clean_cancel ~label:"sync-take" result !body_exit
+    !bg_exit
+
+let test_with_background_cancels_never () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let clock = Eio.Stdenv.clock env in
+  let bg_exit = ref None in
+  let body_exit = ref None in
+  let body_started, resolve_body_started = Eio.Promise.create () in
+  let resume, resolve_resume = Eio.Promise.create () in
+  let background =
+    Eta.Effect.never
+    |> Eta.Effect.on_exit (fun exit ->
+        Eta.Effect.sync (fun () -> bg_exit := Some exit))
+  in
+  let body () =
+    Eta.Effect.sync (fun () ->
+        Eio.Promise.resolve resolve_body_started ();
+        Eio.Promise.await resume)
+    |> Eta.Effect.on_exit (fun exit ->
+        Eta.Effect.sync (fun () -> body_exit := Some exit))
+  in
+  Eio.Fiber.fork ~sw (fun () ->
+      Eio.Promise.await body_started;
+      Eio.Promise.resolve resolve_resume ());
+  let result =
+    Eta_eio.run_once ~sw ~clock
+      (Eta.Effect.with_background ~name:"diag.never" background body
+      |> Eta.Effect.timeout_as (Eta.Duration.seconds 1)
+           ~on_timeout:(`Ptt_error "harness timeout"))
+  in
+  assert_with_background_clean_cancel ~label:"never" result !body_exit !bg_exit
 
 let pcm_chunk sample samples =
   let chunk = Bytes.create (samples * 2) in
@@ -2962,7 +4656,8 @@ let test_ptt_loop_ignores_short_capture_before_offering () =
   let handle =
     {
       Pie.Ptt_loop.offer = (fun _ -> Eta.Effect.sync (fun () -> incr offers));
-      finish = (fun _ -> Eta.Effect.sync (fun () -> incr finishes));
+      finish =
+        Ptt_loop.Buffered (fun _ -> Eta.Effect.sync (fun () -> incr finishes));
       cancel = Eta.Effect.sync (fun () -> incr cancels);
     }
   in
@@ -2987,11 +4682,14 @@ let test_ptt_loop_ignores_short_capture_before_offering () =
       on_release = (fun _ -> Eta.Effect.unit);
       on_abort = Eta.Effect.pure false;
       on_dead_input = Eta.Effect.unit;
+      admission_active = (fun () -> false);
     }
   in
   let operation =
-    Pie.Ptt_loop.run ~keyboard
-      ~audio:(Eta_stream.Stream.from_eio_stream audio)
+    Pie.Ptt_loop.run
+      ~mono_clock:(Eio.Stdenv.mono_clock env)
+      ~keyboard
+      ~audio:(Eta_stream_eio.Stream.from_eio_stream audio)
       config
     |> Eta.Effect.timeout_as (Eta.Duration.seconds 4)
          ~on_timeout:(`Ptt_error "timeout")
@@ -3030,7 +4728,8 @@ let test_ptt_loop_ignores_low_rms_capture_before_offering () =
   let handle =
     {
       Pie.Ptt_loop.offer = (fun _ -> Eta.Effect.sync (fun () -> incr offers));
-      finish = (fun _ -> Eta.Effect.sync (fun () -> incr finishes));
+      finish =
+        Ptt_loop.Buffered (fun _ -> Eta.Effect.sync (fun () -> incr finishes));
       cancel = Eta.Effect.sync (fun () -> incr cancels);
     }
   in
@@ -3055,11 +4754,14 @@ let test_ptt_loop_ignores_low_rms_capture_before_offering () =
       on_release = (fun _ -> Eta.Effect.unit);
       on_abort = Eta.Effect.pure false;
       on_dead_input = Eta.Effect.unit;
+      admission_active = (fun () -> false);
     }
   in
   let operation =
-    Pie.Ptt_loop.run ~keyboard
-      ~audio:(Eta_stream.Stream.from_eio_stream audio)
+    Pie.Ptt_loop.run
+      ~mono_clock:(Eio.Stdenv.mono_clock env)
+      ~keyboard
+      ~audio:(Eta_stream_eio.Stream.from_eio_stream audio)
       config
     |> Eta.Effect.timeout_as (Eta.Duration.seconds 4)
          ~on_timeout:(`Ptt_error "timeout")
@@ -3099,9 +4801,10 @@ let test_ptt_loop_accepts_peak_over_silence_threshold () =
     {
       Pie.Ptt_loop.offer = (fun _ -> Eta.Effect.sync (fun () -> incr offers));
       finish =
-        (fun _ ->
-          let* () = Eta.Effect.sync (fun () -> incr finishes) in
-          Eta.Effect.fail (`Ptt_error "done"));
+        Ptt_loop.Buffered
+          (fun _ ->
+            let* () = Eta.Effect.sync (fun () -> incr finishes) in
+            Eta.Effect.fail (`Ptt_error "done"));
       cancel = Eta.Effect.sync (fun () -> incr cancels);
     }
   in
@@ -3126,12 +4829,15 @@ let test_ptt_loop_accepts_peak_over_silence_threshold () =
       on_release = (fun _ -> Eta.Effect.unit);
       on_abort = Eta.Effect.pure false;
       on_dead_input = Eta.Effect.unit;
+      admission_active = (fun () -> false);
     }
   in
   let result =
     Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env)
-      (Pie.Ptt_loop.run ~keyboard
-         ~audio:(Eta_stream.Stream.from_eio_stream audio)
+      (Pie.Ptt_loop.run
+         ~mono_clock:(Eio.Stdenv.mono_clock env)
+         ~keyboard
+         ~audio:(Eta_stream_eio.Stream.from_eio_stream audio)
          config
       |> Eta.Effect.timeout_as (Eta.Duration.seconds 4)
            ~on_timeout:(`Ptt_error "timeout"))
@@ -3170,9 +4876,10 @@ let test_ptt_loop_accepts_quiet_speech_over_rms_threshold () =
     {
       Pie.Ptt_loop.offer = (fun _ -> Eta.Effect.sync (fun () -> incr offers));
       finish =
-        (fun _ ->
-          let* () = Eta.Effect.sync (fun () -> incr finishes) in
-          Eta.Effect.fail (`Ptt_error "done"));
+        Ptt_loop.Buffered
+          (fun _ ->
+            let* () = Eta.Effect.sync (fun () -> incr finishes) in
+            Eta.Effect.fail (`Ptt_error "done"));
       cancel = Eta.Effect.sync (fun () -> incr cancels);
     }
   in
@@ -3197,12 +4904,15 @@ let test_ptt_loop_accepts_quiet_speech_over_rms_threshold () =
       on_release = (fun _ -> Eta.Effect.unit);
       on_abort = Eta.Effect.pure false;
       on_dead_input = Eta.Effect.unit;
+      admission_active = (fun () -> false);
     }
   in
   let result =
     Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env)
-      (Pie.Ptt_loop.run ~keyboard
-         ~audio:(Eta_stream.Stream.from_eio_stream audio)
+      (Pie.Ptt_loop.run
+         ~mono_clock:(Eio.Stdenv.mono_clock env)
+         ~keyboard
+         ~audio:(Eta_stream_eio.Stream.from_eio_stream audio)
          config
       |> Eta.Effect.timeout_as (Eta.Duration.seconds 4)
            ~on_timeout:(`Ptt_error "timeout"))
@@ -3241,7 +4951,8 @@ let test_ptt_loop_dead_input_cancels_active_capture () =
   let handle =
     {
       Pie.Ptt_loop.offer = (fun _ -> Eta.Effect.sync (fun () -> incr offers));
-      finish = (fun _ -> Eta.Effect.sync (fun () -> incr finishes));
+      finish =
+        Ptt_loop.Buffered (fun _ -> Eta.Effect.sync (fun () -> incr finishes));
       cancel = Eta.Effect.sync (fun () -> incr cancels);
     }
   in
@@ -3266,11 +4977,14 @@ let test_ptt_loop_dead_input_cancels_active_capture () =
       on_release = (fun _ -> Eta.Effect.unit);
       on_abort = Eta.Effect.pure false;
       on_dead_input = Eta.Effect.sync (fun () -> incr dead_inputs);
+      admission_active = (fun () -> false);
     }
   in
   let operation =
-    Pie.Ptt_loop.run ~keyboard
-      ~audio:(Eta_stream.Stream.from_eio_stream audio)
+    Pie.Ptt_loop.run
+      ~mono_clock:(Eio.Stdenv.mono_clock env)
+      ~keyboard
+      ~audio:(Eta_stream_eio.Stream.from_eio_stream audio)
       config
     |> Eta.Effect.timeout_as (Eta.Duration.seconds 3)
          ~on_timeout:(`Ptt_error "timeout")
@@ -3285,23 +4999,6 @@ let test_ptt_loop_dead_input_cancels_active_capture () =
   | Ok () ->
       Alcotest.fail
         "expected timeout after dead-input cancellation returns to idle"
-
-let test_wakeword_pipeline_smoothing_uses_threshold_not_history () =
-  let det = Pie.Wakeword.Pipeline.create_detector () in
-  let loud = Bytes.create 1600 in
-  for i = 0 to 799 do
-    Bytes.set_int16_le loud (i * 2) 32767
-  done;
-  let score1 = Pie.Wakeword.Pipeline.process det loud in
-  let score2 = Pie.Wakeword.Pipeline.process det loud in
-  (* Bug: process_frame blends the raw score toward model.threshold (0.5)
-     instead of toward the previous detector.score. With proper temporal
-     smoothing, score2 should be higher than score1 because the previous
-     score (0.85) would be blended in. The buggy formula always gives
-     the same result for identical frames because it ignores history. *)
-  Alcotest.(check bool)
-    "temporal smoothing should increase score on repeated identical loud frames"
-    true (score2 > score1)
 
 let process_pp_err formatter = function
   | `Invalid_config message | `Stt_error message ->
@@ -3455,6 +5152,8 @@ let () =
             test_pulse_scope_end_disconnects_pending_command;
           Alcotest.test_case "record stream drains on failure" `Quick
             test_pulse_record_stream_drains_before_reader_failure;
+          Alcotest.test_case "record stream preserves pcm chunk bytes" `Quick
+            test_pulse_record_stream_preserves_pcm_chunk_bytes;
           Alcotest.test_case "record cleanup preserves body" `Quick
             test_pulse_record_cleanup_preserves_body_result;
         ] );
@@ -3499,16 +5198,19 @@ let () =
             test_text_injection_newline_rule_regex;
           Alcotest.test_case "per-app entry method" `Quick
             test_text_injection_entry_method_rules;
-          Alcotest.test_case "clipboard text MIME selection" `Quick (fun () ->
-              Alcotest.(check (option string))
-                "prefer UTF-8 plain text" (Some "text/plain;charset=utf-8")
-                (Pie.Wayland.Clipboard.text_mime_type
-                   "text/html\ntext/plain;charset=utf-8\ntext/plain\n");
-              Alcotest.(check (option string))
-                "reject non-text clipboard" None
-                (Pie.Wayland.Clipboard.text_mime_type "image/png\nimage/webp\n"));
-          Alcotest.test_case "atomic paste restores clipboard" `Quick
-            test_wayland_clipboard_paste_restores_previous_text;
+          Alcotest.test_case "paste ignores image-only previous offer" `Quick
+            (test_wayland_clipboard_paste_ignores_previous
+               "image/png\nimage/webp\n");
+          Alcotest.test_case "paste ignores text previous offer" `Quick
+            (test_wayland_clipboard_paste_ignores_previous
+               "text/plain;charset=utf-8\n");
+          Alcotest.test_case "paste ignores empty previous offer" `Quick
+            (test_wayland_clipboard_paste_ignores_previous "");
+          Alcotest.test_case "paste ignores arbitrary previous offer" `Quick
+            (test_wayland_clipboard_paste_ignores_previous
+               "application/octet-stream\n");
+          Alcotest.test_case "paste reports a failed offer" `Quick
+            test_wayland_clipboard_paste_reports_offer_failure;
         ] );
       ( "daemon_contract",
         [
@@ -3521,10 +5223,12 @@ let () =
                     ("enabled", `Bool true);
                   ]
               in
-              let snap = Pie.Daemon.Contract.snapshot_of_json json in
-              Alcotest.(check bool) "active" true snap.active;
-              Alcotest.(check string) "mode" "ptt-transcribe" snap.mode;
-              Alcotest.(check bool) "enabled" true snap.enabled);
+              match Pie.Assistant_service.Contract.snapshot_of_json json with
+              | Ok snap ->
+                  Alcotest.(check bool) "active" true snap.active;
+                  Alcotest.(check string) "mode" "ptt-transcribe" snap.mode;
+                  Alcotest.(check bool) "enabled" true snap.enabled
+              | Error label -> Alcotest.failf "snapshot protocol error %s" label);
           Alcotest.test_case "request parsing" `Quick
             test_daemon_contract_request;
           Alcotest.test_case "action request parsing" `Quick
@@ -3533,29 +5237,27 @@ let () =
             test_daemon_contract_action_response;
           Alcotest.test_case "response roundtrip" `Quick
             test_daemon_contract_response;
-          Alcotest.test_case "error response parsed as success" `Quick
-            test_daemon_contract_error_response_parsed_as_success;
+          Alcotest.test_case "unknown meeting method rejected" `Quick
+            test_daemon_contract_unknown_method;
           Alcotest.test_case "status error swallowed" `Quick
             test_daemon_contract_status_error_swallowed;
           Alcotest.test_case "pause error swallowed" `Quick
             test_daemon_contract_pause_error_swallowed;
-          Alcotest.test_case "meeting toggle missing indicator" `Quick
-            test_daemon_contract_meeting_toggle_no_indicator;
+          Alcotest.test_case "pause scalar rejected" `Quick
+            test_daemon_contract_pause_rejects_non_object;
         ] );
       ( "daemon_server",
         [
           Alcotest.test_case "socket state" `Quick test_daemon_server_state;
           Alcotest.test_case "action handler" `Quick
             test_daemon_server_action_handler;
-          Alcotest.test_case "meeting stop no failure signal" `Quick
-            test_daemon_server_meeting_stop_no_failure_signal;
+          Alcotest.test_case "unknown meeting method no admission" `Quick
+            test_daemon_server_unknown_meeting_method;
           Alcotest.test_case "mkdir_p silent on existing file" `Quick
             test_daemon_server_mkdir_p_silently_accepts_file;
         ] );
       ( "keyboard",
         [
-          Alcotest.test_case "parse KeyEvent" `Quick
-            test_keyboard_key_event_parse;
           Alcotest.test_case "parse D-Bus KeyEvent" `Quick
             test_keyboard_dbus_key_event_parse;
           Alcotest.test_case "session bus path rejects abstract" `Quick
@@ -3577,11 +5279,38 @@ let () =
             test_retry_store_retains_and_discards_recordings;
           Alcotest.test_case "processing failure retains captured audio" `Quick
             test_failed_processing_retains_captured_audio;
+          Alcotest.test_case "setup failure releases admission" `Quick
+            test_setup_failure_releases_admission_and_preserves_error;
+          Alcotest.test_case "settle_attempt duties run only on execution"
+            `Quick test_settle_attempt_construction_does_not_run_duties;
+          Alcotest.test_case "buffered clip cancellation settles after offer"
+            `Quick test_buffered_clip_cancellation_settles_after_offer;
+          Alcotest.test_case "buffered clip defect settles after offer" `Quick
+            test_buffered_clip_defect_settles_after_offer;
+          Alcotest.test_case "on_press construction does not admit" `Quick
+            test_on_press_construction_does_not_admit;
+          Alcotest.test_case "on_press execution admits" `Quick
+            test_on_press_execution_admits;
+          Alcotest.test_case "on_press busy and disabled at execution" `Quick
+            test_on_press_busy_and_disabled_at_execution;
+          Alcotest.test_case
+            "on_press constructor failure releases without clearing other"
+            `Quick
+            test_on_press_constructor_failure_releases_without_clearing_other_attempt;
+          Alcotest.test_case
+            "attempt_handle finish holds admission until outer settle" `Quick
+            test_attempt_handle_finish_holds_until_outer_settle;
+          Alcotest.test_case
+            "attempt_handle cancel holds admission until outer settle" `Quick
+            test_attempt_handle_cancel_holds_until_outer_settle;
         ] );
       ( "recording_coordinator",
         [
           Alcotest.test_case "transitions" `Quick
             test_recording_coordinator_transitions;
+          Alcotest.test_case "stale release preserves newer same-mode attempt"
+            `Quick
+            test_recording_coordinator_release_preserves_newer_same_mode_attempt;
           Alcotest.test_case "persist error swallowed" `Quick
             test_recording_coordinator_persist_error_swallowed;
           Alcotest.test_case "stop clears error inconsistently" `Quick
@@ -3605,10 +5334,6 @@ let () =
             test_speech_operation_deadline_policy;
           Alcotest.test_case "speech operation deadlines are typed" `Quick
             test_speech_operation_deadlines_are_typed;
-          Alcotest.test_case "async completion is one-shot" `Quick
-            test_codex_async_completion_first_result_wins;
-          Alcotest.test_case "async interruption cancels once" `Quick
-            test_codex_async_completion_interruption_runs_canceler_once;
           Alcotest.test_case "stream server error e2e" `Quick
             test_codex_realtime_stream_reports_server_error_e2e;
           Alcotest.test_case "translation ignores prompt" `Quick
@@ -3620,8 +5345,6 @@ let () =
         ] );
       ( "assistant_prompt",
         [
-          Alcotest.test_case "focused window context" `Quick
-            test_assistant_focused_window_prompt_context;
           Alcotest.test_case "startup config report" `Quick
             test_assistant_startup_config_json;
           Alcotest.test_case "hot reloads PTT keysyms" `Quick
@@ -3632,34 +5355,6 @@ let () =
             test_assistant_mod5_chords_latch;
           Alcotest.test_case "rejects colliding effective PTT keysyms" `Quick
             test_assistant_rejects_colliding_effective_keysyms;
-          Alcotest.test_case "project context" `Quick
-            test_assistant_project_context_prompt_context;
-          Alcotest.test_case "missing project context is empty" `Quick
-            test_assistant_project_context_missing_is_empty;
-          Alcotest.test_case "relative cwd traverses parents" `Quick
-            test_project_context_relative_cwd_traversal;
-          Alcotest.test_case "empty project context is empty" `Quick
-            test_assistant_project_context_empty_file_is_empty;
-          Alcotest.test_case "foreground terminal cwd" `Quick
-            test_project_context_prefers_foreground_terminal_cwd;
-          Alcotest.test_case "root cwd fallback" `Quick
-            test_project_context_falls_back_to_root_cwd;
-          Alcotest.test_case "package.json metadata" `Quick
-            test_project_metadata_package_json;
-          Alcotest.test_case "Cargo.toml metadata" `Quick
-            test_project_metadata_cargo_toml;
-          Alcotest.test_case "pyproject.toml metadata" `Quick
-            test_project_metadata_pyproject_toml;
-          Alcotest.test_case "dune-project metadata" `Quick
-            test_project_metadata_dune_project;
-          Alcotest.test_case "opam metadata" `Quick
-            test_project_metadata_opam_without_dune_project;
-          Alcotest.test_case "metadata exact directory only" `Quick
-            test_project_metadata_exact_directory_only;
-          Alcotest.test_case "metadata without description" `Quick
-            test_project_metadata_manifest_without_description;
-          Alcotest.test_case "prompt value utf8 truncation" `Quick
-            test_assistant_prompt_value_utf8_truncation;
         ] );
       ( "ptt_capture",
         [
@@ -3682,6 +5377,10 @@ let () =
               Alcotest.(check bool)
                 "postroll expired" true
                 (Pie.Ptt.Capture.post_roll_remaining_ms s2 4000.0 = 0.0));
+          Alcotest.test_case "with_background cancels sync stream take" `Quick
+            test_with_background_cancels_sync_stream_take;
+          Alcotest.test_case "with_background cancels never" `Quick
+            test_with_background_cancels_never;
           Alcotest.test_case "loop continues after finish" `Quick
             test_ptt_loop_continues_after_finish;
           Alcotest.test_case "control stream triggers capture" `Quick
@@ -3690,6 +5389,28 @@ let () =
             test_ptt_loop_post_roll_repress_continues_capture;
           Alcotest.test_case "scoped handle lifetime" `Quick
             test_ptt_loop_scoped_handle_lifetime;
+          Alcotest.test_case "busy finish cycle is not replayed" `Quick
+            test_ptt_loop_rejects_busy_press_and_accepts_fresh_cycle;
+          Alcotest.test_case "scoped setup failure allows a later press" `Quick
+            test_ptt_loop_scoped_setup_failure_allows_subsequent_press;
+          Alcotest.test_case "press during gated on_press is not replayed"
+            `Quick test_ptt_loop_press_during_gated_on_press_is_not_replayed;
+          Alcotest.test_case "retry admission rejects busy control cycle" `Quick
+            test_ptt_loop_retry_admission_rejects_busy_control_cycle;
+          Alcotest.test_case "retry admission rejects busy keyboard cycle"
+            `Quick test_ptt_loop_retry_admission_rejects_busy_keyboard_cycle;
+          Alcotest.test_case "failed on_press does not replay busy control"
+            `Quick
+            test_ptt_loop_failed_on_press_does_not_replay_busy_control_cycle;
+          Alcotest.test_case "failed on_press does not replay busy keyboard"
+            `Quick
+            test_ptt_loop_failed_on_press_does_not_replay_busy_keyboard_cycle;
+          Alcotest.test_case "processing keeps input live during finish" `Quick
+            test_ptt_loop_processing_keeps_input_live_during_finish;
+          Alcotest.test_case "processing preserves fresh press pending" `Quick
+            test_ptt_loop_processing_preserves_fresh_press_pending;
+          Alcotest.test_case "processing join preserves finish failure" `Quick
+            test_ptt_loop_processing_join_preserves_finish_failure;
           Alcotest.test_case "short capture ignored before offer" `Quick
             test_ptt_loop_ignores_short_capture_before_offering;
           Alcotest.test_case "low-rms capture ignored before offer" `Quick
@@ -3725,18 +5446,6 @@ let () =
           Alcotest.test_case "structured output decoder" `Quick
             test_openrouter_decodes_structured_output_only;
         ] );
-      ( "wakeword_trigger",
-        [
-          Alcotest.test_case "trigger threshold" `Quick (fun () ->
-              let s = Pie.Wakeword.Trigger.initial in
-              Alcotest.(check bool) "not triggered initially" false s.triggered;
-              let s2 = Pie.Wakeword.Trigger.update s 0.6 in
-              Alcotest.(check bool)
-                "triggered above threshold" true s2.triggered;
-              let s3 = Pie.Wakeword.Trigger.update s2 0.3 in
-              Alcotest.(check bool)
-                "not triggered below threshold" false s3.triggered);
-        ] );
       ( "integration",
         [
           Alcotest.test_case "wav header roundtrip" `Quick (fun () ->
@@ -3771,26 +5480,6 @@ let () =
               let result2 = Pie.Audio.Pcm.normalize_pcm_for_stt silent in
               Alcotest.(check bool)
                 "silent signal no gain" true (result2.gain = 1.0));
-        ] );
-      ( "wakeword_pipeline",
-        [
-          Alcotest.test_case "synthetic scoring" `Quick (fun () ->
-              let det = Pie.Wakeword.Pipeline.create_detector () in
-              (* loud signal should trigger *)
-              let loud = Bytes.create 1600 in
-              for i = 0 to 799 do
-                Bytes.set_int16_le loud (i * 2) 20000
-              done;
-              let score = Pie.Wakeword.Pipeline.process det loud in
-              Alcotest.(check bool) "loud triggers" true det.triggered;
-              Alcotest.(check bool) "score high" true (score > 0.5);
-              (* silence should not trigger *)
-              let silent = Bytes.make 1600 '\x00' in
-              let score2 = Pie.Wakeword.Pipeline.process det silent in
-              Alcotest.(check bool) "silence no trigger" false det.triggered;
-              Alcotest.(check bool) "score low" true (score2 < 0.5));
-          Alcotest.test_case "smoothing ignores history" `Quick
-            test_wakeword_pipeline_smoothing_uses_threshold_not_history;
         ] );
       ( "wayland_portal",
         [
@@ -3880,36 +5569,5 @@ let () =
                 Unix.rmdir fake_dir;
                 Unix.rmdir base;
                 raise exn);
-        ] );
-      ( "metadata",
-        [
-          Alcotest.test_case "sexp_tokens handles escaped newlines" `Quick
-            (fun () ->
-              let input = "(name \"foo\\nbar\")" in
-              let tokens = Pie.Context.Metadata.sexp_tokens input in
-              let atoms =
-                List.filter_map
-                  (function
-                    | Pie.Context.Metadata.TAtom s -> Some s | _ -> None)
-                  tokens
-              in
-              (* We expect two atoms: bare atom name and string literal foonbar.
-              The bug is that the string literal is parsed as foonbar
-              instead of foo-newline-bar (backslash is ignored). *)
-              let string_atom =
-                List.find_opt
-                  (fun s -> String.starts_with ~prefix:"foo" s)
-                  atoms
-              in
-              match string_atom with
-              | None -> Alcotest.fail "expected string atom starting with foo"
-              | Some s ->
-                  (* Bug: sexp_tokens treats backslash as a transparent prefix and just
-                emits the next raw character. So backslash-n becomes the letter n
-                instead of a newline character. A correct parser would either
-                reject backslash-n (like dune does) or translate it to a newline. *)
-                  Alcotest.(check string)
-                    "escaped newline should be parsed as newline character"
-                    "foo\nbar" s);
         ] );
     ]

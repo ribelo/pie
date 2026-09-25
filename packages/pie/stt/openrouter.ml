@@ -40,28 +40,22 @@ let responses_provider () =
 
 let http_client ~sw ~net = Process.http_client ~sw ~net
 
+let http_error_metadata error =
+  let category = Http.Error.category_to_string (Http.Error.category error) in
+  match Http.Error.status error with
+  | Some status -> Printf.sprintf "%s HTTP %d" category status
+  | None -> category
+
 let ai_error_message = function
-  | A.Eta_http_error error ->
-      Http.Error.category_to_string (Http.Error.category error)
-      ^ ": " ^ Http.Error.to_string error
-  | Provider_error { provider; status; code; message; _ } ->
-      let status =
-        match status with
-        | None -> ""
-        | Some status -> Printf.sprintf " HTTP %d" status
-      in
-      let code =
-        match code with None -> "" | Some code -> " (" ^ code ^ ")"
-      in
-      Printf.sprintf "%s provider error%s%s: %s" provider status code message
-  | Decode_error { provider; message; _ } ->
-      Printf.sprintf "%s decode error: %s" provider message
-  | Invalid_request { provider; message } ->
-      Printf.sprintf "%s invalid request: %s" provider message
-  | Invalid_tool { name; message } ->
-      Printf.sprintf "invalid tool %s: %s" name message
-  | Unsupported { provider; feature } ->
-      Printf.sprintf "%s unsupported feature: %s" provider feature
+  | A.Eta_http_error error -> http_error_metadata error
+  | Provider_error { status; _ } -> (
+      match status with
+      | Some status -> Printf.sprintf "provider error HTTP %d" status
+      | None -> "provider error")
+  | Decode_error _ -> "decode error"
+  | Invalid_request _ -> "invalid request"
+  | Invalid_tool _ -> "invalid tool"
+  | Unsupported _ -> "unsupported feature"
 
 let stt_error_of_ai error =
   `Stt_error ("OpenRouter request failed: " ^ ai_error_message error)
@@ -175,19 +169,46 @@ let decode_structured_output raw =
   with _ ->
     Error (`Stt_error "OpenRouter structured response was not valid JSON")
 
-let debug_response_content content raw =
-  match Sys.getenv_opt "CAMELPIE_OPENROUTER_DEBUG" with
-  | Some value when String.trim value <> "" ->
-      let truncate value =
-        if String.length value <= 1000 then value
-        else String.sub value 0 1000 ^ "...<truncated>"
-      in
-      Printf.eprintf "openrouter responses content: %s\n%!" (truncate content);
-      Option.iter
-        (fun raw ->
-          Printf.eprintf "openrouter responses raw: %s\n%!" (truncate raw))
-        raw
-  | _ -> ()
+let outcome_rejection response =
+  let tool_continuation =
+    match response.A.message with
+    | A.Assistant { tool_calls = _ :: _; _ } | A.Tool _ -> true
+    | _ -> false
+  in
+  if tool_continuation then Some "tool continuation"
+  else
+    match response.A.finish_reasons with
+    | [] -> Some "missing finish markers"
+    | reasons when List.for_all (function A.Stop -> true | _ -> false) reasons
+      ->
+        None
+    | reasons ->
+        let rec classify = function
+          | [] -> "unrecognized outcome"
+          | A.Length :: _ -> "incomplete"
+          | A.Tool_calls :: _ -> "tool continuation"
+          | A.Other "cancelled" :: _ -> "cancelled"
+          | A.Content_filter :: _ -> "content filter"
+          | A.Error :: _ -> "error"
+          | A.Stop :: rest -> classify rest
+          | A.Other _ :: rest ->
+              if
+                List.exists
+                  (function
+                    | A.Length | A.Tool_calls | A.Content_filter | A.Error ->
+                        true
+                    | A.Other "cancelled" -> true
+                    | _ -> false)
+                  rest
+              then classify rest
+              else "unrecognized outcome"
+        in
+        Some (classify reasons)
+
+let validate_completed_response response =
+  match outcome_rejection response with
+  | None -> Ok ()
+  | Some label -> Error (`Stt_error ("OpenRouter outcome rejected: " ^ label))
 
 let responses_request ~model ~prompt ~sample_rate ~task pcm_bytes :
     A.tool A.Responses.request =
@@ -232,59 +253,68 @@ let responses_request ~model ~prompt ~sample_rate ~task pcm_bytes :
 
 let run_audio_responses ~sw ~net ~model ~prompt ~sample_rate ~task
     ?thinking_effort pcm_bytes =
-  (match resolve_api_key () with
-    | None ->
-        Eta.Effect.fail
-          (`Stt_error "Missing OpenRouter API key. Set OPENROUTER_API_KEY.")
-    | Some api_key ->
-        let client = http_client ~sw ~net in
-        let* reasoning = reasoning_for_effort thinking_effort in
-        let request =
-          responses_request ~model ~prompt ~sample_rate ~task pcm_bytes
-        in
-        let* raw =
-          Openrouter.responses ~provider:(responses_provider ()) ?reasoning
-            client ~api_key:(A.api_key api_key) request
-          |> Eta.Effect.map_error stt_error_of_ai
-          |> Eta.Effect.map (fun response ->
-              let content = extract_message_content response.A.message in
-              debug_response_content content response.raw;
-              content)
-        in
-        Eta.Effect.from_result (decode_structured_output raw))
+  (if Bytes.length pcm_bytes > Dictation_limits.capture_pcm_bytes then
+     Eta.Effect.fail (`Stt_error "OpenRouter captured audio budget exceeded")
+   else
+     match resolve_api_key () with
+     | None ->
+         Eta.Effect.fail
+           (`Stt_error "Missing OpenRouter API key. Set OPENROUTER_API_KEY.")
+     | Some api_key ->
+         let client = http_client ~sw ~net in
+         let* reasoning = reasoning_for_effort thinking_effort in
+         let request =
+           responses_request ~model ~prompt ~sample_rate ~task pcm_bytes
+         in
+         let* raw =
+           Openrouter.responses ~provider:(responses_provider ()) ?reasoning
+             client ~api_key:(A.api_key api_key) request
+           |> Eta.Effect.map_error stt_error_of_ai
+           |> Eta.Effect.bind (fun response ->
+               match validate_completed_response response with
+               | Error error -> Eta.Effect.fail error
+               | Ok () ->
+                   let content = extract_message_content response.A.message in
+                   Eta.Effect.pure content)
+         in
+         Eta.Effect.from_result (decode_structured_output raw))
   |> with_response_operation_timeout
 
 let transcribe ~sw ~net ~api_key ~model ~language ?(sample_rate = 16000)
     pcm_bytes =
-  (let client = http_client ~sw ~net in
-   let file : A.Audio.upload =
-     {
-       filename = "pie.wav";
-       content_type = "audio/wav";
-       source = A.Audio.bytes (wav_bytes ~sample_rate pcm_bytes);
-     }
-   in
-   let request : Openrouter.Audio.Speech_to_text.request =
-     {
-       model;
-       file;
-       language = Some language;
-       prompt = None;
-       response_format = None;
-       temperature = Some 0.0;
-       extra_fields = [];
-     }
-   in
-   let* response =
-     Openrouter.Audio.Speech_to_text.create ~provider:(provider ()) client
-       ~api_key:(A.api_key api_key) request
-     |> Eta.Effect.map_error stt_error_of_ai
-   in
-   match response.text with
-   | Some text when String.trim text <> "" -> Eta.Effect.pure (String.trim text)
-   | _ ->
-       Eta.Effect.fail
-         (`Stt_error "OpenRouter transcription response was empty"))
+  (if Bytes.length pcm_bytes > Dictation_limits.capture_pcm_bytes then
+     Eta.Effect.fail (`Stt_error "OpenRouter captured audio budget exceeded")
+   else
+     let client = http_client ~sw ~net in
+     let file : A.Audio.upload =
+       {
+         filename = "pie.wav";
+         content_type = "audio/wav";
+         source = A.Audio.bytes (wav_bytes ~sample_rate pcm_bytes);
+       }
+     in
+     let request : Openrouter.Audio.Speech_to_text.request =
+       {
+         model;
+         file;
+         language = Some language;
+         prompt = None;
+         response_format = None;
+         temperature = Some 0.0;
+         extra_fields = [];
+       }
+     in
+     let* response =
+       Openrouter.Audio.Speech_to_text.create ~provider:(provider ()) client
+         ~api_key:(A.api_key api_key) request
+       |> Eta.Effect.map_error stt_error_of_ai
+     in
+     match response.text with
+     | Some text when String.trim text <> "" ->
+         Eta.Effect.pure (String.trim text)
+     | _ ->
+         Eta.Effect.fail
+           (`Stt_error "OpenRouter transcription response was empty"))
   |> with_direct_transcription_timeout
 
 let transcribe_with_prompt ~sw ~net ~model ~language ~prompt_template

@@ -1,15 +1,44 @@
-type recording_mode =
-  | Ptt_transcribe
-  | Ptt_translate
-  | Wakeword
-  | Meeting_transcribe
+type recording_mode = Ptt_transcribe | Ptt_translate
 
-type start_result =
-  | Started of recording_mode
-  | Busy of recording_mode
-  | Disabled
+(* PIE004: admission is owned by one attempt, not by a mode. A delayed release
+   from an earlier attempt must never clear admission owned by a later attempt
+   that happens to run the same mode. *)
+(* One-shot pause/cancel latch owned by a single admission attempt. Signalling
+   is idempotent; awaiters that subscribe after the signal still observe it.
+   Resume does not clear the latch. The next try_start allocates a fresh one. *)
+type cancel = {
+  fired : bool Atomic.t;
+  wait : unit Eio.Promise.t;
+  resolve : unit Eio.Promise.u;
+}
+
+type attempt = { id : int; mode : recording_mode; cancel : cancel }
+
+let attempt_counter = Atomic.make 0
+
+let make_cancel () =
+  let wait, resolve = Eio.Promise.create () in
+  { fired = Atomic.make false; wait; resolve }
+
+let make_attempt mode =
+  { id = Atomic.fetch_and_add attempt_counter 1; mode; cancel = make_cancel () }
+
+let attempt_mode attempt = attempt.mode
+let attempt_id attempt = attempt.id
+
+let signal_cancel attempt =
+  if Atomic.compare_and_set attempt.cancel.fired false true then
+    Eio.Promise.resolve attempt.cancel.resolve ()
+
+let await_cancel attempt =
+  Eta.Effect.sync (fun () -> Eio.Promise.await attempt.cancel.wait)
+
+let cancel_signalled attempt = Atomic.get attempt.cancel.fired
+
+type start_result = Started of attempt | Busy of recording_mode | Disabled
 
 type snapshot = {
+  phase : Phase.t;
   enabled : bool;
   active : bool;
   mode : string;
@@ -21,7 +50,9 @@ type snapshot = {
 
 type state = {
   enabled : bool;
-  mode : recording_mode option;
+  (* The active slot is the admitted attempt itself. *)
+  mode : attempt option;
+  phase : Phase.activity option;
   started_at : float option;
   transcript_path : string option;
   last_error : string option;
@@ -30,23 +61,22 @@ type state = {
 
 type t = { persist_path : string; state : state ref }
 
+let current_attempt t = !(t.state).mode
+
 let string_of_mode = function
   | Ptt_transcribe -> "ptt-transcribe"
   | Ptt_translate -> "ptt-translate"
-  | Wakeword -> "wakeword"
-  | Meeting_transcribe -> "meeting-transcribe"
 
 let mode_of_string = function
   | "ptt-transcribe" -> Some Ptt_transcribe
   | "ptt-translate" -> Some Ptt_translate
-  | "wakeword" -> Some Wakeword
-  | "meeting-transcribe" -> Some Meeting_transcribe
   | _ -> None
 
 let initial_state now =
   {
     enabled = true;
     mode = None;
+    phase = None;
     started_at = None;
     transcript_path = None;
     last_error = None;
@@ -60,9 +90,20 @@ let iso_of_unix seconds =
 
 let snapshot_of_state state =
   let mode =
-    match state.mode with Some mode -> string_of_mode mode | None -> "idle"
+    match state.mode with
+    | Some attempt -> string_of_mode attempt.mode
+    | None -> "idle"
   in
   {
+    phase =
+      (match state.mode with
+      | Some attempt ->
+          Phase.Active
+            (if cancel_signalled attempt then Phase.Cancelling
+             else Option.value ~default:Phase.Starting state.phase)
+      | None ->
+          Phase.legacy ~active:false ~enabled:state.enabled ~mode
+            ~last_error:state.last_error);
     enabled = state.enabled;
     active = state.mode <> None;
     mode;
@@ -75,6 +116,7 @@ let snapshot_of_state state =
 let json_of_snapshot (snapshot : snapshot) =
   `Assoc
     [
+      ("phase", `String (Phase.to_string snapshot.phase));
       ("enabled", `Bool snapshot.enabled);
       ("active", `Bool snapshot.active);
       ("mode", `String snapshot.mode);
@@ -121,6 +163,7 @@ let create ?(persist_path = Paths.recording_state_path) () =
   t
 
 let snapshot t = snapshot_of_state !(t.state)
+let is_active t = !(t.state).mode <> None
 
 let mutate t f =
   let result, next = f !(t.state) in
@@ -128,33 +171,58 @@ let mutate t f =
   persist t;
   result
 
+(* Phase publication never releases admission, and stale owners cannot change it. *)
+let set_phase t (attempt : attempt) phase =
+  let current = !(t.state) in
+  match current.mode with
+  | Some active when active.id = attempt.id ->
+      let phase = if cancel_signalled active then Phase.Cancelling else phase in
+      let before = Option.value ~default:Phase.Starting current.phase in
+      if not (Phase.can_transition before phase) then false
+      else if before = phase then true
+      else
+        mutate t (fun current ->
+            ( true,
+              {
+                current with
+                phase = Some phase;
+                updated_at = Unix.gettimeofday ();
+              } ))
+  | _ -> false
+
 let try_start t mode ?transcript_path () =
   mutate t (fun current ->
       if not current.enabled then (Disabled, current)
       else
         match current.mode with
-        | Some active -> (Busy active, current)
+        | Some active -> (Busy active.mode, current)
         | None ->
             let now = Unix.gettimeofday () in
-            ( Started mode,
+            let attempt = make_attempt mode in
+            ( Started attempt,
               {
                 enabled = current.enabled;
-                mode = Some mode;
+                mode = Some attempt;
+                phase = Some Phase.Starting;
                 started_at = Some now;
                 transcript_path;
                 last_error = None;
                 updated_at = now;
               } ))
 
-let stop t mode =
+(* Release admission only when [attempt] still owns it. A stale settlement from
+   an earlier same-mode attempt reports [false] and leaves the current owner
+   untouched. *)
+let release t attempt =
   mutate t (fun current ->
       match current.mode with
-      | Some active when active = mode ->
+      | Some active when active.id = attempt.id ->
           let now = Unix.gettimeofday () in
           ( true,
             {
               enabled = current.enabled;
               mode = None;
+              phase = None;
               started_at = None;
               transcript_path = None;
               last_error = current.last_error;
@@ -162,44 +230,26 @@ let stop t mode =
             } )
       | _ -> (false, current))
 
+(* Publish order: signal the current attempt, then write enabled, then persist.
+   A persist failure is logged by [mutate] and does not unsignal. Pause of an
+   in-flight attempt is therefore consistent with in-memory enabled=false even
+   when the state file write fails. *)
 let set_enabled t enabled =
   mutate t (fun current ->
+      (if not enabled then
+         match current.mode with
+         | Some attempt -> signal_cancel attempt
+         | None -> ());
       ((), { current with enabled; updated_at = Unix.gettimeofday () }))
 
 let toggle_enabled t =
   mutate t (fun current ->
       let enabled = not current.enabled in
+      (if not enabled then
+         match current.mode with
+         | Some attempt -> signal_cancel attempt
+         | None -> ());
       (enabled, { current with enabled; updated_at = Unix.gettimeofday () }))
-
-let toggle_meeting t =
-  mutate t (fun current ->
-      let now = Unix.gettimeofday () in
-      match current.mode with
-      | Some Meeting_transcribe ->
-          let next =
-            {
-              enabled = current.enabled;
-              mode = None;
-              started_at = None;
-              transcript_path = None;
-              last_error = current.last_error;
-              updated_at = now;
-            }
-          in
-          (snapshot_of_state next, next)
-      | None when current.enabled ->
-          let next =
-            {
-              enabled = current.enabled;
-              mode = Some Meeting_transcribe;
-              started_at = Some now;
-              transcript_path = None;
-              last_error = None;
-              updated_at = now;
-            }
-          in
-          (snapshot_of_state next, next)
-      | _ -> (snapshot_of_state current, current))
 
 let set_error t message =
   mutate t (fun current ->
@@ -216,6 +266,7 @@ let clear t =
         {
           enabled = current.enabled;
           mode = None;
+          phase = None;
           started_at = None;
           transcript_path = None;
           last_error = None;

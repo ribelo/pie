@@ -2,11 +2,14 @@ type backend = Wtype | Xdotool
 type session_type = Wayland | X11
 type entry_method = Type | Paste
 
+type outcome = Typed | Clipboard_key_attempted
+
 type result = {
   session_type : session_type;
   backend : backend;
   method_ : entry_method;
   text : string;
+  outcome : outcome;
 }
 
 type newline_action = Collapse_to_space | Shift_enter | Ctrl_j
@@ -112,6 +115,31 @@ let detect_session () =
       else
         Eta.Effect.fail (`Injection_error "could not detect graphical session")
 
+(* Conservative Niri session: Wayland + XDG_CURRENT_DESKTOP colon-token
+   "niri" (case-insensitive) + nonempty NIRI_SOCKET. Otherwise fail before
+   lookup/emission. No other desktop is treated as a Niri focus source. *)
+let desktop_has_niri_token () =
+  match Sys.getenv_opt "XDG_CURRENT_DESKTOP" with
+  | None | Some "" -> false
+  | Some value ->
+      String.split_on_char ':' value
+      |> List.exists (fun token ->
+          String.equal (String.lowercase_ascii (String.trim token)) "niri")
+
+let niri_socket_configured () =
+  match Sys.getenv_opt "NIRI_SOCKET" with
+  | Some value when String.trim value <> "" -> true
+  | _ -> false
+
+let niri_session_compatible = function
+  | X11 -> false
+  | Wayland -> desktop_has_niri_token () && niri_socket_configured ()
+
+let unresolved_focus = `Injection_error "focus information is unavailable"
+
+let incompatible_session =
+  `Injection_error "focus rules require a Niri Wayland session"
+
 let press_newline ~process_mgr ~backend action =
   match (backend, action) with
   | _, Collapse_to_space -> Eta.Effect.unit
@@ -162,36 +190,27 @@ let type_text ?(newline_action = Collapse_to_space) ~process_mgr ~backend text =
       type_segment ~process_mgr ~backend typed
     else type_lines ~process_mgr ~backend ~newline_action typed
 
-let focused_window_for_rules ~process_mgr ~newline_rules ~text_entry_rules =
+let focused_window_for_rules ~process_mgr ~session ~newline_rules
+    ~text_entry_rules =
   if newline_rules = [] && text_entry_rules = [] then Eta.Effect.pure None
+  else if not (niri_session_compatible session) then
+    Eta.Effect.fail incompatible_session
   else
     Niri.focused_window ~process_mgr ()
-    |> Eta.Effect.bind_error (fun (`Niri_error message) ->
-        if text_entry_rules = [] then Eta.Effect.pure None
-        else
-          Eta.Effect.fail
-            (`Injection_error
-               ("failed to identify focused application: " ^ message)))
+    |> Eta.Effect.bind_error (fun (`Niri_error _) ->
+        Eta.Effect.fail unresolved_focus)
     |> Eta.Effect.bind (function
-      | None when text_entry_rules <> [] ->
-          Eta.Effect.fail
-            (`Injection_error "niri reported no focused application")
-      | focused_window -> Eta.Effect.pure focused_window)
+      | None -> Eta.Effect.fail unresolved_focus
+      | Some window -> Eta.Effect.pure (Some window))
 
-let inject ?sw ?(newline_rules = []) ?(text_entry_rules = []) ~process_mgr text
-    =
+let inject ?clipboard_owner ?(newline_rules = []) ?(text_entry_rules = [])
+    ~process_mgr text =
   let open Eta.Syntax in
   let* session = detect_session () in
   let backend = choose_backend session in
-  let* () =
-    match (session, text_entry_rules) with
-    | X11, _ :: _ ->
-        Eta.Effect.fail
-          (`Injection_error "text_entry_rules require a Niri Wayland session")
-    | _ -> Eta.Effect.unit
-  in
   let* focused_window =
-    focused_window_for_rules ~process_mgr ~newline_rules ~text_entry_rules
+    focused_window_for_rules ~process_mgr ~session ~newline_rules
+      ~text_entry_rules
   in
   let newline_action = newline_action_for_window newline_rules focused_window in
   let method_ = entry_method_for_window text_entry_rules focused_window in
@@ -199,16 +218,27 @@ let inject ?sw ?(newline_rules = []) ?(text_entry_rules = []) ~process_mgr text
   if String.length prepared = 0 then
     Eta.Effect.fail (`Injection_error "no text to inject after normalization")
   else
-    let+ () =
-      match (method_, session, sw) with
+    let* () =
+      match (method_, session, clipboard_owner) with
       | Type, _, _ -> type_text ~newline_action ~process_mgr ~backend prepared
-      | Paste, Wayland, Some sw ->
-          Wayland.Clipboard.paste ~sw ~process_mgr prepared
+      | Paste, Wayland, Some owner ->
+          let* () = Wayland.Clipboard.offer owner prepared in
+          (* Preserve the original helper-to-key scheduling interval. Closing
+             stdin is not a Wayland publication acknowledgement; this grace
+             period mitigates the startup race, not a receipt guarantee. *)
+          let* () = Eta.Effect.sleep (Eta.Duration.ms 25) in
+          Wayland.Wtype.key ~process_mgr ~modifiers:[ "ctrl" ] "v"
       | Paste, Wayland, None ->
           Eta.Effect.fail
-            (`Injection_error "paste entry requires an Eio switch")
+            (`Injection_error "paste entry requires a clipboard owner")
       | Paste, X11, _ ->
           Eta.Effect.fail
             (`Injection_error "paste entry is not supported on X11")
     in
-    { session_type = session; backend; method_; text = prepared }
+    let outcome =
+      match method_ with
+      | Type -> Typed
+      | Paste -> Clipboard_key_attempted
+    in
+    Eta.Effect.pure
+      { session_type = session; backend; method_; text = prepared; outcome }

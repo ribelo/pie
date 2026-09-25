@@ -6,6 +6,8 @@ type packet_header = {
   flags : int;
 }
 
+let max_frame_bytes = Dictation_limits.queue_pcm_bytes
+
 let int_of_uint32_be buf offset =
   let value = Int32.to_int (Bytes.get_int32_be buf offset) in
   if value < 0 then value + 0x100000000 else value

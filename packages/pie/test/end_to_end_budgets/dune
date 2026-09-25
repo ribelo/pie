@@ -1,0 +1,13 @@
+(include_subdirs no)
+
+(test
+ (name test_end_to_end_budgets)
+ (libraries
+  pie
+  alcotest
+  eio_main
+  eta
+  eta_eio
+  eta_stream
+  unix
+  yojson))

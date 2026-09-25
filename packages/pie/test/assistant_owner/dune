@@ -1,0 +1,17 @@
+(include_subdirs no)
+
+(test
+ (name test_assistant_owner)
+ (libraries
+  pie
+  alcotest
+  eio_main
+  eta
+  eta_eio
+  eta_stream
+  eta_http_eio
+  eta_http_tls_openssl
+  unix
+  threads
+  yojson
+  cstruct))

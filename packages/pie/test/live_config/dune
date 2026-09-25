@@ -1,0 +1,14 @@
+(include_subdirs no)
+
+(test
+ (name test_live_config)
+ (libraries
+  pie
+  alcotest
+  eio_main
+  eta
+  eta_eio
+  eta_stream
+  unix
+  threads
+  yojson))

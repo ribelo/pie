@@ -1,0 +1,6 @@
+(include_subdirs no)
+
+(test
+ (name test_removed_entrypoints)
+ (libraries unix alcotest)
+ (deps ../../bin/pie.exe))

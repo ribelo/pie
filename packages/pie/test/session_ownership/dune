@@ -1,0 +1,17 @@
+(include_subdirs no)
+
+(test
+ (name test_session_ownership)
+ (libraries
+  pie
+  alcotest
+  eio_main
+  eta
+  eta_eio
+  eta_http
+  eta_http_eio
+  eta_http_tls_openssl
+  eta_stream
+  eio.unix
+  unix
+  cstruct))

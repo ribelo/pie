@@ -1,0 +1,5 @@
+(include_subdirs no)
+
+(test
+ (name test_clipboard_owner)
+ (libraries pie alcotest eio_main unix eta eta_eio))

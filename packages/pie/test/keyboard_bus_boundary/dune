@@ -1,0 +1,5 @@
+(include_subdirs no)
+
+(test
+ (name test_keyboard_bus_boundary)
+ (libraries pie alcotest eio_main eta eta_eio unix cstruct))

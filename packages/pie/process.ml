@@ -1,8 +1,10 @@
-(** Process door: OTEL scope, stderr logfmt tee, HTTP client, and exit mapping.
+(** Process door: optional OTEL scope, stderr logfmt tee, HTTP client, and exit
+    mapping.
 
-    [Eta_eio.run_main] does not expose the Eio environment. This module uses the
-    same public [Exit] verbs and signal-to-interrupt mapping as [run_main], and
-    installs HTTP independently of whether OTEL export is enabled. *)
+    OTEL export is opt-in through [PIE_OTLP]. [Eta_eio.run_main] does not expose
+    the Eio environment. This module uses the same public [Exit] verbs and
+    signal-to-interrupt mapping as [run_main], and installs HTTP independently
+    of whether OTEL export is enabled. *)
 
 exception Process_interrupt
 
@@ -16,7 +18,7 @@ let stderr_logger : Eta.Capabilities.logger =
           "level=error body=\"invalid log attributes\" component=pie\n%!"
   end
 
-let process_http_client : Eta_http.Client.t option ref = ref None
+let process_http_client : Eta_http_eio.Client.t option ref = ref None
 
 let http_client ~sw ~net =
   match !process_http_client with
@@ -42,6 +44,14 @@ let with_stderr_tee computation =
       stderr_logger#log record;
       Eta_observability.Keep)
     computation
+
+let otel_enabled () =
+  match Sys.getenv_opt "PIE_OTLP" with
+  | None -> false
+  | Some value -> (
+      match String.lowercase_ascii (String.trim value) with
+      | "1" | "true" | "yes" | "on" -> true
+      | _ -> false)
 
 let install_signal_interrupt ~sw ~clock =
   let fired = Atomic.make false in
@@ -79,16 +89,24 @@ let run ~pp_err mk_eff =
           mk_eff ~env ~sw
           |> Eta.Effect.map_error (fun err -> `App err)
           |> Eta_observability.annotate_logs [ ("component", "pie") ]
-          |> with_stderr_tee
         in
         let pp fmt = function
           | `Invalid_config message -> Format.pp_print_string fmt message
           | `App err -> pp_err fmt err
+          | `Startup_failed cause ->
+              Format.fprintf fmt "OTEL startup failed: %a"
+                (Eta.Cause.pp (fun fmt () -> Format.pp_print_string fmt "()"))
+                cause
         in
         let exit =
-          Eta_otel_eio.with_otlp ~service_name:"pie"
-            ~attrs:[ ("service.version", "0.1.0") ]
-            ~sw ~net ~clock body
+          if otel_enabled () then
+            Eta_otel_eio.with_otlp ~service_name:"pie"
+              ~attrs:[ ("service.version", "0.1.0") ]
+              ~sw ~net ~clock
+              (fun () -> with_stderr_tee (body ()))
+          else
+            Eta_eio.run_once ~sw ~clock
+              (Eta_observability.with_logger stderr_logger (body ()))
         in
         match exit with
         | Ok _ -> 0

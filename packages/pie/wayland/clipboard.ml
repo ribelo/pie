@@ -1,136 +1,179 @@
-type error = [ `Clipboard_error of string ]
-type snapshot = Empty | Text of string
+exception Retired
+exception Bundle of exn * exn
+exception Clipboard_failure of string
 
-let owner_start_delay = Eta.Duration.ms 25
-let paste_hold = Eta.Duration.ms 250
-let clipboard_mime = "text/plain;charset=utf-8"
-let clipboard_error message = Eta.Effect.fail (`Clipboard_error message)
+type helper = {
+  token : int;
+  pid : int;
+  cancel : unit -> unit;
+  settled : unit Eio.Promise.t;
+  ready : (int, string) result Eio.Promise.t;
+}
 
-let subprocess_error context = function
-  | `Subprocess_error message -> `Clipboard_error (context ^ ": " ^ message)
+type packed_mgr = Mgr : _ Eio.Process.mgr -> packed_mgr
 
-let text_mime_type types =
-  let types =
-    types |> String.split_on_char '\n' |> List.map String.trim
-    |> List.filter (fun value -> value <> "")
+type t = {
+  owner_sw : Eio.Switch.t;
+  process_mgr : packed_mgr;
+  copy_program : string;
+  slots : Eio.Semaphore.t;
+  current : helper option ref;
+  next_token : int Atomic.t;
+}
+
+let combine primary cleanup = Bundle (primary, cleanup)
+
+let resolve_once promise value =
+  try Eio.Promise.resolve promise value with Invalid_argument _ -> ()
+
+let known_message exn = Sh.failure_message ~prog:"wl-copy" exn
+
+let kill_await helper =
+  Eio.Cancel.protect (fun () ->
+      helper.cancel ();
+      Eio.Promise.await helper.settled)
+
+let retire_if_current t token =
+  match !(t.current) with
+  | Some helper when helper.token = token ->
+      t.current := None;
+      kill_await helper
+  | Some _ | None -> ()
+
+let retire_current t =
+  match !(t.current) with
+  | None -> ()
+  | Some helper -> retire_if_current t helper.token
+
+let with_slot t f =
+  Eio.Semaphore.acquire t.slots;
+  match try Ok (f ()) with exn -> Error exn with
+  | Ok value ->
+      Eio.Semaphore.release t.slots;
+      value
+  | Error primary -> (
+      match try Eio.Semaphore.release t.slots; None with cleanup -> Some cleanup
+      with
+      | None -> raise primary
+      | Some cleanup -> raise (combine primary cleanup))
+
+let spawn t text =
+  let token = Atomic.fetch_and_add t.next_token 1 in
+  let settled, resolve_settled = Eio.Promise.create () in
+  let ready, resolve_ready = Eio.Promise.create () in
+  let sw_r = ref None in
+  Eio.Fiber.fork_daemon ~sw:t.owner_sw (fun () ->
+      Fun.protect
+        ~finally:(fun () ->
+          sw_r := None;
+          resolve_once resolve_settled ())
+        (fun () ->
+          try
+            Eio.Switch.run @@ fun helper_sw ->
+            sw_r := Some helper_sw;
+            let (Mgr process_mgr) = t.process_mgr in
+            let stdin_source, stdin_sink =
+              Eio.Process.pipe ~sw:helper_sw process_mgr
+            in
+            let discard_out = Sh.discarded_stderr () in
+            let discard_err = Sh.discarded_stderr () in
+            let process =
+              Eio.Process.spawn ~sw:helper_sw process_mgr ~stdin:stdin_source
+                ~stdout:discard_out ~stderr:discard_err
+                ~executable:t.copy_program
+                [
+                  t.copy_program;
+                  "--foreground";
+                  "--type";
+                  "text/plain;charset=utf-8";
+                ]
+            in
+            Eio.Flow.close stdin_source;
+            match
+              Eio.Fiber.first
+                (fun () ->
+                  Eio.Flow.copy_string text stdin_sink;
+                  Eio.Flow.close stdin_sink;
+                  `Copied)
+                (fun () -> `Dead (Eio.Process.await process))
+            with
+            | `Dead _ ->
+                resolve_once resolve_ready
+                  (Error "clipboard helper failed")
+            | `Copied ->
+                resolve_once resolve_ready (Ok (Eio.Process.pid process));
+                ignore (Eio.Process.await process)
+          with
+          | Retired ->
+              resolve_once resolve_ready (Error "clipboard helper failed")
+          | Eio.Cancel.Cancelled _ as exn ->
+              resolve_once resolve_ready (Error "clipboard helper failed");
+              raise exn
+          | Eio.Exn.Multiple _ as exn -> raise exn
+          | exn ->
+              resolve_once resolve_ready (Error (known_message exn)));
+      `Stop_daemon);
+  {
+    token;
+    pid = 0;
+    cancel =
+      (fun () -> match !sw_r with None -> () | Some sw -> Eio.Switch.fail sw Retired);
+    settled;
+    ready;
+  }
+
+let offer_sync t text =
+  with_slot t @@ fun () ->
+  retire_current t;
+  let helper = spawn t text in
+  let committed = ref false in
+  try
+    Eio.Switch.run @@ fun wait_sw ->
+    Eio.Switch.on_release wait_sw (fun () ->
+        if not !committed then kill_await helper);
+    match Eio.Promise.await helper.ready with
+    | Error message -> raise (Clipboard_failure message)
+    | Ok pid ->
+        if pid = 0 then raise (Clipboard_failure "clipboard helper failed");
+        t.current := Some { helper with pid };
+        committed := true
+  with
+  | Clipboard_failure _ as exn -> raise exn
+  | exn ->
+      (match try kill_await helper; None with cleanup -> Some cleanup with
+       | None -> raise exn
+       | Some cleanup -> raise (combine exn cleanup))
+
+let create ~sw ~process_mgr ?(copy_program = "wl-copy") () =
+  let copy_program =
+    if Filename.is_relative copy_program then
+      Option.value ~default:copy_program (Sh.find_executable copy_program)
+    else copy_program
   in
-  let preferred =
-    [
-      "text/plain;charset=utf-8"; "text/plain"; "UTF8_STRING"; "STRING"; "TEXT";
-    ]
+  let t =
+    {
+      owner_sw = sw;
+      process_mgr = Mgr process_mgr;
+      copy_program;
+      slots = Eio.Semaphore.make 1;
+      current = ref None;
+      next_token = Atomic.make 1;
+    }
   in
-  List.find_map
-    (fun candidate -> List.find_opt (String.equal candidate) types)
-    preferred
+  Eio.Switch.on_release sw (fun () ->
+      Eio.Cancel.protect (fun () -> retire_current t));
+  t
 
-let list_types ~process_mgr ~wl_paste =
-  Eta.Effect.sync_exn
-    (fun () ->
-      Eio.Switch.run @@ fun sw ->
-      let stdout, sink = Eio.Process.pipe ~sw process_mgr in
-      let child =
-        Eio.Process.spawn ~sw process_mgr ~stdout:sink
-          [ wl_paste; "--list-types" ]
-      in
-      Eio.Flow.close sink;
-      let output =
-        Eio.Buf_read.parse_exn Eio.Buf_read.take_all stdout ~max_size:65536
-      in
-      Eio.Flow.close stdout;
-      (Eio.Process.await child, output))
-    ~catch:(function
-      | Eio.Cancel.Cancelled _ as exn -> raise exn
-      | exn ->
-          `Clipboard_error
-            ("failed to inspect clipboard: " ^ Printexc.to_string exn))
-
-let snapshot ~process_mgr ~wl_paste =
-  let open Eta.Syntax in
-  let* status, types = list_types ~process_mgr ~wl_paste in
-  match status with
-  | `Exited 1 when String.trim types = "" -> Eta.Effect.pure Empty
-  | `Exited 0 -> (
-      match text_mime_type types with
-      | None when String.trim types = "" -> Eta.Effect.pure Empty
-      | None ->
-          clipboard_error
-            "clipboard contains no plain-text representation; refusing to \
-             overwrite it"
-      | Some mime ->
-          let+ text =
-            Sh.run_capture ~process_mgr ~prog:wl_paste
-              ~args:[ "--no-newline"; "--type"; mime ]
-            |> Eta.Effect.map_error
-                 (subprocess_error "failed to save clipboard text")
-          in
-          Text text)
-  | status ->
-      clipboard_error
-        (Format.asprintf "failed to inspect clipboard: wl-paste %a"
-           Eio.Process.pp_status status)
-
-let copy_text ~process_mgr ~wl_copy ~context text =
-  Eta.Effect.sync_exn
-    (fun () ->
-      Eio.Process.run process_mgr
-        ~stdin:(Eio.Flow.string_source text)
-        [ wl_copy; "--type"; clipboard_mime ])
-    ~catch:(function
-      | Eio.Cancel.Cancelled _ as exn -> raise exn
-      | exn -> `Clipboard_error (context ^ ": " ^ Printexc.to_string exn))
-
-let restore ~process_mgr ~wl_copy = function
-  | Empty ->
-      Sh.run ~process_mgr ~prog:wl_copy ~args:[ "--clear" ]
-      |> Eta.Effect.map_error (subprocess_error "failed to clear clipboard")
-  | Text text ->
-      copy_text ~process_mgr ~wl_copy ~context:"failed to restore clipboard"
-        text
-
-let spawn_transcript ~sw ~process_mgr ~wl_copy text =
-  Eta.Effect.sync_exn
-    (fun () ->
-      Eio.Process.spawn ~sw process_mgr
-        ~stdin:(Eio.Flow.string_source text)
-        [ wl_copy; "--foreground"; "--type"; clipboard_mime ])
-    ~catch:(function
-      | Eio.Cancel.Cancelled _ as exn -> raise exn
-      | exn ->
-          `Clipboard_error
-            ("failed to offer transcript on clipboard: "
-           ^ Printexc.to_string exn))
-
-let stop_process process =
+let of_sync f =
   Eta.Effect.sync (fun () ->
-      Eio.Process.signal process Sys.sigkill;
-      ignore (Eio.Process.await process))
+      try Ok (f ()) with
+      | Eio.Cancel.Cancelled _ as exn -> raise exn
+      | Eio.Exn.Multiple _ as exn -> raise exn
+      | Bundle _ as exn -> raise exn
+      | Clipboard_failure message -> Error (`Clipboard_error message)
+      | exn -> Error (`Clipboard_error (known_message exn)))
+  |> Eta.Effect.flatten_result
 
-let paste ~sw ~process_mgr text =
-  let open Eta.Syntax in
-  match (Sh.find_executable "wl-copy", Sh.find_executable "wl-paste") with
-  | None, _ -> clipboard_error "wl-copy not found in PATH"
-  | _, None -> clipboard_error "wl-paste not found in PATH"
-  | Some wl_copy, Some wl_paste ->
-      let* previous = snapshot ~process_mgr ~wl_paste in
-      let restored = ref false in
-      let restore_once () =
-        if !restored then Eta.Effect.unit
-        else
-          let+ () = restore ~process_mgr ~wl_copy previous in
-          restored := true
-      in
-      let body =
-        let* process = spawn_transcript ~sw ~process_mgr ~wl_copy text in
-        let consume =
-          Eta.Effect.delay owner_start_delay
-            (let* () = Wtype.key ~process_mgr ~modifiers:[ "ctrl" ] "v" in
-             Eta.Effect.delay paste_hold Eta.Effect.unit)
-          |> Eta.Effect.finally (stop_process process)
-        in
-        let* outcome = Eta.Effect.to_result consume in
-        let* () = restore_once () in
-        match outcome with
-        | Ok () -> Eta.Effect.unit
-        | Error error -> Eta.Effect.fail error
-      in
-      body |> Eta.Effect.finally (restore_once () |> Eta.Effect.ignore_errors)
+let offer t text = of_sync (fun () -> offer_sync t text)
+
+let shutdown t = of_sync (fun () -> with_slot t (fun () -> retire_current t))

@@ -11,18 +11,6 @@ let run_niri_json ~process_mgr args =
   |> Eta.Effect.map_error (fun (`Subprocess_error msg) ->
       `Niri_error ("niri command failed: " ^ msg))
 
-let type_text ~process_mgr text =
-  let normalized = String.trim text in
-  if String.length normalized = 0 then Eta.Effect.unit
-  else
-    match Sh.find_executable "niri" with
-    | None -> Eta.Effect.fail (`Niri_error "niri not found in PATH")
-    | Some niri ->
-        Sh.run ~process_mgr ~prog:niri
-          ~args:[ "msg"; "action"; "spawn"; "--"; "wtype"; "--"; normalized ]
-        |> Eta.Effect.map_error (fun (`Subprocess_error msg) ->
-            `Niri_error ("niri action failed: " ^ msg))
-
 type window_info = {
   id : int;
   title : string option;
@@ -59,5 +47,4 @@ let focused_window ~process_mgr () =
               workspace_id = find_int "workspace_id";
             }
       | _ -> None)
-    ~catch:(fun exn ->
-      `Niri_error ("focused-window json: " ^ Printexc.to_string exn))
+    ~catch:(fun _ -> `Niri_error "focused-window json invalid")

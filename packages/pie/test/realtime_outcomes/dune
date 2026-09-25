@@ -1,0 +1,17 @@
+(include_subdirs no)
+
+(test
+ (name test_realtime_outcomes)
+ (libraries
+  pie
+  alcotest
+  eio_main
+  eta
+  eta_eio
+  eta_http
+  eta_http_eio
+  eta_http_tls_openssl
+  eta_stream
+  unix
+  cstruct
+  yojson))

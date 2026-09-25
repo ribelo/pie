@@ -1,0 +1,26 @@
+(include_subdirs no)
+
+(copy_files# ../../audio/resampler.ml)
+
+(copy_files# ../../audio/resampler.mli)
+
+(test
+ (name test_resampler_bounds)
+ (modules test_resampler_bounds resampler)
+ (libraries alcotest))
+
+(test
+ (name test_streaming_resampling)
+ (modules test_streaming_resampling)
+ (libraries
+  pie
+  alcotest
+  eio_main
+  eta
+  eta_eio
+  eta_http
+  eta_http_eio
+  eta_http_tls_openssl
+  eta_stream
+  unix
+  cstruct))

@@ -6,6 +6,11 @@ type packet_header = {
   flags : int;
 }
 
+val max_frame_bytes : int
+(** Maximum declared native-frame payload ({!Dictation_limits.queue_pcm_bytes}).
+    A larger declared length is a connection-closing protocol error, distinct
+    from ordinary per-stream queue overflow. *)
+
 val encode_packet_header : packet_header -> bytes
 val decode_packet_header : bytes -> packet_header
 val frame_packet : ?channel:int -> ?flags:int -> bytes -> bytes

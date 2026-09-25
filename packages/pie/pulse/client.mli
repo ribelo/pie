@@ -5,11 +5,20 @@ type error =
   | Timeout of { operation : string; duration : Eta.Duration.t }
   | Disconnected of string
   | Malformed_packet of string
+  | Recording_overload of { stream_index : int; capacity : int }
+      (** [capacity] is item count ({!record_stream_capacity}) or PCM bytes
+          ({!Dictation_limits.queue_pcm_bytes}). *)
 
 val error_message : error -> string
 val pp_error : Format.formatter -> error -> unit
 val default_request_timeout : Eta.Duration.t
 val record_stream_capacity : int
+(** Bounded item count (64) for a recording stream queue. Independent of the
+    {!Dictation_limits.queue_pcm_bytes} PCM byte cap. Ordinary queue overflow
+    reports {!Recording_overload} and detaches only that stream; control
+    commands remain usable. Declared Pulse frames larger than
+    {!Protocol.max_frame_bytes} close the connection as {!Protocol_error}
+    and do not leave controls usable. *)
 
 type t
 

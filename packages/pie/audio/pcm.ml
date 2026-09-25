@@ -70,6 +70,74 @@ let pcm_peak (chunk : bytes) : float =
     !peak
   end
 
+module Accounting = struct
+  let bytes_visited = Atomic.make 0
+  let bytes_copied = Atomic.make 0
+
+  let reset () =
+    Atomic.set bytes_visited 0;
+    Atomic.set bytes_copied 0
+
+  let visit n = ignore (Atomic.fetch_and_add bytes_visited n)
+  let copy n = ignore (Atomic.fetch_and_add bytes_copied n)
+  let snapshot () = (Atomic.get bytes_visited, Atomic.get bytes_copied)
+end
+
+(* Complete PCM16LE samples only. An unmatched trailing byte is carried, never
+   turned into a silent sample. *)
+type s16le_acc = {
+  sample_count : int;
+  sum_squares : float;
+  peak : float;
+  pending : char option;
+}
+
+let s16le_empty =
+  { sample_count = 0; sum_squares = 0.0; peak = 0.0; pending = None }
+
+let s16le_add_sample acc b0 b1 =
+  let raw = (b1 lsl 8) lor b0 in
+  let sample =
+    float_of_int (if raw > 32767 then raw - 65536 else raw) /. 32768.0
+  in
+  let mag = abs_float sample in
+  {
+    acc with
+    sample_count = acc.sample_count + 1;
+    sum_squares = acc.sum_squares +. (sample *. sample);
+    peak = (if mag > acc.peak then mag else acc.peak);
+  }
+
+let s16le_update acc chunk =
+  let len = Bytes.length chunk in
+  Accounting.visit len;
+  if len = 0 then acc
+  else
+    let offset, acc =
+      match acc.pending with
+      | None -> (0, acc)
+      | Some pending ->
+          let b0 = Char.code pending in
+          let b1 = Bytes.get_uint8 chunk 0 in
+          (1, { (s16le_add_sample acc b0 b1) with pending = None })
+    in
+    let rec loop acc i =
+      if i + 1 >= len then
+        if i < len then { acc with pending = Some (Bytes.get chunk i) } else acc
+      else
+        let b0 = Bytes.get_uint8 chunk i in
+        let b1 = Bytes.get_uint8 chunk (i + 1) in
+        loop (s16le_add_sample acc b0 b1) (i + 2)
+    in
+    loop acc offset
+
+let s16le_rms acc =
+  if acc.sample_count <= 0 then 0.0
+  else sqrt (acc.sum_squares /. float_of_int acc.sample_count)
+
+let s16le_peak acc = acc.peak
+let s16le_complete_bytes acc = acc.sample_count * 2
+
 type normalization_config = {
   pcm_bytes : bytes;
   target_rms : float;

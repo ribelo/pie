@@ -49,11 +49,23 @@ The fiber that watches component diagnostics and retries failed infrastructure e
 
 ### Voice
 
-**Wake event**:
-The signal that the wakeword component publishes when it detects the wake phrase. A wake event toggles a transcribe capture: the first event starts the capture, the next event or any PTT key stops it.
-
 **PTT**:
 Push-to-talk. The user holds a key, speaks, and releases the key to capture one utterance.
 
-**Wakeword**:
-A spoken trigger phrase that starts a capture without a key press.
+**Enabled**:
+The assistant accepts new recording attempts. Disabling it cancels the current attempt.
+
+**Recording**:
+The current utterance is accepting microphone audio. A stop request begins a short finishing-capture tail, after which no more audio belongs to that utterance.
+
+**Processing**:
+Capture has ended and the assistant is obtaining the transcription or translation. The microphone recording indicator is off.
+
+**Delivery**:
+The assistant is attempting to enter the resulting text into the target application. Dispatch does not prove receipt.
+
+**Busy**:
+One attempt still owns the operation, including setup, recording, processing, delivery and cleanup. A second attempt is not admitted until the first has settled. Busy does not mean recording.
+
+**Low-volume warning**:
+An advisory that nonzero microphone audio has remained too quiet for a sustained interval. It does not stop recording and is distinct from the existing digital-silence warning.

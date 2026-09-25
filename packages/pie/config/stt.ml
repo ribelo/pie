@@ -26,10 +26,6 @@ type t = {
   transcription_language : string;
   translation_source_language : string;
   translation_target_language : string;
-  wakeword_enabled : bool;
-  wakeword_dictation_silence_seconds : float;
-  wakeword_dictation_max_seconds : float;
-  wakeword_dictation_speech_rms_threshold : float;
   ptt_min_capture_rms : float;
   ptt_min_capture_peak : float;
   ptt_transcribe_keysym : int;
@@ -44,6 +40,7 @@ type t = {
 }
 
 exception Config_error of string
+exception Compound of exn * exn
 
 type resolved_model = { provider : provider; model : string }
 
@@ -99,17 +96,125 @@ let entry_method_of_string = function
   | s -> raise (Config_error (Printf.sprintf "unknown text entry method: %s" s))
 
 let string_of_entry_method = function Type -> "type" | Paste -> "paste"
+let max_config_file_bytes = 1024 * 1024
 
-let load_prompt path =
-  try
-    let ic = open_in_bin path in
-    let len = in_channel_length ic in
-    let content = really_input_string ic len in
-    close_in ic;
-    content
-  with Sys_error msg ->
+type read_io = {
+  open_readonly : string -> Unix.file_descr;
+  fstat : Unix.file_descr -> Unix.stats;
+  read : Unix.file_descr -> bytes -> int -> int -> int;
+  close : Unix.file_descr -> unit;
+  after_acquire : Unix.file_descr -> unit;
+  after_fstat : Unix.file_descr -> Unix.stats -> unit;
+}
+
+let rec unix_read fd buf off len =
+  try Unix.read fd buf off len
+  with Unix.Unix_error (Unix.EINTR, _, _) -> unix_read fd buf off len
+
+let rec open_readonly_nonblock path =
+  try Unix.openfile path Unix.[ O_RDONLY; O_NONBLOCK; O_CLOEXEC ] 0
+  with Unix.Unix_error (Unix.EINTR, _, _) -> open_readonly_nonblock path
+
+let unix_read_io =
+  {
+    open_readonly = open_readonly_nonblock;
+    fstat = Unix.fstat;
+    read = unix_read;
+    close = Unix.close;
+    after_acquire = ignore;
+    after_fstat = (fun _ _ -> ());
+  }
+
+let read_unix_error path err =
+  Config_error
+    (Printf.sprintf "failed to read %s: %s" path (Unix.error_message err))
+
+let close_error path err =
+  Config_error
+    (Printf.sprintf "failed to close %s: %s" path (Unix.error_message err))
+
+let combine_read_and_close path primary_msg err =
+  Config_error
+    (Printf.sprintf "%s; also failed to close %s: %s" primary_msg path
+       (Unix.error_message err))
+
+let close_once close fd =
+  let closed = Atomic.make false in
+  fun () -> if Atomic.compare_and_set closed false true then close fd else ()
+
+let read_body read_io path fd =
+  read_io.after_acquire fd;
+  let stats =
+    match read_io.fstat fd with
+    | stats -> stats
+    | exception Unix.Unix_error (err, _, _) -> raise (read_unix_error path err)
+  in
+  if stats.Unix.st_kind <> Unix.S_REG then
+    raise (Config_error (Printf.sprintf "%s is not a regular file" path));
+  if stats.Unix.st_size > max_config_file_bytes then
     raise
-      (Config_error (Printf.sprintf "failed to read prompt %s: %s" path msg))
+      (Config_error
+         (Printf.sprintf "%s exceeds the 1MiB configuration size limit" path));
+  read_io.after_fstat fd stats;
+  let initial =
+    if stats.Unix.st_size > 0 then min stats.Unix.st_size max_config_file_bytes
+    else 64
+  in
+  let buf = Buffer.create initial in
+  let chunk = Bytes.create 65536 in
+  let rec loop total =
+    let remaining_with_sentinel = max_config_file_bytes - total + 1 in
+    if remaining_with_sentinel <= 0 then
+      raise
+        (Config_error
+           (Printf.sprintf "%s exceeds the 1MiB configuration size limit" path))
+    else
+      let want = min (Bytes.length chunk) remaining_with_sentinel in
+      match read_io.read fd chunk 0 want with
+      | 0 -> Buffer.contents buf
+      | n ->
+          let total = total + n in
+          if total > max_config_file_bytes then
+            raise
+              (Config_error
+                 (Printf.sprintf "%s exceeds the 1MiB configuration size limit"
+                    path));
+          Buffer.add_subbytes buf chunk 0 n;
+          loop total
+      | exception Unix.Unix_error ((Unix.EAGAIN | Unix.EWOULDBLOCK), _, _) ->
+          raise (Config_error (Printf.sprintf "%s read would block" path))
+      | exception Unix.Unix_error (err, _, _) ->
+          raise (read_unix_error path err)
+  in
+  loop 0
+
+let read_bounded_regular_file ?(read_io = unix_read_io) path =
+  match read_io.open_readonly path with
+  | exception Unix.Unix_error (Unix.ENOENT, _, _) -> None
+  | exception Unix.Unix_error (err, _, _) -> raise (read_unix_error path err)
+  | fd -> (
+      let closer = close_once read_io.close fd in
+      let outcome =
+        match read_body read_io path fd with
+        | contents -> Ok contents
+        | exception exn -> Error exn
+      in
+      match closer () with
+      | () -> (
+          match outcome with
+          | Ok contents -> Some contents
+          | Error exn -> raise exn)
+      | exception Unix.Unix_error (err, _, _) -> (
+          match outcome with
+          | Ok _ -> raise (close_error path err)
+          | Error (Config_error msg) ->
+              raise (combine_read_and_close path msg err)
+          | Error primary ->
+              raise (Compound (primary, Unix.Unix_error (err, "close", path))))
+      | exception close_exn -> (
+          match outcome with
+          | Ok _ -> raise close_exn
+          | Error primary -> raise (Compound (primary, close_exn))))
 
 let contains_substring ~needle haystack =
   let needle_len = String.length needle in
@@ -155,6 +260,11 @@ let toml_find table key = TT.Table.find_opt (toml_key key) table
 
 let type_error key expected =
   raise (Config_error (Printf.sprintf "%s must be %s" key expected))
+
+let validate_unit_interval name value =
+  if (not (Float.is_finite value)) || value < 0. || value > 1. then
+    raise
+      (Config_error (Printf.sprintf "%s must be a finite value in 0.0-1.0" name))
 
 let get_string table key default_val =
   match toml_find table key with
@@ -265,32 +375,52 @@ let parse_text_entry_rules table =
       List.mapi parse_text_entry_rule rules
   | Some _ -> raise (Config_error "text_entry_rules must be an array of tables")
 
-let load_toml config_path =
-  try
-    match Toml.Parser.from_filename config_path with
-    | `Ok table -> table
-    | `Error (msg, location) ->
+let load_toml ~read_io config_path =
+  match read_bounded_regular_file ~read_io config_path with
+  | None ->
+      let legacy_json =
+        Filename.concat (Filename.dirname config_path) "stt.json"
+      in
+      if Sys.file_exists legacy_json then
         raise
           (Config_error
-             (Printf.sprintf "invalid TOML in %s:%d:%d: %s" config_path
-                location.Toml.Parser.line location.column msg))
-  with Sys_error _ ->
-    let legacy_json =
-      Filename.concat (Filename.dirname config_path) "stt.json"
-    in
-    if Sys.file_exists legacy_json then
-      raise
-        (Config_error
-           (Printf.sprintf
-              "STT config moved to TOML at %s; migrate legacy JSON config from \
-               %s"
-              config_path legacy_json))
-    else
-      raise
-        (Config_error (Printf.sprintf "STT config not found at %s" config_path))
+             (Printf.sprintf
+                "STT config moved to TOML at %s; migrate legacy JSON config \
+                 from %s"
+                config_path legacy_json))
+      else
+        raise
+          (Config_error
+             (Printf.sprintf "STT config not found at %s" config_path))
+  | Some contents -> (
+      match Toml.Parser.from_string contents with
+      | `Ok table -> table
+      | `Error (msg, location) ->
+          raise
+            (Config_error
+               (Printf.sprintf "invalid TOML in %s:%d:%d: %s" config_path
+                  location.Toml.Parser.line location.column msg)))
 
-let load ?(config_path = Paths.stt_config_path) () : t =
-  let table = load_toml config_path in
+let reject_unsupported_wakeword table =
+  List.iter
+    (fun key ->
+      match toml_find table key with
+      | None -> ()
+      | Some _ -> raise (Config_error ("unsupported wakeword setting: " ^ key)))
+    [
+      "wakeword_enabled";
+      "wakeword_dictation_silence_seconds";
+      "wakeword_dictation_max_seconds";
+      "wakeword_dictation_speech_rms_threshold";
+    ];
+  match toml_find table "wakeword" with
+  | None -> ()
+  | Some _ -> raise (Config_error "unsupported wakeword table")
+
+let load ?(config_path = Paths.stt_config_path) ?(read_io = unix_read_io) () : t
+    =
+  let table = load_toml ~read_io config_path in
+  reject_unsupported_wakeword table;
   let provider =
     provider_of_string (get_string table "provider" "codex-realtime")
   in
@@ -323,16 +453,26 @@ let load ?(config_path = Paths.stt_config_path) () : t =
   in
   let translation_prompt_path = Filename.concat prompts_dir "translation.md" in
   let transcription_prompt =
-    try load_prompt transcription_prompt_path
-    with Config_error _ -> "Transcribe the following audio in {{language}}."
+    match read_bounded_regular_file ~read_io transcription_prompt_path with
+    | None -> "Transcribe the following audio in {{language}}."
+    | Some content -> content
   in
   let translation_prompt =
-    try load_prompt translation_prompt_path
-    with Config_error _ ->
-      "Translate from {{source_language}} to {{target_language}}."
+    match read_bounded_regular_file ~read_io translation_prompt_path with
+    | None -> "Translate from {{source_language}} to {{target_language}}."
+    | Some content -> content
   in
   validate_transcription_prompt transcription_prompt;
   validate_translation_prompt translation_prompt;
+  let ptt_min_capture_rms =
+    get_float table "ptt_min_capture_rms" Audio.Pcm.ptt_min_capture_rms_for_stt
+  in
+  let ptt_min_capture_peak =
+    get_float table "ptt_min_capture_peak"
+      Audio.Pcm.ptt_min_capture_peak_for_stt
+  in
+  validate_unit_interval "ptt_min_capture_rms" ptt_min_capture_rms;
+  validate_unit_interval "ptt_min_capture_peak" ptt_min_capture_peak;
   {
     provider;
     transcription_model;
@@ -342,19 +482,8 @@ let load ?(config_path = Paths.stt_config_path) () : t =
       get_string table "translation_source_language" "English";
     translation_target_language =
       get_string table "translation_target_language" "English";
-    wakeword_enabled = get_bool table "wakeword_enabled" true;
-    wakeword_dictation_silence_seconds =
-      get_float table "wakeword_dictation_silence_seconds" 3.0;
-    wakeword_dictation_max_seconds =
-      get_float table "wakeword_dictation_max_seconds" 120.0;
-    wakeword_dictation_speech_rms_threshold =
-      get_float table "wakeword_dictation_speech_rms_threshold" 0.01;
-    ptt_min_capture_rms =
-      get_float table "ptt_min_capture_rms"
-        Audio.Pcm.ptt_min_capture_rms_for_stt;
-    ptt_min_capture_peak =
-      get_float table "ptt_min_capture_peak"
-        Audio.Pcm.ptt_min_capture_peak_for_stt;
+    ptt_min_capture_rms;
+    ptt_min_capture_peak;
     ptt_transcribe_keysym;
     ptt_translate_keysym;
     ptt_transcribe_shift;

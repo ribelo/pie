@@ -12,7 +12,8 @@
   eta_http
   eta_http_eio
   eta_http_tls_openssl
-  eta_observability)
+  eta_observability
+  eta_stream_eio)
  (deps
   (source_tree ../)))
 
@@ -27,3 +28,14 @@
 (executable
  (name live_openrouter_translate)
  (libraries pie eio_main eta eta_eio))
+
+(executable
+ (name ws_settlement_probe)
+ (libraries
+  pie
+  eio_main
+  eta
+  eta_eio
+  eta_http
+  eta_http_eio
+  eta_http_tls_openssl))

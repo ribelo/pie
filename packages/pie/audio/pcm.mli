@@ -9,6 +9,26 @@ val decode_s16le_samples : bytes -> int array
 val pcm_rms : bytes -> float
 val pcm_peak : bytes -> float
 
+module Accounting : sig
+  val reset : unit -> unit
+  val visit : int -> unit
+  val copy : int -> unit
+  val snapshot : unit -> int * int
+end
+
+type s16le_acc = {
+  sample_count : int;
+  sum_squares : float;
+  peak : float;
+  pending : char option;
+}
+
+val s16le_empty : s16le_acc
+val s16le_update : s16le_acc -> bytes -> s16le_acc
+val s16le_rms : s16le_acc -> float
+val s16le_peak : s16le_acc -> float
+val s16le_complete_bytes : s16le_acc -> int
+
 type normalization_config = {
   pcm_bytes : bytes;
   target_rms : float;

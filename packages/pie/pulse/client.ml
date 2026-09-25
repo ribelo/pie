@@ -5,6 +5,7 @@ type error =
   | Timeout of { operation : string; duration : Eta.Duration.t }
   | Disconnected of string
   | Malformed_packet of string
+  | Recording_overload of { stream_index : int; capacity : int }
 
 open Eta.Syntax
 
@@ -24,11 +25,20 @@ let error_message = function
         (Eta.Duration.humanize duration)
   | Disconnected message -> "PulseAudio disconnected: " ^ message
   | Malformed_packet message -> "PulseAudio malformed packet: " ^ message
+  | Recording_overload { stream_index; capacity } ->
+      if capacity = Dictation_limits.queue_pcm_bytes then
+        Printf.sprintf
+          "PulseAudio recording overloaded on stream %d (%d PCM bytes)"
+          stream_index capacity
+      else
+        Printf.sprintf
+          "PulseAudio recording overloaded on stream %d (%d items)"
+          stream_index capacity
 
 let pp_error formatter error =
   Format.pp_print_string formatter (error_message error)
 
-let pulse_error error = `Pulse_error error
+let pulse_error (error : error) : [ `Pulse_error of error ] = `Pulse_error error
 
 let widen_pulse_error computation =
   Eta.Effect.map_error
@@ -38,7 +48,26 @@ let widen_pulse_error computation =
 let debug message attrs = Eta_observability.log_debug ~attrs message
 let warn message attrs = Eta_observability.log_warn ~attrs message
 
-type record_queue = (bytes, [ `Pulse_error of error ]) Eta.Queue.t
+type record_queue = {
+  queue : (string, [ `Pulse_error of error ]) Eta.Queue.t;
+  queued_bytes : int Atomic.t;
+}
+
+let close_record_queue rq =
+  Atomic.set rq.queued_bytes 0;
+  Eta.Queue.close rq.queue
+
+let close_record_queue_error rq failure =
+  Atomic.set rq.queued_bytes 0;
+  Eta.Queue.close_with_error rq.queue failure
+
+let recoup_queued_bytes rq n =
+  let rec retry () =
+    let current = Atomic.get rq.queued_bytes in
+    let next = if current > n then current - n else 0 in
+    if Atomic.compare_and_set rq.queued_bytes current next then () else retry ()
+  in
+  retry ()
 
 type pending = {
   accept : bytes -> (unit, [ `Pulse_error of error ]) Eta.Effect.t;
@@ -116,15 +145,40 @@ let process_command client envelope =
               (Printf.sprintf "unsupported response type %d"
                  envelope.packet_type)))
 
+let overload_record_queue (T t) channel rq capacity =
+  Hashtbl.remove t.record_queues channel;
+  close_record_queue_error rq
+    (pulse_error (Recording_overload { stream_index = channel; capacity }))
+
 let process_record_chunk (T t) channel payload =
-  let* queue =
-    Eta.Effect.sync (fun () -> Hashtbl.find_opt t.record_queues channel)
+  let* outcome =
+    Eta.Effect.sync (fun () ->
+        match Hashtbl.find_opt t.record_queues channel with
+        | None -> `Missing
+        | Some rq ->
+            let chunk_bytes = Bytes.length payload in
+            let queued = Atomic.get rq.queued_bytes in
+            if queued + chunk_bytes > Dictation_limits.queue_pcm_bytes then (
+              overload_record_queue (T t) channel rq
+                Dictation_limits.queue_pcm_bytes;
+              `Overloaded)
+            else (
+              match Eta.Queue.try_offer_now rq.queue (Bytes.to_string payload) with
+              | `Sent ->
+                  ignore (Atomic.fetch_and_add rq.queued_bytes chunk_bytes);
+                  `Sent
+              | `Full | `Dropped ->
+                  overload_record_queue (T t) channel rq record_stream_capacity;
+                  `Overloaded
+              | `Closed | `Closed_with_error _ ->
+                  Hashtbl.remove t.record_queues channel;
+                  `Detached))
   in
-  match queue with
-  | None ->
+  match outcome with
+  | `Missing ->
       debug "PulseAudio chunk for inactive record stream dropped"
         [ ("pulse.channel", string_of_int channel) ]
-  | Some queue -> Eta.Queue.send queue payload |> Eta.Effect.ignore_errors
+  | `Sent | `Overloaded | `Detached -> Eta.Effect.unit
 
 let save_remainder (T t) buffer offset =
   Eta.Effect.sync (fun () ->
@@ -147,9 +201,13 @@ let process_incoming (T t as client) chunk =
         protocol_result "packet header" (fun () ->
             Protocol.decode_packet_header header_bytes)
       in
-      if header.Protocol.length > 256 * 1024 then
-        malformed "packet header"
-          (Printf.sprintf "length %d exceeds 262144 bytes" header.length)
+      if header.Protocol.length > Protocol.max_frame_bytes then
+        Eta.Effect.fail
+          (pulse_error
+             (Protocol_error
+                (Printf.sprintf
+                   "declared packet length %d exceeds max supported frame %d                     bytes"
+                   header.length Protocol.max_frame_bytes)))
       else
         let packet_length = Defs.pa_stream_descriptor_size + header.length in
         if Bytes.length buffer - offset < packet_length then
@@ -190,7 +248,7 @@ let fail_waiters client error =
     |> Eta.Effect.concat
   in
   Eta.Effect.sync (fun () ->
-      List.iter (fun queue -> Eta.Queue.close_with_error queue failure) queues)
+      List.iter (fun rq -> close_record_queue_error rq failure) queues)
 
 let read_chunk (T t) =
   Eta.Effect.sync_result (fun () ->
@@ -278,12 +336,17 @@ let await_record_stream (T t as client) packet =
         protocol_result "create record stream response" (fun () ->
             Commands.parse_create_record_stream_response payload)
       in
-      let queue = Eta.Queue.bounded ~capacity:record_stream_capacity () in
+      let rq =
+        {
+          queue = Eta.Queue.bounded ~capacity:record_stream_capacity ();
+          queued_bytes = Atomic.make 0;
+        }
+      in
       let* () =
         Eta.Effect.sync (fun () ->
-            Hashtbl.replace t.record_queues info.Defs.stream_index queue)
+            Hashtbl.replace t.record_queues info.Defs.stream_index rq)
       in
-      Eta.Effect.pure (info, queue)
+      Eta.Effect.pure (info, rq)
     in
     let* completion =
       completion
@@ -293,15 +356,15 @@ let await_record_stream (T t as client) packet =
     in
     match completion with
     | Error failure -> resolve_failure promise failure
-    | Ok (info, queue) ->
+    | Ok (info, rq) ->
         let* accepted =
-          Eta.Promise.resolve promise (Eta.Exit.ok (info, queue))
+          Eta.Promise.resolve promise (Eta.Exit.ok (info, rq))
         in
         if accepted then Eta.Effect.unit
         else
           Eta.Effect.sync (fun () ->
               Hashtbl.remove t.record_queues info.Defs.stream_index;
-              Eta.Queue.close queue)
+              close_record_queue rq)
   in
   let pending =
     { accept; reject = (fun failure -> resolve_failure promise failure) }
@@ -423,11 +486,11 @@ let with_record_stream (T t as client) ?options use =
     await_record_stream client
       (Commands.build_create_record_stream_command ?options ())
   in
-  let release (info, queue) =
+  let release (info, rq) =
     let* () =
       Eta.Effect.sync (fun () ->
           Hashtbl.remove t.record_queues info.Defs.stream_index;
-          Eta.Queue.close queue)
+          close_record_queue rq)
     in
     await_reply client
       (Commands.build_delete_record_stream_command info.stream_index)
@@ -440,4 +503,10 @@ let with_record_stream (T t as client) ?options use =
           ])
   in
   Eta.Effect.with_resource ~acquire:(acquire |> widen_pulse_error) ~release
-  @@ fun (info, queue) -> use info (Eta_stream.Stream.from_queue queue)
+  @@ fun (info, rq) ->
+  use info
+    (Eta_stream.Stream.map
+       (fun chunk ->
+         recoup_queued_bytes rq (String.length chunk);
+         Bytes.of_string chunk)
+       (Eta_stream.Stream.from_queue rq.queue))
