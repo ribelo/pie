@@ -621,7 +621,7 @@ let rec suppressed_inject_and_publish (cause : e2e_error Eta.Cause.t) =
               | _ -> false)
             fs
       | _ -> false)
-  | Fail _ | Die _ | Interrupt _ -> false
+  | Fail _ | Unhandled _ | Die _ | Interrupt _ -> false
 
 let test_audio_retry_delivery_and_text_publish_both_causes () =
   with_dir (fun dir ->

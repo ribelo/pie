@@ -268,6 +268,11 @@ let handle_peer ~clock ~on_connected scenario flow =
       write_ws_close flow;
       drain_until_eof ~clock flow
   | Stalled_cancel ->
+      (* Cancel while waiting for readiness, not while the client is still
+         consuming the upgrade response. The first frame byte proves the
+         WebSocket was acquired and the session update was sent. *)
+      let first_frame_byte = Cstruct.create 1 in
+      ignore (Eio.Flow.single_read flow first_frame_byte);
       on_connected ();
       drain_until_eof ~clock flow
   | Send_failure ->

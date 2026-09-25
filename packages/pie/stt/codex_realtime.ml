@@ -597,7 +597,9 @@ let with_websocket_establishment_timeout computation =
             "Codex realtime WebSocket establishment timed out after 10 seconds")
 
 let connect_realtime_ws ~headers ~sw ~net url =
-  Http_eio.Ws.Client.connect ~headers ~sw ~net url
+  (* Preserve OpenSSL's SSL_CERT_FILE trust override across Eta transports. *)
+  Http_eio.Ws.Client.connect ?ca_file:(Sys.getenv_opt "SSL_CERT_FILE") ~headers
+    ~sw ~net url
   |> Eta.Effect.bind_error (fun error ->
       stt_error
         ("Codex realtime WebSocket connect failed: " ^ ws_error_message error))
@@ -1018,7 +1020,7 @@ let with_stream_session ~sw ~net ~url ~access_token ~mode ~operation ~model
                   match exit with
                   | Eta.Exit.Ok _ ->
                       record_admission Closed;
-                      Eta.Queue.close queue
+                      Eta.Queue.close_now queue
                   | Eta.Exit.Error cause ->
                       let error =
                         match cause with
@@ -1026,7 +1028,7 @@ let with_stream_session ~sw ~net ~url ~access_token ~mode ~operation ~model
                         | _ -> `Stt_error "Codex realtime stream failed"
                       in
                       record_admission (Failed error);
-                      Eta.Queue.close_with_error queue error)
+                      Eta.Queue.close_with_error_now queue error)
             in
             let* _accepted = Eta.Promise.resolve completion exit in
             Eta.Effect.unit)
@@ -1095,7 +1097,7 @@ let with_stream_session ~sw ~net ~url ~access_token ~mode ~operation ~model
         let* () =
           Eta.Effect.sync (fun () ->
               record_admission (Failed error);
-              Eta.Queue.close_with_error queue error)
+              Eta.Queue.close_with_error_now queue error)
         in
         let* _accepted =
           Eta.Promise.resolve completion (Eta.Exit.Error (Eta.Cause.Fail error))
@@ -1114,7 +1116,7 @@ let with_stream_session ~sw ~net ~url ~access_token ~mode ~operation ~model
                       ~at_ms:started_at_ms)
               in
               record_admission Closed;
-              let* () = Eta.Queue.close_effect queue in
+              let* () = Eta.Queue.close queue in
               Eta.Promise.await completion);
           cancel_stream;
         }

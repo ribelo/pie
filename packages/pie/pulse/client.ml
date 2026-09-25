@@ -55,11 +55,11 @@ type record_queue = {
 
 let close_record_queue rq =
   Atomic.set rq.queued_bytes 0;
-  Eta.Queue.close rq.queue
+  Eta.Queue.close_now rq.queue
 
 let close_record_queue_error rq failure =
   Atomic.set rq.queued_bytes 0;
-  Eta.Queue.close_with_error rq.queue failure
+  Eta.Queue.close_with_error_now rq.queue failure
 
 let recoup_queued_bytes rq n =
   let rec retry () =

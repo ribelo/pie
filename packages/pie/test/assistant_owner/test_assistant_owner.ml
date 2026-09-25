@@ -177,9 +177,21 @@ let with_workflow_background ~sw ~clock workflow assertions =
   | Error cause when Eta.Cause.is_interrupt_only cause -> ()
   | Error cause -> fail_cause cause
 
-let press_cycle ~clock ~keyboard ~audio_q ~delivered =
+(* A slot can exist before the audio consumer is connected. For successful
+   recordings, wait for bytes in the draft rather than just slot creation. *)
+let wait_for_recorded_pcm ~clock ~audio_q ~retry_dir =
+  wait_until ~clock (fun () ->
+      offer_pcm audio_q;
+      List.exists
+        (fun path ->
+          Filename.basename path = "draft.pcm"
+          && (try (Unix.stat path).st_size > 0 with Unix.Unix_error _ -> false))
+        (pcm_files retry_dir))
+
+let press_cycle ~clock ~keyboard ~audio_q ~retry_dir ~delivered =
+  wait_until ~clock (fun () -> pcm_files retry_dir = []);
   Pie.Keyboard.Monitor.emit keyboard (key ~released:false);
-  offer_pcm audio_q;
+  wait_for_recorded_pcm ~clock ~audio_q ~retry_dir;
   Pie.Keyboard.Monitor.emit keyboard (key ~released:true);
   wait_until ~clock (fun () -> Atomic.get delivered <> [])
 
@@ -210,13 +222,13 @@ let test_record_to_delivery_last_good_then_reload () =
         Eta.Effect.sync (fun () ->
             Atomic.set delivered (text :: Atomic.get delivered))
       in
-      let _socket, _retry_dir, workflow =
+      let _socket, retry_dir, workflow =
         owner_workflow ~sw ~net ~process_mgr ~mono_clock ~dir
           ~config_control:{ stamp; load } ~stt ~deliver ~keyboard ~audio
       in
       with_workflow_background ~sw ~clock workflow (fun () ->
           Eio.Time.sleep clock 0.2;
-          press_cycle ~clock ~keyboard ~audio_q ~delivered;
+          press_cycle ~clock ~keyboard ~audio_q ~retry_dir ~delivered;
           Alcotest.(check (list string))
             "first delivery uses last-good model" [ "openrouter/owner-a" ]
             (Atomic.get delivered);
@@ -225,7 +237,7 @@ let test_record_to_delivery_last_good_then_reload () =
           Atomic.set model "openrouter/owner-b";
           Atomic.incr gen;
           Eio.Time.sleep clock 0.7;
-          press_cycle ~clock ~keyboard ~audio_q ~delivered;
+          press_cycle ~clock ~keyboard ~audio_q ~retry_dir ~delivered;
           Alcotest.(check (list string))
             "failed reload keeps last-good model" [ "openrouter/owner-a" ]
             (Atomic.get delivered);
@@ -233,7 +245,7 @@ let test_record_to_delivery_last_good_then_reload () =
           Atomic.set fail_reload false;
           Atomic.incr gen;
           Eio.Time.sleep clock 0.7;
-          press_cycle ~clock ~keyboard ~audio_q ~delivered;
+          press_cycle ~clock ~keyboard ~audio_q ~retry_dir ~delivered;
           Alcotest.(check (list string))
             "successful reload reaches delivery" [ "openrouter/owner-b" ]
             (Atomic.get delivered)))
@@ -911,6 +923,47 @@ let test_pause_latch_one_shot_resume_fresh_attempt () =
         "old cancel signal cannot stop new same-mode attempt" false
         (Pie.Recording.Coordinator.cancel_signalled a2))
 
+(* A quick physical tap can arrive before the recording slot is ready. With no
+   audio, that first attempt must settle rather than retaining admission. *)
+let test_fast_tap_settles_then_next_press_delivers () =
+  Eio_main.run @@ fun env ->
+  with_dir (fun dir ->
+      Eio.Switch.run @@ fun sw ->
+      let clock = Eio.Stdenv.clock env in
+      let net = Eio.Stdenv.net env in
+      let keyboard = Pie.Keyboard.Monitor.create () in
+      let audio_q, audio = make_audio () in
+      let delivered = Atomic.make [] in
+      let stamp () = [ Some (1, 1, 0, 0.) ] in
+      let load _ = (base_config (), stamp ()) in
+      let stt _ _ _ = Eta.Effect.pure "after-fast-tap" in
+      let deliver _ _ text =
+        Eta.Effect.sync (fun () ->
+            Atomic.set delivered (text :: Atomic.get delivered))
+      in
+      let socket_path, retry_dir, workflow =
+        owner_workflow ~sw ~net ~process_mgr:(Eio.Stdenv.process_mgr env)
+          ~mono_clock:(Eio.Stdenv.mono_clock env) ~dir
+          ~config_control:{ stamp; load } ~stt ~deliver ~keyboard ~audio
+      in
+      let status key =
+        try status_bool ~net ~sw socket_path key with _ -> false
+      in
+      with_workflow_background ~sw ~clock workflow (fun () ->
+          wait_until ~clock (fun () -> status "enabled");
+          Pie.Keyboard.Monitor.emit keyboard (key ~released:false);
+          Pie.Keyboard.Monitor.emit keyboard (key ~released:true);
+          wait_until ~clock (fun () -> status "active");
+          wait_until ~steps:120 ~clock (fun () -> not (status "active"));
+          Alcotest.(check (list string))
+            "empty fast tap did not deliver" [] (Atomic.get delivered);
+          Alcotest.(check bool)
+            "empty fast tap released its slot" true (pcm_files retry_dir = []);
+          press_cycle ~clock ~keyboard ~audio_q ~retry_dir ~delivered;
+          Alcotest.(check (list string))
+            "next press admitted and delivered" [ "after-fast-tap" ]
+            (Atomic.get delivered)))
+
 let test_pause_resume_fresh_attempt_delivers () =
   Eio_main.run @@ fun env ->
   with_dir (fun dir ->
@@ -929,7 +982,7 @@ let test_pause_resume_fresh_attempt_delivers () =
         Eta.Effect.sync (fun () ->
             Atomic.set delivered (text :: Atomic.get delivered))
       in
-      let socket_path, _retry_dir, workflow =
+      let socket_path, retry_dir, workflow =
         owner_workflow ~sw ~net ~process_mgr ~mono_clock ~dir
           ~config_control:{ stamp; load } ~stt ~deliver ~keyboard ~audio
       in
@@ -938,7 +991,7 @@ let test_pause_resume_fresh_attempt_delivers () =
       in
       with_workflow_background ~sw ~clock workflow (fun () ->
           wait_until ~clock (fun () -> status "enabled");
-          press_cycle ~clock ~keyboard ~audio_q ~delivered;
+          press_cycle ~clock ~keyboard ~audio_q ~retry_dir ~delivered;
           Alcotest.(check (list string))
             "first attempt delivered" [ "owned-text" ] (Atomic.get delivered);
           wait_until ~clock (fun () -> not (status "active"));
@@ -947,7 +1000,7 @@ let test_pause_resume_fresh_attempt_delivers () =
           wait_until ~clock (fun () -> not (status "enabled"));
           rpc ~net ~sw socket_path "Resume";
           wait_until ~clock (fun () -> status "enabled");
-          press_cycle ~clock ~keyboard ~audio_q ~delivered;
+          press_cycle ~clock ~keyboard ~audio_q ~retry_dir ~delivered;
           Alcotest.(check (list string))
             "fresh attempt after Pause/Resume delivered" [ "owned-text" ]
             (Atomic.get delivered)))
@@ -1268,8 +1321,13 @@ let test_busy_keyboard_and_rpc_then_fresh_cycle () =
             "RPC ptt-start rejected while keyboard attempt active" false
             (json_accepted line);
           Pie.Keyboard.Monitor.emit keyboard (key ~released:true);
+          wait_until ~steps:120 ~clock (fun () ->
+              offer_pcm audio_q;
+              Atomic.get delivered <> []);
+          wait_until ~clock (fun () ->
+              not (status_bool ~net ~sw socket_path "active"));
           Atomic.set delivered [];
-          press_cycle ~clock ~keyboard ~audio_q ~delivered;
+          press_cycle ~clock ~keyboard ~audio_q ~retry_dir ~delivered;
           Alcotest.(check (list string))
             "fresh cycle after busy RPC/keyboard delivered" [ "cycle-text" ]
             (Atomic.get delivered)))
@@ -1404,7 +1462,7 @@ let test_provider_failure_publishes_audio_then_retries_provider () =
       with_workflow_background ~sw ~clock workflow (fun () ->
           Eio.Time.sleep clock 0.2;
           Pie.Keyboard.Monitor.emit keyboard (key ~released:false);
-          offer_pcm audio_q;
+          wait_for_recorded_pcm ~clock ~audio_q ~retry_dir;
           Pie.Keyboard.Monitor.emit keyboard (key ~released:true);
           wait_until ~clock (fun () -> peek_kind retry_dir = Some "audio");
           Alcotest.(check int) "provider called once" 1 (Atomic.get stt_n);
@@ -1446,7 +1504,7 @@ let test_delivery_failure_publishes_text_retry_skips_provider () =
       with_workflow_background ~sw ~clock workflow (fun () ->
           Eio.Time.sleep clock 0.2;
           Pie.Keyboard.Monitor.emit keyboard (key ~released:false);
-          offer_pcm audio_q;
+          wait_for_recorded_pcm ~clock ~audio_q ~retry_dir;
           Pie.Keyboard.Monitor.emit keyboard (key ~released:true);
           wait_until ~clock (fun () ->
               peek_kind retry_dir = Some "text-uncertain");
@@ -1522,7 +1580,7 @@ let test_blank_transcript_publishes_audio_without_inject () =
       with_workflow_background ~sw ~clock workflow (fun () ->
           Eio.Time.sleep clock 0.2;
           Pie.Keyboard.Monitor.emit keyboard (key ~released:false);
-          offer_pcm audio_q;
+          wait_for_recorded_pcm ~clock ~audio_q ~retry_dir;
           Pie.Keyboard.Monitor.emit keyboard (key ~released:true);
           wait_until ~clock (fun () -> Atomic.get stt_n >= 1);
           Alcotest.(check int) "blank skips inject" 0 (Atomic.get deliver_n);
@@ -1621,7 +1679,7 @@ let test_successive_failures_keep_latest_only () =
       with_workflow_background ~sw ~clock workflow (fun () ->
           let cycle () =
             Pie.Keyboard.Monitor.emit keyboard (key ~released:false);
-            offer_pcm audio_q;
+            wait_for_recorded_pcm ~clock ~audio_q ~retry_dir;
             Pie.Keyboard.Monitor.emit keyboard (key ~released:true)
           in
           Eio.Time.sleep clock 0.2;
@@ -1718,7 +1776,7 @@ let test_nested_missing_parent_is_private () =
       with_workflow_background ~sw ~clock workflow (fun () ->
           Eio.Time.sleep clock 0.2;
           Pie.Keyboard.Monitor.emit keyboard (key ~released:false);
-          offer_pcm audio_q;
+          wait_for_recorded_pcm ~clock ~audio_q ~retry_dir;
           Pie.Keyboard.Monitor.emit keyboard (key ~released:true);
           wait_until ~clock (fun () -> peek_kind retry_dir = Some "audio");
           Alcotest.(check int)
@@ -1774,9 +1832,7 @@ let test_success_preserves_older_candidate () =
       with_workflow_background ~sw ~clock workflow (fun () ->
           wait_until ~clock (fun () -> Sys.file_exists socket_path);
           Pie.Keyboard.Monitor.emit keyboard (key ~released:false);
-          wait_until ~clock (fun () ->
-              offer_pcm audio_q;
-              pcm_files retry_dir <> []);
+          wait_for_recorded_pcm ~clock ~audio_q ~retry_dir;
           Pie.Keyboard.Monitor.emit keyboard (key ~released:true);
           wait_until ~clock (fun () -> Atomic.get deliver_n >= 1);
           wait_until ~clock (fun () ->
@@ -1830,11 +1886,11 @@ let test_publication_failure_keeps_primary () =
         | `Replaced saved -> (
             try Unix.rename saved path with Unix.Unix_error _ -> ())
       in
-      let rec pub014_has_stt = function
+      let rec pub014_has_stt : Pie.Ptt_loop.run_error Eta.Cause.t -> bool = function
         | Eta.Cause.Fail (`Ptt_error "stt:unavailable") -> true
         | Sequential xs | Concurrent xs -> List.exists pub014_has_stt xs
         | Suppressed { primary; _ } -> pub014_has_stt primary
-        | Fail _ | Die _ | Interrupt _ | Finalizer _ -> false
+        | Fail _ | Unhandled _ | Die _ | Interrupt _ | Finalizer _ -> false
       in
       let rec pub014_has_pub_fail = function
         | Eta.Cause.Suppressed { finalizer = Eta.Cause.Finalizer.Fail _; _ } ->
@@ -1842,7 +1898,7 @@ let test_publication_failure_keeps_primary () =
         | Sequential xs | Concurrent xs -> List.exists pub014_has_pub_fail xs
         | Suppressed { primary; _ } -> pub014_has_pub_fail primary
         | Finalizer f -> pub014_fin_fail f
-        | Fail _ | Die _ | Interrupt _ -> false
+        | Fail _ | Unhandled _ | Die _ | Interrupt _ -> false
       and pub014_fin_fail = function
         | Eta.Cause.Finalizer.Fail _ -> true
         | Sequential xs | Concurrent xs -> List.exists pub014_fin_fail xs
@@ -1884,9 +1940,7 @@ let test_publication_failure_keeps_primary () =
                    Eta.Effect.sync (fun () ->
                        wait_until ~clock (fun () -> Sys.file_exists _socket);
                        Pie.Keyboard.Monitor.emit keyboard (key ~released:false);
-                       wait_until ~clock (fun () ->
-                           offer_pcm audio_q;
-                           pcm_files retry_dir <> []);
+                       wait_for_recorded_pcm ~clock ~audio_q ~retry_dir;
                        Pie.Keyboard.Monitor.emit keyboard (key ~released:true);
                        Eio.Promise.await never))
               |> Eta.Effect.timeout_as (Eta.Duration.seconds 8)
@@ -1946,9 +2000,11 @@ let test_owned_cancel_cleanup_defect_preserves_older () =
           | Error _ -> ());
       Eio.Time.sleep clock 0.2;
       Pie.Keyboard.Monitor.emit keyboard (key ~released:false);
-      offer_pcm audio_q;
+      wait_for_recorded_pcm ~clock ~audio_q ~retry_dir;
       Pie.Keyboard.Monitor.emit keyboard (key ~released:true);
-      wait_until ~clock (fun () -> Atomic.get started);
+      wait_until ~steps:120 ~clock (fun () ->
+          offer_pcm audio_q;
+          Atomic.get started);
       let pause_sock =
         Eio.Net.connect ~sw (Eio.Stdenv.net env) (`Unix socket_path)
       in
@@ -2194,6 +2250,8 @@ let () =
               Alcotest.test_case
                 "pause latch is one-shot; resume does not stop next attempt"
                 `Quick test_pause_latch_one_shot_resume_fresh_attempt;
+              Alcotest.test_case "quick tap settles; next press works" `Quick
+                test_fast_tap_settles_then_next_press_delivers;
               Alcotest.test_case "Pause then Resume starts a fresh attempt"
                 `Quick test_pause_resume_fresh_attempt_delivers;
               Alcotest.test_case "composite typed body failures stay both"
