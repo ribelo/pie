@@ -1,6 +1,12 @@
-(* PIE019: user markers stay out of diagnostics; intended output remains. *)
+(* PIE019: user markers stay out of diagnostics; intended output remains.
+   Direct style: the provider call and the helper subprocesses return results,
+   stdio stays captured around each call, and every deadline is bounded. *)
 
 let marker = "PIE019-UNIQUE-MARKER-7f3c9e"
+
+(* Fixtures rewrite the process environment (private PATH, provider endpoint,
+   delivery path); the alert only guards against multi-domain mutation. *)
+let putenv = Unix.putenv [@alert "-unsafe_multidomain"]
 
 let string_contains hay needle =
   let hlen = String.length hay in
@@ -155,10 +161,23 @@ let completed_body text =
 
 let pcm = Bytes.make 320 '\001'
 
+(* The call's own structured records go through this reporter straight into the
+   captured stderr, so a diagnostic that leaks the marker is seen where the old
+   logfmt tee wrote it. *)
+let stderr_logger ~clock ~mono_clock =
+  Eta_observability.Logger.create ~service:"pie" ~clock ~mono_clock
+    ~reporter:
+      (Eta_observability.Logger.Reporter.writer (fun line -> prerr_string line))
+    ()
+
+let openrouter_deadline_seconds = 30
+let helper_deadline_seconds = 10.0
+
 let run_openrouter ~body ~status () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let net = Eio.Stdenv.net env in
+  let clock = Eio.Stdenv.clock env in
   let socket =
     Eio.Net.listen ~sw ~reuse_addr:true ~backlog:1 net
       (`Tcp (Eio.Net.Ipaddr.V4.loopback, 0))
@@ -168,45 +187,76 @@ let run_openrouter ~body ~status () =
     | `Tcp (_, port) -> port
     | `Unix _ -> Alcotest.fail "expected TCP listener"
   in
-  Unix.putenv "OPENROUTER_BASE_URL" (Printf.sprintf "http://127.0.0.1:%d" port);
-  Unix.putenv "OPENROUTER_API_KEY" "synthetic-pie019";
-  Eio.Fiber.fork ~sw (fun () ->
+  putenv "OPENROUTER_BASE_URL" (Printf.sprintf "http://127.0.0.1:%d" port);
+  putenv "OPENROUTER_API_KEY" "synthetic-pie019";
+  (* A daemon: the switch cancels the fixture peer when the call under test is
+     done, so it cannot hold the release open. *)
+  Eio.Fiber.fork_daemon ~sw (fun () ->
       Eio.Switch.run (fun conn_sw ->
           let flow, _ = Eio.Net.accept ~sw:conn_sw socket in
           ignore (read_http_request flow);
-          write_http flow ~status body));
-  Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env)
-    (Pie.Stt.Openrouter.transcribe_with_prompt ~sw ~net ~model:"test-model"
-       ~language:"en" ~prompt_template:"Transcribe." pcm)
+          write_http flow ~status body);
+      `Stop_daemon);
+  match
+    Eta.Timeout.timeout ~clock
+      (Eta.Duration.seconds openrouter_deadline_seconds) (fun () ->
+        match
+          Pie.Stt.Openrouter.transcribe_with_prompt ~sw ~net ~clock
+            ~logger:
+              (stderr_logger ~clock ~mono_clock:(Eio.Stdenv.mono_clock env))
+            ~model:"test-model" ~language:"en" ~prompt_template:"Transcribe."
+            pcm
+        with
+        | Ok text -> Ok text
+        | Error (`Stt_error message) -> Error (`Stt_error message))
+  with
+  | Ok text -> Ok text
+  | Error (`Stt_error message) -> Error (`Stt_error message)
+  | Error `Timeout -> Error (`Stt_error "openrouter-deadline")
 
-let cause_text cause =
-  Format.asprintf "%a"
-    (Eta.Cause.pp (fun fmt (`Stt_error m) -> Format.pp_print_string fmt m))
-    cause
+let run_helper f =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let clock = Eio.Stdenv.clock env in
+  try
+    Eio.Time.with_timeout_exn clock helper_deadline_seconds (fun () ->
+        f ~env ~sw)
+  with Eio.Time.Timeout -> Alcotest.fail "helper operation timed out"
 
 let assert_absent label hay =
   Alcotest.(check bool) label false (string_contains hay marker)
+
+let with_fake_helper name script f =
+  with_sandbox @@ fun dir ->
+  let bin = Filename.concat dir "bin" in
+  Unix.mkdir bin 0o700;
+  let helper = Filename.concat bin name in
+  write_file helper script;
+  Unix.chmod helper 0o700;
+  let old_path = Option.value ~default:"/usr/bin" (Sys.getenv_opt "PATH") in
+  putenv "PATH" (bin ^ ":" ^ old_path);
+  Fun.protect ~finally:(fun () -> putenv "PATH" old_path) (fun () -> f dir)
 
 let test_success_keeps_text_out_of_diagnostics () =
   List.iter
     (fun debug ->
       (match debug with
-      | None -> ( try Unix.putenv "CAMELPIE_OPENROUTER_DEBUG" "" with _ -> ())
-      | Some value -> Unix.putenv "CAMELPIE_OPENROUTER_DEBUG" value);
+      | None -> ( try putenv "CAMELPIE_OPENROUTER_DEBUG" "" with _ -> ())
+      | Some value -> putenv "CAMELPIE_OPENROUTER_DEBUG" value);
       let result, stdout, stderr =
         with_captured_stdio (fun () ->
             run_openrouter ~body:(completed_body marker) ~status:"200 OK" ())
       in
       (match result with
-      | Eta.Exit.Ok text -> Alcotest.(check string) "delivered" marker text
-      | Eta.Exit.Error cause ->
-          Alcotest.failf "expected success: %s" (cause_text cause));
+      | Ok text -> Alcotest.(check string) "delivered" marker text
+      | Error (`Stt_error message) ->
+          Alcotest.failf "expected success: %s" message);
       assert_absent "stdout dump" stdout;
       assert_absent "stderr dump" stderr)
     [ None; Some "0"; Some "false"; Some "1" ]
 
 let test_provider_error_omits_body () =
-  Unix.putenv "CAMELPIE_OPENROUTER_DEBUG" "1";
+  putenv "CAMELPIE_OPENROUTER_DEBUG" "1";
   let body =
     Yojson.Safe.to_string
       (`Assoc
@@ -221,20 +271,20 @@ let test_provider_error_omits_body () =
         run_openrouter ~body ~status:"401 Unauthorized" ())
   in
   (match result with
-  | Eta.Exit.Ok text -> Alcotest.failf "expected provider error, got %s" text
-  | Eta.Exit.Error cause -> assert_absent "error cause" (cause_text cause));
+  | Ok text -> Alcotest.failf "expected provider error, got %s" text
+  | Error (`Stt_error message) -> assert_absent "error cause" message);
   assert_absent "stdout" stdout;
   assert_absent "stderr" stderr
 
 let test_malformed_response_omits_payload () =
-  Unix.putenv "CAMELPIE_OPENROUTER_DEBUG" "1";
+  putenv "CAMELPIE_OPENROUTER_DEBUG" "1";
   let result, stdout, stderr =
     with_captured_stdio (fun () ->
         run_openrouter ~body:marker ~status:"200 OK" ())
   in
   (match result with
-  | Eta.Exit.Ok text -> Alcotest.failf "expected malformed, got %s" text
-  | Eta.Exit.Error cause -> assert_absent "error cause" (cause_text cause));
+  | Ok text -> Alcotest.failf "expected malformed, got %s" text
+  | Error (`Stt_error message) -> assert_absent "error cause" message);
   assert_absent "stdout" stdout;
   assert_absent "stderr" stderr
 
@@ -244,78 +294,44 @@ let test_parse_event_omits_payload () =
   | Error (`Stt_error text) -> assert_absent "json error" text
 
 let test_helper_nonzero_omits_argv_and_stderr () =
-  with_sandbox @@ fun dir ->
-  let bin = Filename.concat dir "bin" in
-  Unix.mkdir bin 0o700;
-  let wtype = Filename.concat bin "wtype" in
-  write_file wtype
-    ("#!/bin/sh\necho " ^ marker ^ "\necho " ^ marker ^ " >&2\nexit 1\n");
-  Unix.chmod wtype 0o700;
-  let old_path = Option.value ~default:"/usr/bin" (Sys.getenv_opt "PATH") in
-  Unix.putenv "PATH" (bin ^ ":" ^ old_path);
+  with_fake_helper "wtype"
+    ("#!/bin/sh\necho " ^ marker ^ "\necho " ^ marker ^ " >&2\nexit 1\n")
+  @@ fun _dir ->
   let result, stdout, stderr =
     with_captured_stdio (fun () ->
-        Eio_main.run @@ fun env ->
-        Eio.Switch.run @@ fun sw ->
-        Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env)
-          (Pie.Wayland.Wtype.type_text
-             ~process_mgr:(Eio.Stdenv.process_mgr env)
-             marker))
+        run_helper (fun ~env ~sw:_ ->
+            Pie.Wayland.Wtype.type_text
+              ~process_mgr:(Eio.Stdenv.process_mgr env)
+              marker))
   in
-  Unix.putenv "PATH" old_path;
   (match result with
-  | Eta.Exit.Ok () -> Alcotest.fail "expected wtype failure"
-  | Eta.Exit.Error cause ->
-      let rendered =
-        Format.asprintf "%a"
-          (Eta.Cause.pp (fun fmt (err : [> `Wtype_error of string ]) ->
-               match err with
-               | `Wtype_error m -> Format.pp_print_string fmt m
-               | _ -> Format.pp_print_string fmt "error"))
-          cause
-      in
+  | Ok () -> Alcotest.fail "expected wtype failure"
+  | Error (`Wtype_error message) ->
       Alcotest.(check bool)
         "basename" true
-        (string_contains rendered "wtype failed");
-      assert_absent "helper error" rendered);
+        (string_contains message "wtype failed");
+      assert_absent "helper error" message);
   assert_absent "stdout" stdout;
   assert_absent "stderr" stderr
 
 let test_notification_failure_omits_message () =
-  with_sandbox @@ fun dir ->
-  let bin = Filename.concat dir "bin" in
-  Unix.mkdir bin 0o700;
-  let notify = Filename.concat bin "notify-send" in
-  write_file notify
-    ("#!/bin/sh\necho " ^ marker ^ "\necho " ^ marker ^ " >&2\nexit 1\n");
-  Unix.chmod notify 0o700;
-  let old_path = Option.value ~default:"/usr/bin" (Sys.getenv_opt "PATH") in
-  Unix.putenv "PATH" (bin ^ ":" ^ old_path);
+  with_fake_helper "notify-send"
+    ("#!/bin/sh\necho " ^ marker ^ "\necho " ^ marker ^ " >&2\nexit 1\n")
+  @@ fun _dir ->
   let result, stdout, stderr =
     with_captured_stdio (fun () ->
-        Eio_main.run @@ fun env ->
-        Eio.Switch.run @@ fun sw ->
-        Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env)
-          (Pie.Desktop.Notification.notify_send
-             ~process_mgr:(Eio.Stdenv.process_mgr env)
-             "pie" marker))
+        run_helper (fun ~env ~sw:_ ->
+            Pie.Desktop.Notification.notify_send
+              ~process_mgr:(Eio.Stdenv.process_mgr env)
+              "pie" marker))
   in
-  Unix.putenv "PATH" old_path;
   (match result with
-  | Eta.Exit.Ok () -> Alcotest.fail "expected notify-send failure"
-  | Eta.Exit.Error cause ->
-      let rendered =
-        Format.asprintf "%a"
-          (Eta.Cause.pp (fun fmt (err : [> `Notification_error of string ]) ->
-               match err with
-               | `Notification_error m -> Format.pp_print_string fmt m
-               | _ -> Format.pp_print_string fmt "error"))
-          cause
-      in
+  | Ok () -> Alcotest.fail "expected notify-send failure"
+  | Error (`Notification_error message) ->
       Alcotest.(check bool)
         "basename" true
-        (string_contains rendered "notify-send failed");
-      assert_absent "notify error" rendered);
+        (string_contains message "notify-send failed");
+      assert_absent "notify error" message);
   assert_absent "stdout" stdout;
   assert_absent "stderr" stderr
 
@@ -345,53 +361,30 @@ let test_auth_load_omits_json_snippet () =
   with_sandbox @@ fun dir ->
   let path = Filename.concat dir "auth.json" in
   write_file path ("{\"tokens\": \"" ^ marker ^ " not-json");
-  let result =
-    Eio_main.run @@ fun env ->
-    Eio.Switch.run @@ fun sw ->
-    Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env)
-      (Pie.Stt.Codex_realtime.Codex_auth.load ~path ())
-  in
-  match result with
-  | Eta.Exit.Ok _ -> Alcotest.fail "expected auth load failure"
-  | Eta.Exit.Error cause -> assert_absent "auth json snippet" (cause_text cause)
+  match Pie.Stt.Codex_realtime.Codex_auth.load ~path () with
+  | Ok _ -> Alcotest.fail "expected auth load failure"
+  | Error (`Stt_error message) -> assert_absent "auth json snippet" message
 
 let test_large_helper_stderr_discarded () =
-  with_sandbox @@ fun dir ->
-  let bin = Filename.concat dir "bin" in
-  Unix.mkdir bin 0o700;
-  let wtype = Filename.concat bin "wtype" in
   let blob = String.make 262144 'A' ^ marker in
-  write_file wtype
+  with_fake_helper "wtype"
     ("#!/bin/sh\nprintf '%s' " ^ Filename.quote blob ^ "\nprintf '%s' "
-   ^ Filename.quote blob ^ " >&2\nexit 1\n");
-  Unix.chmod wtype 0o700;
-  let old_path = Option.value ~default:"/usr/bin" (Sys.getenv_opt "PATH") in
-  Unix.putenv "PATH" (bin ^ ":" ^ old_path);
+   ^ Filename.quote blob ^ " >&2\nexit 1\n")
+  @@ fun _dir ->
   let result, stdout, stderr =
     with_captured_stdio (fun () ->
-        Eio_main.run @@ fun env ->
-        Eio.Switch.run @@ fun sw ->
-        Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env)
-          (Pie.Wayland.Wtype.type_text
-             ~process_mgr:(Eio.Stdenv.process_mgr env)
-             "ok"))
+        run_helper (fun ~env ~sw:_ ->
+            Pie.Wayland.Wtype.type_text
+              ~process_mgr:(Eio.Stdenv.process_mgr env)
+              "ok"))
   in
-  Unix.putenv "PATH" old_path;
   (match result with
-  | Eta.Exit.Ok () -> Alcotest.fail "expected wtype failure"
-  | Eta.Exit.Error cause ->
-      let rendered =
-        Format.asprintf "%a"
-          (Eta.Cause.pp (fun fmt (err : [> `Wtype_error of string ]) ->
-               match err with
-               | `Wtype_error m -> Format.pp_print_string fmt m
-               | _ -> Format.pp_print_string fmt "error"))
-          cause
-      in
+  | Ok () -> Alcotest.fail "expected wtype failure"
+  | Error (`Wtype_error message) ->
       Alcotest.(check bool)
         "exit metadata" true
-        (string_contains rendered "wtype failed");
-      assert_absent "typed error" rendered);
+        (string_contains message "wtype failed");
+      assert_absent "typed error" message);
   assert_absent "stdout" stdout;
   assert_absent "stderr" stderr
 
@@ -414,32 +407,24 @@ let test_composite_failure_is_not_flattened () =
   | `Other text -> Alcotest.failf "unexpected %s" text
 
 let test_helper_success_stdout_discarded_delivery_file () =
-  with_sandbox @@ fun dir ->
-  let bin = Filename.concat dir "bin" in
-  Unix.mkdir bin 0o700;
-  let delivery = Filename.concat dir "delivery" in
-  let wtype = Filename.concat bin "wtype" in
   let intended = "PIE019-INTENDED-DELIVERY" in
-  write_file wtype
+  with_fake_helper "wtype"
     ("#!/bin/sh\necho " ^ marker ^ "\necho " ^ marker
-   ^ " >&2\nprintf '%s' \"$2\" > \"$PIE019_DELIVERY\"\nexit 0\n");
-  Unix.chmod wtype 0o700;
-  let old_path = Option.value ~default:"/usr/bin" (Sys.getenv_opt "PATH") in
-  Unix.putenv "PATH" (bin ^ ":" ^ old_path);
-  Unix.putenv "PIE019_DELIVERY" delivery;
+   ^ " >&2\nprintf '%s' \"$2\" > \"$PIE019_DELIVERY\"\nexit 0\n")
+  @@ fun dir ->
+  let delivery = Filename.concat dir "delivery" in
+  putenv "PIE019_DELIVERY" delivery;
   let result, stdout, stderr =
     with_captured_stdio (fun () ->
-        Eio_main.run @@ fun env ->
-        Eio.Switch.run @@ fun sw ->
-        Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env)
-          (Pie.Wayland.Wtype.type_text
-             ~process_mgr:(Eio.Stdenv.process_mgr env)
-             intended))
+        run_helper (fun ~env ~sw:_ ->
+            Pie.Wayland.Wtype.type_text
+              ~process_mgr:(Eio.Stdenv.process_mgr env)
+              intended))
   in
-  Unix.putenv "PATH" old_path;
   (match result with
-  | Eta.Exit.Ok () -> ()
-  | Eta.Exit.Error _ -> Alcotest.fail "expected wtype success");
+  | Ok () -> ()
+  | Error (`Wtype_error message) ->
+      Alcotest.failf "expected wtype success: %s" message);
   let delivered = In_channel.with_open_text delivery In_channel.input_all in
   Alcotest.(check string) "delivery file" intended delivered;
   assert_absent "stdout" stdout;
@@ -452,31 +437,21 @@ let test_nonexecutable_spawn_is_io_failure () =
   Unix.chmod helper 0o600;
   let result, stdout, stderr =
     with_captured_stdio (fun () ->
-        Eio_main.run @@ fun env ->
-        Eio.Switch.run @@ fun sw ->
-        Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env)
-          (Pie.Sh.run
-             ~process_mgr:(Eio.Stdenv.process_mgr env)
-             ~prog:helper ~args:[ "--"; marker ]))
+        run_helper (fun ~env ~sw:_ ->
+            Pie.Sh.run
+              ~process_mgr:(Eio.Stdenv.process_mgr env)
+              ~prog:helper ~args:[ "--"; marker ]))
   in
   (match result with
-  | Eta.Exit.Ok () -> Alcotest.fail "expected spawn failure"
-  | Eta.Exit.Error cause ->
-      let rendered =
-        Format.asprintf "%a"
-          (Eta.Cause.pp (fun fmt (err : [> `Subprocess_error of string ]) ->
-               match err with
-               | `Subprocess_error m -> Format.pp_print_string fmt m
-               | _ -> Format.pp_print_string fmt "error"))
-          cause
-      in
+  | Ok () -> Alcotest.fail "expected spawn failure"
+  | Error (`Subprocess_error message) ->
       Alcotest.(check bool)
         "basename" true
-        (string_contains rendered "blocked-helper failed");
+        (string_contains message "blocked-helper failed");
       Alcotest.(check bool)
         "io-failure" true
-        (string_contains rendered "io-failure");
-      assert_absent "spawn error" rendered);
+        (string_contains message "io-failure");
+      assert_absent "spawn error" message);
   assert_absent "stdout" stdout;
   assert_absent "stderr" stderr
 

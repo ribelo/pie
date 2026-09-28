@@ -257,3 +257,26 @@ U1 + U2 + U3 + U4 + closed gaps ----------------------------+--> U5 final gates
 
 ## Preparation Verification and Step-2 Gates
 
+U5 integration acceptance is evidence-based, not a deployment. The final pass
+requires a forbidden-v1-symbol census in application/test sources and package
+metadata, whole-tree `dune fmt`, private `@install` build, every registered
+`dune test` suite, `@fmt`, and the `.#pie` flake artifact. Record any failing
+suite with its root repair; do not exclude or silence it. Remove `_build_u5`
+afterward. The live microphone/key check is **prepared, not executed**:
+[scripts/live-ptt-check-eta-next](</home/ribelo/projects/ribelo/pie/scripts/live-ptt-check-eta-next>)
+prints the operator-only stop/check/restart sequence, requires explicit
+provider-call approval, refuses an active production service/socket, and logs
+results privately in `/tmp`. `bash -n` and `--dry-run` pass; active-service
+refusal was observed. The real check remains for the operator after separate
+approval and can never be inferred from automated fixture success.
+
+Current U5 provenance fixture gate: `nix develop -c env DUNE_BUILD_DIR=_build_u5
+dune test packages/pie/test/build_record` passes all 10 cases after archive
+names move from v1 TLS transport to consolidated `eta_http`. Complete build,
+test, formatter and flake results are recorded below when integration settles.
+
+## Behaviour Changes Accepted During Step 2
+
+- **Interrupt exit.** The Door classifies a stop it requested itself (its own SIGINT/SIGTERM identity) as a clean **exit 0**, and any other interruption as **2**. The v1 `Pie.Process.run` mapped an interrupt-only cause to **130**, so `pie` under SIGINT/SIGTERM now exits 0 instead of 130. The local-diagnostics suite asserts the Door's classification; the mapping itself belongs to the Door / [bin/pie.ml](</home/ribelo/projects/ribelo/pie/packages/pie/bin/pie.ml>) (U4), not to the test. ^pienext-ipne
+- **OTLP enablement and the local channel.** [process.ml](</home/ribelo/projects/ribelo/pie/packages/pie/process.ml>) reads only `PIE_OTLP`; `OTEL_SDK_DISABLED` is no longer consulted. The local channel is eta-next's structured JSON journal record (with `Redact.t` fields rendering as `"<redacted>"`), not the v1 logfmt line, and a failing exporter leaves that channel intact while its own failure is reported on stderr. ^pienext-gaq3
+
