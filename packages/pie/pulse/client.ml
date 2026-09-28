@@ -466,9 +466,15 @@ let with_record_stream (T t as client) ?options
         ~finally:(fun () ->
           Hashtbl.remove t.record_queues info.Defs.stream_index;
           close_record_queue rq (Ok ());
+          (* When the reader has stopped (server closed) the body is being cancelled:
+             there is no one to answer a delete, and closing the socket frees the
+             stream server-side. Skip the delete then instead of raising from the
+             finalizer, which would replace the typed Disconnected with a defect. *)
           match
-            await_reply client
-              (Commands.build_delete_record_stream_command info.stream_index)
+            try
+              await_reply client
+                (Commands.build_delete_record_stream_command info.stream_index)
+            with Eio.Cancel.Cancelled _ -> Ok Bytes.empty
           with
           | Ok _ -> ()
           | Error (`Pulse_error error) ->
