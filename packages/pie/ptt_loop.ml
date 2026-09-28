@@ -444,14 +444,17 @@ let run ?control ?(on_capture_resumed = fun () -> Ok ())
               let with_cleanup finalizer =
                 Error
                   (`Ptt_cause
-                     (Eta.Cause.Suppressed { primary = to_cause error; finalizer }))
+                     (Eta.Cause.Suppressed
+                        { primary = to_cause error; finalizer }))
               in
               match handle.cancel () with
               | Ok () -> Error error
               | Error cleanup -> with_cleanup (to_cause cleanup)
-              | exception (Eio.Cancel.Cancelled _ as cancelled) -> raise cancelled
+              | exception (Eio.Cancel.Cancelled _ as cancelled) ->
+                  raise cancelled
               | exception exn ->
-                  with_cleanup (Eta.Cause.Die (exn, Printexc.get_raw_backtrace ())))
+                  with_cleanup
+                    (Eta.Cause.Die (exn, Printexc.get_raw_backtrace ())))
         in
         recover_operation mode "PTT capture failed" result
       in

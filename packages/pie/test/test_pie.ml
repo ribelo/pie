@@ -877,8 +877,7 @@ let test_pulse_record_cleanup_preserves_body_result () =
       ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env) ~socket_path
       ~cookie:(Bytes.make Pulse.Defs.pa_native_cookie_length '\x00')
       (fun client ->
-        Pulse.Client.with_record_stream client (fun _ _ ->
-            Ok "body"))
+        Pulse.Client.with_record_stream client (fun _ _ -> Ok "body"))
   in
   match run_boundary operation with
   | Ok value -> Alcotest.(check string) "body result" "body" value
@@ -924,6 +923,11 @@ let test_daemon_contract_response () =
   | Ok (Pie.Assistant_service.Contract.Toggle_resp true) -> ()
   | _ -> Alcotest.fail "expected toggle bool response"
 
+(* eta_ipc refuses a socket whose directory other users can write (e.g. /tmp), so each
+   daemon test binds inside a private 0700 directory. *)
+let private_socket_dir =
+  lazy (Filename.temp_dir ~perms:0o700 "pie-daemon-test" "")
+
 let expect_listener_start = function
   | Ok () -> ()
   | Error _ -> Alcotest.fail "daemon listener did not start"
@@ -933,7 +937,7 @@ let test_daemon_server_state () =
   Eio.Switch.run @@ fun sw ->
   let socket_path =
     Filename.concat
-      (Filename.get_temp_dir_name ())
+      (Lazy.force private_socket_dir)
       (Printf.sprintf "pie-daemon-%d.sock" (Unix.getpid ()))
   in
   let persist_path =
@@ -946,8 +950,8 @@ let test_daemon_server_state () =
   let coordinator = Pie.Recording.Coordinator.create ~persist_path () in
   expect_listener_start
     (Pie.Assistant_service.Server.start ~sw ~fs:(Eio.Stdenv.fs env)
-       ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env)
-       ~socket_path coordinator);
+       ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env) ~socket_path
+       coordinator);
   let send req =
     let flow = Eio.Net.connect ~sw (Eio.Stdenv.net env) (`Unix socket_path) in
     Fun.protect
@@ -986,7 +990,7 @@ let test_daemon_server_action_handler () =
   Eio.Switch.run @@ fun sw ->
   let socket_path =
     Filename.concat
-      (Filename.get_temp_dir_name ())
+      (Lazy.force private_socket_dir)
       (Printf.sprintf "pie-daemon-action-%d.sock" (Unix.getpid ()))
   in
   let persist_path =
@@ -1019,8 +1023,8 @@ let test_daemon_server_action_handler () =
   in
   expect_listener_start
     (Pie.Assistant_service.Server.start ~sw ~fs:(Eio.Stdenv.fs env)
-       ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env)
-       ~socket_path ~action_handler coordinator);
+       ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env) ~socket_path
+       ~action_handler coordinator);
   let flow = Eio.Net.connect ~sw (Eio.Stdenv.net env) (`Unix socket_path) in
   let response =
     Fun.protect
@@ -1058,7 +1062,7 @@ let test_daemon_server_unknown_meeting_method () =
   Eio.Switch.run @@ fun sw ->
   let socket_path =
     Filename.concat
-      (Filename.get_temp_dir_name ())
+      (Lazy.force private_socket_dir)
       (Printf.sprintf "pie-daemon-%d.sock" (Unix.getpid ()))
   in
   let persist_path =
@@ -1074,8 +1078,8 @@ let test_daemon_server_unknown_meeting_method () =
        Pie.Recording.Coordinator.Ptt_transcribe ());
   expect_listener_start
     (Pie.Assistant_service.Server.start ~sw ~fs:(Eio.Stdenv.fs env)
-       ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env)
-       ~socket_path coordinator);
+       ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env) ~socket_path
+       coordinator);
   let send method_str =
     let flow = Eio.Net.connect ~sw (Eio.Stdenv.net env) (`Unix socket_path) in
     Fun.protect
@@ -1317,8 +1321,8 @@ let test_speech_operation_deadlines_are_typed () =
           ~api_key:(Eta_observability.Redact.make "pie-local-deadline-test")
           ~model:"local-test" ~language:"en" pcm)
   in
-  Alcotest.(check (result string string)) "direct STT timeout is typed"
-    (Error "OpenRouter request failed: timeout")
+  Alcotest.(check (result string string))
+    "direct STT timeout is typed" (Error "OpenRouter request failed: timeout")
     (Result.map_error (function `Stt_error msg -> msg) direct);
   let response =
     stalled_openrouter_call ~seconds:121 (fun env sw ->
@@ -1328,12 +1332,12 @@ let test_speech_operation_deadlines_are_typed () =
             ~reporter:(Eta_observability.Logger.Reporter.records (fun _ -> ()))
             ()
         in
-        Stt.Openrouter.transcribe_with_prompt ~sw ~net:env#net
-          ~clock:env#clock ~logger ~model:"local-test" ~language:"en"
+        Stt.Openrouter.transcribe_with_prompt ~sw ~net:env#net ~clock:env#clock
+          ~logger ~model:"local-test" ~language:"en"
           ~prompt_template:"Transcribe {{language}}" pcm)
   in
-  Alcotest.(check (result string string)) "response STT timeout is typed"
-    (Error "OpenRouter request failed: timeout")
+  Alcotest.(check (result string string))
+    "response STT timeout is typed" (Error "OpenRouter request failed: timeout")
     (Result.map_error (function `Stt_error msg -> msg) response)
 
 let tcp_port = function
@@ -1509,12 +1513,11 @@ let test_codex_realtime_transcribe_uses_conversation_prompt_e2e () =
   in
   let pcm = Bytes.make 3200 '\x00' in
   let operation () =
-    Stt.Codex_realtime.transcribe_with_prompt ~sw ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env)
-      ~model:"gpt-realtime-2.1" ~language:"pl"
+    Stt.Codex_realtime.transcribe_with_prompt ~sw ~net:(Eio.Stdenv.net env)
+      ~clock:(Eio.Stdenv.clock env) ~model:"gpt-realtime-2.1" ~language:"pl"
       ~prompt_template:"Transcribe in {{language}}." ~sample_rate:16000 pcm
   in
-  (match run_boundary operation with
-  | Ok _ | Error _ -> ());
+  (match run_boundary operation with Ok _ | Error _ -> ());
   cleanup_env ();
   match !captured with
   | `Null -> Alcotest.fail "did not capture session.update message"
@@ -1571,15 +1574,14 @@ let test_codex_realtime_translate_nonconv_drops_prompt_e2e () =
   in
   let pcm = Bytes.make 3200 '\x00' in
   let operation () =
-    Stt.Codex_realtime.translate_with_prompt ~sw ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env)
-      ~model:"not-the-conversation-model" ~source_language:"pl"
-      ~target_language:"en"
+    Stt.Codex_realtime.translate_with_prompt ~sw ~net:(Eio.Stdenv.net env)
+      ~clock:(Eio.Stdenv.clock env) ~model:"not-the-conversation-model"
+      ~source_language:"pl" ~target_language:"en"
       ~prompt_template:
         "Translate from {{source_language}} to {{target_language}}."
       ~sample_rate:16000 pcm
   in
-  (match run_boundary operation with
-  | Ok _ | Error _ -> ());
+  (match run_boundary operation with Ok _ | Error _ -> ());
   cleanup_env ();
   match !captured with
   | `Null -> Alcotest.fail "did not capture session.update"
@@ -1831,9 +1833,7 @@ let test_failed_processing_retains_captured_audio () =
   let owner =
     require_owner ~dir ~coordinator ~attempt Assistant.Service.Transcribe
   in
-  let stt _config _mode _bytes =
-    Error (`Ptt_error "STT unavailable")
-  in
+  let stt _config _mode _bytes = Error (`Ptt_error "STT unavailable") in
   let deliver _config _mode _text = Ok () in
   let inner =
     Assistant.Service.make_clip_handle ~owner ~stt ~deliver
@@ -1844,12 +1844,11 @@ let test_failed_processing_retains_captured_audio () =
   let pcm_bytes = Bytes.of_string "captured-audio" in
   let operation () =
     Assistant.Service.run_acquired_attempt ~sw ~attempt
-      ~on_settle:(settle_attempt owner)
-      (fun () ->
-       let* () = handle.offer pcm_bytes in
-       match handle.finish with
-       | Ptt_loop.Buffered f -> f { Ptt_loop.duration_ms = 500; pcm_bytes }
-       | Ptt_loop.Streaming _ -> Alcotest.fail "expected Buffered finish")
+      ~on_settle:(settle_attempt owner) (fun () ->
+        let* () = handle.offer pcm_bytes in
+        match handle.finish with
+        | Ptt_loop.Buffered f -> f { Ptt_loop.duration_ms = 500; pcm_bytes }
+        | Ptt_loop.Streaming _ -> Alcotest.fail "expected Buffered finish")
   in
   (match run_boundary operation with
   | Ok () -> Alcotest.fail "expected processing failure"
@@ -1885,8 +1884,8 @@ let test_setup_failure_releases_admission_and_preserves_error () =
   in
   let operation () =
     Assistant.Service.run_acquired_attempt ~sw ~attempt
-      ~on_settle:(settle_attempt owner)
-      (fun () -> Error (`Ptt_error "synthetic setup failure"))
+      ~on_settle:(settle_attempt owner) (fun () ->
+        Error (`Ptt_error "synthetic setup failure"))
   in
   (match run_boundary operation with
   | Ok () -> Alcotest.fail "setup failure was erased"
@@ -1935,9 +1934,7 @@ let test_settle_attempt_construction_does_not_run_duties () =
       }
   in
   let pcm_bytes = Bytes.of_string "captured-audio" in
-  (match
-     run_boundary (fun () -> handle.offer pcm_bytes)
-   with
+  (match run_boundary (fun () -> handle.offer pcm_bytes) with
   | Ok () -> ()
   | Error cause ->
       Alcotest.failf "offer failed: %a" (Eta.Cause.pp pp_ptt_error) cause);
@@ -1953,9 +1950,7 @@ let test_settle_attempt_construction_does_not_run_duties () =
     (Recording.Coordinator.snapshot coordinator).Recording.Coordinator.active;
   Alcotest.(check bool)
     "abandoned blueprint does not publish" true (peek_none store);
-  (match
-     run_boundary (fun () -> Assistant.Service.settle_attempt owner)
-   with
+  (match run_boundary (fun () -> Assistant.Service.settle_attempt owner) with
   | Ok () -> ()
   | Error cause ->
       Alcotest.failf "executed cleanup failed: %a"
@@ -1966,9 +1961,7 @@ let test_settle_attempt_construction_does_not_run_duties () =
     (Recording.Coordinator.snapshot coordinator).Recording.Coordinator.active;
   Alcotest.(check bool)
     "executed cleanup does not publish abort" true (peek_none store);
-  (match
-     run_boundary (fun () -> Assistant.Service.settle_attempt owner)
-   with
+  (match run_boundary (fun () -> Assistant.Service.settle_attempt owner) with
   | Ok () -> ()
   | Error cause ->
       Alcotest.failf "repeated cleanup failed: %a"
@@ -1995,16 +1988,19 @@ let test_buffered_clip_cancellation_settles_after_offer () =
     let exit =
       Eta.Scope.run (fun _ ->
           let* press =
-            Assistant.Service.on_press ~sw ~net:(Eio.Stdenv.net env)
-              ~clock ~logger:(test_logger env)
+            Assistant.Service.on_press ~sw ~net:(Eio.Stdenv.net env) ~clock
+              ~logger:(test_logger env)
               ~stt:(fun _ _ _ -> Ok "synthetic transcript")
               ~deliver:(fun _ _ _ -> Ok ())
               ~coordinator ~retry_dir:dir
-              ~config:(openrouter_clip_config ()) "transcribe"
+              ~config:(openrouter_clip_config ())
+              "transcribe"
           in
           match press with
           | Ptt_loop.Handle _ ->
-              Error (`Ptt_error "buffered clip attempt returned Handle without Scoped")
+              Error
+                (`Ptt_error
+                   "buffered clip attempt returned Handle without Scoped")
           | Ptt_loop.Skip -> Error (`Ptt_error "buffered clip attempt skipped")
           | Ptt_loop.Scoped with_handle ->
               with_handle (fun handle ->
@@ -2057,9 +2053,9 @@ let test_buffered_clip_defect_settles_after_offer () =
   let operation () =
     let* press =
       Assistant.Service.on_press ~sw ~net:(Eio.Stdenv.net env)
-         ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env)
+        ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env)
         ~stt:(fun _ _ _ -> Ok "synthetic transcript")
-         ~deliver:(fun _ _ _ -> Ok ())
+        ~deliver:(fun _ _ _ -> Ok ())
         ~coordinator ~retry_dir:dir
         ~config:(openrouter_clip_config ())
         "transcribe"
@@ -2068,8 +2064,7 @@ let test_buffered_clip_defect_settles_after_offer () =
     | Ptt_loop.Handle _ ->
         Error
           (`Ptt_error "buffered clip attempt returned Handle without Scoped")
-    | Ptt_loop.Skip ->
-        Error (`Ptt_error "buffered clip attempt skipped")
+    | Ptt_loop.Skip -> Error (`Ptt_error "buffered clip attempt skipped")
     | Ptt_loop.Scoped with_handle ->
         with_handle (fun handle ->
             let* () = handle.offer pcm_bytes in
@@ -2103,9 +2098,9 @@ let test_on_press_construction_does_not_admit () =
     (Recording.Coordinator.snapshot coordinator).Recording.Coordinator.active;
   let blueprint () =
     Assistant.Service.on_press ~sw ~net:(Eio.Stdenv.net env)
-         ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env)
+      ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env)
       ~stt:(fun _ _ _ -> Ok "synthetic transcript")
-         ~deliver:(fun _ _ _ -> Ok ())
+      ~deliver:(fun _ _ _ -> Ok ())
       ~coordinator
       ~config:(openrouter_clip_config ())
       "transcribe"
@@ -2124,9 +2119,9 @@ let test_on_press_execution_admits () =
   let coordinator = Recording.Coordinator.create ~persist_path () in
   let blueprint () =
     Assistant.Service.on_press ~sw ~net:(Eio.Stdenv.net env)
-         ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env)
+      ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env)
       ~stt:(fun _ _ _ -> Ok "synthetic transcript")
-         ~deliver:(fun _ _ _ -> Ok ())
+      ~deliver:(fun _ _ _ -> Ok ())
       ~coordinator ~retry_dir:dir
       ~config:(openrouter_clip_config ())
       "transcribe"
@@ -2159,7 +2154,8 @@ let test_on_press_busy_and_disabled_at_execution () =
   let press () =
     Assistant.Service.on_press ~sw ~net ~clock ~logger:(test_logger env)
       ~stt:(fun _ _ _ -> Ok "synthetic transcript")
-      ~deliver:(fun _ _ _ -> Ok ()) ~coordinator ~retry_dir:dir
+      ~deliver:(fun _ _ _ -> Ok ())
+      ~coordinator ~retry_dir:dir
       ~config:(openrouter_clip_config ())
       "transcribe"
   in
@@ -2226,9 +2222,9 @@ let test_on_press_constructor_failure_releases_without_clearing_other_attempt ()
   in
   let blueprint () =
     Assistant.Service.on_press ~sw ~net:(Eio.Stdenv.net env)
-         ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env)
+      ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env)
       ~stt:(fun _ _ _ -> Ok "synthetic transcript")
-         ~deliver:(fun _ _ _ -> Ok ())
+      ~deliver:(fun _ _ _ -> Ok ())
       ~coordinator ~retry_dir:dir ~config "transcribe"
   in
   Alcotest.(check bool)
@@ -2242,9 +2238,7 @@ let test_on_press_constructor_failure_releases_without_clearing_other_attempt ()
         "on_press admits before deferred handle construction" true
         (Recording.Coordinator.snapshot coordinator)
           .Recording.Coordinator.active;
-      match
-        run_boundary (fun () -> with_handle (fun _ -> Ok ()))
-      with
+      match run_boundary (fun () -> with_handle (fun _ -> Ok ())) with
       | Ok _ -> Alcotest.fail "empty model should fail handle construction"
       | Error cause -> (
           match Eta.Cause.failures cause with
@@ -2336,9 +2330,7 @@ let test_attempt_handle_finish_holds_until_outer_settle () =
           f { Ptt_loop.duration_ms = 1; pcm_bytes = even_hold_pcm }
       | Ptt_loop.Streaming _ -> Alcotest.fail "expected Buffered finish"
     in
-    let* () =
-      sync (fun () -> Eio.Promise.resolve resolve_entered ())
-    in
+    let* () = sync (fun () -> Eio.Promise.resolve resolve_entered ()) in
     sync (fun () -> Eio.Promise.await held)
   in
   let checker () =
@@ -2349,8 +2341,9 @@ let test_attempt_handle_finish_holds_until_outer_settle () =
   in
   let operation () =
     par ~sw
-      (fun () -> Assistant.Service.run_acquired_attempt ~sw ~attempt
-         ~on_settle:(settle_attempt owner) body)
+      (fun () ->
+        Assistant.Service.run_acquired_attempt ~sw ~attempt
+          ~on_settle:(settle_attempt owner) body)
       checker
   in
   (match run_boundary operation with
@@ -2395,9 +2388,7 @@ let test_attempt_handle_cancel_holds_until_outer_settle () =
   let body () =
     let* () = handle.offer even_hold_pcm in
     let* () = handle.cancel () in
-    let* () =
-      sync (fun () -> Eio.Promise.resolve resolve_entered ())
-    in
+    let* () = sync (fun () -> Eio.Promise.resolve resolve_entered ()) in
     sync (fun () -> Eio.Promise.await held)
   in
   let checker () =
@@ -2408,8 +2399,9 @@ let test_attempt_handle_cancel_holds_until_outer_settle () =
   in
   let operation () =
     par ~sw
-      (fun () -> Assistant.Service.run_acquired_attempt ~sw ~attempt
-         ~on_settle:(settle_attempt owner) body)
+      (fun () ->
+        Assistant.Service.run_acquired_attempt ~sw ~attempt
+          ~on_settle:(settle_attempt owner) body)
       checker
   in
   (match run_boundary operation with
@@ -2565,10 +2557,13 @@ action = "ctrl-j"
      it to None, leaving a rule with neither app_id nor title_regex. Such a
      matcher-less rule would match every window (a catch-all), so it must be
      rejected at load time rather than silently accepted. *)
-  match Pie.Config.Stt.load ~fs:(Eio.Stdenv.fs env)
-          ~source:(`Explicit config_path) () with
+  match
+    Pie.Config.Stt.load ~fs:(Eio.Stdenv.fs env) ~source:(`Explicit config_path)
+      ()
+  with
   | Error _ -> remove_dir dir
-  | Ok _ -> Alcotest.fail "whitespace-only app_id should be rejected, not loaded"
+  | Ok _ ->
+      Alcotest.fail "whitespace-only app_id should be rejected, not loaded"
 
 let json_member name = function
   | `Assoc fields -> (
@@ -2667,8 +2662,10 @@ let test_assistant_startup_config_json () =
   | _ -> Alcotest.fail "expected one text entry rule"
 
 let load_stt_config env config_path =
-  match Pie.Config.Stt.load ~fs:(Eio.Stdenv.fs env)
-          ~source:(`Explicit config_path) () with
+  match
+    Pie.Config.Stt.load ~fs:(Eio.Stdenv.fs env) ~source:(`Explicit config_path)
+      ()
+  with
   | Ok config -> config
   | Error (`Config msg) -> Alcotest.fail msg
 
@@ -2875,8 +2872,10 @@ app_id = "Alacritty"
 title_regex = "("
 action = "ctrl-j"
 |toml};
-  match Pie.Config.Stt.load ~fs:(Eio.Stdenv.fs env)
-          ~source:(`Explicit config_path) () with
+  match
+    Pie.Config.Stt.load ~fs:(Eio.Stdenv.fs env) ~source:(`Explicit config_path)
+      ()
+  with
   | Ok _ -> Alcotest.fail "expected invalid regex to fail"
   | Error (`Config msg) ->
       Alcotest.(check bool)
@@ -2900,8 +2899,10 @@ let test_stt_config_rejects_prompt_with_wrong_placeholder () =
      of the required "{{language}}" placeholder. A prompt with "{language}"
      passes validation but render_template won't substitute it, so the
      language variable is silently omitted from the actual API request. *)
-  match Pie.Config.Stt.load ~fs:(Eio.Stdenv.fs env)
-          ~source:(`Explicit config_path) () with
+  match
+    Pie.Config.Stt.load ~fs:(Eio.Stdenv.fs env) ~source:(`Explicit config_path)
+      ()
+  with
   | Error (`Config msg) ->
       Alcotest.(check bool)
         "mentions language placeholder" true (String.contains msg '{')
@@ -2940,29 +2941,39 @@ let test_stt_config_resolves_provider_qualified_model () =
 let test_openrouter_responses_request_uses_text_and_audio () =
   let wav = Bytes.of_string "RIFF\000\000\000\000WAVE" in
   let request : Eta_ai_openrouter.Responses.request =
-    { model = "xiaomi/mimo-v2.5"; prompt = "Use Pie context."; wav;
-      temperature = Some 0.0; text_format = None; reasoning_effort = None }
+    {
+      model = "xiaomi/mimo-v2.5";
+      prompt = "Use Pie context.";
+      wav;
+      temperature = Some 0.0;
+      text_format = None;
+      reasoning_effort = None;
+    }
   in
   let encoded = Eta_ai_openrouter.Responses.encode request in
-  Alcotest.(check string) "model id" "xiaomi/mimo-v2.5"
+  Alcotest.(check string)
+    "model id" "xiaomi/mimo-v2.5"
     (json_string "model" encoded);
-  Alcotest.(check bool) "max tokens absent" true
-    (match encoded with `Assoc fields -> not (List.mem_assoc "max_output_tokens" fields)
-     | _ -> false);
+  Alcotest.(check bool)
+    "max tokens absent" true
+    (match encoded with
+    | `Assoc fields -> not (List.mem_assoc "max_output_tokens" fields)
+    | _ -> false);
   match json_member "input" encoded with
   | `List [ `Assoc fields ] -> (
       match List.assoc_opt "content" fields with
-      | Some (`List [ text; audio ]) -> (
-          Alcotest.(check string) "prompt" "Use Pie context."
-            (json_string "text" text);
+      | Some (`List [ text; audio ]) ->
+          Alcotest.(check string)
+            "prompt" "Use Pie context." (json_string "text" text);
           let input_audio = json_member "input_audio" audio in
-          Alcotest.(check string) "wav format" "wav"
+          Alcotest.(check string)
+            "wav format" "wav"
             (json_string "format" input_audio);
-          Alcotest.(check string) "wav riff" "RIFF"
-            (Bytes.sub_string wav 0 4);
-          Alcotest.(check string) "wav encoded intact"
+          Alcotest.(check string) "wav riff" "RIFF" (Bytes.sub_string wav 0 4);
+          Alcotest.(check string)
+            "wav encoded intact"
             (Pie.Stt.Openrouter.base64_encode wav)
-            (json_string "data" input_audio))
+            (json_string "data" input_audio)
       | _ -> Alcotest.fail "expected one text and audio input")
   | _ -> Alcotest.fail "expected one user message with text and audio"
 
@@ -3255,8 +3266,7 @@ let test_ptt_loop_continues_after_finish () =
         Ptt_loop.Buffered
           (fun _ ->
             let* () = sync (fun () -> incr finishes) in
-            if !finishes = 2 then Error (`Ptt_error "done")
-            else Ok ());
+            if !finishes = 2 then Error (`Ptt_error "done") else Ok ());
       cancel = (fun () -> Ok ());
     }
   in
@@ -3291,12 +3301,10 @@ let test_ptt_loop_continues_after_finish () =
     Pie.Ptt_loop.run ~sw ~logger:(test_logger env)
       ~mono_clock:(Eio.Stdenv.mono_clock env)
       ~keyboard
-      ~audio:((fun () -> Ok (Some (Eio.Stream.take audio))))
+      ~audio:(fun () -> Ok (Some (Eio.Stream.take audio)))
       config
   in
-  let result =
-    run_ptt_boundary ~clock:(Eio.Stdenv.clock env) operation
-  in
+  let result = run_ptt_boundary ~clock:(Eio.Stdenv.clock env) operation in
   running := false;
   Alcotest.(check int) "starts" 3 !starts;
   Alcotest.(check int) "finishes" 3 !finishes;
@@ -3354,10 +3362,10 @@ let test_ptt_loop_control_stream_triggers_capture () =
   let result =
     run_ptt_boundary ~clock:(Eio.Stdenv.clock env) (fun () ->
         Pie.Ptt_loop.run ~sw ~logger:(test_logger env)
-         ~mono_clock:(Eio.Stdenv.mono_clock env)
-         ~control ~keyboard
-         ~audio:((fun () -> Ok (Some (Eio.Stream.take audio))))
-         config)
+          ~mono_clock:(Eio.Stdenv.mono_clock env)
+          ~control ~keyboard
+          ~audio:(fun () -> Ok (Some (Eio.Stream.take audio)))
+          config)
   in
   Alcotest.(check int) "starts" 1 !starts;
   Alcotest.(check int) "finishes" 1 !finishes;
@@ -3393,8 +3401,7 @@ let test_ptt_loop_post_roll_repress_continues_capture () =
     {
       Pie.Ptt_loop.offer =
         (fun chunk ->
-          sync (fun () ->
-              offered := Bytes.to_string chunk :: !offered));
+          sync (fun () -> offered := Bytes.to_string chunk :: !offered));
       finish =
         Ptt_loop.Buffered
           (fun _ ->
@@ -3433,10 +3440,10 @@ let test_ptt_loop_post_roll_repress_continues_capture () =
   let result =
     run_ptt_boundary ~clock:(Eio.Stdenv.clock env) (fun () ->
         Pie.Ptt_loop.run ~sw ~logger:(test_logger env)
-         ~mono_clock:(Eio.Stdenv.mono_clock env)
-         ~keyboard
-         ~audio:((fun () -> Ok (Some (Eio.Stream.take audio))))
-         config)
+          ~mono_clock:(Eio.Stdenv.mono_clock env)
+          ~keyboard
+          ~audio:(fun () -> Ok (Some (Eio.Stream.take audio)))
+          config)
   in
   Alcotest.(check int) "one handle" 1 !starts;
   Alcotest.(check int) "one finish" 1 !finishes;
@@ -3470,8 +3477,7 @@ let test_ptt_loop_scoped_handle_lifetime () =
   let handle =
     {
       Pie.Ptt_loop.offer = (fun _ -> sync (fun () -> incr offers));
-      finish =
-        Ptt_loop.Buffered (fun _ -> sync (fun () -> incr finishes));
+      finish = Ptt_loop.Buffered (fun _ -> sync (fun () -> incr finishes));
       cancel = (fun () -> Ok (incr cancels));
     }
   in
@@ -3510,12 +3516,10 @@ let test_ptt_loop_scoped_handle_lifetime () =
     Pie.Ptt_loop.run ~sw ~logger:(test_logger env)
       ~mono_clock:(Eio.Stdenv.mono_clock env)
       ~keyboard
-      ~audio:((fun () -> Ok (Some (Eio.Stream.take audio))))
+      ~audio:(fun () -> Ok (Some (Eio.Stream.take audio)))
       config
   in
-  let result =
-    run_ptt_boundary ~clock:(Eio.Stdenv.clock env) operation
-  in
+  let result = run_ptt_boundary ~clock:(Eio.Stdenv.clock env) operation in
   Alcotest.(check int) "scope entered" 1 !scope_entries;
   Alcotest.(check int) "scope exited" 1 !scope_exits;
   Alcotest.(check int) "offers" 1 !offers;
@@ -3623,10 +3627,10 @@ let test_ptt_loop_rejects_busy_press_and_accepts_fresh_cycle () =
   let result =
     run_ptt_boundary ~clock:(Eio.Stdenv.clock env) (fun () ->
         Pie.Ptt_loop.run ~sw ~logger:(test_logger env)
-         ~mono_clock:(Eio.Stdenv.mono_clock env)
-         ~control ~keyboard
-         ~audio:((fun () -> Ok (Some (Eio.Stream.take audio))))
-         config)
+          ~mono_clock:(Eio.Stdenv.mono_clock env)
+          ~control ~keyboard
+          ~audio:(fun () -> Ok (Some (Eio.Stream.take audio)))
+          config)
   in
   Alcotest.(check int) "fresh cycle after settlement is admitted" 2 !calls;
   Alcotest.(check int) "both admitted cycles finished" 2 !finishes;
@@ -3651,8 +3655,7 @@ let test_ptt_loop_scoped_setup_failure_allows_subsequent_press () =
   let handle : Pie.Ptt_loop.handle =
     {
       offer = (fun _ -> Ok ());
-      finish =
-        Ptt_loop.Buffered (fun _ -> sync (fun () -> incr finishes));
+      finish = Ptt_loop.Buffered (fun _ -> sync (fun () -> incr finishes));
       cancel = (fun () -> Ok ());
     }
   in
@@ -3670,8 +3673,7 @@ let test_ptt_loop_scoped_setup_failure_allows_subsequent_press () =
               incr calls;
               if !calls = 1 then
                 Pie.Ptt_loop.Scoped
-                  (fun _use ->
-                    Error (`Ptt_error "synthetic setup failure"))
+                  (fun _use -> Error (`Ptt_error "synthetic setup failure"))
               else (
                 Eio.Promise.resolve resolve_second_started ();
                 Pie.Ptt_loop.Handle handle)));
@@ -3690,10 +3692,10 @@ let test_ptt_loop_scoped_setup_failure_allows_subsequent_press () =
   let result =
     run_ptt_boundary ~clock:(Eio.Stdenv.clock env) (fun () ->
         Pie.Ptt_loop.run ~sw ~logger:(test_logger env)
-         ~mono_clock:(Eio.Stdenv.mono_clock env)
-         ~control ~keyboard
-         ~audio:((fun () -> Ok (Some (Eio.Stream.take audio))))
-         config)
+          ~mono_clock:(Eio.Stdenv.mono_clock env)
+          ~control ~keyboard
+          ~audio:(fun () -> Ok (Some (Eio.Stream.take audio)))
+          config)
   in
   Alcotest.(check int)
     "setup failure does not consume the subsequent press" 2 !calls;
@@ -3793,10 +3795,10 @@ let test_ptt_loop_press_during_gated_on_press_is_not_replayed () =
   let result =
     run_ptt_boundary ~clock:(Eio.Stdenv.clock env) (fun () ->
         Pie.Ptt_loop.run ~sw ~logger:(test_logger env)
-         ~mono_clock:(Eio.Stdenv.mono_clock env)
-         ~control ~keyboard
-         ~audio:((fun () -> Ok (Some (Eio.Stream.take audio))))
-         config)
+          ~mono_clock:(Eio.Stdenv.mono_clock env)
+          ~control ~keyboard
+          ~audio:(fun () -> Ok (Some (Eio.Stream.take audio)))
+          config)
   in
   Alcotest.(check int)
     "press during gated on_press is not a later attempt" 1 !calls;
@@ -3877,9 +3879,11 @@ let test_ptt_loop_retry_admission_rejects_busy_control_cycle () =
                                   (Recording.Coordinator.release coordinator
                                      attempt)));
                       cancel =
-                        (fun () -> sync (fun () ->
-                            ignore
-                              (Recording.Coordinator.release coordinator attempt)));
+                        (fun () ->
+                          sync (fun () ->
+                              ignore
+                                (Recording.Coordinator.release coordinator
+                                   attempt)));
                     }
               | _ -> Pie.Ptt_loop.Skip));
       on_release = (fun _ -> Ok ());
@@ -3909,10 +3913,10 @@ let test_ptt_loop_retry_admission_rejects_busy_control_cycle () =
   let result =
     run_ptt_boundary ~clock:(Eio.Stdenv.clock env) (fun () ->
         Pie.Ptt_loop.run ~sw ~logger:(test_logger env)
-         ~mono_clock:(Eio.Stdenv.mono_clock env)
-         ~control ~keyboard
-         ~audio:((fun () -> Ok (Some (Eio.Stream.take audio))))
-         config)
+          ~mono_clock:(Eio.Stdenv.mono_clock env)
+          ~control ~keyboard
+          ~audio:(fun () -> Ok (Some (Eio.Stream.take audio)))
+          config)
   in
   Alcotest.(check int) "fresh cycle after retry release is admitted" 1 !calls;
   Alcotest.(check int) "fresh cycle finished" 1 !finishes;
@@ -3976,9 +3980,11 @@ let test_ptt_loop_retry_admission_rejects_busy_keyboard_cycle () =
                                   (Recording.Coordinator.release coordinator
                                      attempt)));
                       cancel =
-                        (fun () -> sync (fun () ->
-                            ignore
-                              (Recording.Coordinator.release coordinator attempt)));
+                        (fun () ->
+                          sync (fun () ->
+                              ignore
+                                (Recording.Coordinator.release coordinator
+                                   attempt)));
                     }
               | _ -> Pie.Ptt_loop.Skip));
       on_release = (fun _ -> Ok ());
@@ -4009,10 +4015,10 @@ let test_ptt_loop_retry_admission_rejects_busy_keyboard_cycle () =
   let result =
     run_ptt_boundary ~clock:(Eio.Stdenv.clock env) (fun () ->
         Pie.Ptt_loop.run ~sw ~logger:(test_logger env)
-         ~mono_clock:(Eio.Stdenv.mono_clock env)
-         ~keyboard
-         ~audio:((fun () -> Ok (Some (Eio.Stream.take audio))))
-         config)
+          ~mono_clock:(Eio.Stdenv.mono_clock env)
+          ~keyboard
+          ~audio:(fun () -> Ok (Some (Eio.Stream.take audio)))
+          config)
   in
   Alcotest.(check int)
     "fresh keyboard cycle after retry release is admitted" 1 !calls;
@@ -4056,22 +4062,23 @@ let test_ptt_loop_failed_on_press_does_not_replay_busy_control_cycle () =
         (fun _ ->
           incr calls;
           if !calls = 1 then
-            let* disposition = sync (fun () ->
-                match
-                  Recording.Coordinator.try_start coordinator
-                    Recording.Coordinator.Ptt_transcribe ()
-                with
-                | Recording.Coordinator.Started attempt ->
-                    Eio.Promise.resolve resolve_entered ();
-                    Eio.Promise.await proceed;
-                    ignore (Recording.Coordinator.release coordinator attempt);
-                    Eio.Promise.resolve resolve_failed ();
-                    `Fail
-                | _ -> `Skip)
+            let* disposition =
+              sync (fun () ->
+                  match
+                    Recording.Coordinator.try_start coordinator
+                      Recording.Coordinator.Ptt_transcribe ()
+                  with
+                  | Recording.Coordinator.Started attempt ->
+                      Eio.Promise.resolve resolve_entered ();
+                      Eio.Promise.await proceed;
+                      ignore (Recording.Coordinator.release coordinator attempt);
+                      Eio.Promise.resolve resolve_failed ();
+                      `Fail
+                  | _ -> `Skip)
             in
-            (match disposition with
+            match disposition with
             | `Skip -> Ok Pie.Ptt_loop.Skip
-            | `Fail -> Error (`Ptt_error "setup failed before handle"))
+            | `Fail -> Error (`Ptt_error "setup failed before handle")
           else
             sync (fun () ->
                 match
@@ -4091,10 +4098,11 @@ let test_ptt_loop_failed_on_press_does_not_replay_busy_control_cycle () =
                                     (Recording.Coordinator.release coordinator
                                        attempt)));
                         cancel =
-                          (fun () -> sync (fun () ->
-                              ignore
-                                (Recording.Coordinator.release coordinator
-                                   attempt)));
+                          (fun () ->
+                            sync (fun () ->
+                                ignore
+                                  (Recording.Coordinator.release coordinator
+                                     attempt)));
                       }
                 | _ -> Pie.Ptt_loop.Skip));
       on_release = (fun _ -> Ok ());
@@ -4127,10 +4135,10 @@ let test_ptt_loop_failed_on_press_does_not_replay_busy_control_cycle () =
   let result =
     run_ptt_boundary ~clock:(Eio.Stdenv.clock env) (fun () ->
         Pie.Ptt_loop.run ~sw ~logger:(test_logger env)
-         ~mono_clock:(Eio.Stdenv.mono_clock env)
-         ~control ~keyboard
-         ~audio:((fun () -> Ok (Some (Eio.Stream.take audio))))
-         config)
+          ~mono_clock:(Eio.Stdenv.mono_clock env)
+          ~control ~keyboard
+          ~audio:(fun () -> Ok (Some (Eio.Stream.take audio)))
+          config)
   in
   Alcotest.(check int) "fresh cycle after failed on_press is admitted" 2 !calls;
   Alcotest.(check int) "fresh cycle finished" 1 !finishes;
@@ -4172,22 +4180,23 @@ let test_ptt_loop_failed_on_press_does_not_replay_busy_keyboard_cycle () =
         (fun _ ->
           incr calls;
           if !calls = 1 then
-            let* disposition = sync (fun () ->
-                match
-                  Recording.Coordinator.try_start coordinator
-                    Recording.Coordinator.Ptt_transcribe ()
-                with
-                | Recording.Coordinator.Started attempt ->
-                    Eio.Promise.resolve resolve_entered ();
-                    Eio.Promise.await proceed;
-                    ignore (Recording.Coordinator.release coordinator attempt);
-                    Eio.Promise.resolve resolve_failed ();
-                    `Fail
-                | _ -> `Skip)
+            let* disposition =
+              sync (fun () ->
+                  match
+                    Recording.Coordinator.try_start coordinator
+                      Recording.Coordinator.Ptt_transcribe ()
+                  with
+                  | Recording.Coordinator.Started attempt ->
+                      Eio.Promise.resolve resolve_entered ();
+                      Eio.Promise.await proceed;
+                      ignore (Recording.Coordinator.release coordinator attempt);
+                      Eio.Promise.resolve resolve_failed ();
+                      `Fail
+                  | _ -> `Skip)
             in
-            (match disposition with
+            match disposition with
             | `Skip -> Ok Pie.Ptt_loop.Skip
-            | `Fail -> Error (`Ptt_error "setup failed before handle"))
+            | `Fail -> Error (`Ptt_error "setup failed before handle")
           else
             sync (fun () ->
                 match
@@ -4207,10 +4216,11 @@ let test_ptt_loop_failed_on_press_does_not_replay_busy_keyboard_cycle () =
                                     (Recording.Coordinator.release coordinator
                                        attempt)));
                         cancel =
-                          (fun () -> sync (fun () ->
-                              ignore
-                                (Recording.Coordinator.release coordinator
-                                   attempt)));
+                          (fun () ->
+                            sync (fun () ->
+                                ignore
+                                  (Recording.Coordinator.release coordinator
+                                     attempt)));
                       }
                 | _ -> Pie.Ptt_loop.Skip));
       on_release = (fun _ -> Ok ());
@@ -4243,10 +4253,10 @@ let test_ptt_loop_failed_on_press_does_not_replay_busy_keyboard_cycle () =
   let result =
     run_ptt_boundary ~clock:(Eio.Stdenv.clock env) (fun () ->
         Pie.Ptt_loop.run ~sw ~logger:(test_logger env)
-         ~mono_clock:(Eio.Stdenv.mono_clock env)
-         ~keyboard
-         ~audio:((fun () -> Ok (Some (Eio.Stream.take audio))))
-         config)
+          ~mono_clock:(Eio.Stdenv.mono_clock env)
+          ~keyboard
+          ~audio:(fun () -> Ok (Some (Eio.Stream.take audio)))
+          config)
   in
   Alcotest.(check int)
     "fresh keyboard cycle after failed on_press is admitted" 2 !calls;
@@ -4334,9 +4344,11 @@ let test_ptt_loop_processing_keeps_input_live_during_finish () =
                                   (Recording.Coordinator.release coordinator
                                      attempt)));
                       cancel =
-                        (fun () -> sync (fun () ->
-                            ignore
-                              (Recording.Coordinator.release coordinator attempt)));
+                        (fun () ->
+                          sync (fun () ->
+                              ignore
+                                (Recording.Coordinator.release coordinator
+                                   attempt)));
                     }
               | _ -> Pie.Ptt_loop.Skip));
       on_release = (fun _ -> Ok ());
@@ -4380,10 +4392,11 @@ let test_ptt_loop_processing_keeps_input_live_during_finish () =
   let result =
     run_ptt_boundary ~clock:(Eio.Stdenv.clock env) (fun () ->
         Pie.Ptt_loop.run ~sw ~logger:(test_logger env)
-         ~mono_clock:(Eio.Stdenv.mono_clock env)
-         ~control ~keyboard
-         ~audio:(ptt_audio_with_flood_ingress_ack audio resolve_flood_ingressed)
-         config)
+          ~mono_clock:(Eio.Stdenv.mono_clock env)
+          ~control ~keyboard
+          ~audio:
+            (ptt_audio_with_flood_ingress_ack audio resolve_flood_ingressed)
+          config)
   in
   Alcotest.(check int) "no extra on_press during gated finish" 2 !calls;
   Alcotest.(check int) "two finishes" 2 !finishes;
@@ -4459,13 +4472,14 @@ let test_ptt_loop_processing_preserves_fresh_press_pending () =
                                 | None -> ());
                                 admitted := None));
                       cancel =
-                        (fun () -> sync (fun () ->
-                            match !admitted with
-                            | Some current ->
-                                ignore
-                                  (Recording.Coordinator.release coordinator
-                                     current)
-                            | None -> ()));
+                        (fun () ->
+                          sync (fun () ->
+                              match !admitted with
+                              | Some current ->
+                                  ignore
+                                    (Recording.Coordinator.release coordinator
+                                       current)
+                              | None -> ()));
                     }
               | _ -> Pie.Ptt_loop.Skip));
       on_release = (fun _ -> Ok ());
@@ -4501,10 +4515,10 @@ let test_ptt_loop_processing_preserves_fresh_press_pending () =
   let result =
     run_ptt_boundary ~clock:(Eio.Stdenv.clock env) (fun () ->
         Pie.Ptt_loop.run ~sw ~logger:(test_logger env)
-         ~mono_clock:(Eio.Stdenv.mono_clock env)
-         ~control ~keyboard
-         ~audio:((fun () -> Ok (Some (Eio.Stream.take audio))))
-         config)
+          ~mono_clock:(Eio.Stdenv.mono_clock env)
+          ~control ~keyboard
+          ~audio:(fun () -> Ok (Some (Eio.Stream.take audio)))
+          config)
   in
   Alcotest.(check int)
     "fresh press during finish handoff is admitted once" 2 !calls;
@@ -4580,9 +4594,11 @@ let test_ptt_loop_processing_join_preserves_finish_failure () =
                                 (`Ptt_error "provider failed during processing")
                             else Ok ());
                       cancel =
-                        (fun () -> sync (fun () ->
-                            ignore
-                              (Recording.Coordinator.release coordinator attempt)));
+                        (fun () ->
+                          sync (fun () ->
+                              ignore
+                                (Recording.Coordinator.release coordinator
+                                   attempt)));
                     }
               | _ -> Pie.Ptt_loop.Skip));
       on_release = (fun _ -> Ok ());
@@ -4610,10 +4626,11 @@ let test_ptt_loop_processing_join_preserves_finish_failure () =
   let result =
     run_ptt_boundary ~clock:(Eio.Stdenv.clock env) (fun () ->
         Pie.Ptt_loop.run ~sw ~logger:(test_logger env)
-         ~mono_clock:(Eio.Stdenv.mono_clock env)
-         ~control ~keyboard
-         ~audio:(ptt_audio_with_flood_ingress_ack audio resolve_flood_ingressed)
-         config)
+          ~mono_clock:(Eio.Stdenv.mono_clock env)
+          ~control ~keyboard
+          ~audio:
+            (ptt_audio_with_flood_ingress_ack audio resolve_flood_ingressed)
+          config)
   in
   Alcotest.(check int) "failed finish did not extra-admit" 2 !calls;
   Alcotest.(check bool)
@@ -4644,14 +4661,20 @@ let assert_with_background_clean_cancel ~label result body_exit bg_exit =
       (dump_exit body_exit) (dump_exit bg_exit) (dump_exit (Some result))
   in
   (match body_exit with Some (Eta.Exit.Success _) -> () | _ -> mismatch ());
-  (match result with Eta.Exit.Success () -> () | Eta.Exit.Failure _ -> mismatch ());
+  (match result with
+  | Eta.Exit.Success () -> ()
+  | Eta.Exit.Failure _ -> mismatch ());
   match bg_exit with
   | Some (Eta.Exit.Failure cause) when Eta.Cause.is_interrupt_only cause -> ()
   | _ -> mismatch ()
 
 let run_background_cancel ~bg_exit ~body_exit ~background ~body =
   let record marker action =
-    let exit = Eta.Scope.run (fun _ -> action (); Ok ()) in
+    let exit =
+      Eta.Scope.run (fun _ ->
+          action ();
+          Ok ())
+    in
     marker := Some exit;
     match exit with
     | Eta.Exit.Success () -> Ok ()
@@ -4742,8 +4765,7 @@ let test_ptt_loop_ignores_short_capture_before_offering () =
   let handle =
     {
       Pie.Ptt_loop.offer = (fun _ -> sync (fun () -> incr offers));
-      finish =
-        Ptt_loop.Buffered (fun _ -> sync (fun () -> incr finishes));
+      finish = Ptt_loop.Buffered (fun _ -> sync (fun () -> incr finishes));
       cancel = (fun () -> Ok (incr cancels));
     }
   in
@@ -4775,12 +4797,10 @@ let test_ptt_loop_ignores_short_capture_before_offering () =
     Pie.Ptt_loop.run ~sw ~logger:(test_logger env)
       ~mono_clock:(Eio.Stdenv.mono_clock env)
       ~keyboard
-      ~audio:((fun () -> Ok (Some (Eio.Stream.take audio))))
+      ~audio:(fun () -> Ok (Some (Eio.Stream.take audio)))
       config
   in
-  let result =
-    run_ptt_boundary ~clock:(Eio.Stdenv.clock env) operation
-  in
+  let result = run_ptt_boundary ~clock:(Eio.Stdenv.clock env) operation in
   Alcotest.(check int) "offers" 0 !offers;
   Alcotest.(check int) "finishes" 0 !finishes;
   Alcotest.(check int) "cancels" 1 !cancels;
@@ -4814,8 +4834,7 @@ let test_ptt_loop_ignores_low_rms_capture_before_offering () =
   let handle =
     {
       Pie.Ptt_loop.offer = (fun _ -> sync (fun () -> incr offers));
-      finish =
-        Ptt_loop.Buffered (fun _ -> sync (fun () -> incr finishes));
+      finish = Ptt_loop.Buffered (fun _ -> sync (fun () -> incr finishes));
       cancel = (fun () -> Ok (incr cancels));
     }
   in
@@ -4847,12 +4866,10 @@ let test_ptt_loop_ignores_low_rms_capture_before_offering () =
     Pie.Ptt_loop.run ~sw ~logger:(test_logger env)
       ~mono_clock:(Eio.Stdenv.mono_clock env)
       ~keyboard
-      ~audio:((fun () -> Ok (Some (Eio.Stream.take audio))))
+      ~audio:(fun () -> Ok (Some (Eio.Stream.take audio)))
       config
   in
-  let result =
-    run_ptt_boundary ~clock:(Eio.Stdenv.clock env) operation
-  in
+  let result = run_ptt_boundary ~clock:(Eio.Stdenv.clock env) operation in
   Alcotest.(check int) "offers" 0 !offers;
   Alcotest.(check int) "finishes" 0 !finishes;
   Alcotest.(check int) "cancels" 1 !cancels;
@@ -4921,10 +4938,10 @@ let test_ptt_loop_accepts_peak_over_silence_threshold () =
   let result =
     run_ptt_boundary ~clock:(Eio.Stdenv.clock env) (fun () ->
         Pie.Ptt_loop.run ~sw ~logger:(test_logger env)
-         ~mono_clock:(Eio.Stdenv.mono_clock env)
-         ~keyboard
-         ~audio:((fun () -> Ok (Some (Eio.Stream.take audio))))
-         config)
+          ~mono_clock:(Eio.Stdenv.mono_clock env)
+          ~keyboard
+          ~audio:(fun () -> Ok (Some (Eio.Stream.take audio)))
+          config)
   in
   Alcotest.(check bool) "offers" true (!offers > 0);
   Alcotest.(check int) "finishes" 1 !finishes;
@@ -4994,10 +5011,10 @@ let test_ptt_loop_accepts_quiet_speech_over_rms_threshold () =
   let result =
     run_ptt_boundary ~clock:(Eio.Stdenv.clock env) (fun () ->
         Pie.Ptt_loop.run ~sw ~logger:(test_logger env)
-         ~mono_clock:(Eio.Stdenv.mono_clock env)
-         ~keyboard
-         ~audio:((fun () -> Ok (Some (Eio.Stream.take audio))))
-         config)
+          ~mono_clock:(Eio.Stdenv.mono_clock env)
+          ~keyboard
+          ~audio:(fun () -> Ok (Some (Eio.Stream.take audio)))
+          config)
   in
   Alcotest.(check bool) "offers" true (!offers > 0);
   Alcotest.(check int) "finishes" 1 !finishes;
@@ -5033,8 +5050,7 @@ let test_ptt_loop_dead_input_cancels_active_capture () =
   let handle =
     {
       Pie.Ptt_loop.offer = (fun _ -> sync (fun () -> incr offers));
-      finish =
-        Ptt_loop.Buffered (fun _ -> sync (fun () -> incr finishes));
+      finish = Ptt_loop.Buffered (fun _ -> sync (fun () -> incr finishes));
       cancel = (fun () -> Ok (incr cancels));
     }
   in
@@ -5066,12 +5082,10 @@ let test_ptt_loop_dead_input_cancels_active_capture () =
     Pie.Ptt_loop.run ~sw ~logger:(test_logger env)
       ~mono_clock:(Eio.Stdenv.mono_clock env)
       ~keyboard
-      ~audio:((fun () -> Ok (Some (Eio.Stream.take audio))))
+      ~audio:(fun () -> Ok (Some (Eio.Stream.take audio)))
       config
   in
-  let result =
-    run_ptt_boundary ~clock:(Eio.Stdenv.clock env) operation
-  in
+  let result = run_ptt_boundary ~clock:(Eio.Stdenv.clock env) operation in
   Alcotest.(check int) "offers" 0 !offers;
   Alcotest.(check int) "finishes" 0 !finishes;
   Alcotest.(check int) "cancels" 1 !cancels;
@@ -5103,15 +5117,18 @@ let run_process_door ?on_switch program =
           ~service_args:(Cmdliner.Term.const ()) ~env
           ~journal:(Eta_observability.Logger.Memory.reporter journal)
           ~name:"pie" ~config ~pp_err:process_pp_err
-          ~getenv:(fun _ -> None) ~read:(fun _ -> Ok "")
-          ~stderr:(fun text -> Buffer.add_string errors text) ~stdout:(fun _ -> ())
+          ~getenv:(fun _ -> None)
+          ~read:(fun _ -> Ok "")
+          ~stderr:(fun text -> Buffer.add_string errors text)
+          ~stdout:(fun _ -> ())
           ~argv:[| "pie" |]
           (fun door_env _source () () sw -> program door_env sw)
       in
-      (code, Buffer.contents errors,
-       Eta_observability.Logger.Memory.records journal
-       |> List.map Eta_observability.Logger.to_string
-       |> String.concat "\n"))
+      ( code,
+        Buffer.contents errors,
+        Eta_observability.Logger.Memory.records journal
+        |> List.map Eta_observability.Logger.to_string
+        |> String.concat "\n" ))
 
 let test_process_success_exit () =
   let code, _, _ = run_process_door (fun _ _ -> Ok ()) in
@@ -5122,14 +5139,17 @@ let test_process_typed_failure_exit () =
     run_process_door (fun _ _ -> Error (`Stt_error "typed boom"))
   in
   Alcotest.(check int) "pieeta-np5l" 1 code;
-  Alcotest.(check bool) "renders typed failure" true
-    (String.contains stderr 't' &&
-     let needle = "typed boom" in
-     let rec contains i =
-       i + String.length needle <= String.length stderr
-       && (String.sub stderr i (String.length needle) = needle
-          || contains (i + 1))
-     in contains 0)
+  Alcotest.(check bool)
+    "renders typed failure" true
+    (String.contains stderr 't'
+    &&
+    let needle = "typed boom" in
+    let rec contains i =
+      i + String.length needle <= String.length stderr
+      && (String.sub stderr i (String.length needle) = needle
+         || contains (i + 1))
+    in
+    contains 0)
 
 let test_process_interrupt_exit () =
   let id = Eta.Interrupt_id.create () in
@@ -5137,9 +5157,9 @@ let test_process_interrupt_exit () =
     run_process_door
       ~on_switch:(fun sw ->
         Eio.Fiber.fork_daemon ~sw (fun () ->
-          Eio.Fiber.yield ();
-          Eta_app.request_stop ~sw id;
-          `Stop_daemon))
+            Eio.Fiber.yield ();
+            Eta_app.request_stop ~sw id;
+            `Stop_daemon))
       (fun _ sw -> Eta_app.serve ~sw ())
   in
   Alcotest.(check int) "owned signal stop exits cleanly" 0 code
@@ -5147,23 +5167,24 @@ let test_process_interrupt_exit () =
 let test_process_logfmt_stderr () =
   let code, _, journal =
     run_process_door (fun env _ ->
-      Eta_observability.Logger.info env.Eta_app.Env.logger
-        "process door ready";
-      Ok ())
+        Eta_observability.Logger.info env.Eta_app.Env.logger
+          "process door ready";
+        Ok ())
   in
   Alcotest.(check int) "log emitted by successful Door" 0 code;
-  Alcotest.(check bool) "journal contains process door ready" true
+  Alcotest.(check bool)
+    "journal contains process door ready" true
     (let needle = "process door ready" in
      let rec contains i =
        i + String.length needle <= String.length journal
        && (String.sub journal i (String.length needle) = needle
           || contains (i + 1))
-     in contains 0)
+     in
+     contains 0)
 
 let test_process_otel_disabled () =
   let code, _, _ = run_process_door (fun _ _ -> Ok ()) in
   Alcotest.(check int) "Door runs with no OTEL exporter" 0 code
-
 
 let () =
   Alcotest.run "pie"

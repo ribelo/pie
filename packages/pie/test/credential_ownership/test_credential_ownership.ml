@@ -140,7 +140,8 @@ let test_readonly_dir_allows_fresh_read () =
       with_codex_home dir @@ fun () ->
       match run_access () with
       | Ok got -> Alcotest.(check string) "readonly read" token got
-      | Error cause -> Alcotest.failf "readonly read failed: %s" (cause_text cause))
+      | Error cause ->
+          Alcotest.failf "readonly read failed: %s" (cause_text cause))
 
 let test_two_callers_cannot_overwrite_newest () =
   with_sandbox @@ fun dir ->

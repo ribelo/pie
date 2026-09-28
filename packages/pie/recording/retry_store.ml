@@ -10,7 +10,6 @@ module Active = struct
   let generation_equal = String.equal
 
   type store = { root : string; active : string }
-
   type phase = Draft | Sealed | Published
 
   type writer = {
@@ -45,14 +44,12 @@ module Active = struct
   let max_index_bytes = 1024
   let max_gen_len = 128
   let gen_counter = Atomic.make 0
-
   let inject_fchmod = ref false
   let inject_close = ref false
   let inject_unlink = ref false
   let inject_emfile = ref false
   let inject_index_open = ref false
   let inject_fsync = ref false
-
   let reused_fd : Unix.file_descr option ref = ref None
 
   let unix_close fd =
@@ -62,10 +59,7 @@ module Active = struct
       | Some _ -> ()
       | None ->
           reused_fd :=
-            Some
-              (Unix.openfile "/dev/null"
-                 [ Unix.O_RDONLY; Unix.O_CLOEXEC ]
-                 0));
+            Some (Unix.openfile "/dev/null" [ Unix.O_RDONLY; Unix.O_CLOEXEC ] 0));
       raise (Unix.Unix_error (Unix.EIO, "close", "")))
     else Unix.close fd
 
@@ -78,8 +72,7 @@ module Active = struct
     Unix.fchmod fd mode
 
   let unix_openfile path flags perm =
-    if !inject_emfile then
-      raise (Unix.Unix_error (Unix.EMFILE, "open", path));
+    if !inject_emfile then raise (Unix.Unix_error (Unix.EMFILE, "open", path));
     if !inject_index_open && Filename.basename path = "index.json" then
       raise (Unix.Unix_error (Unix.EMFILE, "open", path));
     Unix.openfile path flags perm
@@ -131,9 +124,8 @@ module Active = struct
           (String.concat "; "
              (List.rev acc
              |> List.filter_map (function
-                  | Unix_named (n, er) ->
-                      Some (n ^ ": " ^ Unix.error_message er)
-                  | Exn _ -> None)))
+               | Unix_named (n, er) -> Some (n ^ ": " ^ Unix.error_message er)
+               | Exn _ -> None)))
     | Some e -> raise e
 
   let fresh_generation () =
@@ -191,7 +183,8 @@ module Active = struct
   let open_store ~root =
     match Unix.lstat root with
     | exception Unix.Unix_error (e, _, _) -> err (Unix.error_message e)
-    | rst when rst.st_kind <> Unix.S_DIR -> err "recovery root is not a directory"
+    | rst when rst.st_kind <> Unix.S_DIR ->
+        err "recovery root is not a directory"
     | rst when rst.st_uid <> euid () -> err "recovery root is not owned"
     | rst when rst.st_perm land 0o022 <> 0 ->
         err "recovery root is group/other writable"
@@ -212,7 +205,8 @@ module Active = struct
     type t = { parent_dev : int; parent_ino : int; basename : string }
 
     let equal a b =
-      a.parent_dev = b.parent_dev && a.parent_ino = b.parent_ino
+      a.parent_dev = b.parent_dev
+      && a.parent_ino = b.parent_ino
       && String.equal a.basename b.basename
 
     let hash k = Hashtbl.hash (k.parent_dev, k.parent_ino, k.basename)
@@ -281,8 +275,10 @@ module Active = struct
     let open_existing st =
       if
         st.Unix.st_kind = Unix.S_LNK
-        || st.st_kind <> Unix.S_REG || st.st_uid <> euid ()
-        || st.st_perm land 0o777 land 0o077 <> 0 || st.st_nlink <> 1
+        || st.st_kind <> Unix.S_REG
+        || st.st_uid <> euid ()
+        || st.st_perm land 0o777 land 0o077 <> 0
+        || st.st_nlink <> 1
       then raise (Unix.Unix_error (Unix.EPERM, "lock_identity", path));
       let fd = unix_openfile path [ Unix.O_RDWR; Unix.O_CLOEXEC ] 0o600 in
       let owned = ref true in
@@ -294,8 +290,8 @@ module Active = struct
         else (
           owned := false;
           fd)
-      with exn ->
-        (match close_owned owned fd with
+      with exn -> (
+        match close_owned owned fd with
         | () -> raise exn
         | exception close_exn -> raise (combine exn close_exn))
     in
@@ -307,12 +303,7 @@ module Active = struct
             try
               let fd =
                 unix_openfile path
-                  [
-                    Unix.O_RDWR;
-                    Unix.O_CREAT;
-                    Unix.O_EXCL;
-                    Unix.O_CLOEXEC;
-                  ]
+                  [ Unix.O_RDWR; Unix.O_CREAT; Unix.O_EXCL; Unix.O_CLOEXEC ]
                   0o600
               in
               let owned = ref true in
@@ -321,8 +312,8 @@ module Active = struct
                 ignore (own fd);
                 owned := false;
                 fd
-              with exn ->
-                (match close_owned owned fd with
+              with exn -> (
+                match close_owned owned fd with
                 | () -> raise exn
                 | exception close_exn -> raise (combine exn close_exn))
             with Unix.Unix_error (Unix.EEXIST, _, _) ->
@@ -342,9 +333,9 @@ module Active = struct
               match unix_close fd with
               | () -> err "busy"
               | exception close_exn -> raise close_exn)
-          | exception exn ->
+          | exception exn -> (
               release_local key token;
-              (match unix_close fd with
+              match unix_close fd with
               | () -> raise exn
               | exception close_exn -> raise (combine exn close_exn)))
     with exn -> known_unix exn
@@ -352,7 +343,7 @@ module Active = struct
   let with_publish_lock store f =
     match acquire_publish_lock store with
     | Error e -> Error e
-    | Ok held ->
+    | Ok held -> (
         let owned = ref true in
         let op_error = ref None in
         let body =
@@ -377,7 +368,7 @@ module Active = struct
             | Some m -> raise (combine (Result_error (`Retry_store m)) cleanup)
             | None -> raise cleanup)
         | Error exn, None -> raise exn
-        | Error primary, Some cleanup -> raise (combine primary cleanup)
+        | Error primary, Some cleanup -> raise (combine primary cleanup))
 
   let open_excl_0600 path =
     let fd =
@@ -390,8 +381,8 @@ module Active = struct
       unix_fchmod fd 0o600;
       owned := false;
       fd
-    with exn ->
-      (match close_owned owned fd with
+    with exn -> (
+      match close_owned owned fd with
       | () -> raise exn
       | exception close_exn -> raise (combine exn close_exn))
 
@@ -426,20 +417,18 @@ module Active = struct
                 byte_count = 0;
                 phase = Draft;
               }
-          with exn ->
-            let acc =
-              duty [] "unlink-draft" (fun () -> unix_unlink draft)
-            in
+          with exn -> (
+            let acc = duty [] "unlink-draft" (fun () -> unix_unlink draft) in
             let acc = duty acc "rmdir" (fun () -> Unix.rmdir slot) in
             match collected_exn acc with
             | None -> raise exn
-            | Some c -> raise (combine exn c))
+            | Some c -> raise (combine exn c)))
     with exn -> known_unix exn
 
   let append_audio (writer : writer) bytes =
     match writer.fd with
     | None -> err "audio writer is closed"
-    | Some fd ->
+    | Some fd -> (
         let n = Bytes.length bytes in
         if writer.byte_count + n > Dictation_limits.capture_pcm_bytes then
           err "PCM exceeds capture bound"
@@ -455,7 +444,7 @@ module Active = struct
             loop 0;
             writer.byte_count <- writer.byte_count + n;
             Ok ()
-          with exn -> known_unix exn
+          with exn -> known_unix exn)
 
   let close_writer (writer : writer) =
     match writer.phase with
@@ -464,17 +453,13 @@ module Active = struct
     | Draft -> (
         match writer.fd with
         | None -> err "audio writer is closed"
-        | Some fd ->
+        | Some fd -> (
             let sync_exn =
-              match unix_fsync fd with
-              | () -> None
-              | exception exn -> Some exn
+              match unix_fsync fd with () -> None | exception exn -> Some exn
             in
             writer.fd <- None;
             let close_exn =
-              match unix_close fd with
-              | () -> None
-              | exception exn -> Some exn
+              match unix_close fd with () -> None | exception exn -> Some exn
             in
             match (sync_exn, close_exn) with
             | None, None ->
@@ -482,7 +467,7 @@ module Active = struct
                 Ok ()
             | Some exn, None -> known_unix exn
             | None, Some exn -> known_unix exn
-            | Some a, Some b -> raise (combine a b))
+            | Some a, Some b -> raise (combine a b)))
 
   let abort_writer (writer : writer) =
     match writer.phase with
@@ -527,8 +512,8 @@ module Active = struct
       write_all fd (Bytes.of_string contents);
       Unix.fsync fd;
       close_owned owned fd
-    with exn ->
-      (match close_owned owned fd with
+    with exn -> (
+      match close_owned owned fd with
       | () -> raise exn
       | exception close_exn -> raise (combine exn close_exn))
 
@@ -554,11 +539,9 @@ module Active = struct
       close_owned owned fd;
       Unix.rename tmp dest;
       published := true
-    with exn ->
+    with exn -> (
       let close_exn =
-        match close_owned owned fd with
-        | () -> None
-        | exception c -> Some c
+        match close_owned owned fd with () -> None | exception c -> Some c
       in
       let unlink_exn =
         if !published then None
@@ -572,7 +555,7 @@ module Active = struct
       | None, None -> raise exn
       | Some c, None -> raise (combine exn c)
       | None, Some u -> raise (combine exn u)
-      | Some c, Some u -> raise (combine exn (combine c u))
+      | Some c, Some u -> raise (combine exn (combine c u)))
 
   let read_index store =
     let path = index_path store in
@@ -588,44 +571,44 @@ module Active = struct
             0
         with
         | exception Unix.Unix_error (e, _, _) -> err (Unix.error_message e)
-        | fd ->
-        let owned = ref true in
-        try
-          let st2 = Unix.fstat fd in
-          if st.st_dev <> st2.st_dev || st.st_ino <> st2.st_ino then (
-            close_owned owned fd;
-            Ok None)
-          else if st2.st_size > max_index_bytes || st2.st_size <= 0 then (
-            close_owned owned fd;
-            Ok None)
-          else
-            let buf = Bytes.create st2.st_size in
-            let rec loop off =
-              if off < st2.st_size then
-                let r = Unix.read fd buf off (st2.st_size - off) in
-                if r = 0 then off else loop (off + r)
-              else off
-            in
-            let got = loop 0 in
-            close_owned owned fd;
-            if got <> st2.st_size then Ok None
-            else
-              match Yojson.Safe.from_string (Bytes.to_string buf) with
-              | `Assoc fields -> (
-                  match
-                    ( List.assoc_opt "version" fields,
-                      List.assoc_opt "generation" fields )
-                  with
-                  | Some ver, Some (`String g)
-                    when json_int ver = Some 1 && safe_generation g ->
-                      Ok (Some g)
-                  | _ -> Ok None)
-              | _ -> Ok None
-              | exception Yojson.Json_error _ -> Ok None
-        with exn ->
-          (match close_owned owned fd with
-          | () -> known_unix exn
-          | exception close_exn -> raise (combine exn close_exn)))
+        | fd -> (
+            let owned = ref true in
+            try
+              let st2 = Unix.fstat fd in
+              if st.st_dev <> st2.st_dev || st.st_ino <> st2.st_ino then (
+                close_owned owned fd;
+                Ok None)
+              else if st2.st_size > max_index_bytes || st2.st_size <= 0 then (
+                close_owned owned fd;
+                Ok None)
+              else
+                let buf = Bytes.create st2.st_size in
+                let rec loop off =
+                  if off < st2.st_size then
+                    let r = Unix.read fd buf off (st2.st_size - off) in
+                    if r = 0 then off else loop (off + r)
+                  else off
+                in
+                let got = loop 0 in
+                close_owned owned fd;
+                if got <> st2.st_size then Ok None
+                else
+                  match Yojson.Safe.from_string (Bytes.to_string buf) with
+                  | `Assoc fields -> (
+                      match
+                        ( List.assoc_opt "version" fields,
+                          List.assoc_opt "generation" fields )
+                      with
+                      | Some ver, Some (`String g)
+                        when json_int ver = Some 1 && safe_generation g ->
+                          Ok (Some g)
+                      | _ -> Ok None)
+                  | _ -> Ok None
+                  | exception Yojson.Json_error _ -> Ok None
+            with exn -> (
+              match close_owned owned fd with
+              | () -> known_unix exn
+              | exception close_exn -> raise (combine exn close_exn))))
 
   let retire_slot store generation acc =
     let slot = slot_dir store generation in
@@ -641,7 +624,8 @@ module Active = struct
               let p = Filename.concat slot name in
               match Unix.lstat p with
               | exception Unix.Unix_error (Unix.ENOENT, _, _) -> acc
-              | exception Unix.Unix_error (e, _, _) -> Unix_named (name, e) :: acc
+              | exception Unix.Unix_error (e, _, _) ->
+                  Unix_named (name, e) :: acc
               | st when st.st_kind = Unix.S_LNK -> acc
               | st when owned_reg_0600 st ->
                   duty acc name (fun () -> unix_unlink p)
@@ -715,8 +699,8 @@ module Active = struct
             write_manifest writer.slot writer.generation "audio" writer.mode
               [ ("pcm_bytes", `Int writer.byte_count) ];
             match
-              publish_index store writer.generation
-                ~on_commit:(fun () -> writer.phase <- Published)
+              publish_index store writer.generation ~on_commit:(fun () ->
+                  writer.phase <- Published)
             with
             | Error e -> Error e
             | Ok () -> Ok writer.generation
@@ -744,13 +728,13 @@ module Active = struct
                     ("dispatch_uncertain", `Bool dispatch_uncertain);
                   ];
                 match
-                  publish_index store generation
-                    ~on_commit:(fun () -> committed := true)
+                  publish_index store generation ~on_commit:(fun () ->
+                      committed := true)
                 with
                 | Ok () -> Ok generation
-                | Error e ->
+                | Error e -> (
                     if !committed then Error e
-                    else (
+                    else
                       match duties_done (rollback_unpublished_slot slot) with
                       | Ok () -> Error e
                       | Error rollback ->
@@ -760,9 +744,9 @@ module Active = struct
                           raise (combine (of_err e) (of_err rollback)))
               with exn ->
                 if not !committed then
-                  (match collected_exn (rollback_unpublished_slot slot) with
+                  match collected_exn (rollback_unpublished_slot slot) with
                   | None -> raise exn
-                  | Some c -> raise (combine exn c))
+                  | Some c -> raise (combine exn c)
                 else raise exn))
 
   type opened = Excluded | Opened of Unix.file_descr * Unix.stats
@@ -774,7 +758,7 @@ module Active = struct
     | st when st.st_kind = Unix.S_LNK -> Ok Excluded
     | st when not (owned_reg_0600 st) -> Ok Excluded
     | st when st.st_size <= 0 || st.st_size > max_bytes -> Ok Excluded
-    | st ->
+    | st -> (
         let fd =
           unix_openfile path
             [ Unix.O_RDONLY; Unix.O_NONBLOCK; Unix.O_CLOEXEC ]
@@ -789,10 +773,10 @@ module Active = struct
           else (
             owned := false;
             Ok (Opened (fd, st2)))
-        with exn ->
-          (match close_owned owned fd with
+        with exn -> (
+          match close_owned owned fd with
           | () -> known_unix exn
-          | exception close_exn -> raise (combine exn close_exn))
+          | exception close_exn -> raise (combine exn close_exn)))
 
   let read_fd fd size =
     let buf = Bytes.create size in
@@ -811,7 +795,7 @@ module Active = struct
     | Ok None -> Ok None
     | Ok (Some generation) -> (
         let slot = slot_dir store generation in
-        (match Unix.lstat slot with
+        match Unix.lstat slot with
         | exception Unix.Unix_error (Unix.ENOENT, _, _) -> Ok None
         | exception Unix.Unix_error (e, _, _) -> err (Unix.error_message e)
         | st when st.st_kind = Unix.S_LNK -> Ok None
@@ -821,7 +805,7 @@ module Active = struct
             match open_owned_regular man max_manifest_bytes with
             | Error e -> Error e
             | Ok Excluded -> Ok None
-            | Ok (Opened (fd, st)) ->
+            | Ok (Opened (fd, st)) -> (
                 let owned = ref true in
                 try
                   let parsed =
@@ -884,8 +868,8 @@ module Active = struct
                   in
                   close_owned owned fd;
                   parsed
-                with exn ->
-                  (match close_owned owned fd with
+                with exn -> (
+                  match close_owned owned fd with
                   | () -> known_unix exn
                   | exception close_exn -> raise (combine exn close_exn)))))
 
@@ -901,7 +885,7 @@ module Active = struct
         match open_owned_regular path max_bytes with
         | Error e -> Error e
         | Ok Excluded -> err "payload rejected"
-        | Ok (Opened (fd, st)) ->
+        | Ok (Opened (fd, st)) -> (
             let owned = ref true in
             try
               let body =
@@ -911,17 +895,19 @@ module Active = struct
               in
               close_owned owned fd;
               body
-            with exn ->
-              (match close_owned owned fd with
+            with exn -> (
+              match close_owned owned fd with
               | () -> known_unix exn
-              | exception close_exn -> raise (combine exn close_exn)))
+              | exception close_exn -> raise (combine exn close_exn))))
 
   let load_audio store generation =
     match peek store with
     | Error e -> Error e
     | Ok (Some (Audio { generation = g; pcm_bytes; _ }))
       when generation_equal g generation -> (
-        match load_payload store generation Dictation_limits.capture_pcm_bytes with
+        match
+          load_payload store generation Dictation_limits.capture_pcm_bytes
+        with
         | Error e -> Error e
         | Ok b when Bytes.length b <> pcm_bytes -> err "pcm length mismatch"
         | Ok b -> Ok b)
@@ -932,7 +918,9 @@ module Active = struct
     | Error e -> Error e
     | Ok (Some (Text { generation = g; utf8_bytes; _ }))
       when generation_equal g generation -> (
-        match load_payload store generation Dictation_limits.result_utf8_bytes with
+        match
+          load_payload store generation Dictation_limits.result_utf8_bytes
+        with
         | Error e -> Error e
         | Ok b when Bytes.length b <> utf8_bytes -> err "utf8 length mismatch"
         | Ok b -> Ok (Bytes.to_string b))
@@ -971,6 +959,7 @@ module Active = struct
       let fd = !reused_fd in
       reused_fd := None;
       fd
+
     let with_unlink_fail f = with_flag inject_unlink f
     let with_emfile f = with_flag inject_emfile f
     let with_index_open_fail f = with_flag inject_index_open f

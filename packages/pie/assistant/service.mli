@@ -25,7 +25,8 @@ val effective_bindings :
   Config.Stt.t ->
   ptt_binding * ptt_binding
 (** Transcribe and translate bindings after CLI overrides.
-    @raise Config.Stt.Config_error when a keysym is not positive or both bindings are equal. *)
+    @raise Config.Stt.Config_error
+      when a keysym is not positive or both bindings are equal. *)
 
 val startup_config_json :
   ?config_path:string ->
@@ -35,7 +36,8 @@ val startup_config_json :
   min_duration_ms:int ->
   unit ->
   string
-(** The effective configuration logged at startup, as pretty JSON; never contains secrets. *)
+(** The effective configuration logged at startup, as pretty JSON; never
+    contains secrets. *)
 
 val default_min_duration_ms : int
 val config_path : string
@@ -78,9 +80,10 @@ val make_clip_handle :
   config:Config.Stt.t ->
   ptt_mode ->
   Ptt_loop.handle
-(** The buffered (non-streaming) capture handle: [finish] seals the attempt's audio,
-    recognizes the whole clip with [stt] and delivers it, publishing sealed audio or the
-    recognized text on failure (see [on_press]). [offer] and [cancel] are no-ops. *)
+(** The buffered (non-streaming) capture handle: [finish] seals the attempt's
+    audio, recognizes the whole clip with [stt] and delivers it, publishing
+    sealed audio or the recognized text on failure (see [on_press]). [offer] and
+    [cancel] are no-ops. *)
 
 val run_acquired_attempt :
   sw:Eio.Switch.t ->

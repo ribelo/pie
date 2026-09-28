@@ -175,8 +175,9 @@ let test_removed_names_fail_before_helpers () =
 
 let load_error path =
   Eio_main.run @@ fun env ->
-  match Pie.Config.Stt.load ~fs:(Eio.Stdenv.fs env)
-          ~source:(`Explicit path) () with
+  match
+    Pie.Config.Stt.load ~fs:(Eio.Stdenv.fs env) ~source:(`Explicit path) ()
+  with
   | Error (`Config msg) -> msg
   | _ -> Alcotest.fail "expected config error"
 
@@ -216,8 +217,9 @@ let test_ptt_config_without_wakeword_loads () =
      ptt_translate_keysym = 65479\n";
   let config =
     Eio_main.run @@ fun env ->
-    match Pie.Config.Stt.load ~fs:(Eio.Stdenv.fs env)
-            ~source:(`Explicit path) () with
+    match
+      Pie.Config.Stt.load ~fs:(Eio.Stdenv.fs env) ~source:(`Explicit path) ()
+    with
     | Ok config -> config
     | Error (`Config msg) -> Alcotest.fail msg
   in

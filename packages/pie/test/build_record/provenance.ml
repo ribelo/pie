@@ -280,8 +280,7 @@ let linked_tls_stub_archive cmxa_paths =
       else Some stub
   | many ->
       failwith
-        ("duplicate linked eta_http.cmxa versions: "
-       ^ String.concat ", " many)
+        ("duplicate linked eta_http.cmxa versions: " ^ String.concat ", " many)
 
 type file_id = { name : string; path : string; sha256 : string }
 
