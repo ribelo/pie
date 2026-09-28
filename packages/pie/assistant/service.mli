@@ -19,6 +19,24 @@ type 'audio owned_inputs = {
 
 type attempt_owner
 
+val effective_bindings :
+  ?ptt_transcribe_keysym:int ->
+  ?ptt_translate_keysym:int ->
+  Config.Stt.t ->
+  ptt_binding * ptt_binding
+(** Transcribe and translate bindings after CLI overrides.
+    @raise Config.Stt.Config_error when a keysym is not positive or both bindings are equal. *)
+
+val startup_config_json :
+  ?config_path:string ->
+  config:Config.Stt.t ->
+  ptt_transcribe_keysym:int ->
+  ptt_translate_keysym:int ->
+  min_duration_ms:int ->
+  unit ->
+  string
+(** The effective configuration logged at startup, as pretty JSON; never contains secrets. *)
+
 val default_min_duration_ms : int
 val config_path : string
 val config_stamp : ?config_path:string -> unit -> config_stamp
