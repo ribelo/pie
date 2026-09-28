@@ -1,8 +1,7 @@
 (* PIE002 private acceptance. Public Codex buffered/streaming. *)
 
-open Eta.Syntax
-
-let putenv = (Unix.putenv [@alert "-unsafe_multidomain"])
+let ( let* ) = Result.bind
+let putenv = Unix.putenv [@alert "-unsafe_multidomain"]
 
 type scenario =
   | Normal
@@ -42,6 +41,7 @@ let has_suffix suffix s =
   let sl = String.length suffix in
   let n = String.length s in
   n >= sl && String.sub s (n - sl) sl = suffix
+
 let read_http_head flow =
   let scratch = Cstruct.create 1 in
   let buffer = Buffer.create 512 in
@@ -70,15 +70,16 @@ let header_value name raw =
       | key :: rest when String.lowercase_ascii (String.trim key) = expected ->
           Some (String.trim (String.concat ":" rest))
       | _ -> None)
+
 let write_ws_text flow payload =
-  Eta_http_eio.Ws.Codec.encode
+  Eta_http.Ws_codec.encode
     { fin = true; opcode = Text; payload = Bytes.of_string payload }
   |> Bytes.to_string
   |> fun encoded -> Eio.Flow.copy_string encoded flow
 
 let write_ws_switching_response flow key =
   let accept =
-    Eta_http_eio.Ws.Codec.accept_key ~sha1:Eta_http_tls_openssl.sha1 key
+    Eta_http.Ws_codec.accept_key ~sha1:Eta_http.Eta_http_tls_openssl.sha1 key
   in
   let response =
     String.concat ""
@@ -100,10 +101,13 @@ let upgrade flow =
   | None -> failwith "missing Sec-WebSocket-Key"
 
 let session_updated = "{\"type\":\"session.updated\"}"
+
 let response_done =
   "{\"type\":\"response.done\",\"response\":{\"status\":\"completed\"}}"
+
 let server_error =
   "{\"type\":\"error\",\"error\":{\"message\":\"pre-ready\",\"code\":\"bad_request\"}}"
+
 let drain_peer ~clock flow =
   let buf = Cstruct.create 4096 in
   let rec loop () =
@@ -114,11 +118,11 @@ let drain_peer ~clock flow =
   in
   try Eio.Time.with_timeout_exn clock 0.4 loop with _ -> ()
 
-let handle_peer ~clock:_ scenario ~on_connected ~hold flow =
+let handle_peer ~clock:_ scenario ~on_connected ~hold ~close_flow flow =
   upgrade flow;
   let hold_then_close () =
     Eio.Promise.await hold;
-    (try Eio.Flow.close flow with _ -> ())
+    try close_flow () with _ -> ()
   in
   match scenario with
   | Normal ->
@@ -140,7 +144,7 @@ let handle_peer ~clock:_ scenario ~on_connected ~hold flow =
   | Send_failure ->
       on_connected ();
       write_ws_text flow session_updated;
-      Eio.Flow.close flow
+      close_flow ()
   | Midstream_cancel ->
       write_ws_text flow session_updated;
       on_connected ();
@@ -154,53 +158,43 @@ let session_update =
 
 let response_create =
   Pie.Stt.Codex_realtime.build_conversation_response_create ~prompt:"test"
-let run_buffered ~sw ~net ~url =
-  Pie.Stt.Codex_realtime.run_realtime_session ~sw ~net ~url
+
+let run_buffered ~sw ~net ~clock ?ca_file ~url () =
+  Pie.Stt.Codex_realtime.run_realtime_session ~sw ~net ~clock ?ca_file ~url
     ~access_token:"synthetic-ownership-token"
     ~mode:Pie.Stt.Codex_realtime.Conversation ~session_update ~response_create
     ~input_sample_rate:16000 pcm
 
-let run_streaming ~sw ~net ~url ?on_audio_pull () =
-  let audio =
-    match on_audio_pull with
-    | None -> Eta_stream.Stream.from_iterable [ pcm ]
-    | Some resolve ->
-        Eta_stream.Stream.from_effect
-          (Eta.Effect.sync (fun () ->
-               resolve ();
-               pcm))
+let run_streaming ~sw ~net ~clock ?ca_file ~url ?on_audio_pull () =
+  let supplied = ref false in
+  let audio () =
+    if !supplied then Ok None
+    else (
+      supplied := true;
+      Option.iter (fun resolve -> resolve ()) on_audio_pull;
+      Ok (Some pcm))
   in
-  Pie.Stt.Codex_realtime.run_realtime_stream_session ~sw ~net ~url
-    ~access_token:"synthetic-ownership-token"
+  Pie.Stt.Codex_realtime.run_realtime_stream_session ~sw ~net ~clock ?ca_file
+    ~url ~access_token:"synthetic-ownership-token"
     ~mode:Pie.Stt.Codex_realtime.Conversation ~session_update ~response_create
     ~input_sample_rate:16000 audio
 
 let pp_stt ppf = function `Stt_error msg -> Format.pp_print_string ppf msg
 
-let cause_contains needle cause =
-  let rendered = Format.asprintf "%a" (Eta.Cause.pp pp_stt) cause in
+let contains hay needle =
   let n = String.length needle in
-  let h = String.length rendered in
   let rec loop i =
-    i <= h - n && (String.sub rendered i n = needle || loop (i + 1))
+    i <= String.length hay - n && (String.sub hay i n = needle || loop (i + 1))
   in
   n = 0 || loop 0
 
-let expect_error ~needle timed =
-  timed
-  |> Eta.Effect.bind (fun _ ->
-         Eta.Effect.fail (`Stt_error "expected failure, got success"))
-  |> Eta.Effect.bind_error (fun (`Stt_error msg as err) ->
-         let n = String.length needle in
-         let h = String.length msg in
-         let rec loop i =
-           i <= h - n && (String.sub msg i n = needle || loop (i + 1))
-         in
-         if n = 0 || loop 0 then Eta.Effect.unit else Eta.Effect.fail err)
-
-let local_deadline = Eta.Duration.ms 1500
+let expect_error ~needle = function
+  | Ok _ -> Error (`Stt_error "expected failure, got success")
+  | Error (`Stt_error message as error) ->
+      if contains message needle then Ok () else Error error
 
 let timeout_fail label = `Stt_error ("ownership-deadline:" ^ label)
+
 type job = {
   connected : unit Eio.Promise.t;
   resolve_connected : unit Eio.Promise.u;
@@ -223,55 +217,48 @@ let make_job () =
     resolve_hold;
   }
 
-let settle ~sw ~net ~url ~job scenario streaming =
-  let body =
+let settle ~sw ~net ~clock ?ca_file ~url ~job scenario streaming =
+  let body () =
     match scenario with
     | Midstream_cancel ->
-        run_streaming ~sw ~net ~url
+        run_streaming ~sw ~net ~clock ?ca_file ~url
           ~on_audio_pull:(fun () ->
             Eio.Promise.resolve job.resolve_client_ready ())
           ()
     | _ ->
-        if streaming then run_streaming ~sw ~net ~url ()
-        else run_buffered ~sw ~net ~url
+        if streaming then run_streaming ~sw ~net ~clock ?ca_file ~url ()
+        else run_buffered ~sw ~net ~clock ?ca_file ~url ()
   in
-  let timed =
-    body
-    |> Eta.Effect.timeout_as local_deadline
-         ~on_timeout:(timeout_fail (scenario_name scenario))
+  let timed () =
+    try Eio.Time.with_timeout_exn clock 1.5 body
+    with Eio.Time.Timeout -> Error (timeout_fail (scenario_name scenario))
   in
   match scenario with
-  | Normal ->
-      timed
-      |> Eta.Effect.bind (fun _ -> Eta.Effect.unit)
-      |> Eta.Effect.bind_error (fun (`Stt_error msg) ->
-             Eta.Effect.fail (`Stt_error ("normal-op: " ^ msg)))
-  | Pre_ready_error -> expect_error ~needle:"server error" timed
-  | Malformed_readiness -> expect_error ~needle:"not valid JSON" timed
-  | Send_failure ->
-      timed |> Eta.Effect.to_exit
-      |> Eta.Effect.bind (function
-           | Eta.Exit.Ok _ ->
-               Eta.Effect.fail (`Stt_error "expected send failure, got success")
-           | Eta.Exit.Error cause
-             when cause_contains "ownership-deadline" cause ->
-               Eta.Effect.fail (`Stt_error "send-failure timed out")
-           | Eta.Exit.Error _ -> Eta.Effect.unit)
+  | Normal -> (
+      match timed () with
+      | Ok _ -> Ok ()
+      | Error (`Stt_error message) ->
+          Error (`Stt_error ("normal-op: " ^ message)))
+  | Pre_ready_error -> expect_error ~needle:"server error" (timed ())
+  | Malformed_readiness -> expect_error ~needle:"invalid event" (timed ())
+  | Send_failure -> (
+      match timed () with
+      | Ok _ -> Error (`Stt_error "expected send failure, got success")
+      | Error (`Stt_error message) when contains message "ownership-deadline" ->
+          Error (`Stt_error "send-failure timed out")
+      | Error _ -> Ok ())
   | Never_ready_cancel | Midstream_cancel ->
       let gate =
         if scenario = Midstream_cancel then job.client_ready else job.connected
       in
-      let cancel =
-        Eta.Effect.sync (fun () -> Eio.Promise.await gate)
-        |> Eta.Effect.map (fun () -> `Cancel)
-      in
-      Eta.Effect.race
-        [ timed |> Eta.Effect.map (fun result -> `Body result); cancel ]
-      |> Eta.Effect.bind (function
-           | `Cancel -> Eta.Effect.unit
-           | `Body _ ->
-               Eta.Effect.fail
-                 (`Stt_error "expected cancel winner, body succeeded"))
+      Eio.Fiber.first
+        (fun () ->
+          Eio.Promise.await gate;
+          Ok ())
+        (fun () ->
+          ignore (timed ());
+          Error (`Stt_error "expected cancel winner, body succeeded"))
+
 let classify_fds () =
   let dir = Unix.opendir "/proc/self/fd" in
   Fun.protect
@@ -313,15 +300,15 @@ let format_owned_sockets () =
       | Some inode -> Some (name ^ "->" ^ target ^ " inode=" ^ inode))
   |> String.concat "; "
 
-let fd_targets () =
-  classify_fds () |> List.map snd |> List.sort String.compare
+let fd_targets () = classify_fds () |> List.map snd |> List.sort String.compare
 
 let peer_inode_of flow =
   match Eio_unix.Resource.fd_opt flow with
   | None -> None
   | Some fd ->
-      Eio_unix.Fd.use fd ~if_closed:(fun () -> None) (fun unix_fd ->
-          Some (string_of_int (Unix.fstat unix_fd).st_ino))
+      Eio_unix.Fd.use fd
+        ~if_closed:(fun () -> None)
+        (fun unix_fd -> Some (string_of_int (Unix.fstat unix_fd).st_ino))
 
 let extra_socket_inodes ~baseline =
   let base = List.sort_uniq String.compare baseline in
@@ -339,30 +326,28 @@ let assert_held_no_client ~label ~baseline ~peer_flow ~held =
       let peer_inos =
         match peer_inode_of flow with None -> [] | Some i -> [ i ]
       in
-      let client =
-        List.filter (fun i -> not (List.mem i peer_inos)) extras
-      in
+      let client = List.filter (fun i -> not (List.mem i peer_inos)) extras in
       if client <> [] then
-        Alcotest.failf "%s extra client socket inodes=[%s] fds=[%s] sockets=[%s]"
-          label (String.concat "," client) (format_fds ())
-          (format_owned_sockets ());
+        Alcotest.failf
+          "%s extra client socket inodes=[%s] fds=[%s] sockets=[%s]" label
+          (String.concat "," client) (format_fds ()) (format_owned_sockets ());
       if held && peer_inos = [] && extras = [] then
         Alcotest.failf "%s expected held peer socket, extras empty fds=[%s]"
           label (format_fds ())
 
 let assert_back_to_baseline ~label ~baseline =
   let now = fd_targets () in
-  let extra =
-    List.filter (fun t -> not (List.mem t baseline)) now
-  in
+  let extra = List.filter (fun t -> not (List.mem t baseline)) now in
   let extra_sockets =
     List.filter
-      (fun t -> String.length t >= 7 && String.sub t 0 7 = "socket:") extra
+      (fun t -> String.length t >= 7 && String.sub t 0 7 = "socket:")
+      extra
   in
   if extra_sockets <> [] then
     Alcotest.failf "%s after peer join extra sockets=[%s] fds=[%s] sockets=[%s]"
-      label (String.concat "; " extra_sockets) (format_fds ())
-      (format_owned_sockets ())
+      label
+      (String.concat "; " extra_sockets)
+      (format_fds ()) (format_owned_sockets ())
 
 let listen_v4 ~sw net =
   Eio.Net.listen ~sw ~reuse_addr:true ~backlog:8 net
@@ -375,7 +360,8 @@ let tcp_port socket =
 
 let close_peer flow = try Eio.Flow.close flow with _ -> ()
 
-let run_one ~sw ~net ~clock ~url_of_port ~serve ~baseline scenario streaming =
+let run_one ~sw ~net ~clock ?ca_file ~url_of_port ~serve ~baseline scenario
+    streaming =
   let socket = listen_v4 ~sw net in
   let port = tcp_port socket in
   let url = url_of_port port in
@@ -389,16 +375,14 @@ let run_one ~sw ~net ~clock ~url_of_port ~serve ~baseline scenario streaming =
           let flow, _ = Eio.Net.accept ~sw socket in
           Atomic.set peer_flow (Some flow);
           serve ~clock ~job scenario flow));
-  let result =
-    settle ~sw ~net ~url ~job scenario streaming |> Eta_eio.run_once ~sw ~clock
-  in
+  let result = settle ~sw ~net ~clock ?ca_file ~url ~job scenario streaming in
   (try Eio.Resource.close socket with _ -> ());
   (match result with
   | Ok () -> ()
   | Error cause ->
       Alcotest.failf "%s %s: %a"
         (if streaming then "streaming" else "buffered")
-        (scenario_name scenario) (Eta.Cause.pp pp_stt) cause);
+        (scenario_name scenario) pp_stt cause);
   let label =
     (if streaming then "streaming " else "buffered ") ^ scenario_name scenario
   in
@@ -421,7 +405,9 @@ let all_scenarios =
 let serve_plain ~clock ~job scenario flow =
   handle_peer ~clock scenario
     ~on_connected:(fun () -> Eio.Promise.resolve job.resolve_connected ())
-    ~hold:job.hold flow
+    ~hold:job.hold
+    ~close_flow:(fun () -> Eio.Flow.close flow)
+    flow
 
 let ws_url port =
   Printf.sprintf "ws://localhost:%d/v1/realtime?model=gpt-realtime-2" port
@@ -432,7 +418,8 @@ let wss_url port =
 let warm_timer ~sw clock =
   let hold, hold_u = Eio.Promise.create () in
   Eio.Fiber.fork ~sw (fun () ->
-      try Eio.Time.with_timeout_exn clock 120.0 (fun () -> Eio.Promise.await hold)
+      try
+        Eio.Time.with_timeout_exn clock 120.0 (fun () -> Eio.Promise.await hold)
       with _ -> ());
   Eio.Time.sleep clock 0.02;
   hold_u
@@ -448,8 +435,8 @@ let test_gates_ws () =
     (fun scenario ->
       List.iter
         (fun streaming ->
-          run_one ~sw ~net ~clock ~url_of_port:ws_url ~serve:serve_plain ~baseline
-            scenario streaming)
+          run_one ~sw ~net ~clock ~url_of_port:ws_url ~serve:serve_plain
+            ~baseline scenario streaming)
         [ false; true ])
     all_scenarios;
   ignore (Eio.Promise.try_resolve stop_timer ())
@@ -472,6 +459,7 @@ let repeat_ws ~rounds () =
       all_scenarios
   done;
   ignore (Eio.Promise.try_resolve stop_timer ())
+
 let with_localhost_tls f =
   let cert = Filename.temp_file "pie-own-cert" ".pem" in
   let key = Filename.temp_file "pie-own-key" ".pem" in
@@ -503,22 +491,25 @@ let serve_tls ctx ~clock ~job scenario raw =
   let raw_flow =
     (raw :> [ Eio.Flow.two_way_ty | Eio.Resource.close_ty ] Eio.Resource.t)
   in
-  let tls, _ = Eta_http_eio.Tls.Eio.server_of_flow_with_context ctx raw_flow in
+  let tls =
+    Eta_http.Tls_flow.create
+      ~raw:(raw_flow :> Eio.Flow.two_way_ty Eio.Resource.t)
+      ~ssl:(Eta_http.Eta_http_tls_openssl.create_server_ssl ctx)
+  in
   Fun.protect
-    ~finally:(fun () ->
-      (try Eio.Flow.close tls with _ -> ());
-      try Eio.Flow.close raw with _ -> ())
+    ~finally:(fun () -> try Eio.Flow.close raw with _ -> ())
     (fun () ->
       handle_peer ~clock scenario
         ~on_connected:(fun () -> Eio.Promise.resolve job.resolve_connected ())
-        ~hold:job.hold tls)
+        ~hold:job.hold
+        ~close_flow:(fun () -> Eio.Flow.close raw)
+        tls)
 
 let repeat_wss_in_process ~cert ~key ~rounds =
-  let server_config =
-    Eta_http.Tls.Config.default_server ~certificate_chain_file:cert
+  let ctx =
+    Eta_http.Eta_http_tls_openssl.create_server_ctx ~certificate_chain_file:cert
       ~private_key_file:key ~alpn_protocols:[ "http/1.1" ] ()
   in
-  let ctx = Eta_http_eio.Tls.Eio.server_context server_config in
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
@@ -530,8 +521,8 @@ let repeat_wss_in_process ~cert ~key ~rounds =
       (fun scenario ->
         List.iter
           (fun streaming ->
-            run_one ~sw ~net ~clock ~url_of_port:wss_url ~serve:(serve_tls ctx)
-              ~baseline scenario streaming)
+            run_one ~sw ~net ~clock ~ca_file:cert ~url_of_port:wss_url
+              ~serve:(serve_tls ctx) ~baseline scenario streaming)
           [ false; true ])
       all_scenarios
   done;
@@ -553,7 +544,13 @@ let repeat_wss ~rounds () =
   with_localhost_tls @@ fun cert key ->
   let env =
     Array.append
-      (env_without [ "SSL_CERT_FILE"; "PIE_OWN_WSS_CHILD"; "PIE_OWN_TLS_KEY"; "PIE_OWN_ROUNDS" ])
+      (env_without
+         [
+           "SSL_CERT_FILE";
+           "PIE_OWN_WSS_CHILD";
+           "PIE_OWN_TLS_KEY";
+           "PIE_OWN_ROUNDS";
+         ])
       [|
         "SSL_CERT_FILE=" ^ cert;
         "PIE_OWN_WSS_CHILD=1";
@@ -562,7 +559,8 @@ let repeat_wss ~rounds () =
       |]
   in
   let exe =
-    if Array.length Sys.argv > 0 && Sys.file_exists Sys.argv.(0) then Sys.argv.(0)
+    if Array.length Sys.argv > 0 && Sys.file_exists Sys.argv.(0) then
+      Sys.argv.(0)
     else Sys.executable_name
   in
   let pid =
@@ -574,12 +572,12 @@ let repeat_wss ~rounds () =
   | Unix.WSIGNALED s -> Alcotest.failf "wss ownership child signaled %d" s
   | Unix.WSTOPPED s -> Alcotest.failf "wss ownership child stopped %d" s
 
-
 let probe_flow label flow =
   match Eio_unix.Resource.fd_opt flow with
   | None -> label ^ ":fd_opt=none"
   | Some fd ->
-      Eio_unix.Fd.use fd ~if_closed:(fun () -> label ^ ":rcfd=closed")
+      Eio_unix.Fd.use fd
+        ~if_closed:(fun () -> label ^ ":rcfd=closed")
         (fun unix_fd ->
           let local =
             try
@@ -629,19 +627,18 @@ let test_fd_identity_diagnosis () =
             write_ws_text flow response_done;
             Eio.Promise.await hold;
             close_peer flow));
-    let result =
-      settle ~sw ~net ~url ~job Normal false |> Eta_eio.run_once ~sw ~clock
-    in
+    let result = settle ~sw ~net ~clock ~url ~job Normal false in
     (try Eio.Resource.close socket with _ -> ());
     let peer = Atomic.get peer_flow in
     let peer_diag =
-      match peer with None -> "peer=none" | Some flow -> probe_flow "accepted-peer" flow
+      match peer with
+      | None -> "peer=none"
+      | Some flow -> probe_flow "accepted-peer" flow
     in
     snap ("held-after-op-" ^ string_of_int i) peer_diag;
     (match result with
     | Ok () -> ()
-    | Error cause ->
-        Alcotest.failf "diagnosis op %d failed: %a" i (Eta.Cause.pp pp_stt) cause);
+    | Error cause -> Alcotest.failf "diagnosis op %d failed: %a" i pp_stt cause);
     ignore (Eio.Promise.try_resolve hold_u ());
     Eio.Promise.await peer_done;
     snap ("after-peer-join-" ^ string_of_int i) "peer released+joined";
@@ -673,24 +670,25 @@ let () =
       in
       repeat_wss_in_process ~cert ~key ~rounds
   | _ ->
-  Alcotest.run "session_ownership"
-    [
-      ( "diagnosis",
+      Alcotest.run "session_ownership"
         [
-          Alcotest.test_case
-            "fd identity warmup then 3 held-peer buffered normal" `Slow
-            test_fd_identity_diagnosis;
-        ] );
-      ( "gates",
-        [
-          Alcotest.test_case "buffered+streaming six scenarios localhost ws"
-            `Slow test_gates_ws;
-        ] );
-      ( "repeat",
-        [
-          Alcotest.test_case "18 rounds x 12 ops ws localhost (216)" `Slow
-            (repeat_ws ~rounds:18);
-          Alcotest.test_case "18 rounds x 12 ops wss localhost dual-SAN (216)"
-            `Slow (repeat_wss ~rounds:18);
-        ] );
-    ]
+          ( "diagnosis",
+            [
+              Alcotest.test_case
+                "fd identity warmup then 3 held-peer buffered normal" `Slow
+                test_fd_identity_diagnosis;
+            ] );
+          ( "gates",
+            [
+              Alcotest.test_case "buffered+streaming six scenarios localhost ws"
+                `Slow test_gates_ws;
+            ] );
+          ( "repeat",
+            [
+              Alcotest.test_case "18 rounds x 12 ops ws localhost (216)" `Slow
+                (repeat_ws ~rounds:18);
+              Alcotest.test_case
+                "18 rounds x 12 ops wss localhost dual-SAN (216)" `Slow
+                (repeat_wss ~rounds:18);
+            ] );
+        ]

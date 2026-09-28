@@ -52,5 +52,8 @@ val response_to_json : response -> Yojson.Safe.t
 val response_of_json :
   request -> Yojson.Safe.t -> (response, protocol_error) result
 
+val decode_line : string -> (request, string) result
+val encode_response : response -> string
+
 val snapshot_of_status_response :
   response -> (recording_snapshot, protocol_error) result

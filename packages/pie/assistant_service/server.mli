@@ -7,7 +7,7 @@ type budget = { peer_timeout_s : float }
 
 val default_budget : budget
 
-exception Error of string
+type error = Eta_ipc.Listener.error
 
 val err_endpoint_conflict : string
 val err_unsafe_runtime_dir : string
@@ -20,10 +20,11 @@ val err_malformed_request : string
 
 val start :
   sw:Eio.Switch.t ->
-  net:_ Eio.Net.t ->
-  mono_clock:_ Eio.Time.Mono.t ->
+  fs:_ Eio.Path.t ->
+  net:_ Eio.Net.ty Eio.Resource.t ->
+  clock:_ Eio.Time.clock ->
   ?socket_path:string ->
   ?budget:budget ->
   ?action_handler:(string -> Contract.action_result) ->
   Recording.Coordinator.t ->
-  unit
+  (unit, error) result

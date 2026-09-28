@@ -65,7 +65,11 @@ let output_message inner =
   `Assoc
     [
       ("type", `String "message");
-      ("content", `List [ `Assoc [ ("text", `String inner) ] ]);
+      ( "content",
+        `List
+          [
+            `Assoc [ ("type", `String "output_text"); ("text", `String inner) ];
+          ] );
     ]
 
 let responses_body ~status ?extra_output inner =
@@ -136,35 +140,37 @@ let run_public ~body ~op () =
           ignore (read_http_request flow);
           write_http_json flow body));
   let pcm_bytes = pcm in
+  let clock = Eio.Stdenv.clock env in
+  let logger =
+    Eta_observability.Logger.create ~service:"pie-test" ~clock
+      ~mono_clock:(Eio.Stdenv.mono_clock env)
+      ~reporter:
+        (Eta_observability.Logger.Memory.reporter
+           (Eta_observability.Logger.Memory.create ()))
+      ()
+  in
   let operation =
     match op with
     | Transcribe ->
-        Pie.Stt.Openrouter.transcribe_with_prompt ~sw ~net ~model:"test-model"
-          ~language:"en" ~prompt_template:"Transcribe." pcm_bytes
+        Pie.Stt.Openrouter.transcribe_with_prompt ~sw ~net ~clock ~logger
+          ~model:"test-model" ~language:"en" ~prompt_template:"Transcribe."
+          pcm_bytes
     | Translate ->
-        Pie.Stt.Openrouter.translate_with_prompt ~sw ~net ~model:"test-model"
-          ~source_language:"en" ~target_language:"pl"
+        Pie.Stt.Openrouter.translate_with_prompt ~sw ~net ~clock ~logger
+          ~model:"test-model" ~source_language:"en" ~target_language:"pl"
           ~prompt_template:"Translate." pcm_bytes
   in
-  Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env) operation
+  operation
 
 let expect_ok expected result =
   match result with
-  | Eta.Exit.Ok text -> Alcotest.(check string) "delivered text" expected text
-  | Eta.Exit.Error cause ->
-      Alcotest.failf "expected success, got %a"
-        (Eta.Cause.pp (fun fmt (`Stt_error m) -> Format.pp_print_string fmt m))
-        cause
+  | Ok text -> Alcotest.(check string) "delivered text" expected text
+  | Error (`Stt_error message) -> Alcotest.failf "expected success: %s" message
 
 let expect_reject needle result =
   match result with
-  | Eta.Exit.Ok text -> Alcotest.failf "delivery continuation ran: %s" text
-  | Eta.Exit.Error cause ->
-      let rendered =
-        Format.asprintf "%a"
-          (Eta.Cause.pp (fun fmt (`Stt_error m) -> Format.pp_print_string fmt m))
-          cause
-      in
+  | Ok text -> Alcotest.failf "delivery continuation ran: %s" text
+  | Error (`Stt_error rendered) ->
       if
         not
           (String.length rendered >= String.length needle
@@ -228,7 +234,7 @@ let child_main name =
            ~body:(cancelled_body "should-not-deliver")
            ~op:Transcribe ())
   | "missing" ->
-      expect_reject "OpenRouter outcome rejected: missing finish markers"
+      expect_reject "OpenRouter request failed: invalid response"
         (run_public ~body:(missing_body "should-not-deliver") ~op:Transcribe ())
   | "tool" ->
       expect_reject "OpenRouter outcome rejected: tool continuation"

@@ -1,61 +1,37 @@
 type error = [ `Stt_error of string ]
 
-module A = Eta_ai
-module Http = Eta_http
-module Http_eio = Eta_http_eio
-module Openrouter = Eta_ai_openrouter
-open Eta.Syntax
+module Responses = Eta_ai_openrouter.Responses
+module Openrouter_audio = Eta_ai_openrouter.Audio
+module Redact = Eta_observability.Redact
 
 let direct_transcription_timeout = Eta.Duration.seconds 60
 let response_operation_timeout = Eta.Duration.seconds 120
 
-let with_direct_transcription_timeout computation =
-  computation
-  |> Eta.Effect.timeout_as direct_transcription_timeout
-       ~on_timeout:
-         (`Stt_error "OpenRouter transcription timed out after 60 seconds")
-
-let with_response_operation_timeout computation =
-  computation
-  |> Eta.Effect.timeout_as response_operation_timeout
-       ~on_timeout:
-         (`Stt_error "OpenRouter response operation timed out after 120 seconds")
-
 let resolve_api_key () =
   match Sys.getenv_opt "OPENROUTER_API_KEY" with
-  | Some value when String.trim value <> "" -> Some (String.trim value)
+  | Some value when String.trim value <> "" ->
+      Some (Redact.make (String.trim value))
   | _ -> None
 
-let provider () =
+let endpoint path =
   match Sys.getenv_opt "OPENROUTER_BASE_URL" with
-  | Some value when String.trim value <> "" ->
-      Openrouter.provider ~base_url:(String.trim value) ()
-  | _ -> Openrouter.provider ()
+  | Some base when String.trim base <> "" ->
+      let base = String.trim base in
+      let rec trim n =
+        if n > 0 && base.[n - 1] = '/' then trim (n - 1) else n
+      in
+      Some (String.sub base 0 (trim (String.length base)) ^ path)
+  | _ -> None
 
-let responses_provider () =
-  match Sys.getenv_opt "OPENROUTER_BASE_URL" with
-  | Some value when String.trim value <> "" ->
-      Openrouter.responses_provider ~base_url:(String.trim value) ()
-  | _ -> Openrouter.responses_provider ()
-
-let http_client ~sw ~net = Process.http_client ~sw ~net
-
-let http_error_metadata error =
-  let category = Http.Error.category_to_string (Http.Error.category error) in
-  match Http.Error.status error with
-  | Some status -> Printf.sprintf "%s HTTP %d" category status
-  | None -> category
-
-let ai_error_message = function
-  | A.Eta_http_error error -> http_error_metadata error
-  | Provider_error { status; _ } -> (
-      match status with
-      | Some status -> Printf.sprintf "provider error HTTP %d" status
-      | None -> "provider error")
-  | Decode_error _ -> "decode error"
-  | Invalid_request _ -> "invalid request"
-  | Invalid_tool _ -> "invalid tool"
-  | Unsupported _ -> "unsupported feature"
+(* Never render provider-owned text: Invalid_response.got and refusal text can
+   contain credentials, prompts or transcripts. *)
+let ai_error_message : Eta_ai.Error.t -> string = function
+  | `Unavailable _ -> "unavailable"
+  | `Timeout -> "timeout"
+  | `Authentication _ -> "authentication"
+  | `Invalid_response _ -> "invalid response"
+  | `Input_too_large _ -> "input too large"
+  | `Model_mismatch _ -> "model mismatch"
 
 let stt_error_of_ai error =
   `Stt_error ("OpenRouter request failed: " ^ ai_error_message error)
@@ -131,200 +107,113 @@ let structured_output task =
         ("additionalProperties", `Bool false);
       ]
   in
-  {
-    A.Responses.format =
-      A.Responses.Json_schema
-        { name = task ^ "_response"; schema; strict = Some true };
-  }
-
-let reasoning_for_effort = function
-  | None -> Eta.Effect.pure None
-  | Some effort -> (
-      match Openrouter.reasoning ~effort () with
-      | Ok reasoning -> Eta.Effect.pure (Some reasoning)
-      | Error error -> Eta.Effect.fail (stt_error_of_ai error))
-
-let extract_message_content = function
-  | A.Assistant { content; _ } | A.User content | A.Tool { content; _ } ->
-      let parts =
-        List.filter_map
-          (function
-            | A.Text text | A.Json text -> Some text
-            | A.Image _ | A.Audio _ | A.Video _ -> None)
-          content
-      in
-      String.concat "" parts
-  | A.System text -> text
+  Responses.Json_schema
+    { name = task ^ "_response"; schema; strict = Some true }
 
 let decode_structured_output raw =
-  let trimmed = String.trim raw in
-  try
-    match Yojson.Safe.from_string trimmed with
-    | `Assoc fields -> (
-        match List.assoc_opt output_text_field fields with
-        | Some (`String text) when String.trim text <> "" ->
-            Ok (String.trim text)
-        | _ -> Error (`Stt_error "OpenRouter structured response missing text"))
-    | _ -> Error (`Stt_error "OpenRouter structured response must be an object")
-  with _ ->
-    Error (`Stt_error "OpenRouter structured response was not valid JSON")
-
-let outcome_rejection response =
-  let tool_continuation =
-    match response.A.message with
-    | A.Assistant { tool_calls = _ :: _; _ } | A.Tool _ -> true
-    | _ -> false
-  in
-  if tool_continuation then Some "tool continuation"
+  if String.length raw > Dictation_limits.result_utf8_bytes then
+    Error (`Stt_error "OpenRouter result budget exceeded")
   else
-    match response.A.finish_reasons with
-    | [] -> Some "missing finish markers"
-    | reasons when List.for_all (function A.Stop -> true | _ -> false) reasons
-      ->
-        None
-    | reasons ->
-        let rec classify = function
-          | [] -> "unrecognized outcome"
-          | A.Length :: _ -> "incomplete"
-          | A.Tool_calls :: _ -> "tool continuation"
-          | A.Other "cancelled" :: _ -> "cancelled"
-          | A.Content_filter :: _ -> "content filter"
-          | A.Error :: _ -> "error"
-          | A.Stop :: rest -> classify rest
-          | A.Other _ :: rest ->
-              if
-                List.exists
-                  (function
-                    | A.Length | A.Tool_calls | A.Content_filter | A.Error ->
-                        true
-                    | A.Other "cancelled" -> true
-                    | _ -> false)
-                  rest
-              then classify rest
-              else "unrecognized outcome"
+    try
+      match Yojson.Safe.from_string (String.trim raw) with
+      | `Assoc fields -> (
+          match List.assoc_opt output_text_field fields with
+          | Some (`String text) when String.trim text <> "" ->
+              let text = String.trim text in
+              if String.length text > Dictation_limits.result_utf8_bytes then
+                Error (`Stt_error "OpenRouter result budget exceeded")
+              else Ok text
+          | _ ->
+              Error (`Stt_error "OpenRouter structured response missing text"))
+      | _ ->
+          Error (`Stt_error "OpenRouter structured response must be an object")
+    with Yojson.Json_error _ ->
+      Error (`Stt_error "OpenRouter structured response was not valid JSON")
+
+let outcome_rejection = function
+  | `Not_completed "incomplete" -> "incomplete"
+  | `Not_completed "cancelled" -> "cancelled"
+  | `Not_completed _ -> "missing finish markers or non-completed status"
+  | `Tool_continuation _ -> "tool continuation"
+  | `Refusal _ -> "refusal"
+  | `Other _ -> "unsupported output"
+
+let run_audio_responses ~sw ~net ~clock ~logger ~model ~prompt ~sample_rate
+    ~task ?thinking_effort pcm_bytes =
+  if Bytes.length pcm_bytes > Dictation_limits.capture_pcm_bytes then
+    Error (`Stt_error "OpenRouter captured audio budget exceeded")
+  else
+    match resolve_api_key () with
+    | None ->
+        Error (`Stt_error "Missing OpenRouter API key. Set OPENROUTER_API_KEY.")
+    | Some api_key -> (
+        let http = Process.make_http ~sw ~net ~clock in
+        let request : Responses.request =
+          {
+            model;
+            prompt;
+            wav = wav_bytes ~sample_rate pcm_bytes;
+            temperature = Some 0.0;
+            text_format = Some (structured_output task);
+            reasoning_effort = thinking_effort;
+          }
         in
-        Some (classify reasons)
+        match
+          Responses.create ~http ~clock ~logger ~api_key
+            ?endpoint:(endpoint "/api/v1/responses")
+            ~deadline:response_operation_timeout request
+        with
+        | Error error -> Error (stt_error_of_ai error)
+        | Ok response -> (
+            match Responses.deliverable response with
+            | Error rejection ->
+                Error
+                  (`Stt_error
+                     ("OpenRouter outcome rejected: "
+                     ^ outcome_rejection rejection))
+            | Ok raw -> decode_structured_output raw))
 
-let validate_completed_response response =
-  match outcome_rejection response with
-  | None -> Ok ()
-  | Some label -> Error (`Stt_error ("OpenRouter outcome rejected: " ^ label))
+(* A 64 MiB admitted PCM capture has a 44-byte WAV header and bounded multipart
+   framing. The extra 8 KiB covers the model/language and transport field names. *)
+let max_audio_request_bytes = Dictation_limits.capture_pcm_bytes + 44 + 8192
 
-let responses_request ~model ~prompt ~sample_rate ~task pcm_bytes :
-    A.tool A.Responses.request =
-  {
-    model;
-    input =
-      A.Responses.Messages
-        [
-          A.User
-            [
-              A.Text prompt;
-              A.Audio
-                {
-                  data = A.Bytes (wav_bytes ~sample_rate pcm_bytes);
-                  format = A.Wav;
-                  transcript = None;
-                };
-            ];
-        ];
-    instructions = None;
-    previous_response_id = None;
-    store = None;
-    include_ = [];
-    tools = [];
-    tool_choice = None;
-    parallel_tool_calls = None;
-    max_turns = None;
-    max_output_tokens = None;
-    temperature = Some 0.0;
-    top_p = None;
-    top_k = None;
-    min_p = None;
-    text = Some (structured_output task);
-    reasoning = None;
-    reasoning_effort = None;
-    service_tier = None;
-    user = None;
-    prompt_cache_key = None;
-    replay_items = [];
-    stream = false;
-  }
-
-let run_audio_responses ~sw ~net ~model ~prompt ~sample_rate ~task
-    ?thinking_effort pcm_bytes =
-  (if Bytes.length pcm_bytes > Dictation_limits.capture_pcm_bytes then
-     Eta.Effect.fail (`Stt_error "OpenRouter captured audio budget exceeded")
-   else
-     match resolve_api_key () with
-     | None ->
-         Eta.Effect.fail
-           (`Stt_error "Missing OpenRouter API key. Set OPENROUTER_API_KEY.")
-     | Some api_key ->
-         let client = http_client ~sw ~net in
-         let* reasoning = reasoning_for_effort thinking_effort in
-         let request =
-           responses_request ~model ~prompt ~sample_rate ~task pcm_bytes
-         in
-         let* raw =
-           Openrouter.responses ~provider:(responses_provider ()) ?reasoning
-             client ~api_key:(A.api_key api_key) request
-           |> Eta.Effect.map_error stt_error_of_ai
-           |> Eta.Effect.bind (fun response ->
-               match validate_completed_response response with
-               | Error error -> Eta.Effect.fail error
-               | Ok () ->
-                   let content = extract_message_content response.A.message in
-                   Eta.Effect.pure content)
-         in
-         Eta.Effect.from_result (decode_structured_output raw))
-  |> with_response_operation_timeout
-
-let transcribe ~sw ~net ~api_key ~model ~language ?(sample_rate = 16000)
+let transcribe ~sw ~net ~clock ~api_key ~model ~language ?(sample_rate = 16000)
     pcm_bytes =
-  (if Bytes.length pcm_bytes > Dictation_limits.capture_pcm_bytes then
-     Eta.Effect.fail (`Stt_error "OpenRouter captured audio budget exceeded")
-   else
-     let client = http_client ~sw ~net in
-     let file : A.Audio.upload =
-       {
-         filename = "pie.wav";
-         content_type = "audio/wav";
-         source = A.Audio.bytes (wav_bytes ~sample_rate pcm_bytes);
-       }
-     in
-     let request : Openrouter.Audio.Speech_to_text.request =
-       {
-         model;
-         file;
-         language = Some language;
-         prompt = None;
-         response_format = None;
-         temperature = Some 0.0;
-         extra_fields = [];
-       }
-     in
-     let* response =
-       Openrouter.Audio.Speech_to_text.create ~provider:(provider ()) client
-         ~api_key:(A.api_key api_key) request
-       |> Eta.Effect.map_error stt_error_of_ai
-     in
-     match response.text with
-     | Some text when String.trim text <> "" ->
-         Eta.Effect.pure (String.trim text)
-     | _ ->
-         Eta.Effect.fail
-           (`Stt_error "OpenRouter transcription response was empty"))
-  |> with_direct_transcription_timeout
+  if Bytes.length pcm_bytes > Dictation_limits.capture_pcm_bytes then
+    Error (`Stt_error "OpenRouter captured audio budget exceeded")
+  else
+    let http = Process.make_http ~sw ~net ~clock in
+    let request : Openrouter_audio.request =
+      {
+        model;
+        filename = "pie.wav";
+        wav = wav_bytes ~sample_rate pcm_bytes;
+        language = Some language;
+        prompt = None;
+        temperature = Some 0.0;
+      }
+    in
+    match
+      Openrouter_audio.create ~http ~api_key
+        ?endpoint:(endpoint "/api/v1/audio/transcriptions")
+        ~max_request_bytes:max_audio_request_bytes
+        ~deadline:direct_transcription_timeout request
+    with
+    | Error error -> Error (stt_error_of_ai error)
+    | Ok text ->
+        if String.length text > Dictation_limits.result_utf8_bytes then
+          Error (`Stt_error "OpenRouter result budget exceeded")
+        else Ok text
 
-let transcribe_with_prompt ~sw ~net ~model ~language ~prompt_template
-    ?thinking_effort ?(sample_rate = 16000) pcm_bytes =
-  let prompt = render_template prompt_template [ ("language", language) ] in
-  run_audio_responses ~sw ~net ~model ~prompt ~sample_rate ~task:"transcription"
-    ?thinking_effort pcm_bytes
-
-let translate_with_prompt ~sw ~net ~model ~source_language ~target_language
+let transcribe_with_prompt ~sw ~net ~clock ~logger ~model ~language
     ~prompt_template ?thinking_effort ?(sample_rate = 16000) pcm_bytes =
+  let prompt = render_template prompt_template [ ("language", language) ] in
+  run_audio_responses ~sw ~net ~clock ~logger ~model ~prompt ~sample_rate
+    ~task:"transcription" ?thinking_effort pcm_bytes
+
+let translate_with_prompt ~sw ~net ~clock ~logger ~model ~source_language
+    ~target_language ~prompt_template ?thinking_effort ?(sample_rate = 16000)
+    pcm_bytes =
   let prompt =
     render_template prompt_template
       [
@@ -332,5 +221,5 @@ let translate_with_prompt ~sw ~net ~model ~source_language ~target_language
         ("target_language", target_language);
       ]
   in
-  run_audio_responses ~sw ~net ~model ~prompt ~sample_rate ~task:"translation"
-    ?thinking_effort pcm_bytes
+  run_audio_responses ~sw ~net ~clock ~logger ~model ~prompt ~sample_rate
+    ~task:"translation" ?thinking_effort pcm_bytes

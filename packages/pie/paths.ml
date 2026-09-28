@@ -31,5 +31,9 @@ let runtime_dir = resolve_runtime_dir ()
 let daemon_socket_path = Filename.concat runtime_dir "control.sock"
 let recording_state_path = Filename.concat runtime_dir "recording.json"
 let failed_recordings_dir = Filename.concat data_dir "failed-recordings"
-let stt_config_path = Filename.concat config_dir "stt.toml"
+
+let stt_config_path =
+  Eta_app.Config.path_with ~file_name:"stt.toml" ~name:app_dir_name ~config:None
+    ~getenv:Sys.getenv_opt
+
 let prompts_dir = Filename.concat config_dir "prompts"

@@ -132,6 +132,16 @@ let test_unknown_method () =
   | Error "unknown method: MeetingStart" -> ()
   | _ -> Alcotest.fail "expected unknown method"
 
+let test_line_codec () =
+  expect_error "invalid JSON line" "malformed-request"
+    (C.decode_line "{not-json}");
+  (match C.decode_line {|{"method":"Status"}|} with
+  | Ok C.Status -> ()
+  | _ -> Alcotest.fail "Status line did not decode");
+  Alcotest.(check string)
+    "error response" {|{"error":"malformed-request"}|}
+    (C.encode_response (C.Error_resp "malformed-request"))
+
 let serve_one ~socket_path reply =
   let server = Unix.socket Unix.PF_UNIX Unix.SOCK_STREAM 0 in
   Unix.set_nonblock server;
@@ -273,6 +283,7 @@ let () =
           Alcotest.test_case "snapshot_of_status matching" `Quick
             test_snapshot_of_status_matching;
           Alcotest.test_case "unknown meeting method" `Quick test_unknown_method;
+          Alcotest.test_case "newline request codec" `Quick test_line_codec;
           Alcotest.test_case "action matching" `Quick test_action_matching;
           Alcotest.test_case "action mismatch rejected" `Quick
             test_action_mismatch;

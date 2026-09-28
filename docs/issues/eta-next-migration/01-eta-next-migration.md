@@ -92,6 +92,9 @@ These are missing observable contracts, not requests to restore v1 names. Draft 
 
 ### G2 — IPC peer failures cannot produce protocol replies (blocks U4 listener replacement)
 
+**Resolved (eta-next b39988bf nipc-c871; Pie U4):** malformed/oversized lines get `{"error":"malformed-request"}` via `?error_response`. Pie's old whole-peer 1 s budget is preserved as **300 ms ingress + 400 ms handler + 300 ms egress** (sum 1 s), 16 active peers, 64 KiB line and reply caps.
+
+
 **Exact absence:** [lib/ipc/listener.mli](</home/ribelo/projects/ribelo/ocaml/eta-next/lib/ipc/listener.mli>) offers only `on_peer_error : peer_error -> unit`; `decode` errors and `Ingress_too_large` never reach `handler` or `encode`. The callback has neither response return nor flow. Pie's [assistant_service/server.ml](</home/ribelo/projects/ribelo/pie/packages/pie/assistant_service/server.ml>) sends `{"error":"malformed-request"}` plus newline for malformed JSON/codec failures and overlong lines. Mapping malformed input to a fake successful request does not address oversized ingress and is not the intended boundary.
 
 **Draft eta-next story:** As a Pie control-listener owner, I want a bounded optional peer-error response encoder, so that malformed/overlong requests receive the existing protocol error without admitting a handler. ^pienext-pyo6
@@ -105,6 +108,8 @@ These are missing observable contracts, not requests to restore v1 names. Draft 
 **Draft eta-next story:** As the Pie CLI owner, I want typed service arguments and capability-bearing extra commands under the same Door, so that all existing verbs and default-service overrides run without a second runner. ^pienext-zyck
 
 **Proposed API:** a typed service argument term supplied to the service callback and a command-builder/command callback contract that receives Door `Env.t` plus an owned switch and returns a typed outcome. Expose both through `run` and `run_for_test`; keep one signal/exit boundary. Test bare invocation with both overrides, every existing verb, errors, help, and cancellation of a long-lived extra command. Do not parse `Sys.argv` a second time or capture capabilities in global refs.
+
+**U4 CLI diagnostic ruling:** malformed daemon JSON reports typed protocol error `malformed-response` on stderr and exits nonzero. The previous `Json_error` exception class name was an implementation detail, not a user-facing contract; successful output, command exits, and daemon protocol replies retain their contracts.
 
 ### G4 — Door lacks the existing config source/read policy (blocks U4 full config integration)
 
@@ -252,17 +257,3 @@ U1 + U2 + U3 + U4 + closed gaps ----------------------------+--> U5 final gates
 
 ## Preparation Verification and Step-2 Gates
 
-Preparation checks passed: all 36 package Dune files and project/OPAM metadata have no legacy Eta package names or duplicate library entries; the lock changes only the existing eta node plus its two required new nodes; private `pie.opam` generation and `git diff --check` pass; all 57 source matches are mapped and all ticket links resolve. All 24 new story/requirement IDs are valid and unique. The repository-wide ID validator reports only two pre-existing malformed IDs (`piegap-piegap-gsqw`, `piegap-piegap-lwro`) at [stale-gap spec:12–13](</home/ribelo/projects/ribelo/pie/docs/issues/stale-eta-gap-workarounds/01-retire-stale-eta-gap-workarounds.md#L12-L13>); they were left unchanged. Application tests and whole-tree formatting are deliberately deferred because sources are not ported. No shared-switch install helper, production invocation, live provider call or service restart was performed. A final read-only service check remained active; its PID differed from the initial observation, so this preparation does not claim process identity stayed unchanged.
-
-Example later commands (run from Pie with a **new private build directory**, under a bounded timeout; inspect the development-shell hook before use):
-
-```sh
-PRIVATE_BUILD="$PWD/.scratch/eta-next-port/dune"
-mkdir -p "$(dirname "$PRIVATE_BUILD")"
-DUNE_CACHE=disabled nix develop -c dune build --build-dir "$PRIVATE_BUILD" @install
-DUNE_CACHE=disabled nix develop -c dune test --build-dir "$PRIVATE_BUILD"
-DUNE_CACHE=disabled nix develop -c dune build --build-dir "$PRIVATE_BUILD" @fmt
-/home/ribelo/.dotfiles/skills/engineering/requirements/ears/scripts/validate-ids
-```
-
-The installed service is not a smoke-test fixture. A later service smoke run uses temporary HOME/XDG state, its own IPC path, loopback provider peers and fake audio/input unless real devices are separately authorized. Do not repoint or touch the production credentials/service to make a test pass.

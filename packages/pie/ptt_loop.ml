@@ -1,39 +1,24 @@
 type trigger = Press of string | Release of string
 type captured_clip = { duration_ms : int; pcm_bytes : bytes }
-type error = [ `Ptt_error of string ]
+
+type error =
+  [ `Ptt_error of string | `Ptt_cause of [ `Ptt_error of string ] Eta.Cause.t ]
+
 type run_error = [ error | `Pulse_error of Pulse.Client.error ]
 
-let widen_ptt (`Ptt_error msg) : run_error = `Ptt_error msg
-let widen_pulse (`Pulse_error error) : run_error = `Pulse_error error
-
-(* catch_some recovers the first typed Fail in an otherwise-catchable
-   Concurrent/Sequential tree. Recover only an exact Cause.Fail. *)
-let recover_single_failure handler body =
-  Eta.Effect.defer (fun () ->
-      let single = ref false in
-      body
-      |> Eta.Effect.on_error (fun cause ->
-          (single := match cause with Eta.Cause.Fail _ -> true | _ -> false);
-          Eta.Effect.unit)
-      |> Eta.Effect.catch_some (fun err ->
-          if !single then handler err else None))
-
-exception Queue_budget
-
 type finish =
-  | Buffered of (captured_clip -> (unit, error) Eta.Effect.t)
-  | Streaming of (duration_ms:int -> (unit, error) Eta.Effect.t)
+  | Buffered of (captured_clip -> (unit, error) result)
+  | Streaming of (duration_ms:int -> (unit, error) result)
 
 type handle = {
-  offer : bytes -> (unit, error) Eta.Effect.t;
+  offer : bytes -> (unit, error) result;
   finish : finish;
-  cancel : (unit, error) Eta.Effect.t;
+  cancel : unit -> (unit, error) result;
 }
 
 type press_result =
   | Handle of handle
-  | Scoped of
-      ((handle -> (unit, error) Eta.Effect.t) -> (unit, error) Eta.Effect.t)
+  | Scoped of ((handle -> (unit, error) result) -> (unit, error) result)
   | Skip
 
 type config = {
@@ -42,78 +27,19 @@ type config = {
   capture_thresholds : unit -> float * float;
   log_prefix : string -> string;
   source : string option;
-  on_ready : (unit, error) Eta.Effect.t;
-  on_press : string -> (press_result, error) Eta.Effect.t;
-  on_release : string -> (unit, error) Eta.Effect.t;
-  on_abort : (bool, error) Eta.Effect.t;
-  on_dead_input : (unit, error) Eta.Effect.t;
+  on_ready : unit -> (unit, error) result;
+  on_press : string -> (press_result, error) result;
+  on_release : string -> (unit, error) result;
+  on_abort : unit -> (bool, error) result;
+  on_dead_input : unit -> (unit, error) result;
   admission_active : unit -> bool;
 }
 
-open Eta.Syntax
+let ( let* ) = Result.bind
 
 let elapsed_ms ~origin now =
   let ns = Mtime.Span.to_uint64_ns (Mtime.span origin now) in
   Int64.to_int (Int64.div ns 1_000_000L)
-
-let timestamp () =
-  let now = Unix.gettimeofday () in
-  let tm = Unix.localtime now in
-  let millis = int_of_float ((now -. floor now) *. 1000.0) in
-  Printf.sprintf "%02d:%02d:%02d.%03d" tm.Unix.tm_hour tm.tm_min tm.tm_sec
-    millis
-
-let log_info message fields =
-  let attrs =
-    ("pie.timestamp", timestamp ())
-    :: List.map (fun (key, value) -> (key, Yojson.Safe.to_string value)) fields
-  in
-  Eta_observability.log_info ~attrs message
-
-let log_error message fields =
-  let attrs =
-    ("pie.timestamp", timestamp ())
-    :: List.map (fun (key, value) -> (key, Yojson.Safe.to_string value)) fields
-  in
-  Eta_observability.log_error ~attrs message
-
-let ptt_fields ?duration_ms ?held_duration_ms ?bytes ?rms ?peak config mode =
-  let base =
-    [
-      ("ptt.mode", `String mode);
-      ("ptt.log_prefix", `String (config.log_prefix mode));
-    ]
-  in
-  let base =
-    match config.source with
-    | None -> base
-    | Some source -> ("ptt.source", `String source) :: base
-  in
-  let base =
-    match duration_ms with
-    | None -> base
-    | Some duration_ms -> ("ptt.duration_ms", `Int duration_ms) :: base
-  in
-  let base =
-    match held_duration_ms with
-    | None -> base
-    | Some held_duration_ms ->
-        ("ptt.held_duration_ms", `Int held_duration_ms) :: base
-  in
-  let base =
-    match bytes with
-    | None -> base
-    | Some bytes -> ("ptt.bytes", `Int bytes) :: base
-  in
-  let base =
-    match rms with None -> base | Some rms -> ("ptt.rms", `Float rms) :: base
-  in
-  let base =
-    match peak with
-    | None -> base
-    | Some peak -> ("ptt.peak", `Float peak) :: base
-  in
-  List.rev base
 
 let concat_chunks chunks =
   let chunks = List.rev chunks in
@@ -149,152 +75,172 @@ type input =
   | Trigger of trigger
   | Chunk of bytes
 
-(* PIE004: an item records whether the coordinator already owned admission when
-   the item was received. A press received during an attempt is rejected at
-   receipt instead of replaying as a fresh attempt after settlement; releases
-   keep their meaning. Admission itself stays owned by the recording
-   coordinator; this stamp only observes it. *)
 type stamped_input = { operation_active : bool; input : input }
 
-let run ?control ?(on_capture_resumed = Eta.Effect.unit)
-    ?(on_low_input = Eta.Effect.unit) ~mono_clock
+(* PCM bytes and item count are admitted and released with the queue mutation
+   under the same mutex. A blocked producer cannot charge an unqueued chunk. *)
+type input_queue = {
+  mutex : Eio.Mutex.t;
+  changed : Eio.Condition.t;
+  items : stamped_input Queue.t;
+  mutable bytes : int;
+  capacity : int;
+  pcm_limit : int;
+}
+
+let queue_create ~capacity ~pcm_limit =
+  {
+    mutex = Eio.Mutex.create ();
+    changed = Eio.Condition.create ();
+    items = Queue.create ();
+    bytes = 0;
+    capacity;
+    pcm_limit;
+  }
+
+let queue_add q item =
+  let n = match item.input with Chunk b -> Bytes.length b | _ -> 0 in
+  Eio.Mutex.lock q.mutex;
+  Fun.protect ~finally:(fun () -> Eio.Mutex.unlock q.mutex) @@ fun () ->
+  let rec add () =
+    if n > q.pcm_limit - q.bytes then Error (`Ptt_error "pcm:queue_budget")
+    else if Queue.length q.items >= q.capacity then (
+      Eio.Condition.await q.changed q.mutex;
+      add ())
+    else (
+      Queue.add item q.items;
+      q.bytes <- q.bytes + n;
+      Eio.Condition.broadcast q.changed;
+      Ok ())
+  in
+  add ()
+
+let queue_take q =
+  Eio.Mutex.lock q.mutex;
+  Fun.protect ~finally:(fun () -> Eio.Mutex.unlock q.mutex) @@ fun () ->
+  let rec take () =
+    match Queue.take_opt q.items with
+    | None ->
+        Eio.Condition.await q.changed q.mutex;
+        take ()
+    | Some item ->
+        (match item.input with
+        | Chunk b -> q.bytes <- q.bytes - Bytes.length b
+        | _ -> ());
+        Eio.Condition.broadcast q.changed;
+        item
+  in
+  take ()
+
+let ptt_fields ?duration_ms ?held_duration_ms ?bytes ?rms ?peak config mode =
+  let open Eta_observability.Logger in
+  let base =
+    [
+      ("ptt.mode", String mode);
+      ("ptt.log_prefix", String (config.log_prefix mode));
+    ]
+  in
+  let add key f value fields =
+    match value with None -> fields | Some v -> (key, f v) :: fields
+  in
+  base
+  |> add "ptt.source" (fun x -> String x) config.source
+  |> add "ptt.duration_ms" (fun x -> Int x) duration_ms
+  |> add "ptt.held_duration_ms" (fun x -> Int x) held_duration_ms
+  |> add "ptt.bytes" (fun x -> Int x) bytes
+  |> add "ptt.rms" (fun x -> Float x) rms
+  |> add "ptt.peak" (fun x -> Float x) peak
+
+let run ?control ?(on_capture_resumed = fun () -> Ok ())
+    ?(on_low_input = fun () -> Ok ()) ~sw ~mono_clock ~logger
     ~(keyboard : Keyboard.Monitor.t) ~audio
     ?(queue_pcm_bytes = Dictation_limits.queue_pcm_bytes)
     ?(capture_pcm_bytes = Dictation_limits.capture_pcm_bytes)
-    ?(queue_capacity = 1024 + 256) (config : config) =
-  Eta.Effect.defer @@ fun () ->
-  let origin = ref None in
-  let now_ms () =
-    let now = Eio.Time.Mono.now mono_clock in
-    let origin_t =
-      match !origin with
-      | Some t -> t
-      | None ->
-          origin := Some now;
-          now
-    in
-    elapsed_ms ~origin:origin_t now
-  in
+    ?(queue_capacity = 1024 + 256) (config : config) : (unit, run_error) result
+    =
+  let origin = Eio.Time.Mono.now mono_clock in
+  let now_ms () = elapsed_ms ~origin (Eio.Time.Mono.now mono_clock) in
   let keyboard_queue = Keyboard.Monitor.subscribe keyboard in
-  let input = Eio.Stream.create queue_capacity in
-  let pending = Atomic.make (None : stamped_input option) in
-  let queue_mutex = Eio.Mutex.create () in
-  let queued_bytes = ref 0 in
-  let reserve_audio n =
-    if n < 0 || n > queue_pcm_bytes then false
-    else
-      Eio.Mutex.use_rw ~protect:true queue_mutex (fun () ->
-          if !queued_bytes + n > queue_pcm_bytes then false
-          else (
-            queued_bytes := !queued_bytes + n;
-            true))
+  let input =
+    queue_create ~capacity:queue_capacity ~pcm_limit:queue_pcm_bytes
   in
-  let release_audio n =
-    Eio.Mutex.use_rw ~protect:true queue_mutex (fun () ->
-        queued_bytes := !queued_bytes - n)
+  let pending = ref None in
+  let stamp item =
+    { operation_active = config.admission_active (); input = item }
   in
-  let push_input item =
-    Eta.Effect.sync (fun () ->
-        Eio.Stream.add input
-          { operation_active = config.admission_active (); input = item })
-  in
-  let take_stamped_now () =
-    let stamped =
-      match Atomic.exchange pending None with
-      | Some stamped -> stamped
-      | None -> Eio.Stream.take input
-    in
-    (match stamped.input with
-    | Chunk chunk -> release_audio (Bytes.length chunk)
-    | Event _ | Trigger _ -> ());
-    stamped
-  in
-  let take_input = Eta.Effect.sync take_stamped_now in
-  let take_tagged =
-    take_input |> Eta.Effect.map (fun stamped -> `Item stamped)
+  let push_input item = queue_add input (stamp item) in
+  let take_input () =
+    match !pending with
+    | Some item ->
+        pending := None;
+        item
+    | None -> queue_take input
   in
   let rec consume_processing_input () =
-    let* step =
-      Eta.Effect.sync (fun () ->
-          let stamped = take_stamped_now () in
-          match stamped.input with
-          | Chunk _ -> `Continue
-          | Trigger (Press _) when stamped.operation_active -> `Continue
-          | Trigger (Release _) when stamped.operation_active -> `Continue
-          | Trigger (Press _ | Release _) ->
-              Atomic.set pending (Some stamped);
-              `Park
-          | Event event -> (
-              match config.recognize event with
-              | Some ((Press _ | Release _) as trigger)
-                when not stamped.operation_active ->
-                  Atomic.set pending
-                    (Some { stamped with input = Trigger trigger });
-                  `Park
-              | Some (Press _) | Some (Release _) | None -> `Continue))
+    let stamped = take_input () in
+    let park item =
+      pending := Some item;
+      Ok ()
     in
-    match step with
-    | `Park -> Eta.Effect.unit
-    | `Continue -> consume_processing_input ()
+    match stamped.input with
+    | Chunk _ -> consume_processing_input ()
+    | Trigger (Press _ | Release _) when stamped.operation_active ->
+        consume_processing_input ()
+    | Trigger (Press _ | Release _) -> park stamped
+    | Event event -> (
+        match config.recognize event with
+        | Some trigger when not stamped.operation_active ->
+            park { stamped with input = Trigger trigger }
+        | _ -> consume_processing_input ())
   in
-  let finish_with_processing finish =
-    Eta.Effect.with_background ~name:"ptt.processing.input"
-      (consume_processing_input ()) (fun () -> finish)
+  let finish_with_processing f =
+    Eta.Concurrent.with_background ~sw consume_processing_input f
   in
   let rec keyboard_loop () =
-    let* event = Eta.Effect.sync (fun () -> Eio.Stream.take keyboard_queue) in
-    let* () = push_input (Event event) in
+    let* () = push_input (Event (Eio.Stream.take keyboard_queue)) in
     keyboard_loop ()
   in
   let rec control_loop control =
-    let* trigger = Eta.Effect.sync (fun () -> Eio.Stream.take control) in
-    let* () = push_input (Trigger trigger) in
+    let* () = push_input (Trigger (Eio.Stream.take control)) in
     control_loop control
   in
-  (* run_for_each locks the callback error row to the Pulse stream. There is
-     no public Stream.map_error. Reserve/enqueue stays in a non-failing Pulse
-     callback; queue overflow raises Queue_budget and is converted to
-     `Ptt_error only when that Die is the primary cause, so Pulse Fail trees
-     are replayed unchanged. *)
-  let recv_loop =
-    Eta_stream.run_for_each
-      (fun chunk ->
-        Eta.Effect.sync (fun () ->
-            let n = Bytes.length chunk in
-            if not (reserve_audio n) then raise Queue_budget;
-            let added = ref false in
-            Fun.protect
-              ~finally:(fun () -> if not !added then release_audio n)
-              (fun () ->
-                Eio.Stream.add input
-                  {
-                    operation_active = config.admission_active ();
-                    input = Chunk chunk;
-                  };
-                added := true)))
-      audio
-    |> Eta.Effect.map_error widen_pulse
+  let rec recv_loop () =
+    match audio () with
+    | Error (`Pulse_error e) -> Error (`Pulse_error e)
+    | Ok None -> Ok ()
+    | Ok (Some chunk) ->
+        let* () = push_input (Chunk chunk) in
+        recv_loop ()
   in
-  let input_loop =
-    let keyboard_and_audio =
-      Eta.Effect.par (keyboard_loop ()) recv_loop
-      |> Eta.Effect.map (fun _ -> ())
+  let input_loop () =
+    let keyboard_and_audio () =
+      let* _ = Eta.Concurrent.par ~sw keyboard_loop recv_loop in
+      Ok ()
     in
     match control with
-    | None -> keyboard_and_audio
+    | None -> keyboard_and_audio ()
     | Some control ->
-        Eta.Effect.par keyboard_and_audio (control_loop control)
-        |> Eta.Effect.map (fun _ -> ())
+        let* _ =
+          Eta.Concurrent.par ~sw keyboard_and_audio (fun () ->
+              control_loop control)
+        in
+        Ok ()
   in
   let state_loop () =
+    let log_info ?(fields = []) msg =
+      Eta_observability.Logger.info logger ~fields msg
+    in
+    let log_error ?(fields = []) msg =
+      Eta_observability.Logger.error logger ~fields msg
+    in
     let offer_chunks handle chunks =
-      let rec loop = function
-        | [] -> Eta.Effect.unit
+      let rec offer = function
+        | [] -> Ok ()
         | chunk :: rest ->
             let* () = handle.offer chunk in
-            loop rest
+            offer rest
       in
-      loop (List.rev chunks)
+      offer (List.rev chunks)
     in
     let finish_capture ~thresholds mode handle started_at capture_state offered
         chunks acc =
@@ -304,44 +250,40 @@ let run ?control ?(on_capture_resumed = Eta.Effect.unit)
       let rms = Audio.Pcm.s16le_rms acc in
       let peak = Audio.Pcm.s16le_peak acc in
       let min_capture_rms, min_capture_peak = thresholds in
-      if acc.pending <> None then Eta.Effect.fail (`Ptt_error "pcm:framing")
+      if acc.pending <> None then Error (`Ptt_error "pcm:framing")
       else if
         not
           (capture_is_eligible ~min_duration_ms:config.min_duration_ms
              ~min_capture_rms ~min_capture_peak ~held_duration_ms
              ~sample_count:acc.Audio.Pcm.sample_count ~rms ~peak)
-      then
-        let* () =
-          log_info "PTT capture ignored"
+      then (
+        log_info
+          ~fields:
             (ptt_fields ~duration_ms ~held_duration_ms
                ~bytes:(Audio.Pcm.s16le_complete_bytes acc)
                ~rms ~peak config mode)
-        in
-        handle.cancel
+          "PTT capture ignored";
+        handle.cancel ())
       else
-        let* () =
-          if offered then Eta.Effect.unit else offer_chunks handle chunks
-        in
-        let* () =
-          log_info "PTT capture stopped"
+        let* () = if offered then Ok () else offer_chunks handle chunks in
+        log_info
+          ~fields:
             (ptt_fields ~duration_ms ~held_duration_ms
                ~bytes:(Audio.Pcm.s16le_complete_bytes acc)
                ~rms ~peak config mode)
-        in
-        let finishing =
-          match handle.finish with
-          | Buffered f -> f { duration_ms; pcm_bytes = concat_chunks chunks }
-          | Streaming f -> f ~duration_ms
-        in
-        finish_with_processing finishing
+          "PTT capture stopped";
+        finish_with_processing (fun () ->
+            match handle.finish with
+            | Buffered f -> f { duration_ms; pcm_bytes = concat_chunks chunks }
+            | Streaming f -> f ~duration_ms)
     in
     let run_active ~thresholds mode started_at handle =
       let captured = ref 0 in
       let min_rms, min_peak = thresholds in
       let low_volume = ref (Ptt.Low_volume.create ~min_rms ~min_peak ()) in
       let rec loop capture_state dead_input offered chunks acc =
-        let* abort = config.on_abort in
-        if abort then handle.cancel
+        let* abort = config.on_abort () in
+        if abort then handle.cancel ()
         else
           match capture_state with
           | Ptt.Capture.PostRoll _ ->
@@ -353,18 +295,24 @@ let run ?control ?(on_capture_resumed = Eta.Effect.unit)
                 finish_capture ~thresholds mode handle started_at capture_state
                   offered chunks acc
               else
-                let timeout =
-                  Eta.Effect.sync (fun () ->
-                      Eio.Time.Mono.sleep mono_clock (remaining /. 1000.0))
-                  |> Eta.Effect.map (fun () -> `Timeout)
+                let* next =
+                  match
+                    Eta.Concurrent.race ~sw
+                      [
+                        (fun () ->
+                          Eio.Time.Mono.sleep mono_clock (remaining /. 1000.0);
+                          Ok `Timeout);
+                        (fun () -> Ok (`Item (take_input ())));
+                      ]
+                  with
+                  | Ok x -> Ok x
+                  | Error _ -> Error (`Ptt_error "ptt:postroll_race")
                 in
-                let* next = Eta.Effect.race [ timeout; take_tagged ] in
                 handle_active_event capture_state dead_input offered chunks acc
                   next
           | Ptt.Capture.Idle | Ptt.Capture.Capturing _ ->
-              let* next = take_tagged in
               handle_active_event capture_state dead_input offered chunks acc
-                next
+                (`Item (take_input ()))
       and handle_active_event capture_state dead_input offered chunks acc =
         function
         | `Timeout ->
@@ -380,20 +328,18 @@ let run ?control ?(on_capture_resumed = Eta.Effect.unit)
                 Ptt.Low_volume.process_chunk !low_volume chunk
               in
               low_volume := next_low_volume;
-              if result.dead then
-                let* () = handle.cancel in
-                let* () =
-                  log_info "PTT capture cancelled: no microphone input"
-                    (ptt_fields config mode)
-                in
-                config.on_dead_input
+              if result.dead then (
+                let* () = handle.cancel () in
+                log_info ~fields:(ptt_fields config mode)
+                  "PTT capture cancelled: no microphone input";
+                config.on_dead_input ())
               else
-                let* () = if warn_low then on_low_input else Eta.Effect.unit in
+                let* () = if warn_low then on_low_input () else Ok () in
                 let n = Bytes.length chunk in
-                if n > capture_pcm_bytes || !captured + n > capture_pcm_bytes
-                then Eta.Effect.fail (`Ptt_error "pcm:capture_budget")
-                else
-                  let () = captured := !captured + n in
+                if n > capture_pcm_bytes - !captured then
+                  Error (`Ptt_error "pcm:capture_budget")
+                else (
+                  captured := !captured + n;
                   let acc = Audio.Pcm.s16le_update acc chunk in
                   let chunks = chunk :: chunks in
                   let should_start_offering =
@@ -412,42 +358,27 @@ let run ?control ?(on_capture_resumed = Eta.Effect.unit)
                         ~sample_count:acc.Audio.Pcm.sample_count ~rms ~peak
                   in
                   let* () =
-                    if not result.has_input then Eta.Effect.unit
+                    if not result.has_input then Ok ()
                     else if offered then handle.offer chunk
                     else if should_start_offering then
                       offer_chunks handle chunks
-                    else Eta.Effect.unit
+                    else Ok ()
                   in
-                  let offered = offered || should_start_offering in
-                  loop capture_state result.detector offered chunks acc
+                  loop capture_state result.detector
+                    (offered || should_start_offering)
+                    chunks acc)
         | `Item { input = Event event; _ } -> (
             match config.recognize event with
-            | Some (Release release_mode) when release_mode = mode -> (
-                match capture_state with
-                | Ptt.Capture.Capturing _ ->
-                    let next =
-                      Ptt.Capture.release capture_state
-                        (float_of_int (now_ms ()))
-                    in
-                    let* () = config.on_release mode in
-                    loop next dead_input offered chunks acc
-                | _ -> loop capture_state dead_input offered chunks acc)
-            | Some (Press press_mode) when press_mode = mode ->
-                let next =
-                  Ptt.Capture.start capture_state (float_of_int (now_ms ()))
-                in
-                let* () =
-                  match capture_state with
-                  | Ptt.Capture.PostRoll _ ->
-                      let* () = on_capture_resumed in
-                      log_info "Post-roll cancelled, continuing capture"
-                        (ptt_fields config mode)
-                  | _ -> Eta.Effect.unit
-                in
-                loop next dead_input offered chunks acc
-            | _ -> loop capture_state dead_input offered chunks acc)
-        | `Item { input = Trigger (Release release_mode); _ }
-          when release_mode = mode -> (
+            | Some trigger ->
+                handle_trigger ~notify_resumed:true capture_state dead_input
+                  offered chunks acc trigger
+            | None -> loop capture_state dead_input offered chunks acc)
+        | `Item { input = Trigger trigger; _ } ->
+            handle_trigger ~notify_resumed:false capture_state dead_input
+              offered chunks acc trigger
+      and handle_trigger ~notify_resumed capture_state dead_input offered chunks
+          acc = function
+        | Release release_mode when release_mode = mode -> (
             match capture_state with
             | Ptt.Capture.Capturing _ ->
                 let next =
@@ -456,20 +387,23 @@ let run ?control ?(on_capture_resumed = Eta.Effect.unit)
                 let* () = config.on_release mode in
                 loop next dead_input offered chunks acc
             | _ -> loop capture_state dead_input offered chunks acc)
-        | `Item { input = Trigger (Press press_mode); _ } when press_mode = mode
-          ->
+        | Press press_mode when press_mode = mode ->
             let next =
               Ptt.Capture.start capture_state (float_of_int (now_ms ()))
             in
             let* () =
               match capture_state with
               | Ptt.Capture.PostRoll _ ->
-                  log_info "Post-roll cancelled, continuing capture"
-                    (ptt_fields config mode)
-              | _ -> Eta.Effect.unit
+                  let* () =
+                    if notify_resumed then on_capture_resumed () else Ok ()
+                  in
+                  log_info ~fields:(ptt_fields config mode)
+                    "Post-roll cancelled, continuing capture";
+                  Ok ()
+              | _ -> Ok ()
             in
             loop next dead_input offered chunks acc
-        | `Item _ -> loop capture_state dead_input offered chunks acc
+        | _ -> loop capture_state dead_input offered chunks acc
       in
       loop
         (Ptt.Capture.start Ptt.Capture.idle (float_of_int started_at))
@@ -477,108 +411,99 @@ let run ?control ?(on_capture_resumed = Eta.Effect.unit)
         false [] Audio.Pcm.s16le_empty
     in
     let rec idle_loop () =
-      let capture_failed mode message =
-        log_error "PTT capture failed"
-          (("ptt.error", `String message) :: ptt_fields config mode)
+      let report_failure kind mode message =
+        log_error
+          ~fields:
+            (("ptt.error", Eta_observability.Logger.String message)
+            :: ptt_fields config mode)
+          kind
       in
-      (* Recoverable operation failure stays inside the PTT loop: the owner
-         settles the attempt and the loop keeps admitting new ones. *)
-      let operation_failed mode message =
-        log_error "PTT operation failed"
-          (("ptt.error", `String message) :: ptt_fields config mode)
-      in
-      let replay_exit exit =
-        Eta.Effect.async ~register:(fun resume ->
-            resume exit;
-            None)
-      in
-      let recover_clean_ptt recover =
-        recover_single_failure (function
-          | `Ptt_error "pcm:capture_budget" | `Ptt_error "pcm:queue_budget" ->
-              None
-          | `Ptt_error message -> Some (recover message))
+      let recover_operation mode kind = function
+        | Error (`Ptt_error (("pcm:capture_budget" | "pcm:queue_budget") as m))
+          ->
+            Error (`Ptt_error m)
+        | Error (`Ptt_error message) ->
+            report_failure kind mode message;
+            Ok ()
+        | Error (`Ptt_cause _ as cause) -> Error cause
+        | Ok () -> Ok ()
       in
       let run_capture mode handle run =
-        run
-        |> Eta.Effect.on_exit (function
-          | Eta.Exit.Ok () -> Eta.Effect.unit
-          | Eta.Exit.Error _ -> handle.cancel)
-        |> recover_clean_ptt (fun message -> capture_failed mode message)
-      in
-      let press mode =
-        Eta.Effect.sync (fun () ->
-            let thresholds = config.capture_thresholds () in
-            (thresholds, config.on_press mode))
-        |> Eta.Effect.bind (fun (thresholds, started) ->
-            started |> Eta.Effect.to_exit
-            |> Eta.Effect.bind (fun (exit : (press_result, error) Eta.Exit.t) ->
-                match exit with
-                | Eta.Exit.Ok result -> Eta.Effect.pure (thresholds, result)
-                | Eta.Exit.Error _ as failed ->
-                    replay_exit failed
-                    |> recover_clean_ptt (fun message ->
-                        let* () = operation_failed mode message in
-                        Eta.Effect.pure Skip)
-                    |> Eta.Effect.map (fun result -> (thresholds, result))))
-      in
-      let start_handle ~thresholds mode started_at handle =
-        let* () = log_info "PTT capture started" (ptt_fields config mode) in
-        run_capture mode handle (run_active ~thresholds mode started_at handle)
-      in
-      let start_scoped ~thresholds mode started_at with_handle =
-        let* () = log_info "PTT capture started" (ptt_fields config mode) in
-        with_handle (fun handle ->
-            run_capture mode handle
-              (run_active ~thresholds mode started_at handle))
-        |> recover_clean_ptt (fun message -> operation_failed mode message)
-      in
-      let rejected mode =
-        let* () =
-          log_info "PTT press ignored: operation already active"
-            (ptt_fields config mode)
+        let result = run () in
+        let result =
+          match result with
+          | Ok () -> Ok ()
+          | Error error -> (
+              match handle.cancel () with
+              | Ok () -> Error error
+              | Error (`Ptt_error cleanup) -> (
+                  match error with
+                  | `Ptt_error primary ->
+                      Error
+                        (`Ptt_cause
+                           (Eta.Cause.Concurrent
+                              [
+                                Eta.Cause.Fail (`Ptt_error primary);
+                                Eta.Cause.Fail (`Ptt_error cleanup);
+                              ]))
+                  | `Ptt_cause _ -> Error error)
+              | Error (`Ptt_cause _ as cleanup) -> Error cleanup)
         in
-        idle_loop ()
+        recover_operation mode "PTT capture failed" result
       in
       let begin_press mode received_during_attempt =
-        if received_during_attempt then rejected mode
+        if received_during_attempt then (
+          log_info ~fields:(ptt_fields config mode)
+            "PTT press ignored: operation already active";
+          idle_loop ())
         else
-          let* thresholds, pressed = press mode in
-          match pressed with
-          | Skip -> idle_loop ()
-          | Handle handle ->
-              let started_at = now_ms () in
-              let* () = start_handle ~thresholds mode started_at handle in
+          let thresholds = config.capture_thresholds () in
+          match config.on_press mode with
+          | Error
+              (`Ptt_error (("pcm:capture_budget" | "pcm:queue_budget") as m)) ->
+              Error (`Ptt_error m)
+          | Error (`Ptt_error message) ->
+              report_failure "PTT operation failed" mode message;
               idle_loop ()
-          | Scoped with_handle ->
+          | Error (`Ptt_cause _ as cause) -> Error cause
+          | Ok Skip -> idle_loop ()
+          | Ok (Handle handle) ->
               let started_at = now_ms () in
-              let* () = start_scoped ~thresholds mode started_at with_handle in
+              log_info ~fields:(ptt_fields config mode) "PTT capture started";
+              let* () =
+                run_capture mode handle (fun () ->
+                    run_active ~thresholds mode started_at handle)
+              in
+              idle_loop ()
+          | Ok (Scoped with_handle) ->
+              let started_at = now_ms () in
+              log_info ~fields:(ptt_fields config mode) "PTT capture started";
+              let result =
+                with_handle (fun handle ->
+                    run_capture mode handle (fun () ->
+                        run_active ~thresholds mode started_at handle))
+              in
+              let* () = recover_operation mode "PTT operation failed" result in
               idle_loop ()
       in
-      let* next = take_input in
-      match next.input with
-      | Chunk _ -> idle_loop ()
-      | Trigger (Press mode) -> begin_press mode next.operation_active
-      | Trigger (Release _) -> idle_loop ()
-      | Event event -> (
+      match take_input () with
+      | { input = Chunk _; _ } | { input = Trigger (Release _); _ } ->
+          idle_loop ()
+      | { input = Trigger (Press mode); operation_active } ->
+          begin_press mode operation_active
+      | { input = Event event; operation_active } -> (
           match config.recognize event with
-          | Some (Press mode) -> begin_press mode next.operation_active
+          | Some (Press mode) -> begin_press mode operation_active
           | _ -> idle_loop ())
     in
-    let* () = config.on_ready in
+    let* () = config.on_ready () in
     idle_loop ()
   in
-  let* () = Eta.Effect.sync (fun () -> ignore (now_ms ())) in
-  let replay cause =
-    Eta.Effect.async ~register:(fun resume ->
-        resume (Eta.Exit.Error cause);
-        None)
+  let input_loop () =
+    Result.map_error (fun e -> (e :> run_error)) (input_loop ())
   in
-  Eta.Effect.par input_loop (state_loop () |> Eta.Effect.map_error widen_ptt)
-  |> Eta.Effect.map (fun _ -> ())
-  |> Eta.Effect.to_exit
-  |> Eta.Effect.bind (fun exit ->
-      match exit with
-      | Eta.Exit.Ok () -> Eta.Effect.unit
-      | Eta.Exit.Error (Eta.Cause.Die { exn = Queue_budget; _ }) ->
-          Eta.Effect.fail (`Ptt_error "pcm:queue_budget")
-      | Eta.Exit.Error cause -> replay cause)
+  let state_loop () =
+    Result.map_error (fun e -> (e :> run_error)) (state_loop ())
+  in
+  let* _ = Eta.Concurrent.par ~sw input_loop state_loop in
+  Ok ()

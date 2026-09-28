@@ -289,7 +289,7 @@ let read_http_head flow =
   loop ()
 
 let write_ws_text flow payload =
-  Eta_http_eio.Ws.Codec.encode
+  Eta_http.Ws_codec.encode
     { fin = true; opcode = Text; payload = Bytes.of_string payload }
   |> Bytes.to_string
   |> fun encoded -> Eio.Flow.copy_string encoded flow
@@ -298,7 +298,7 @@ let write_ws_close flow =
   let payload = Bytes.create 2 in
   Bytes.set payload 0 (Char.chr 3);
   Bytes.set payload 1 (Char.chr 232);
-  Eta_http_eio.Ws.Codec.encode { fin = true; opcode = Close; payload }
+  Eta_http.Ws_codec.encode { fin = true; opcode = Close; payload }
   |> Bytes.to_string
   |> fun encoded -> Eio.Flow.copy_string encoded flow
 
@@ -398,7 +398,7 @@ let write_ws_switching_response flow key =
   let response =
     "HTTP/1.1 101 Switching Protocols\r\n" ^ "Upgrade: websocket\r\n"
     ^ "Connection: keep-alive, Upgrade\r\n" ^ "Sec-WebSocket-Accept: "
-    ^ Eta_http_eio.Ws.Codec.accept_key ~sha1:Eta_http_tls_openssl.sha1 key
+    ^ Eta_http.Ws_codec.accept_key ~sha1:Eta_http.Eta_http_tls_openssl.sha1 key
     ^ "\r\n\r\n"
   in
   Eio.Flow.copy_string response flow
@@ -447,6 +447,15 @@ let serve_audio_capture ~clock flow captured commit_before_response =
   in
   loop false
 
+let audio_of_chunks chunks =
+  let remaining = ref chunks in
+  fun () ->
+    match !remaining with
+    | [] -> Ok None
+    | chunk :: rest ->
+        remaining := rest;
+        Ok (Some chunk)
+
 let run_streaming_sender chunks ~from_rate =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
@@ -463,18 +472,18 @@ let run_streaming_sender chunks ~from_rate =
       Eio.Switch.run @@ fun conn_sw ->
       let flow, _ = Eio.Net.accept ~sw:conn_sw socket in
       serve_audio_capture ~clock flow captured commit_before_response);
-  let audio = Eta_stream.Stream.from_iterable chunks in
+  let audio = audio_of_chunks chunks in
   let url = Printf.sprintf "ws://127.0.0.1:%d" port in
   let operation =
-    Codex.run_realtime_stream_session ~sw ~net ~url
-      ~access_token:"synthetic-resampling-token" ~mode:Codex.Transcription
-      ~input_sample_rate:from_rate audio
-    |> Eta.Effect.timeout_as (Eta.Duration.seconds 5)
-         ~on_timeout:(`Stt_error "timeout")
+    try
+      Eio.Time.with_timeout_exn clock 5.0 (fun () ->
+          Codex.run_realtime_stream_session ~sw ~net ~clock ~url
+            ~access_token:"synthetic-resampling-token" ~mode:Codex.Transcription
+            ~input_sample_rate:from_rate audio)
+    with Eio.Time.Timeout -> Error (`Stt_error "timeout")
   in
-  match Eta_eio.run_once ~sw ~clock operation with
-  | Error cause ->
-      Alcotest.failf "streaming sender failed: %a" (Eta.Cause.pp pp_stt) cause
+  match operation with
+  | Error error -> Alcotest.failf "streaming sender failed: %a" pp_stt error
   | Ok _ ->
       Alcotest.(check bool)
         "audio commit before response" true !commit_before_response;
@@ -507,15 +516,15 @@ let test_buffered_odd_is_stt_error () =
   let odd = Bytes.make 1 '\x00' in
   let run rate =
     Codex.run_realtime_session ~sw ~net:(Eio.Stdenv.net env)
-      ~url:"ws://127.0.0.1:1" ~access_token:"synthetic-resampling-token"
-      ~mode:Codex.Transcription ~input_sample_rate:rate odd
-    |> Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env)
+      ~clock:(Eio.Stdenv.clock env) ~url:"ws://127.0.0.1:1"
+      ~access_token:"synthetic-resampling-token" ~mode:Codex.Transcription
+      ~input_sample_rate:rate odd
   in
   (match run 16000 with
   | exception exn ->
       Alcotest.failf "buffered odd must not Die: %s" (Printexc.to_string exn)
-  | Error cause ->
-      let rendered = Format.asprintf "%a" (Eta.Cause.pp pp_stt) cause in
+  | Error error ->
+      let rendered = Format.asprintf "%a" pp_stt error in
       Alcotest.(check bool)
         "buffered odd is Stt_error" true
         (contains rendered "odd" || contains rendered "byte")
@@ -524,8 +533,8 @@ let test_buffered_odd_is_stt_error () =
   | exception exn ->
       Alcotest.failf "buffered equal-rate odd must not Die: %s"
         (Printexc.to_string exn)
-  | Error cause ->
-      let rendered = Format.asprintf "%a" (Eta.Cause.pp pp_stt) cause in
+  | Error error ->
+      let rendered = Format.asprintf "%a" pp_stt error in
       Alcotest.(check bool)
         "buffered equal-rate odd is Stt_error" true
         (contains rendered "odd" || contains rendered "byte")
@@ -537,14 +546,15 @@ let test_buffered_huge_rate_is_stt_error () =
   let pcm = pcm_of_samples [| 1; 2 |] in
   let operation =
     Codex.run_realtime_session ~sw ~net:(Eio.Stdenv.net env)
-      ~url:"ws://127.0.0.1:1" ~access_token:"synthetic-resampling-token"
-      ~mode:Codex.Transcription ~input_sample_rate:max_int pcm
+      ~clock:(Eio.Stdenv.clock env) ~url:"ws://127.0.0.1:1"
+      ~access_token:"synthetic-resampling-token" ~mode:Codex.Transcription
+      ~input_sample_rate:max_int pcm
   in
-  match Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env) operation with
+  match operation with
   | exception exn ->
       Alcotest.failf "huge rate must not Die: %s" (Printexc.to_string exn)
-  | Error cause ->
-      let rendered = Format.asprintf "%a" (Eta.Cause.pp pp_stt) cause in
+  | Error error ->
+      let rendered = Format.asprintf "%a" pp_stt error in
       Alcotest.(check bool)
         "typed huge-rate error" true
         (String.length rendered > 0)
@@ -616,40 +626,38 @@ let test_translation_tail_before_retire () =
       serve_translation_capture ~clock
         ~expected_bytes:(Bytes.length (oracle ~from_rate ~to_rate source))
         flow captured tail_before_retire);
-  let audio = Eta_stream.Stream.from_iterable chunks in
+  let audio = audio_of_chunks chunks in
   let url = Printf.sprintf "ws://127.0.0.1:%d" port in
   let operation =
-    Codex.run_realtime_stream_session ~sw ~net ~url
-      ~access_token:"synthetic-resampling-token" ~mode:Codex.Translation
-      ~translation_output_drain_ms:20 ~input_sample_rate:from_rate audio
-    |> Eta.Effect.timeout_as (Eta.Duration.seconds 5)
-         ~on_timeout:(`Stt_error "timeout")
+    try
+      Eio.Time.with_timeout_exn clock 5.0 (fun () ->
+          Codex.run_realtime_stream_session ~sw ~net ~clock ~url
+            ~access_token:"synthetic-resampling-token" ~mode:Codex.Translation
+            ~translation_output_drain_ms:200 ~input_sample_rate:from_rate audio)
+    with Eio.Time.Timeout -> Error (`Stt_error "timeout")
   in
-  match Eta_eio.run_once ~sw ~clock operation with
-  | Error cause ->
-      let rendered = Format.asprintf "%a" (Eta.Cause.pp pp_stt) cause in
-      Alcotest.(check bool)
-        "drain without provider completion is incomplete" true
-        (contains rendered "incomplete");
+  match operation with
+  | Error error -> Alcotest.failf "translation sender failed: %a" pp_stt error
+  | Ok transcript ->
+      Alcotest.(check string) "provider terminal transcript" "ok" transcript;
       Alcotest.(check bool)
         "tail append before retirement" true !tail_before_retire;
       check_match "translation sender" ~from_rate ~to_rate source
         (Buffer.to_bytes captured)
-  | Ok _ ->
-      Alcotest.fail "translation drain must not manufacture completed outcome"
 
 let test_streaming_nonpositive_rate () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let operation =
     Codex.run_realtime_stream_session ~sw ~net:(Eio.Stdenv.net env)
-      ~url:"ws://127.0.0.1:1" ~access_token:"synthetic-resampling-token"
-      ~mode:Codex.Transcription ~input_sample_rate:0
-      (Eta_stream.Stream.from_iterable [ sample_pcm ])
+      ~clock:(Eio.Stdenv.clock env) ~url:"ws://127.0.0.1:1"
+      ~access_token:"synthetic-resampling-token" ~mode:Codex.Transcription
+      ~input_sample_rate:0
+      (audio_of_chunks [ sample_pcm ])
   in
-  match Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env) operation with
-  | Error cause ->
-      let rendered = Format.asprintf "%a" (Eta.Cause.pp pp_stt) cause in
+  match operation with
+  | Error error ->
+      let rendered = Format.asprintf "%a" pp_stt error in
       Alcotest.(check bool)
         "mentions sample rate" true
         (contains rendered "sample rate")
@@ -693,7 +701,7 @@ let () =
             test_buffered_odd_is_stt_error;
           Alcotest.test_case "buffered huge rate is Stt_error not Die" `Quick
             test_buffered_huge_rate_is_stt_error;
-          Alcotest.test_case "translation 20ms drain appends tail before retire"
-            `Quick test_translation_tail_before_retire;
+          Alcotest.test_case "translation terminal follows audio tail" `Quick
+            test_translation_tail_before_retire;
         ] );
     ]

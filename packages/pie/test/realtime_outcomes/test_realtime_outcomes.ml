@@ -13,7 +13,7 @@ let contains hay needle =
   in
   nlen = 0 || loop 0
 
-let cause_text cause = Format.asprintf "%a" (Eta.Cause.pp pp_stt) cause
+let cause_text (`Stt_error message) = message
 
 let has_suffix suffix value =
   let suffix_len = String.length suffix in
@@ -56,7 +56,7 @@ let read_http_head flow =
   loop ()
 
 let write_ws_text flow payload =
-  Eta_http_eio.Ws.Codec.encode
+  Eta_http.Ws_codec.encode
     { fin = true; opcode = Text; payload = Bytes.of_string payload }
   |> Bytes.to_string
   |> fun encoded -> Eio.Flow.copy_string encoded flow
@@ -65,7 +65,7 @@ let write_ws_close flow =
   let payload = Bytes.create 2 in
   Bytes.set payload 0 (Char.chr 3);
   Bytes.set payload 1 (Char.chr 232);
-  Eta_http_eio.Ws.Codec.encode { fin = true; opcode = Close; payload }
+  Eta_http.Ws_codec.encode { fin = true; opcode = Close; payload }
   |> Bytes.to_string
   |> fun encoded -> Eio.Flow.copy_string encoded flow
 
@@ -121,7 +121,7 @@ let write_ws_switching_response flow key =
   let response =
     "HTTP/1.1 101 Switching Protocols\r\n" ^ "Upgrade: websocket\r\n"
     ^ "Connection: keep-alive, Upgrade\r\n" ^ "Sec-WebSocket-Accept: "
-    ^ Eta_http_eio.Ws.Codec.accept_key ~sha1:Eta_http_tls_openssl.sha1 key
+    ^ Eta_http.Ws_codec.accept_key ~sha1:Eta_http.Eta_http_tls_openssl.sha1 key
     ^ "\r\n\r\n"
   in
   Eio.Flow.copy_string response flow
@@ -216,14 +216,14 @@ let run_session ~mode ~script ~drain_ms =
     | Codex.Translation ->
         Some (Codex.build_translation_session_update ~prompt:"p" ())
   in
-  let operation =
-    Codex.run_realtime_session ~sw ~net ~url ~access_token:"synthetic" ~mode
-      ?session_update ~translation_output_drain_ms:drain_ms
-      ~input_sample_rate:16000 pcm
-    |> Eta.Effect.timeout_as (Eta.Duration.seconds 3)
-         ~on_timeout:(`Stt_error "timeout")
+  let result =
+    try
+      Eio.Time.with_timeout_exn clock 3.0 (fun () ->
+          Codex.run_realtime_session ~sw ~net ~clock ~url
+            ~access_token:"synthetic" ~mode ?session_update
+            ~translation_output_drain_ms:drain_ms ~input_sample_rate:16000 pcm)
+    with Eio.Time.Timeout -> Error (`Stt_error "timeout")
   in
-  let result = Eta_eio.run_once ~sw ~clock operation in
   (result, !saw_audio)
 
 let created = {|{"type":"session.created"}|}
@@ -247,8 +247,8 @@ let done_malformed = {|{"type":"response.done","response":"nope"}|}
 
 let expect_error needle (result, _) =
   match result with
-  | Eta.Exit.Ok text -> Alcotest.failf "expected error, got %s" text
-  | Eta.Exit.Error cause ->
+  | Ok text -> Alcotest.failf "expected error, got %s" text
+  | Error cause ->
       let text = cause_text cause in
       Alcotest.(check bool) needle true (contains text needle);
       Alcotest.(check bool) "no secret" false (contains text "SECRET_MARKER")
@@ -294,9 +294,8 @@ let test_delayed_ack_then_transcription_completed () =
   in
   Alcotest.(check bool) "audio after ack" true saw_audio;
   match result with
-  | Eta.Exit.Ok text -> Alcotest.(check string) "final" "hello" text
-  | Eta.Exit.Error cause ->
-      Alcotest.failf "expected success: %s" (cause_text cause)
+  | Ok text -> Alcotest.(check string) "final" "hello" text
+  | Error cause -> Alcotest.failf "expected success: %s" (cause_text cause)
 
 let test_conversation_completed () =
   let result, _ =
@@ -310,9 +309,8 @@ let test_conversation_completed () =
       ~drain_ms:20
   in
   match result with
-  | Eta.Exit.Ok text -> Alcotest.(check string) "delta text" "hel" text
-  | Eta.Exit.Error cause ->
-      Alcotest.failf "expected success: %s" (cause_text cause)
+  | Ok text -> Alcotest.(check string) "delta text" "hel" text
+  | Error cause -> Alcotest.failf "expected success: %s" (cause_text cause)
 
 let test_failed_after_partial () =
   let result, _ =
@@ -327,8 +325,8 @@ let test_failed_after_partial () =
   in
   expect_error "failed" (result, ());
   match result with
-  | Eta.Exit.Ok text -> Alcotest.failf "partial injected as success: %s" text
-  | Eta.Exit.Error _ -> ()
+  | Ok text -> Alcotest.failf "partial injected as success: %s" text
+  | Error _ -> ()
 
 let test_cancelled_after_partial () =
   let result, _ =

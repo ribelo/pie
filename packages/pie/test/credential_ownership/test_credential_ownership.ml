@@ -75,24 +75,12 @@ let auth_json token =
     "{\"tokens\":{\"access_token\":%S,\"refresh_token\":\"do-not-use\"},\"unrelated\":\"keep-me\"}\n"
     token
 
-let cause_text cause =
-  Format.asprintf "%a"
-    (Eta.Cause.pp (fun fmt (`Stt_error m) -> Format.pp_print_string fmt m))
-    cause
-
-let run_access () =
-  Eio_main.run @@ fun env ->
-  Eio.Switch.run @@ fun sw ->
-  Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env)
-    (Pie.Stt.Codex_realtime.Codex_auth.access_token ())
+let cause_text (`Stt_error message) = message
+let run_access () = Pie.Stt.Codex_realtime.Codex_auth.access_token ()
 
 let run_realtime ~client_env =
-  Eio_main.run @@ fun env ->
-  Eio.Switch.run @@ fun sw ->
-  let client = Pie.Process.http_client ~sw ~net:(Eio.Stdenv.net env) in
   ignore client_env;
-  Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env)
-    (Pie.Stt.Codex_realtime.realtime_access_token ~client ())
+  Pie.Stt.Codex_realtime.realtime_access_token ~client:() ()
 
 let with_codex_home dir f =
   Unix.putenv "CODEX_HOME" dir;
@@ -102,10 +90,8 @@ let with_codex_home dir f =
 let test_env_key_succeeds () =
   Unix.putenv "OPENAI_API_KEY" "synthetic-env-key";
   match run_realtime ~client_env:() with
-  | Eta.Exit.Ok token ->
-      Alcotest.(check string) "env key" "synthetic-env-key" token
-  | Eta.Exit.Error cause ->
-      Alcotest.failf "env key failed: %s" (cause_text cause)
+  | Ok token -> Alcotest.(check string) "env key" "synthetic-env-key" token
+  | Error cause -> Alcotest.failf "env key failed: %s" (cause_text cause)
 
 let test_fresh_jwt_succeeds_without_write () =
   with_sandbox @@ fun dir ->
@@ -116,12 +102,11 @@ let test_fresh_jwt_succeeds_without_write () =
   Unix.chmod path 0o600;
   with_codex_home dir @@ fun () ->
   match run_access () with
-  | Eta.Exit.Ok got ->
+  | Ok got ->
       Alcotest.(check string) "fresh token" token got;
       Alcotest.(check string) "bytes unchanged" body (read_file path);
       Alcotest.(check int) "mode 0600" 0o600 (file_mode path)
-  | Eta.Exit.Error cause ->
-      Alcotest.failf "fresh jwt failed: %s" (cause_text cause)
+  | Error cause -> Alcotest.failf "fresh jwt failed: %s" (cause_text cause)
 
 let test_expired_jwt_is_stable_error_without_write () =
   with_sandbox @@ fun dir ->
@@ -130,8 +115,8 @@ let test_expired_jwt_is_stable_error_without_write () =
   write_file path body;
   with_codex_home dir @@ fun () ->
   match run_access () with
-  | Eta.Exit.Ok _ -> Alcotest.fail "expired token was accepted"
-  | Eta.Exit.Error cause ->
+  | Ok _ -> Alcotest.fail "expired token was accepted"
+  | Error cause ->
       let text = cause_text cause in
       Alcotest.(check bool) "expired" true (string_contains text "expired");
       Alcotest.(check bool)
@@ -151,9 +136,8 @@ let test_readonly_dir_allows_fresh_read () =
   Unix.chmod dir 0o555;
   with_codex_home dir @@ fun () ->
   match run_access () with
-  | Eta.Exit.Ok got -> Alcotest.(check string) "readonly read" token got
-  | Eta.Exit.Error cause ->
-      Alcotest.failf "readonly read failed: %s" (cause_text cause)
+  | Ok got -> Alcotest.(check string) "readonly read" token got
+  | Error cause -> Alcotest.failf "readonly read failed: %s" (cause_text cause)
 
 let test_two_callers_cannot_overwrite_newest () =
   with_sandbox @@ fun dir ->
@@ -161,9 +145,8 @@ let test_two_callers_cannot_overwrite_newest () =
   let first = auth_json (fresh_jwt ()) in
   write_file path first;
   with_codex_home dir @@ fun () ->
-  Eio_main.run @@ fun env ->
+  Eio_main.run @@ fun _env ->
   Eio.Switch.run @@ fun sw ->
-  let clock = Eio.Stdenv.clock env in
   let newest_token = fresh_jwt () in
   let newest =
     Printf.sprintf
@@ -175,16 +158,10 @@ let test_two_callers_cannot_overwrite_newest () =
   let first_done, resolve_first = Eio.Promise.create () in
   let second_done, resolve_second = Eio.Promise.create () in
   Eio.Fiber.fork ~sw (fun () ->
-      let result =
-        Eta_eio.run_once ~sw ~clock
-          (Pie.Stt.Codex_realtime.Codex_auth.access_token ())
-      in
+      let result = Pie.Stt.Codex_realtime.Codex_auth.access_token () in
       Eio.Promise.resolve resolve_first result);
   Eio.Fiber.fork ~sw (fun () ->
-      let result =
-        Eta_eio.run_once ~sw ~clock
-          (Pie.Stt.Codex_realtime.Codex_auth.access_token ())
-      in
+      let result = Pie.Stt.Codex_realtime.Codex_auth.access_token () in
       Eio.Promise.resolve resolve_second result);
   Unix.rename tmp path;
   ignore (Eio.Promise.await first_done);
@@ -201,11 +178,11 @@ let test_expired_does_not_contact_auth_endpoint () =
     "http://127.0.0.1:1/oauth/token";
   let result = run_access () in
   (match result with
-  | Eta.Exit.Error cause ->
+  | Error cause ->
       Alcotest.(check bool)
         "expired" true
         (string_contains (cause_text cause) "expired")
-  | Eta.Exit.Ok _ -> Alcotest.fail "expired token accepted");
+  | Ok _ -> Alcotest.fail "expired token accepted");
   Alcotest.(check int) "auth endpoint contacts" 0 (Atomic.get hits)
 
 let fd_count () =
@@ -227,13 +204,10 @@ let test_cancel_leaves_no_temp_or_fd () =
   write_file path (auth_json (fresh_jwt ()));
   with_codex_home dir @@ fun () ->
   let before = fd_count () in
-  Eio_main.run @@ fun env ->
+  Eio_main.run @@ fun _env ->
   Eio.Switch.run @@ fun sw ->
-  let clock = Eio.Stdenv.clock env in
   Eio.Fiber.fork ~sw (fun () ->
-      ignore
-        (Eta_eio.run_once ~sw ~clock
-           (Pie.Stt.Codex_realtime.Codex_auth.access_token ())));
+      ignore (Pie.Stt.Codex_realtime.Codex_auth.access_token ()));
   let temps =
     Array.to_list (Sys.readdir dir)
     |> List.filter (fun name -> name <> "auth.json")

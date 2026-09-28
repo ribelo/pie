@@ -41,22 +41,6 @@ type t = {
 
 exception Config_error of string
 
-exception Compound of exn * exn
-(** Primary failure plus a subsequent close failure. Unknown and cancel
-    exceptions are not rewritten as {!Config_error}. A typed {!Config_error}
-    with a Unix close error is still combined into one {!Config_error}. *)
-
-type read_io = {
-  open_readonly : string -> Unix.file_descr;
-  fstat : Unix.file_descr -> Unix.stats;
-  read : Unix.file_descr -> bytes -> int -> int -> int;
-  close : Unix.file_descr -> unit;
-  after_acquire : Unix.file_descr -> unit;
-  after_fstat : Unix.file_descr -> Unix.stats -> unit;
-}
-
-val unix_read_io : read_io
-
 type resolved_model = { provider : provider; model : string }
 
 val provider_of_string : string -> provider
@@ -69,4 +53,14 @@ val newline_action_of_string : string -> newline_action
 val string_of_newline_action : newline_action -> string
 val entry_method_of_string : string -> entry_method
 val string_of_entry_method : entry_method -> string
-val load : ?config_path:string -> ?read_io:read_io -> unit -> t
+val max_config_file_bytes : int
+val door_spec : t Eta_app.Config.t
+val default_source : unit -> Eta_app.Config.source
+val source_path : Eta_app.Config.source -> string
+
+val load :
+  fs:_ Eio.Path.t ->
+  ?source:Eta_app.Config.source ->
+  ?read:(string -> (string, Eta_app.Config.read_error) result) ->
+  unit ->
+  (t, Eta_app.Config.error) result

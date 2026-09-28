@@ -1,6 +1,7 @@
 (* PIE013 provider byte budgets. Synthetic PCM and local WS only. *)
 
-open Eta.Syntax
+let ( let* ) = Result.bind
+
 module Codex = Pie.Stt.Codex_realtime
 module Limits = Pie.Dictation_limits
 
@@ -14,12 +15,12 @@ let contains hay needle =
   in
   nlen = 0 || loop 0
 
-let cause_text cause = Format.asprintf "%a" (Eta.Cause.pp pp_stt) cause
+let cause_text (`Stt_error message) = message
 
 let expect_budget result =
   match result with
-  | Eta.Exit.Ok _ -> Alcotest.fail "expected budget error"
-  | Eta.Exit.Error cause ->
+  | Ok _ -> Alcotest.fail "expected budget error"
+  | Error cause ->
       let text = cause_text cause in
       Alcotest.(check bool) "mentions budget" true (contains text "budget")
 
@@ -40,62 +41,65 @@ let with_listening f =
   in
   let port = tcp_port (Eio.Net.listening_addr socket) in
   let url = Printf.sprintf "ws://127.0.0.1:%d" port in
-  f ~sw ~net ~clock ~url ~socket
+  let memory = Eta_observability.Logger.Memory.create () in
+  let logger =
+    Eta_observability.Logger.create ~service:"pie-budget-test" ~clock
+      ~mono_clock:(Eio.Stdenv.mono_clock env)
+      ~reporter:(Eta_observability.Logger.Memory.reporter memory)
+      ()
+  in
+  f ~sw ~net ~clock ~logger ~url ~socket
 
-let run_offer ~url ~sw ~net ~clock offer =
+let run_offer ~logger ~url ~sw ~net ~clock offer =
   let operation =
-    Codex.with_stream_session ~sw ~net ~url ~access_token:"synthetic"
-      ~mode:Codex.Transcription ~operation:"budget"
+    Codex.with_stream_session ~sw ~net ~clock ~logger ~url
+      ~access_token:"synthetic" ~mode:Codex.Transcription ~operation:"budget"
       ~model:"gpt-4o-mini-transcribe"
       ~cancel_message:"Codex realtime transcription cancelled" (fun handle ->
         offer handle)
-    |> Eta.Effect.timeout_as (Eta.Duration.seconds 3)
-         ~on_timeout:(`Stt_error "timeout")
   in
-  Eta_eio.run_once ~sw ~clock operation
+  operation
 
 let test_queue_minus_one_succeeds () =
-  with_listening @@ fun ~sw ~net ~clock ~url ~socket:_ ->
+  with_listening @@ fun ~sw ~net ~clock ~logger ~url ~socket:_ ->
   match
-    run_offer ~url ~sw ~net ~clock (fun handle ->
+    run_offer ~logger ~url ~sw ~net ~clock (fun handle ->
         handle.offer_chunk (pcm (Limits.queue_pcm_bytes - 1)))
   with
-  | Eta.Exit.Ok () -> ()
-  | Eta.Exit.Error cause ->
-      Alcotest.failf "queue-1 failed: %s" (cause_text cause)
+  | Ok () -> ()
+  | Error cause -> Alcotest.failf "queue-1 failed: %s" (cause_text cause)
 
 let test_queue_exact_succeeds () =
-  with_listening @@ fun ~sw ~net ~clock ~url ~socket:_ ->
+  with_listening @@ fun ~sw ~net ~clock ~logger ~url ~socket:_ ->
   match
-    run_offer ~url ~sw ~net ~clock (fun handle ->
+    run_offer ~logger ~url ~sw ~net ~clock (fun handle ->
         handle.offer_chunk (pcm Limits.queue_pcm_bytes))
   with
-  | Eta.Exit.Ok () -> ()
-  | Eta.Exit.Error cause ->
-      Alcotest.failf "queue exact failed: %s" (cause_text cause)
+  | Ok () -> ()
+  | Error cause -> Alcotest.failf "queue exact failed: %s" (cause_text cause)
 
 let test_queue_plus_one_rejected () =
-  with_listening @@ fun ~sw ~net ~clock ~url ~socket:_ ->
+  with_listening @@ fun ~sw ~net ~clock ~logger ~url ~socket:_ ->
   expect_budget
-    (run_offer ~url ~sw ~net ~clock (fun handle ->
+    (run_offer ~logger ~url ~sw ~net ~clock (fun handle ->
          handle.offer_chunk (pcm (Limits.queue_pcm_bytes + 1))))
 
 let test_stalled_then_overflow_rejected () =
-  with_listening @@ fun ~sw ~net ~clock ~url ~socket:_ ->
+  with_listening @@ fun ~sw ~net ~clock ~logger ~url ~socket:_ ->
   expect_budget
-    (run_offer ~url ~sw ~net ~clock (fun handle ->
+    (run_offer ~logger ~url ~sw ~net ~clock (fun handle ->
          let* () = handle.offer_chunk (pcm Limits.queue_pcm_bytes) in
          handle.offer_chunk (pcm 1)))
 
 let test_cancel_then_offer_fails () =
-  with_listening @@ fun ~sw ~net ~clock ~url ~socket:_ ->
+  with_listening @@ fun ~sw ~net ~clock ~logger ~url ~socket:_ ->
   match
-    run_offer ~url ~sw ~net ~clock (fun handle ->
-        let* () = handle.cancel_stream in
+    run_offer ~logger ~url ~sw ~net ~clock (fun handle ->
+        let* () = handle.cancel_stream () in
         handle.offer_chunk (pcm 2))
   with
-  | Eta.Exit.Ok () -> Alcotest.fail "offer after cancel succeeded"
-  | Eta.Exit.Error cause ->
+  | Ok () -> Alcotest.fail "offer after cancel succeeded"
+  | Error cause ->
       let text = cause_text cause in
       Alcotest.(check bool)
         "cancelled or closed" true
@@ -103,23 +107,21 @@ let test_cancel_then_offer_fails () =
        || contains text "budget")
 
 let test_two_blueprints_independent () =
-  with_listening @@ fun ~sw ~net ~clock ~url ~socket:_ ->
+  with_listening @@ fun ~sw ~net ~clock ~logger ~url ~socket:_ ->
   let first =
-    run_offer ~url ~sw ~net ~clock (fun handle ->
+    run_offer ~logger ~url ~sw ~net ~clock (fun handle ->
         handle.offer_chunk (pcm Limits.queue_pcm_bytes))
   in
   let second =
-    run_offer ~url ~sw ~net ~clock (fun handle ->
+    run_offer ~logger ~url ~sw ~net ~clock (fun handle ->
         handle.offer_chunk (pcm Limits.queue_pcm_bytes))
   in
   (match first with
-  | Eta.Exit.Ok () -> ()
-  | Eta.Exit.Error cause ->
-      Alcotest.failf "first blueprint: %s" (cause_text cause));
+  | Ok () -> ()
+  | Error cause -> Alcotest.failf "first blueprint: %s" (cause_text cause));
   match second with
-  | Eta.Exit.Ok () -> ()
-  | Eta.Exit.Error cause ->
-      Alcotest.failf "second blueprint: %s" (cause_text cause)
+  | Ok () -> ()
+  | Error cause -> Alcotest.failf "second blueprint: %s" (cause_text cause)
 
 let test_buffered_capture_plus_one () =
   Eio_main.run @@ fun env ->
@@ -127,10 +129,11 @@ let test_buffered_capture_plus_one () =
   let pcm_bytes = pcm (Limits.capture_pcm_bytes + 1) in
   let operation =
     Codex.run_realtime_session ~sw ~net:(Eio.Stdenv.net env)
-      ~url:"ws://127.0.0.1:1" ~access_token:"synthetic"
-      ~mode:Codex.Transcription ~input_sample_rate:16000 pcm_bytes
+      ~clock:(Eio.Stdenv.clock env) ~url:"ws://127.0.0.1:1"
+      ~access_token:"synthetic" ~mode:Codex.Transcription
+      ~input_sample_rate:16000 pcm_bytes
   in
-  expect_budget (Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env) operation)
+  expect_budget operation
 
 let test_openrouter_capture_plus_one () =
   Eio_main.run @@ fun env ->
@@ -138,22 +141,24 @@ let test_openrouter_capture_plus_one () =
   let pcm_bytes = pcm (Limits.capture_pcm_bytes + 1) in
   let operation =
     Pie.Stt.Openrouter.transcribe ~sw ~net:(Eio.Stdenv.net env)
-      ~api_key:"synthetic" ~model:"m" ~language:"en" pcm_bytes
+      ~clock:(Eio.Stdenv.clock env)
+      ~api_key:(Eta_observability.Redact.make "synthetic")
+      ~model:"m" ~language:"en" pcm_bytes
   in
-  expect_budget (Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env) operation)
+  expect_budget operation
 
 let test_empty_offers_are_noop_until_item_cap () =
-  with_listening @@ fun ~sw ~net ~clock ~url ~socket:_ ->
+  with_listening @@ fun ~sw ~net ~clock ~logger ~url ~socket:_ ->
   match
-    run_offer ~url ~sw ~net ~clock (fun handle ->
+    run_offer ~logger ~url ~sw ~net ~clock (fun handle ->
         let rec empties n =
-          if n = 0 then Eta.Effect.unit
+          if n = 0 then Ok ()
           else
             let* () = handle.offer_chunk (pcm 0) in
             empties (n - 1)
         in
         let rec tinies n =
-          if n = 0 then Eta.Effect.unit
+          if n = 0 then Ok ()
           else
             let* () = handle.offer_chunk (pcm 1) in
             tinies (n - 1)
@@ -162,21 +167,21 @@ let test_empty_offers_are_noop_until_item_cap () =
         let* () = tinies Limits.queue_items in
         handle.offer_chunk (pcm 1))
   with
-  | Eta.Exit.Ok () -> Alcotest.fail "tiny item cap not enforced"
-  | Eta.Exit.Error cause ->
+  | Ok () -> Alcotest.fail "tiny item cap not enforced"
+  | Error cause ->
       Alcotest.(check bool)
         "item cap" true
         (contains (cause_text cause) "budget")
 
 let test_empty_offer_after_cancel_fails () =
-  with_listening @@ fun ~sw ~net ~clock ~url ~socket:_ ->
+  with_listening @@ fun ~sw ~net ~clock ~logger ~url ~socket:_ ->
   match
-    run_offer ~url ~sw ~net ~clock (fun handle ->
-        let* () = handle.cancel_stream in
+    run_offer ~logger ~url ~sw ~net ~clock (fun handle ->
+        let* () = handle.cancel_stream () in
         handle.offer_chunk (pcm 0))
   with
-  | Eta.Exit.Ok () -> Alcotest.fail "empty offer after cancel succeeded"
-  | Eta.Exit.Error _ -> ()
+  | Ok () -> Alcotest.fail "empty offer after cancel succeeded"
+  | Error _ -> ()
 
 let has_suffix suffix value =
   let suffix_len = String.length suffix in
@@ -219,7 +224,7 @@ let read_http_head flow =
   loop ()
 
 let write_ws_text flow payload =
-  Eta_http_eio.Ws.Codec.encode
+  Eta_http.Ws_codec.encode
     { fin = true; opcode = Text; payload = Bytes.of_string payload }
   |> Bytes.to_string
   |> fun encoded -> Eio.Flow.copy_string encoded flow
@@ -228,7 +233,7 @@ let write_ws_close flow =
   let payload = Bytes.create 2 in
   Bytes.set payload 0 (Char.chr 3);
   Bytes.set payload 1 (Char.chr 232);
-  Eta_http_eio.Ws.Codec.encode { fin = true; opcode = Close; payload }
+  Eta_http.Ws_codec.encode { fin = true; opcode = Close; payload }
   |> Bytes.to_string
   |> fun encoded -> Eio.Flow.copy_string encoded flow
 
@@ -236,7 +241,7 @@ let write_ws_switching_response flow key =
   let response =
     "HTTP/1.1 101 Switching Protocols\r\n" ^ "Upgrade: websocket\r\n"
     ^ "Connection: keep-alive, Upgrade\r\n" ^ "Sec-WebSocket-Accept: "
-    ^ Eta_http_eio.Ws.Codec.accept_key ~sha1:Eta_http_tls_openssl.sha1 key
+    ^ Eta_http.Ws_codec.accept_key ~sha1:Eta_http.Eta_http_tls_openssl.sha1 key
     ^ "\r\n\r\n"
   in
   Eio.Flow.copy_string response flow
@@ -324,7 +329,7 @@ let serve_script ~after_handshake ~after_update ~after_append flow =
 
 let run_buffered ~mode ~session_update ~script_handshake ~script_append
     pcm_bytes =
-  with_listening @@ fun ~sw ~net ~clock ~url ~socket ->
+  with_listening @@ fun ~sw ~net ~clock ~logger ~url ~socket ->
   Eio.Fiber.fork ~sw (fun () ->
       try
         let flow, _ = Eio.Net.accept ~sw socket in
@@ -332,12 +337,10 @@ let run_buffered ~mode ~session_update ~script_handshake ~script_append
           ~after_append:script_append flow
       with _ -> ());
   let operation =
-    Codex.run_realtime_session ~sw ~net ~url ~access_token:"synthetic" ~mode
-      ~session_update ~input_sample_rate:16000 pcm_bytes
-    |> Eta.Effect.timeout_as (Eta.Duration.seconds 5)
-         ~on_timeout:(`Stt_error "timeout")
+    Codex.run_realtime_session ~sw ~net ~clock ~url ~access_token:"synthetic"
+      ~mode ~session_update ~input_sample_rate:16000 pcm_bytes
   in
-  Eta_eio.run_once ~sw ~clock operation
+  operation
 
 let json_delta text =
   Printf.sprintf {|{"type":"response.output_text.delta","delta":%S}|} text
@@ -369,13 +372,12 @@ let test_result_minus_one () =
     run_buffered ~mode:Codex.Conversation ~session_update:conversation_update
       ~script_handshake:[ created ] ~script_append:append (pcm 320)
   with
-  | Eta.Exit.Ok got ->
+  | Ok got ->
       Alcotest.(check int)
         "len-1"
         (Limits.result_utf8_bytes - 1)
         (String.length got)
-  | Eta.Exit.Error cause ->
-      Alcotest.failf "result-1 failed: %s" (cause_text cause)
+  | Error cause -> Alcotest.failf "result-1 failed: %s" (cause_text cause)
 
 let test_result_exact () =
   let size = 32_768 in
@@ -385,10 +387,9 @@ let test_result_exact () =
     run_buffered ~mode:Codex.Conversation ~session_update:conversation_update
       ~script_handshake:[ created ] ~script_append:append (pcm 320)
   with
-  | Eta.Exit.Ok got ->
+  | Ok got ->
       Alcotest.(check int) "exact" Limits.result_utf8_bytes (String.length got)
-  | Eta.Exit.Error cause ->
-      Alcotest.failf "result exact failed: %s" (cause_text cause)
+  | Error cause -> Alcotest.failf "result exact failed: %s" (cause_text cause)
 
 let test_result_plus_one () =
   let size = 32_768 in
@@ -411,8 +412,8 @@ let test_final_replaces_partials () =
       ~script_append:[ json_delta chunk; json_final chunk ]
       (pcm 320)
   with
-  | Eta.Exit.Ok got -> Alcotest.(check string) "replaced" chunk got
-  | Eta.Exit.Error cause ->
+  | Ok got -> Alcotest.(check string) "replaced" chunk got
+  | Error cause ->
       Alcotest.failf "replacement double-counted or failed: %s"
         (cause_text cause)
 
@@ -427,12 +428,11 @@ let test_empty_deltas_do_not_grow () =
       ~script_append:(empties @ [ json_final "ok" ])
       (pcm 320)
   with
-  | Eta.Exit.Ok got -> Alcotest.(check string) "final after empties" "ok" got
-  | Eta.Exit.Error cause ->
-      Alcotest.failf "empty deltas failed: %s" (cause_text cause)
+  | Ok got -> Alcotest.(check string) "final after empties" "ok" got
+  | Error cause -> Alcotest.failf "empty deltas failed: %s" (cause_text cause)
 
 let test_offer_after_provider_failure () =
-  with_listening @@ fun ~sw ~net ~clock ~url ~socket ->
+  with_listening @@ fun ~sw ~net ~clock ~logger ~url ~socket ->
   Eio.Fiber.fork ~sw (fun () ->
       try
         let flow, _ = Eio.Net.accept ~sw socket in
@@ -450,21 +450,21 @@ let test_offer_after_provider_failure () =
         wait ()
       with _ -> ());
   match
-    run_offer ~url ~sw ~net ~clock (fun handle ->
+    run_offer ~logger ~url ~sw ~net ~clock (fun handle ->
         let rec spin n =
-          if n <= 0 then Eta.Effect.fail (`Stt_error "timeout")
+          if n <= 0 then Error (`Stt_error "timeout")
           else
-            let* offered = handle.offer_chunk (pcm 2) |> Eta.Effect.to_result in
+            let offered = handle.offer_chunk (pcm 320) in
             match offered with
-            | Error err -> Eta.Effect.fail err
+            | Error err -> Error err
             | Ok () ->
-                let* () = Eta.Effect.sleep (Eta.Duration.ms 10) in
+                Eio.Time.sleep clock 0.01;
                 spin (n - 1)
         in
         spin 200)
   with
-  | Eta.Exit.Ok () -> Alcotest.fail "offer never observed provider failure"
-  | Eta.Exit.Error cause ->
+  | Ok () -> Alcotest.fail "offer never observed provider failure"
+  | Error cause ->
       let text = cause_text cause in
       Alcotest.(check bool) "no secret" false (contains text "SECRET");
       if
@@ -475,7 +475,7 @@ let test_offer_after_provider_failure () =
       then Alcotest.failf "unexpected provider-failure cause: %s" text
 
 let test_closed_after_success () =
-  with_listening @@ fun ~sw ~net ~clock ~url ~socket ->
+  with_listening @@ fun ~sw ~net ~clock ~logger ~url ~socket ->
   Eio.Fiber.fork ~sw (fun () ->
       try
         let flow, _ = Eio.Net.accept ~sw socket in
@@ -484,8 +484,8 @@ let test_closed_after_success () =
           flow
       with _ -> ());
   let operation =
-    Codex.with_stream_session ~sw ~net ~url ~access_token:"synthetic"
-      ~mode:Codex.Transcription ~operation:"budget"
+    Codex.with_stream_session ~sw ~net ~clock ~logger ~url
+      ~access_token:"synthetic" ~mode:Codex.Transcription ~operation:"budget"
       ~model:"gpt-4o-mini-transcribe"
       ~session_update:
         (Codex.build_transcription_session_update
@@ -493,61 +493,13 @@ let test_closed_after_success () =
       ~cancel_message:"Codex realtime transcription cancelled" (fun handle ->
         let* () = handle.offer_chunk (pcm 320) in
         let* text = handle.finish_stream () in
-        let+ offer_after = handle.offer_chunk (pcm 2) |> Eta.Effect.to_result in
-        (text, offer_after))
-    |> Eta.Effect.timeout_as (Eta.Duration.seconds 5)
-         ~on_timeout:(`Stt_error "timeout")
+        let offer_after = handle.offer_chunk (pcm 2) in
+        Ok (text, offer_after))
   in
-  match Eta_eio.run_once ~sw ~clock operation with
-  | Eta.Exit.Ok (text, Error _) ->
-      Alcotest.(check string) "completed" "hello" text
-  | Eta.Exit.Ok (_, Ok ()) -> Alcotest.fail "offer after success was admitted"
-  | Eta.Exit.Error cause ->
-      Alcotest.failf "success path failed: %s" (cause_text cause)
-
-let replay_exit exit =
-  Eta.Effect.async ~register:(fun resume ->
-      resume exit;
-      None)
-
-let rec primary_fail_contains needle = function
-  | Eta.Cause.Fail (`Stt_error msg) -> contains msg needle
-  | Eta.Cause.Suppressed { primary; _ } -> primary_fail_contains needle primary
-  | Eta.Cause.Sequential xs | Eta.Cause.Concurrent xs ->
-      List.exists (primary_fail_contains needle) xs
-  | _ -> false
-
-let rec has_finalizer_node = function
-  | Eta.Cause.Suppressed _ | Eta.Cause.Finalizer _ -> true
-  | Eta.Cause.Sequential xs | Eta.Cause.Concurrent xs ->
-      List.exists has_finalizer_node xs
-  | _ -> false
-
-let test_provider_fail_plus_cleanup_defect () =
-  Eio_main.run @@ fun env ->
-  Eio.Switch.run @@ fun sw ->
-  let ran = ref 0 in
-  let publish _exit =
-    Eta.Effect.defer (fun () ->
-        let* () = Eta.Effect.sync (fun () -> incr ran) in
-        Eta.Effect.die_message "cleanup-defect")
-  in
-  let operation =
-    Eta.Effect.fail (`Stt_error "provider-fail")
-    |> Eta.Effect.to_exit
-    |> Eta.Effect.bind (fun exit ->
-        replay_exit exit |> Eta.Effect.finally (publish exit))
-  in
-  Alcotest.(check int) "publish not eager at construction" 0 !ran;
-  match Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env) operation with
-  | Eta.Exit.Ok _ -> Alcotest.fail "expected composed failure"
-  | Eta.Exit.Error cause ->
-      Alcotest.(check int) "publish ran in finalizer" 1 !ran;
-      Alcotest.(check bool)
-        "keeps provider fail" true
-        (primary_fail_contains "provider-fail" cause);
-      Alcotest.(check bool)
-        "cleanup defect is finalizer" true (has_finalizer_node cause)
+  match operation with
+  | Ok (text, Error _) -> Alcotest.(check string) "completed" "hello" text
+  | Ok (_, Ok ()) -> Alcotest.fail "offer after success was admitted"
+  | Error cause -> Alcotest.failf "success path failed: %s" (cause_text cause)
 
 let test_queue_accounting_underflow_is_visible () =
   let queued = ref 0 in
@@ -593,8 +545,6 @@ let () =
             test_offer_after_provider_failure;
           Alcotest.test_case "closed after success" `Quick
             test_closed_after_success;
-          Alcotest.test_case "provider fail plus cleanup defect" `Quick
-            test_provider_fail_plus_cleanup_defect;
           Alcotest.test_case "queue accounting underflow is visible" `Quick
             test_queue_accounting_underflow_is_visible;
         ] );

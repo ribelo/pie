@@ -1,8 +1,6 @@
 (* PIE007: incremental PCM16LE stats equal whole-concat reference; PTT
    eligibility does not prefix-concat. Synthetic audio only. *)
 
-open Eta.Syntax
-
 let sample_bytes values =
   let b = Bytes.create (List.length values * 2) in
   List.iteri (fun i v -> Bytes.set_int16_le b (i * 2) v) values;
@@ -102,23 +100,29 @@ let run_loop ~env ~sw ~clock ~handle ~min_duration_ms ~rms ~peak ~audio_fn
       capture_thresholds = (fun () -> (rms, peak));
       log_prefix = (fun mode -> mode);
       source = None;
-      on_ready = Eta.Effect.unit;
-      on_press = (fun _ -> Eta.Effect.pure (Pie.Ptt_loop.Handle handle));
-      on_release = (fun _ -> Eta.Effect.unit);
-      on_abort = Eta.Effect.pure false;
-      on_dead_input = Eta.Effect.unit;
+      on_ready = (fun () -> Ok ());
+      on_press = (fun _ -> Ok (Pie.Ptt_loop.Handle handle));
+      on_release = (fun _ -> Ok ());
+      on_abort = (fun () -> Ok false);
+      on_dead_input = (fun () -> Ok ());
       admission_active = (fun () -> false);
     }
   in
-  Eta_eio.run_once ~sw ~clock
-    (Pie.Ptt_loop.run
-       ~mono_clock:(Eio.Stdenv.mono_clock env)
-       ~keyboard
-       ~audio:(Eta_stream_eio.Stream.from_eio_stream audio)
-       config
-    |> Eta.Effect.timeout_as
-         (Eta.Duration.seconds timeout_s)
-         ~on_timeout:(`Ptt_error "timeout"))
+  let logger =
+    Eta_observability.Logger.create ~service:"pie-test" ~clock
+      ~mono_clock:(Eio.Stdenv.mono_clock env)
+      ~reporter:(Eta_observability.Logger.Reporter.writer ignore)
+      ()
+  in
+  try
+    Eio.Time.with_timeout_exn clock (float_of_int timeout_s) @@ fun () ->
+    Eio.Switch.run @@ fun inner ->
+    Pie.Ptt_loop.run ~sw:inner ~logger
+      ~mono_clock:(Eio.Stdenv.mono_clock env)
+      ~keyboard
+      ~audio:(fun () -> Ok (Some (Eio.Stream.take audio)))
+      config
+  with Eio.Time.Timeout -> Error (`Ptt_error "timeout")
 
 let test_ptt_quiet_nonzero_visits_linear () =
   Eio_main.run @@ fun env ->
@@ -129,11 +133,16 @@ let test_ptt_quiet_nonzero_visits_linear () =
     let cancels = ref 0 in
     let handle : Pie.Ptt_loop.handle =
       {
-        offer = (fun _ -> Eta.Effect.unit);
+        offer = (fun _ -> Ok ());
         finish =
           Pie.Ptt_loop.Buffered
-            (fun _ -> Eta.Effect.sync (fun () -> incr finishes));
-        cancel = Eta.Effect.sync (fun () -> incr cancels);
+            (fun _ ->
+              incr finishes;
+              Ok ());
+        cancel =
+          (fun () ->
+            incr cancels;
+            Ok ());
       }
     in
     Pie.Audio.Pcm.Accounting.reset ();
@@ -171,14 +180,14 @@ let test_ptt_silence_and_crossing () =
   let last_len = ref 0 in
   let handle : Pie.Ptt_loop.handle =
     {
-      offer = (fun _ -> Eta.Effect.unit);
+      offer = (fun _ -> Ok ());
       finish =
         Pie.Ptt_loop.Buffered
           (fun clip ->
-            Eta.Effect.sync (fun () ->
-                incr finishes;
-                last_len := Bytes.length clip.pcm_bytes));
-      cancel = Eta.Effect.unit;
+            incr finishes;
+            last_len := Bytes.length clip.pcm_bytes;
+            Ok ());
+      cancel = (fun () -> Ok ());
     }
   in
   ignore
@@ -201,11 +210,13 @@ let test_ptt_streaming_finish_does_not_concat () =
   let finishes = ref 0 in
   let handle : Pie.Ptt_loop.handle =
     {
-      offer = (fun _ -> Eta.Effect.unit);
+      offer = (fun _ -> Ok ());
       finish =
         Pie.Ptt_loop.Streaming
-          (fun ~duration_ms:_ -> Eta.Effect.sync (fun () -> incr finishes));
-      cancel = Eta.Effect.unit;
+          (fun ~duration_ms:_ ->
+            incr finishes;
+            Ok ());
+      cancel = (fun () -> Ok ());
     }
   in
   Pie.Audio.Pcm.Accounting.reset ();
@@ -234,16 +245,23 @@ let test_ptt_odd_split_pair_succeeds kind =
   let cancels = ref 0 in
   let handle : Pie.Ptt_loop.handle =
     {
-      offer = (fun _ -> Eta.Effect.unit);
+      offer = (fun _ -> Ok ());
       finish =
         (match kind with
         | `Buffered ->
             Pie.Ptt_loop.Buffered
-              (fun _ -> Eta.Effect.sync (fun () -> incr finishes))
+              (fun _ ->
+                incr finishes;
+                Ok ())
         | `Streaming ->
             Pie.Ptt_loop.Streaming
-              (fun ~duration_ms:_ -> Eta.Effect.sync (fun () -> incr finishes)));
-      cancel = Eta.Effect.sync (fun () -> incr cancels);
+              (fun ~duration_ms:_ ->
+                incr finishes;
+                Ok ()));
+      cancel =
+        (fun () ->
+          incr cancels;
+          Ok ());
     }
   in
   ignore
@@ -270,16 +288,23 @@ let test_ptt_odd_final_framing_fails kind =
   let cancels = ref 0 in
   let handle : Pie.Ptt_loop.handle =
     {
-      offer = (fun _ -> Eta.Effect.unit);
+      offer = (fun _ -> Ok ());
       finish =
         (match kind with
         | `Buffered ->
             Pie.Ptt_loop.Buffered
-              (fun _ -> Eta.Effect.sync (fun () -> incr finishes))
+              (fun _ ->
+                incr finishes;
+                Ok ())
         | `Streaming ->
             Pie.Ptt_loop.Streaming
-              (fun ~duration_ms:_ -> Eta.Effect.sync (fun () -> incr finishes)));
-      cancel = Eta.Effect.sync (fun () -> incr cancels);
+              (fun ~duration_ms:_ ->
+                incr finishes;
+                Ok ()));
+      cancel =
+        (fun () ->
+          incr cancels;
+          Ok ());
     }
   in
   ignore

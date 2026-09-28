@@ -14,20 +14,37 @@ let with_temp_dir f =
     (fun () -> f dir)
 
 let socket_in dir = Filename.concat dir "control.sock"
-
 let persist_in dir = Filename.concat dir "recording.json"
 
-let coordinator dir = Pie.Recording.Coordinator.create ~persist_path:(persist_in dir) ()
+let coordinator dir =
+  Pie.Recording.Coordinator.create ~persist_path:(persist_in dir) ()
+
+exception Start_error of S.error
+
+let category = function
+  | `Invalid_policy _ -> "invalid-policy"
+  | `Unsafe_runtime_dir -> S.err_unsafe_runtime_dir
+  | `Inaccessible_runtime_dir -> S.err_inaccessible_runtime_dir
+  | `Ownership_conflict _ -> S.err_endpoint_conflict
+  | `Active_listener -> S.err_active_listener
+  | `Lock_conflict -> S.err_lock_conflict
+  | `Lock_identity -> S.err_lock_identity
+  | `Probe_failed -> S.err_stale_probe_failed
+  | `Bind_failed _ -> "bind-failed"
 
 let start_in ~sw env ~socket_path ?budget coordinator =
-  S.start ~sw ~net:(Eio.Stdenv.net env) ~mono_clock:(Eio.Stdenv.mono_clock env)
-    ~socket_path ?budget coordinator
+  match
+    S.start ~sw ~fs:(Eio.Stdenv.fs env) ~net:(Eio.Stdenv.net env)
+      ~clock:(Eio.Stdenv.clock env) ~socket_path ?budget coordinator
+  with
+  | Ok () -> ()
+  | Error reason -> raise (Start_error reason)
 
-let expect_error category f =
+let expect_error expected f =
   match f () with
-  | exception S.Error actual ->
-      Alcotest.(check string) "error category" category actual
-  | () -> Alcotest.failf "expected %s" category
+  | exception Start_error actual ->
+      Alcotest.(check string) "error category" expected (category actual)
+  | () -> Alcotest.failf "expected %s" expected
 
 let send_status ~sw env socket_path =
   let flow = Eio.Net.connect ~sw (Eio.Stdenv.net env) (`Unix socket_path) in
@@ -105,10 +122,10 @@ let test_racing_processes () =
           Eio.Switch.run @@ fun sw ->
           match start_in ~sw env ~socket_path (coordinator dir) with
           | () -> Alcotest.fail "second process bound the live endpoint"
-          | exception S.Error category ->
+          | exception Start_error reason ->
+              let category = category reason in
               Alcotest.(check bool)
-                "race rejected"
-                true
+                "race rejected" true
                 (category = S.err_lock_conflict
                 || category = S.err_active_listener))
 
@@ -116,15 +133,17 @@ let test_old_owner_retirement () =
   with_temp_dir @@ fun dir ->
   let socket_path = socket_in dir in
   Eio_main.run @@ fun env ->
-  (Eio.Switch.run @@ fun sw ->
-   start_in ~sw env ~socket_path (coordinator dir);
-   Eio.Switch.run @@ fun sw2 ->
-   expect_error S.err_lock_conflict (fun () ->
-       start_in ~sw:sw2 env ~socket_path (coordinator dir)));
+  ( Eio.Switch.run @@ fun sw ->
+    start_in ~sw env ~socket_path (coordinator dir);
+    Eio.Switch.run @@ fun sw2 ->
+    expect_error S.err_lock_conflict (fun () ->
+        start_in ~sw:sw2 env ~socket_path (coordinator dir)) );
   Eio.Switch.run @@ fun sw ->
   start_in ~sw env ~socket_path (coordinator dir);
   let line = send_status ~sw env socket_path in
-  Alcotest.(check bool) "replacement listener reachable" true (String.length line > 0)
+  Alcotest.(check bool)
+    "replacement listener reachable" true
+    (String.length line > 0)
 
 let test_unsafe_dir () =
   with_temp_dir @@ fun dir ->
@@ -165,7 +184,8 @@ let test_never_newline_expires () =
       | exception End_of_file -> ()
       | exception _ -> ());
       let elapsed = Unix.gettimeofday () -. started in
-      Alcotest.(check bool) "expired promptly" true (elapsed < 1.0))
+      Alcotest.(check bool)
+        "expired within whole-peer budget" true (elapsed < 0.8))
 
 let test_shutdown_unlinks_owned_socket () =
   with_temp_dir @@ fun dir ->
@@ -173,7 +193,8 @@ let test_shutdown_unlinks_owned_socket () =
   Eio_main.run @@ fun env ->
   (Eio.Switch.run @@ fun sw -> start_in ~sw env ~socket_path (coordinator dir));
   Alcotest.(check bool)
-    "owned socket removed" false (Sys.file_exists socket_path);
+    "owned socket removed" false
+    (Sys.file_exists socket_path);
   Alcotest.(check bool)
     "lockfile remains" true
     (Sys.file_exists (socket_path ^ ".lock"))
@@ -211,7 +232,9 @@ let test_failed_start_releases_registry () =
   Sys.remove socket_path;
   start_in ~sw env ~socket_path (coordinator dir);
   let line = send_status ~sw env socket_path in
-  Alcotest.(check bool) "second start after failed claim" true (String.length line > 0)
+  Alcotest.(check bool)
+    "second start after failed claim" true
+    (String.length line > 0)
 
 let test_permit_released_on_parse_fail () =
   with_temp_dir @@ fun dir ->
@@ -225,7 +248,9 @@ let test_permit_released_on_parse_fail () =
     (fun () ->
       Eio.Flow.write flow [ Cstruct.of_string "{not-json}\n" ];
       let reader = Eio.Buf_read.of_flow ~max_size:65536 flow in
-      ignore (Eio.Buf_read.line reader));
+      Alcotest.(check string)
+        "malformed response" {|{"error":"malformed-request"}|}
+        (Eio.Buf_read.line reader));
   let line = send_status ~sw env socket_path in
   Alcotest.(check bool) "status after parse fail" true (String.length line > 0)
 
@@ -245,20 +270,20 @@ let test_client_cancellation_retires_handler () =
    with Exit -> ());
   let line = send_status ~sw env socket_path in
   Alcotest.(check bool)
-    "status after client cancel" true (String.length line > 0)
+    "status after client cancel" true
+    (String.length line > 0)
 
 let test_shutdown_with_stalled_handlers () =
   with_temp_dir @@ fun dir ->
   let socket_path = socket_in dir in
   Eio_main.run @@ fun env ->
-  (Eio.Switch.run @@ fun sw ->
-   start_in ~sw env ~socket_path (coordinator dir);
-   let _stalled =
-     List.init 4 (fun _ -> connect_partial ~sw env socket_path)
-   in
-   ());
+  ( Eio.Switch.run @@ fun sw ->
+    start_in ~sw env ~socket_path (coordinator dir);
+    let _stalled = List.init 4 (fun _ -> connect_partial ~sw env socket_path) in
+    () );
   Alcotest.(check bool)
-    "socket removed with stalled handlers" false (Sys.file_exists socket_path)
+    "socket removed with stalled handlers" false
+    (Sys.file_exists socket_path)
 
 let test_capacity_saturation () =
   with_temp_dir @@ fun dir ->
@@ -267,23 +292,17 @@ let test_capacity_saturation () =
   Eio.Switch.run @@ fun sw ->
   start_in ~sw env ~socket_path (coordinator dir);
   let before = fd_count () in
-  let stalled =
-    List.init 16 (fun _ -> connect_partial ~sw env socket_path)
-  in
+  let stalled = List.init 16 (fun _ -> connect_partial ~sw env socket_path) in
   let during = fd_count () in
-  Alcotest.(check bool)
-    "accepted fds bounded"
-    true
-    (during - before <= 40);
+  Alcotest.(check bool) "accepted fds bounded" true (during - before <= 40);
   let finished = ref false in
   let waiter, resolve = Eio.Promise.create () in
   Eio.Fiber.fork ~sw (fun () ->
       (try ignore (send_status ~sw env socket_path) with _ -> ());
       finished := true;
       Eio.Promise.resolve resolve ());
-  Eio.Time.sleep (Eio.Stdenv.clock env) 0.3;
-  Alcotest.(check bool)
-    "17th handler waits for a permit" false !finished;
+  Eio.Time.sleep (Eio.Stdenv.clock env) 0.05;
+  Alcotest.(check bool) "17th handler waits for a permit" false !finished;
   Eio.Promise.await waiter;
   Alcotest.(check bool) "17th handler runs after a slot frees" true !finished;
   List.iter (fun flow -> try Eio.Flow.close flow with _ -> ()) stalled
@@ -313,14 +332,15 @@ let test_saturated_foreign_listener_not_stale () =
       Eio.Switch.run @@ fun sw ->
       (match start_in ~sw env ~socket_path (coordinator dir) with
       | () -> Alcotest.fail "saturated foreign listener treated as stale"
-      | exception S.Error category ->
+      | exception Start_error reason ->
+          let category = category reason in
           Alcotest.(check bool)
-            "fail closed"
-            true
+            "fail closed" true
             (category = S.err_stale_probe_failed
             || category = S.err_active_listener));
       Alcotest.(check bool)
-        "foreign socket not unlinked" true (Sys.file_exists socket_path);
+        "foreign socket not unlinked" true
+        (Sys.file_exists socket_path);
       match Unix.lstat socket_path with
       | { st_kind = Unix.S_SOCK; _ } -> ()
       | _ -> Alcotest.fail "foreign listener replaced")
@@ -349,12 +369,11 @@ let test_oversize_line_malformed_then_status () =
       let oversized = String.make 65537 'x' ^ "\n" in
       Eio.Flow.write flow [ Cstruct.of_string oversized ];
       let reader = Eio.Buf_read.of_flow ~max_size:65536 flow in
-      (match Eio.Buf_read.line reader with
+      match Eio.Buf_read.line reader with
       | line ->
-          Alcotest.(check bool)
-            "malformed category" true
-            (String.length line > 0)
-      | exception End_of_file -> ()));
+          Alcotest.(check string)
+            "oversize malformed category" {|{"error":"malformed-request"}|} line
+      | exception End_of_file -> ());
   let line = send_status ~sw env socket_path in
   Alcotest.(check bool) "status after oversize" true (String.length line > 0)
 
@@ -376,7 +395,8 @@ let test_client_cancel_releases_fd () =
   Eio.Time.sleep (Eio.Stdenv.clock env) 0.05;
   let after = fd_count () in
   Alcotest.(check bool)
-    "physical fds retired after client cancel" true (after <= before + 2);
+    "physical fds retired after client cancel" true
+    (after <= before + 2);
   let line = send_status ~sw env socket_path in
   Alcotest.(check bool) "status after fd retire" true (String.length line > 0)
 
@@ -412,10 +432,10 @@ let test_cancel_before_peer_deadline () =
      raise Exit
    with Exit -> ());
   let elapsed = Unix.gettimeofday () -. started in
+  Alcotest.(check bool) "settled well before peer budget" true (elapsed < 1.0);
   Alcotest.(check bool)
-    "settled well before peer budget" true (elapsed < 1.0);
-  Alcotest.(check bool)
-    "owned socket gone after cancel" false (Sys.file_exists socket_path)
+    "owned socket gone after cancel" false
+    (Sys.file_exists socket_path)
 
 let test_hardlinked_lock_rejected () =
   with_temp_dir @@ fun dir ->

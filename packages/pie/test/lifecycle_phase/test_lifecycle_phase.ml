@@ -3,6 +3,7 @@ module P = Pie.Recording.Phase
 module Contract = Pie.Assistant_service.Contract
 
 let with_coordinator f =
+  Eio_main.run @@ fun _env ->
   let dir = Filename.temp_dir "pie-phase" "" in
   Fun.protect
     ~finally:(fun () ->

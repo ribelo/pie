@@ -3,21 +3,35 @@ type error =
 
 val status :
   net:_ Eio.Net.t ->
+  clock:_ Eio.Time.clock ->
   sw:Eio.Switch.t ->
   unit ->
-  (Contract.recording_snapshot, error) Eta.Effect.t
+  (Contract.recording_snapshot, error) result
 
 val toggle :
-  net:_ Eio.Net.t -> sw:Eio.Switch.t -> unit -> (bool, error) Eta.Effect.t
+  net:_ Eio.Net.t ->
+  clock:_ Eio.Time.clock ->
+  sw:Eio.Switch.t ->
+  unit ->
+  (bool, error) result
 
 val action :
   net:_ Eio.Net.t ->
+  clock:_ Eio.Time.clock ->
   sw:Eio.Switch.t ->
   string ->
-  (Contract.action_result, error) Eta.Effect.t
+  (Contract.action_result, error) result
 
 val pause :
-  net:_ Eio.Net.t -> sw:Eio.Switch.t -> unit -> (unit, error) Eta.Effect.t
+  net:_ Eio.Net.t ->
+  clock:_ Eio.Time.clock ->
+  sw:Eio.Switch.t ->
+  unit ->
+  (unit, error) result
 
 val resume :
-  net:_ Eio.Net.t -> sw:Eio.Switch.t -> unit -> (unit, error) Eta.Effect.t
+  net:_ Eio.Net.t ->
+  clock:_ Eio.Time.clock ->
+  sw:Eio.Switch.t ->
+  unit ->
+  (unit, error) result

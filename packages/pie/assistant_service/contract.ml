@@ -245,6 +245,13 @@ let response_of_json req json =
       | None -> decode_for_request req json)
   | _ -> Error not_object
 
+let decode_line line =
+  match Yojson.Safe.from_string (String.trim line) with
+  | json -> request_of_json json
+  | exception Yojson.Json_error _ -> Error "malformed-request"
+
+let encode_response response = Yojson.Safe.to_string (response_to_json response)
+
 let snapshot_of_status_response = function
   | Status_resp snap -> Ok snap
   | _ -> Error wrong_type

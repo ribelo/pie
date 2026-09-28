@@ -40,7 +40,6 @@ type t = {
 }
 
 exception Config_error of string
-exception Compound of exn * exn
 
 type resolved_model = { provider : provider; model : string }
 
@@ -98,123 +97,8 @@ let entry_method_of_string = function
 let string_of_entry_method = function Type -> "type" | Paste -> "paste"
 let max_config_file_bytes = 1024 * 1024
 
-type read_io = {
-  open_readonly : string -> Unix.file_descr;
-  fstat : Unix.file_descr -> Unix.stats;
-  read : Unix.file_descr -> bytes -> int -> int -> int;
-  close : Unix.file_descr -> unit;
-  after_acquire : Unix.file_descr -> unit;
-  after_fstat : Unix.file_descr -> Unix.stats -> unit;
-}
-
-let rec unix_read fd buf off len =
-  try Unix.read fd buf off len
-  with Unix.Unix_error (Unix.EINTR, _, _) -> unix_read fd buf off len
-
-let rec open_readonly_nonblock path =
-  try Unix.openfile path Unix.[ O_RDONLY; O_NONBLOCK; O_CLOEXEC ] 0
-  with Unix.Unix_error (Unix.EINTR, _, _) -> open_readonly_nonblock path
-
-let unix_read_io =
-  {
-    open_readonly = open_readonly_nonblock;
-    fstat = Unix.fstat;
-    read = unix_read;
-    close = Unix.close;
-    after_acquire = ignore;
-    after_fstat = (fun _ _ -> ());
-  }
-
-let read_unix_error path err =
-  Config_error
-    (Printf.sprintf "failed to read %s: %s" path (Unix.error_message err))
-
-let close_error path err =
-  Config_error
-    (Printf.sprintf "failed to close %s: %s" path (Unix.error_message err))
-
-let combine_read_and_close path primary_msg err =
-  Config_error
-    (Printf.sprintf "%s; also failed to close %s: %s" primary_msg path
-       (Unix.error_message err))
-
-let close_once close fd =
-  let closed = Atomic.make false in
-  fun () -> if Atomic.compare_and_set closed false true then close fd else ()
-
-let read_body read_io path fd =
-  read_io.after_acquire fd;
-  let stats =
-    match read_io.fstat fd with
-    | stats -> stats
-    | exception Unix.Unix_error (err, _, _) -> raise (read_unix_error path err)
-  in
-  if stats.Unix.st_kind <> Unix.S_REG then
-    raise (Config_error (Printf.sprintf "%s is not a regular file" path));
-  if stats.Unix.st_size > max_config_file_bytes then
-    raise
-      (Config_error
-         (Printf.sprintf "%s exceeds the 1MiB configuration size limit" path));
-  read_io.after_fstat fd stats;
-  let initial =
-    if stats.Unix.st_size > 0 then min stats.Unix.st_size max_config_file_bytes
-    else 64
-  in
-  let buf = Buffer.create initial in
-  let chunk = Bytes.create 65536 in
-  let rec loop total =
-    let remaining_with_sentinel = max_config_file_bytes - total + 1 in
-    if remaining_with_sentinel <= 0 then
-      raise
-        (Config_error
-           (Printf.sprintf "%s exceeds the 1MiB configuration size limit" path))
-    else
-      let want = min (Bytes.length chunk) remaining_with_sentinel in
-      match read_io.read fd chunk 0 want with
-      | 0 -> Buffer.contents buf
-      | n ->
-          let total = total + n in
-          if total > max_config_file_bytes then
-            raise
-              (Config_error
-                 (Printf.sprintf "%s exceeds the 1MiB configuration size limit"
-                    path));
-          Buffer.add_subbytes buf chunk 0 n;
-          loop total
-      | exception Unix.Unix_error ((Unix.EAGAIN | Unix.EWOULDBLOCK), _, _) ->
-          raise (Config_error (Printf.sprintf "%s read would block" path))
-      | exception Unix.Unix_error (err, _, _) ->
-          raise (read_unix_error path err)
-  in
-  loop 0
-
-let read_bounded_regular_file ?(read_io = unix_read_io) path =
-  match read_io.open_readonly path with
-  | exception Unix.Unix_error (Unix.ENOENT, _, _) -> None
-  | exception Unix.Unix_error (err, _, _) -> raise (read_unix_error path err)
-  | fd -> (
-      let closer = close_once read_io.close fd in
-      let outcome =
-        match read_body read_io path fd with
-        | contents -> Ok contents
-        | exception exn -> Error exn
-      in
-      match closer () with
-      | () -> (
-          match outcome with
-          | Ok contents -> Some contents
-          | Error exn -> raise exn)
-      | exception Unix.Unix_error (err, _, _) -> (
-          match outcome with
-          | Ok _ -> raise (close_error path err)
-          | Error (Config_error msg) ->
-              raise (combine_read_and_close path msg err)
-          | Error primary ->
-              raise (Compound (primary, Unix.Unix_error (err, "close", path))))
-      | exception close_exn -> (
-          match outcome with
-          | Ok _ -> raise close_exn
-          | Error primary -> raise (Compound (primary, close_exn))))
+let toml_find table key =
+  match table with `Assoc fields -> List.assoc_opt key fields | _ -> None
 
 let contains_substring ~needle haystack =
   let needle_len = String.length needle in
@@ -253,11 +137,6 @@ let validate_translation_prompt content =
          "translation prompt missing required placeholders {{source_language}} \
           and {{target_language}}")
 
-module TT = Toml.Types
-
-let toml_key key = TT.Table.Key.of_string key
-let toml_find table key = TT.Table.find_opt (toml_key key) table
-
 let type_error key expected =
   raise (Config_error (Printf.sprintf "%s must be %s" key expected))
 
@@ -268,35 +147,35 @@ let validate_unit_interval name value =
 
 let get_string table key default_val =
   match toml_find table key with
-  | Some (TT.TString value) -> value
+  | Some (`String value) -> value
   | Some _ -> type_error key "a string"
   | None -> default_val
 
 let get_bool table key default_val =
   match toml_find table key with
-  | Some (TT.TBool value) -> value
+  | Some (`Bool value) -> value
   | Some _ -> type_error key "a bool"
   | None -> default_val
 
 let get_float table key default_val =
   match toml_find table key with
-  | Some (TT.TFloat value) -> value
-  | Some (TT.TInt value) -> float_of_int value
+  | Some (`Float value) -> value
+  | Some (`Int value) -> float_of_int value
   | Some _ -> type_error key "a number"
   | None -> default_val
 
 let get_int table key default_val =
   match toml_find table key with
-  | Some (TT.TInt value) -> value
+  | Some (`Int value) -> value
   | Some _ -> type_error key "an integer"
   | None -> default_val
 
 let get_optional_string table key =
   match toml_find table key with
-  | Some (TT.TString value) -> (
+  | Some (`String value) -> (
       match String.trim value with "" -> None | trimmed -> Some trimmed)
+  | Some `Null | None -> None
   | Some _ -> type_error key "a string"
-  | None -> None
 
 let parse_thinking_effort table =
   match get_optional_string table "thinking_effort" with
@@ -346,7 +225,9 @@ let parse_newline_rule index table =
 let parse_newline_rules table =
   match toml_find table "newline_rules" with
   | None -> []
-  | Some (TT.TArray (TT.NodeTable rules)) -> List.mapi parse_newline_rule rules
+  | Some (`List rules)
+    when List.for_all (function `Assoc _ -> true | _ -> false) rules ->
+      List.mapi parse_newline_rule rules
   | Some _ -> raise (Config_error "newline_rules must be an array of tables")
 
 let parse_text_entry_rule index table =
@@ -371,35 +252,10 @@ let parse_text_entry_rule index table =
 let parse_text_entry_rules table =
   match toml_find table "text_entry_rules" with
   | None -> []
-  | Some (TT.TArray (TT.NodeTable rules)) ->
+  | Some (`List rules)
+    when List.for_all (function `Assoc _ -> true | _ -> false) rules ->
       List.mapi parse_text_entry_rule rules
   | Some _ -> raise (Config_error "text_entry_rules must be an array of tables")
-
-let load_toml ~read_io config_path =
-  match read_bounded_regular_file ~read_io config_path with
-  | None ->
-      let legacy_json =
-        Filename.concat (Filename.dirname config_path) "stt.json"
-      in
-      if Sys.file_exists legacy_json then
-        raise
-          (Config_error
-             (Printf.sprintf
-                "STT config moved to TOML at %s; migrate legacy JSON config \
-                 from %s"
-                config_path legacy_json))
-      else
-        raise
-          (Config_error
-             (Printf.sprintf "STT config not found at %s" config_path))
-  | Some contents -> (
-      match Toml.Parser.from_string contents with
-      | `Ok table -> table
-      | `Error (msg, location) ->
-          raise
-            (Config_error
-               (Printf.sprintf "invalid TOML in %s:%d:%d: %s" config_path
-                  location.Toml.Parser.line location.column msg)))
 
 let reject_unsupported_wakeword table =
   List.iter
@@ -417,9 +273,10 @@ let reject_unsupported_wakeword table =
   | None -> ()
   | Some _ -> raise (Config_error "unsupported wakeword table")
 
-let load ?(config_path = Paths.stt_config_path) ?(read_io = unix_read_io) () : t
-    =
-  let table = load_toml ~read_io config_path in
+let of_json table : t =
+  (match table with
+  | `Assoc _ -> ()
+  | _ -> raise (Config_error "STT config must be an object"));
   reject_unsupported_wakeword table;
   let provider =
     provider_of_string (get_string table "provider" "codex-realtime")
@@ -447,20 +304,13 @@ let load ?(config_path = Paths.stt_config_path) ?(read_io = unix_read_io) () : t
   then raise (Config_error "PTT transcribe and translate bindings must differ");
   ignore (resolve_model_provider ~default_provider:provider transcription_model);
   ignore (resolve_model_provider ~default_provider:provider translation_model);
-  let prompts_dir = Filename.concat (Filename.dirname config_path) "prompts" in
-  let transcription_prompt_path =
-    Filename.concat prompts_dir "transcription.md"
-  in
-  let translation_prompt_path = Filename.concat prompts_dir "translation.md" in
   let transcription_prompt =
-    match read_bounded_regular_file ~read_io transcription_prompt_path with
-    | None -> "Transcribe the following audio in {{language}}."
-    | Some content -> content
+    get_string table "transcription_prompt"
+      "Transcribe the following audio in {{language}}."
   in
   let translation_prompt =
-    match read_bounded_regular_file ~read_io translation_prompt_path with
-    | None -> "Translate from {{source_language}} to {{target_language}}."
-    | Some content -> content
+    get_string table "translation_prompt"
+      "Translate from {{source_language}} to {{target_language}}."
   in
   validate_transcription_prompt transcription_prompt;
   validate_translation_prompt translation_prompt;
@@ -494,3 +344,116 @@ let load ?(config_path = Paths.stt_config_path) ?(read_io = unix_read_io) () : t
     newline_rules = parse_newline_rules table;
     text_entry_rules = parse_text_entry_rules table;
   }
+
+let decode_json json =
+  match of_json json with
+  | config -> Ok config
+  | exception Config_error message -> Error message
+
+let yojson_of_t (config : t) =
+  let string x = `String x in
+  let opt = function Some x -> string x | None -> `Null in
+  let rule action (r : newline_rule) =
+    `Assoc
+      [
+        ("app_id", opt r.app_id);
+        ("title_regex", opt r.title_regex);
+        ("action", string (string_of_newline_action action));
+      ]
+  in
+  let entry (r : text_entry_rule) =
+    `Assoc
+      [
+        ("app_id", opt r.app_id);
+        ("title_regex", opt r.title_regex);
+        ("method", string (string_of_entry_method r.method_));
+      ]
+  in
+  `Assoc
+    [
+      ("provider", string (string_of_provider config.provider));
+      ("transcription_model", string config.transcription_model);
+      ("translation_model", string config.translation_model);
+      ("transcription_language", string config.transcription_language);
+      ("translation_source_language", string config.translation_source_language);
+      ("translation_target_language", string config.translation_target_language);
+      ("ptt_min_capture_rms", `Float config.ptt_min_capture_rms);
+      ("ptt_min_capture_peak", `Float config.ptt_min_capture_peak);
+      ("ptt_transcribe_keysym", `Int config.ptt_transcribe_keysym);
+      ("ptt_translate_keysym", `Int config.ptt_translate_keysym);
+      ("ptt_transcribe_shift", `Bool config.ptt_transcribe_shift);
+      ("ptt_translate_shift", `Bool config.ptt_translate_shift);
+      ("thinking_effort", opt config.thinking_effort);
+      ("transcription_prompt", string config.transcription_prompt);
+      ("translation_prompt", string config.translation_prompt);
+      ( "newline_rules",
+        `List (List.map (fun r -> rule r.action r) config.newline_rules) );
+      ("text_entry_rules", `List (List.map entry config.text_entry_rules));
+    ]
+
+let door_spec : t Eta_app.Config.t =
+  {
+    of_yojson = decode_json;
+    yojson_of_t;
+    env = (fun ~getenv:_ config -> config);
+  }
+
+let default_source () =
+  Eta_app.Config.resolve_with ~file_name:"stt.toml" ~name:"pie" ~config:None
+    ~getenv:Sys.getenv_opt
+
+let source_path : Eta_app.Config.source -> string = function
+  | `Default path | `Explicit path -> path
+
+let load ~fs ?source ?read () =
+  let source = Option.value source ~default:(default_source ()) in
+  let path = source_path source in
+  let read =
+    Option.value read ~default:(fun path ->
+        Eta_app.Config.read_regular ~max_bytes:max_config_file_bytes
+          Eio.Path.(fs / path))
+  in
+  let result =
+    Eta_app.Config.load_with ~missing:`Required ~spec:door_spec
+      ~getenv:Sys.getenv_opt ~read ~source
+  in
+  let result =
+    match result with
+    | Error (`Config _) as err
+      when Sys.file_exists (Filename.concat (Filename.dirname path) "stt.json")
+      -> (
+        match read path with
+        | Error `Missing ->
+            Error
+              (`Config
+                 (Printf.sprintf
+                    "STT config moved to TOML at %s; migrate legacy JSON \
+                     config from %s"
+                    path
+                    (Filename.concat (Filename.dirname path) "stt.json")))
+        | _ -> err)
+    | other -> other
+  in
+  let ( let* ) = Result.bind in
+  let* config = result in
+  let prompt name default =
+    let prompt_path =
+      Filename.concat (Filename.concat (Filename.dirname path) "prompts") name
+    in
+    match read prompt_path with
+    | Ok content -> Ok content
+    | Error `Missing -> Ok default
+    | Error (`Unreadable reason) ->
+        Error (`Config (prompt_path ^ ": " ^ reason))
+  in
+  let* transcription_prompt =
+    prompt "transcription.md" config.transcription_prompt
+  in
+  let* translation_prompt = prompt "translation.md" config.translation_prompt in
+  match
+    validate_transcription_prompt transcription_prompt;
+    validate_translation_prompt translation_prompt;
+    { config with transcription_prompt; translation_prompt }
+  with
+  | config -> Ok config
+  | exception Config_error message -> Error (`Config message)

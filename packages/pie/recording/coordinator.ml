@@ -30,9 +30,7 @@ let signal_cancel attempt =
   if Atomic.compare_and_set attempt.cancel.fired false true then
     Eio.Promise.resolve attempt.cancel.resolve ()
 
-let await_cancel attempt =
-  Eta.Effect.sync (fun () -> Eio.Promise.await attempt.cancel.wait)
-
+let await_cancel attempt = Eio.Promise.await attempt.cancel.wait
 let cancel_signalled attempt = Atomic.get attempt.cancel.fired
 
 type start_result = Started of attempt | Busy of recording_mode | Disabled
@@ -59,9 +57,15 @@ type state = {
   updated_at : float;
 }
 
-type t = { persist_path : string; state : state ref }
+type t = {
+  persist_path : string;
+  logger : Eta_observability.Logger.t option;
+  state : state ref;
+  mutex : Eio.Mutex.t;
+}
 
-let current_attempt t = !(t.state).mode
+let locked t f = Eio.Mutex.use_rw ~protect:true t.mutex f
+let current_attempt t = locked t (fun () -> !(t.state).mode)
 
 let string_of_mode = function
   | Ptt_transcribe -> "ptt-transcribe"
@@ -149,30 +153,50 @@ let write_state t =
    crashing the daemon's hot path. *)
 let persist t =
   try write_state t
-  with exn ->
-    Process.emit_sync ~level:Error
-      ~attrs:[ ("path", t.persist_path); ("error", Printexc.to_string exn) ]
-      "failed to write recording state"
+  with exn -> (
+    match t.logger with
+    | Some logger ->
+        Eta_observability.Logger.error logger
+          ~fields:
+            [
+              ("path", String t.persist_path);
+              ("error", String (Printexc.to_string exn));
+            ]
+          "failed to write recording state"
+    | None ->
+        Format.eprintf "failed to write recording state (%s): %s@."
+          t.persist_path (Printexc.to_string exn))
 
-let create ?(persist_path = Paths.recording_state_path) () =
+let create ?logger ?(persist_path = Paths.recording_state_path) () =
   let now = Unix.gettimeofday () in
-  let t = { persist_path; state = ref (initial_state now) } in
+  let t =
+    {
+      persist_path;
+      logger;
+      state = ref (initial_state now);
+      mutex = Eio.Mutex.create ();
+    }
+  in
   (* Fail fast at startup: if we cannot write the initial state file, the
      caller must know rather than run with a phantom persistence path. *)
   write_state t;
   t
 
-let snapshot t = snapshot_of_state !(t.state)
-let is_active t = !(t.state).mode <> None
+let snapshot t = locked t (fun () -> snapshot_of_state !(t.state))
+let is_active t = locked t (fun () -> !(t.state).mode <> None)
 
-let mutate t f =
+let mutate_unlocked t f =
   let result, next = f !(t.state) in
-  t.state := next;
-  persist t;
+  if next != !(t.state) then (
+    t.state := next;
+    persist t);
   result
+
+let mutate t f = locked t (fun () -> mutate_unlocked t f)
 
 (* Phase publication never releases admission, and stale owners cannot change it. *)
 let set_phase t (attempt : attempt) phase =
+  locked t @@ fun () ->
   let current = !(t.state) in
   match current.mode with
   | Some active when active.id = attempt.id ->
@@ -181,7 +205,7 @@ let set_phase t (attempt : attempt) phase =
       if not (Phase.can_transition before phase) then false
       else if before = phase then true
       else
-        mutate t (fun current ->
+        mutate_unlocked t (fun current ->
             ( true,
               {
                 current with
