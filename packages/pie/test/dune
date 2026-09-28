@@ -8,6 +8,9 @@
   eio_main
   eta
   eta_ai
+  eta_ai_openrouter
+  eta_app
+  cmdliner
   eta_test
   eta_http
   eta_observability
