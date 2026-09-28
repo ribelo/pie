@@ -359,6 +359,38 @@ let test_unwatch_budget_still_closes () =
       await_conn ();
       Alcotest.(check int) "unwatch budget closed" baseline (fd_count ()))
 
+(* A stop (cancellation of the monitor's user) must end as a pure interruption: the
+   unwatch in release used to observe the cancellation and raise out of the finalizer,
+   which the Door rendered as a defect and exit 2 on every service stop (found at the
+   eta-next cut-over, 2026-09-28). *)
+let test_stop_is_clean_interruption () =
+  with_sandbox @@ fun dir ->
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let clock = Eio.Stdenv.clock env in
+  let net = Eio.Stdenv.net env in
+  let process_mgr = Eio.Stdenv.process_mgr env in
+  with_fake ~sw ~net ~clock ~dir
+    (fun flow ->
+      complete_watch flow;
+      drain_until_eof flow)
+    (fun ~await_conn ->
+      let result =
+        Eta.Scope.run (fun scope ->
+            Eio.Fiber.fork ~sw:scope (fun () ->
+                Eio.Time.sleep clock 0.2;
+                Eio.Switch.fail scope
+                  (Eio.Cancel.Cancelled (Failure "service stop")));
+            Monitor.with_monitor_budgets ~budgets:short_budgets ~sw:scope ~net
+              ~clock ~process_mgr (fun _ -> Eio.Fiber.await_cancel ()))
+      in
+      (match result with
+      | Eta.Exit.Success () -> Alcotest.fail "stopped monitor reported success"
+      | Eta.Exit.Failure cause ->
+          if defects cause <> [] then
+            Alcotest.failf "stop raised a defect: %s" (show_cause cause));
+      await_conn ())
+
 let add_string_field = Monitor.add_string_field
 let add_object_path_field = Monitor.add_object_path_field
 
@@ -1019,6 +1051,8 @@ let () =
         [
           Alcotest.test_case "stalled setup times out and closes" `Quick
             test_stalled_setup_times_out;
+          Alcotest.test_case "stop is a clean interruption" `Quick
+            test_stop_is_clean_interruption;
           Alcotest.test_case "unwatch budget still closes" `Quick
             test_unwatch_budget_still_closes;
         ] );

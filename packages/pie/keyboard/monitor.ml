@@ -814,14 +814,19 @@ let with_monitor_budgets ~budgets ~sw ~net ~clock ~process_mgr:_ f =
     | Ok value -> value
     | Error `Timeout -> raise Setup_timeout
   in
+  (* Release runs when the monitor's user ends — including when a stop cancels it. The
+     unwatch is a D-Bus write: run it uncancelled (bounded by its own budget) so a stop
+     neither skips it nor raises Cancelled out of the finalizer, which the Door would
+     report as a defect (exit 2) instead of a clean stop. *)
   let release () =
-    Fun.protect
-      ~finally:(fun () -> Eio.Flow.close flow)
-      (fun () ->
-        ignore
-          (Eta.Timeout.timeout ~clock budgets.unwatch (fun () ->
-               unwatch_write ~destination:owner flow;
-               Ok ())))
+    Eio.Cancel.protect (fun () ->
+        Fun.protect
+          ~finally:(fun () -> Eio.Flow.close flow)
+          (fun () ->
+            ignore
+              (Eta.Timeout.timeout ~clock budgets.unwatch (fun () ->
+                   unwatch_write ~destination:owner flow;
+                   Ok ()))))
   in
   Fun.protect ~finally:release @@ fun () ->
   Eta.Concurrent.with_background ~sw
