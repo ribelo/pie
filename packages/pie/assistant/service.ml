@@ -544,20 +544,31 @@ let settle_attempt owner =
 (* One recognition -> delivery stage used by live capture and RetryLatest.
    Blank / provider failure stay on Audio. Delivery failure publishes the
    exact recognized text (dispatch_uncertain is a warning, not a retry veto). *)
+(* A failing publication never hides the primary failure and is never lost:
+   both travel as [Suppressed {primary; finalizer}]. *)
+let with_publication primary publication =
+  match publication with
+  | Ok () -> Error primary
+  | Error finalizer ->
+      let cause : [ `Ptt_error of string ] Eta.Cause.t -> _ = fun c -> c in
+      let as_cause = function
+        | `Ptt_error _ as e -> Eta.Cause.Fail e
+        | `Ptt_cause c -> cause c
+      in
+      Error
+        (`Ptt_cause
+           (Eta.Cause.Suppressed
+              { primary = as_cause primary; finalizer = as_cause finalizer }))
+
 let recognize_then_deliver ~recognize ~deliver ~on_provider_failure ~on_blank
     ~on_delivery_failure ~on_success =
   match recognize () with
-  | Error _ as failure ->
-      ignore (on_provider_failure ());
-      failure
+  | Error primary -> with_publication primary (on_provider_failure ())
   | Ok text when is_blank text ->
-      ignore (on_blank ());
-      Error (`Ptt_error "stt:no_transcript")
+      with_publication (`Ptt_error "stt:no_transcript") (on_blank ())
   | Ok text -> (
       match deliver text with
-      | Error _ as failure ->
-          ignore (on_delivery_failure text ());
-          failure
+      | Error primary -> with_publication primary (on_delivery_failure text ())
       | Ok () -> on_success ())
 
 let unless_cancelled attempt action =

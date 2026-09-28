@@ -36,16 +36,19 @@ let () =
   let pcm = Bytes.of_string (read_file pcm_path) in
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  let operation =
-    Pie.Stt.Codex_realtime.transcribe_with_prompt ~sw ~net:(Eio.Stdenv.net env)
-      ~model ~language:"English"
-      ~prompt_template:
-        "Transcribe the spoken English words. Return only the transcript text."
-      ~sample_rate:16000 pcm
-    |> Eta.Effect.timeout_as (Eta.Duration.seconds 45)
-         ~on_timeout:(`Stt_error "live transcription timed out")
+  let clock = Eio.Stdenv.clock env in
+  let result =
+    try
+      Eio.Time.with_timeout_exn clock 45.0 (fun () ->
+          Pie.Stt.Codex_realtime.transcribe_with_prompt ~sw
+            ~net:(Eio.Stdenv.net env) ~clock ~model ~language:"English"
+            ~prompt_template:
+              "Transcribe the spoken English words. Return only the transcript \
+               text."
+            ~sample_rate:16000 pcm)
+    with Eio.Time.Timeout -> Error (`Stt_error "live transcription timed out")
   in
-  match Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env) operation with
+  match result with
   | Ok transcript ->
       let expected_normalized = normalize expected in
       let transcript_normalized = normalize transcript in
@@ -55,12 +58,7 @@ let () =
       Printf.printf "normalized_transcript=%S\n" transcript_normalized;
       Printf.printf "match=%b\n%!" matched;
       if not matched then exit 2
-  | Error cause ->
-      let message =
-        Format.asprintf "%a"
-          (Eta.Cause.pp (fun fmt error ->
-               Format.pp_print_string fmt (render_error error)))
-          cause
-      in
+  | Error error ->
+      let message = render_error error in
       Printf.eprintf "error=%s\n%!" message;
       exit 1

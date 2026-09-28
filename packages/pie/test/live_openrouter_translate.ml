@@ -45,18 +45,27 @@ let () =
   let pcm = Bytes.of_string (read_file pcm_path) in
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  let operation =
-    Pie.Stt.Openrouter.translate_with_prompt ~sw ~net:(Eio.Stdenv.net env)
-      ~model:resolved_model.model ~source_language:"English"
-      ~target_language:"English"
-      ~prompt_template:
-        "Translate the spoken audio from {{source_language}} to \
-         {{target_language}}."
-      ~sample_rate:16000 pcm
-    |> Eta.Effect.timeout_as (Eta.Duration.seconds 90)
-         ~on_timeout:(`Stt_error "live OpenRouter translation timed out")
+  let clock = Eio.Stdenv.clock env in
+  let logger =
+    Eta_observability.Logger.create ~service:"pie-live-test" ~clock
+      ~mono_clock:(Eio.Stdenv.mono_clock env)
+      ~reporter:
+        (Eta_observability.Logger.Reporter.journal (Eio.Stdenv.stderr env))
+      ()
   in
-  match Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env) operation with
+  let result =
+    try
+      Eio.Time.with_timeout_exn clock 90.0 (fun () ->
+          Pie.Stt.Openrouter.translate_with_prompt ~sw ~net:(Eio.Stdenv.net env)
+            ~clock ~logger ~model:resolved_model.model
+            ~source_language:"English" ~target_language:"English"
+            ~prompt_template:
+              "Translate the spoken audio from {{source_language}} to \
+               {{target_language}}."
+            ~sample_rate:16000 pcm)
+    with Eio.Time.Timeout -> Error (`Stt_error "live translation timed out")
+  in
+  match result with
   | Ok translation ->
       let expected_normalized = normalize expected in
       let translation_normalized = normalize translation in
@@ -66,12 +75,7 @@ let () =
       Printf.printf "normalized_translation=%S\n" translation_normalized;
       Printf.printf "match=%b\n%!" matched;
       if not matched then exit 2
-  | Error cause ->
-      let message =
-        Format.asprintf "%a"
-          (Eta.Cause.pp (fun fmt error ->
-               Format.pp_print_string fmt (render_error error)))
-          cause
-      in
+  | Error error ->
+      let message = render_error error in
       Printf.eprintf "error=%s\n%!" message;
       exit 1

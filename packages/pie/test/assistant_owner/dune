@@ -7,10 +7,8 @@
   alcotest
   eio_main
   eta
-  eta_test
   eio
   eta_http
   unix
-  threads
   yojson
   cstruct))

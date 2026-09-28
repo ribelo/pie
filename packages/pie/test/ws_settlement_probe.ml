@@ -14,8 +14,7 @@ let has_suffix suffix value =
   let suffix_len = String.length suffix in
   let value_len = String.length value in
   value_len >= suffix_len
-  && String.equal suffix
-       (String.sub value (value_len - suffix_len) suffix_len)
+  && String.equal suffix (String.sub value (value_len - suffix_len) suffix_len)
 
 let header_value name head =
   let lines = String.split_on_char '\n' head in
@@ -47,7 +46,7 @@ let read_http_head flow =
   loop ()
 
 let write_ws_text flow payload =
-  Eta_http_eio.Ws.Codec.encode
+  Eta_http.Ws_codec.encode
     { fin = true; opcode = Text; payload = Bytes.of_string payload }
   |> Bytes.to_string
   |> fun encoded -> Eio.Flow.copy_string encoded flow
@@ -56,7 +55,7 @@ let write_ws_switching_response flow key =
   let response =
     "HTTP/1.1 101 Switching Protocols\r\n" ^ "Upgrade: websocket\r\n"
     ^ "Connection: keep-alive, Upgrade\r\n" ^ "Sec-WebSocket-Accept: "
-    ^ Eta_http_eio.Ws.Codec.accept_key ~sha1:Eta_http_tls_openssl.sha1 key
+    ^ Eta_http.Ws_codec.accept_key ~sha1:Eta_http.Eta_http_tls_openssl.sha1 key
     ^ "\r\n\r\n"
   in
   Eio.Flow.copy_string response flow
@@ -79,13 +78,13 @@ let handle_connection ~mode ~release flow =
       write_ws_text flow
         {|{"type":"error","error":{"message":"boom","code":"bad_request"}}|}
   | Gated -> ());
-  (match mode with
-  | Error_close ->
+  match mode with
+  | Error_close -> (
       (try Eio.Flow.shutdown flow `Send with _ -> ());
-      (try Eio.Flow.close flow with _ -> ())
-  | Gated | Error_frame ->
+      try Eio.Flow.close flow with _ -> ())
+  | Gated | Error_frame -> (
       Eio.Promise.await release;
-      (try Eio.Flow.close flow with _ -> ()))
+      try Eio.Flow.close flow with _ -> ())
 
 let start_server ~sw ~net ~mode =
   let socket =
@@ -101,8 +100,7 @@ let start_server ~sw ~net ~mode =
         | exception Eio.Io _ -> ()
         | flow, _addr ->
             incr held;
-            Eio.Fiber.fork ~sw (fun () ->
-                handle_connection ~mode ~release flow);
+            Eio.Fiber.fork ~sw (fun () -> handle_connection ~mode ~release flow);
             loop ()
       in
       loop ());
@@ -115,48 +113,38 @@ let set_url port =
   Unix.putenv "CODEX_REALTIME_BASE_URL_OVERRIDE"
     (Printf.sprintf "ws://127.0.0.1:%d" port)
 
-let headers () =
-  Eta_http.Core.Header.unsafe_of_list
-    [ ("Authorization", "Bearer test-token") ]
+let direct_close ~sw ~net ~clock ~url =
+  Eio.Switch.run (fun sw ->
+      match
+        Eta_ai_realtime.Session.connect ~sw ~net ~clock
+          ~api_key:(Eta_observability.Redact.make "test-token")
+          url
+      with
+      | Error _ -> Error ()
+      | Ok session ->
+          Result.map_error (fun _ -> ()) (Eta_ai_realtime.Session.close session))
 
-let direct_close ~sw ~net ~url =
-  Eta_http_eio.Ws.Client.connect ~headers:(headers ()) ~sw ~net url
-  |> Eta.Effect.bind (fun ws -> Eta_http_eio.Ws.Client.close ws)
+let pie_buffered ~sw ~net ~clock =
+  Stt.Codex_realtime.transcribe_with_prompt ~sw ~net ~clock
+    ~model:"gpt-realtime-2" ~language:"pl"
+    ~prompt_template:"Transcribe in {{language}}." ~sample_rate:16000
+    (Bytes.make 3200 '\000')
 
-let pie_buffered ~sw ~net =
-  Stt.Codex_realtime.transcribe_with_prompt ~sw ~net ~model:"gpt-realtime-2"
-    ~language:"pl" ~prompt_template:"Transcribe in {{language}}."
-    ~sample_rate:16000 (Bytes.make 3200 '\000')
-
-let pp_stt fmt (`Stt_error message) = Format.pp_print_string fmt message
-
-let report ~clock ~label ~index ~held ~runtime =
+let report ~clock ~label ~index ~held =
   Eio.Time.sleep clock 0.05;
   let raw = fd_count () in
-  let drain_ok =
-    try
-      Eio.Time.with_timeout_exn clock 0.5 (fun () ->
-          Eta_eio.Runtime.drain runtime;
-          true)
-    with Eio.Time.Timeout -> false
-  in
-  Printf.printf
-    "%-30s %2d raw=%3d held=%2d adjusted=%3d drain=%s\n%!" label index raw
+  Printf.printf "%-30s %2d raw=%3d held=%2d adjusted=%3d\n%!" label index raw
     !held
     (raw - !held - 1)
-    (if drain_ok then "flat" else "blocked")
 
-let run_effect ~clock ~label ~index ~runtime ~held eff =
+let run_operation ~clock ~label ~index ~held operation =
   let started = Unix.gettimeofday () in
-  let exit = Eta_eio.Runtime.run runtime eff in
+  let result = operation () in
   let elapsed = (Unix.gettimeofday () -. started) *. 1000. in
-  report ~clock ~label ~index ~held ~runtime;
-  match exit with
-  | Ok _ -> Printf.printf "    %s exit=Ok (%.0fms)\n%!" label elapsed
-  | Error cause ->
-      Printf.printf "    %s exit=Error %s (%.0fms)\n%!" label
-        (Format.asprintf "%a" (Eta.Cause.pp pp_stt) cause)
-        elapsed
+  report ~clock ~label ~index ~held;
+  Printf.printf "    %s exit=%s (%.0fms)\n%!" label
+    (match result with Ok _ -> "Ok" | Error _ -> "Error")
+    elapsed
 
 let main () =
   Eio_main.run @@ fun env ->
@@ -164,70 +152,51 @@ let main () =
   let net = Eio.Stdenv.net env in
   let clock = Eio.Stdenv.clock env in
   Unix.putenv "OPENAI_API_KEY" "test-token";
-  let runtime = Eta_eio.Runtime.create ~sw ~clock () in
   let sessions = 12 in
   let direct_control ~label ~mode ~scoped =
     let port, held, release = start_server ~sw ~net ~mode in
     Printf.printf "=== %s (base fd=%d) ===\n%!" label (fd_count ());
     for index = 1 to sessions do
       (if scoped then
-         Eio.Switch.run @@ fun op_sw ->
-         Eta_eio.Runtime.run runtime
-           (direct_close ~sw:op_sw ~net ~url:(url port))
-       else
-         Eta_eio.Runtime.run runtime (direct_close ~sw ~net ~url:(url port)))
+         Eio.Switch.run (fun op_sw ->
+             direct_close ~sw:op_sw ~net ~clock ~url:(url port))
+       else direct_close ~sw ~net ~clock ~url:(url port))
       |> ignore;
-      report ~clock ~label ~index ~held ~runtime
+      report ~clock ~label ~index ~held
     done;
     release ()
   in
   direct_control ~label:"direct-close/long-lived-sw" ~mode:Gated ~scoped:false;
   direct_control ~label:"direct-close/op-switch" ~mode:Gated ~scoped:true;
-  let pie_control ~label ~mode ~shape =
+  let pie_control ~label ~mode ~scoped =
     let port, held, release = start_server ~sw ~net ~mode in
     set_url port;
     Printf.printf "=== %s (base fd=%d) ===\n%!" label (fd_count ());
     for index = 1 to sessions do
-      match shape with
-      | `Long_lived ->
-          run_effect ~clock ~label ~index ~runtime ~held
-            (pie_buffered ~sw ~net)
-      | `Op_switch ->
-          Eio.Switch.run @@ fun op_sw ->
-          run_effect ~clock ~label ~index ~runtime ~held
-            (pie_buffered ~sw:op_sw ~net)
-      | `Nested_runtime ->
-          Eio.Switch.run @@ fun op_sw ->
-          let op_runtime = Eta_eio.Runtime.create ~sw:op_sw ~clock () in
-          run_effect ~clock ~label ~index ~runtime:op_runtime ~held
-            (pie_buffered ~sw:op_sw ~net)
+      let operation () =
+        if scoped then
+          Eio.Switch.run (fun op_sw -> pie_buffered ~sw:op_sw ~net ~clock)
+        else pie_buffered ~sw ~net ~clock
+      in
+      run_operation ~clock ~label ~index ~held operation
     done;
     Eio.Time.sleep clock 0.1;
     release ()
   in
-  pie_control ~label:"pie-error/long-lived-sw" ~mode:Error_frame
-    ~shape:`Long_lived;
-  pie_control ~label:"pie-error/op-switch" ~mode:Error_frame ~shape:`Op_switch;
-  pie_control ~label:"pie-error/nested-runtime" ~mode:Error_frame
-    ~shape:`Nested_runtime;
-  pie_control ~label:"pie-error/cooperative" ~mode:Error_close
-    ~shape:`Long_lived;
+  pie_control ~label:"pie-error/long-lived-sw" ~mode:Error_frame ~scoped:false;
+  pie_control ~label:"pie-error/op-switch" ~mode:Error_frame ~scoped:true;
+  pie_control ~label:"pie-error/peer-close" ~mode:Error_close ~scoped:false;
   let port, held, release = start_server ~sw ~net ~mode:Gated in
   set_url port;
   Printf.printf "=== pie-stalled-cancel (base fd=%d) ===\n%!" (fd_count ());
   for index = 1 to 4 do
-    let started = Unix.gettimeofday () in
-    let exit =
-      Eta_eio.Runtime.run runtime
-        (pie_buffered ~sw ~net
-        |> Eta.Effect.timeout_as (Eta.Duration.ms 300)
-             ~on_timeout:(`Stt_error "local cancel"))
+    let operation () =
+      try
+        Eio.Time.with_timeout_exn clock 0.3 (fun () ->
+            pie_buffered ~sw ~net ~clock)
+      with Eio.Time.Timeout -> Error (`Stt_error "local cancel")
     in
-    let elapsed = (Unix.gettimeofday () -. started) *. 1000. in
-    Printf.printf "pie-stalled-cancel %2d exit=%s elapsed=%.0fms\n%!" index
-      (match exit with Ok _ -> "Ok" | Error _ -> "Error")
-      elapsed;
-    report ~clock ~label:"pie-stalled-cancel" ~index ~held ~runtime
+    run_operation ~clock ~label:"pie-stalled-cancel" ~index ~held operation
   done;
   release ()
 
