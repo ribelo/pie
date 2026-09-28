@@ -71,8 +71,7 @@ let test_no_inspection_exact_stdin previous =
        ("touch \"" ^ inspected ^ "\"\nprintf '%s' \"" ^ previous ^ "\"\n"));
   let copy =
     write_exec dir "wl-copy"
-      ("cat > \"" ^ stdin_path
-     ^ "\"\nwhile :; do sleep 0.05; done\n")
+      ("cat > \"" ^ stdin_path ^ "\"\nwhile :; do sleep 0.05; done\n")
   in
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
@@ -81,19 +80,17 @@ let test_no_inspection_exact_stdin previous =
       ~process_mgr:(Eio.Stdenv.process_mgr env)
       ~copy_program:copy ()
   in
-  match
-    Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env)
-      (Pie.Wayland.Clipboard.offer owner "offered-text")
-  with
-  | Error (Eta.Cause.Fail (`Clipboard_error msg)) ->
-      Alcotest.failf "offer failed: %s" msg
+  match Pie.Wayland.Clipboard.offer owner "offered-text" with
+  | Error (`Clipboard_error msg) -> Alcotest.failf "offer failed: %s" msg
   | Error _ -> Alcotest.fail "unexpected offer error"
   | Ok () ->
       Eio.Time.sleep (Eio.Stdenv.clock env) 0.1;
       Alcotest.(check bool)
-        "did not inspect previous" false (Sys.file_exists inspected);
+        "did not inspect previous" false
+        (Sys.file_exists inspected);
       Alcotest.(check bool)
-        "helper received stdin" true (Sys.file_exists stdin_path);
+        "helper received stdin" true
+        (Sys.file_exists stdin_path);
       let got = In_channel.with_open_text stdin_path In_channel.input_all in
       Alcotest.(check string) "exact stdin" "offered-text" got
 
@@ -107,17 +104,15 @@ let test_known_spawn_failure_hides_secret () =
       ~process_mgr:(Eio.Stdenv.process_mgr env)
       ~copy_program:secret ()
   in
-  match
-    Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env)
-      (Pie.Wayland.Clipboard.offer owner "payload")
-  with
+  match Pie.Wayland.Clipboard.offer owner "payload" with
   | Ok () -> Alcotest.fail "missing helper succeeded"
-  | Error (Eta.Cause.Fail (`Clipboard_error message)) ->
+  | Error (`Clipboard_error message) ->
       Alcotest.(check bool)
-        "no secret path" false (contains message "secret-argv-token");
+        "no secret path" false
+        (contains message "secret-argv-token");
       Alcotest.(check bool)
-        "no execve context" false (contains message "execve")
-  | Error (Eta.Cause.Die _) -> Alcotest.fail "known spawn failure became a defect"
+        "no execve context" false
+        (contains message "execve")
   | Error _ -> Alcotest.fail "unexpected error shape"
 
 let test_copy_early_failure () =
@@ -130,11 +125,8 @@ let test_copy_early_failure () =
       ~process_mgr:(Eio.Stdenv.process_mgr env)
       ~copy_program:copy ()
   in
-  match
-    Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env)
-      (Pie.Wayland.Clipboard.offer owner "payload")
-  with
-  | Error (Eta.Cause.Fail (`Clipboard_error _)) -> ()
+  match Pie.Wayland.Clipboard.offer owner "payload" with
+  | Error (`Clipboard_error _) -> ()
   | Ok () -> Alcotest.fail "early copy failure reported success"
   | Error _ -> Alcotest.fail "unexpected error shape"
 
@@ -156,18 +148,13 @@ let test_cancellation_at_acquisition () =
      Eio.Fiber.fork ~sw:offer_sw (fun () ->
          Eio.Time.sleep (Eio.Stdenv.clock env) 0.05;
          raise Exit);
-     ignore
-       (Eta_eio.run_once ~sw:offer_sw ~clock:(Eio.Stdenv.clock env)
-          (Pie.Wayland.Clipboard.offer owner payload));
+     ignore (Pie.Wayland.Clipboard.offer owner payload);
      Eio.Time.sleep (Eio.Stdenv.clock env) 10.0
    with Exit | Eio.Cancel.Cancelled _ -> ());
   Alcotest.(check int)
     "children settled before cancel returns" kids0 (child_count ());
   Alcotest.(check int) "fds settled before cancel returns" fds0 (fd_count ());
-  match
-    Eta_eio.run_once ~sw:owner_sw ~clock:(Eio.Stdenv.clock env)
-      (Pie.Wayland.Clipboard.offer owner "next")
-  with
+  match Pie.Wayland.Clipboard.offer owner "next" with
   | Ok () -> ()
   | Error _ -> Alcotest.fail "next offer after cancelled call"
 
@@ -185,10 +172,7 @@ let test_slow_consumer_still_alive () =
       ~process_mgr:(Eio.Stdenv.process_mgr env)
       ~copy_program:copy ()
   in
-  match
-    Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env)
-      (Pie.Wayland.Clipboard.offer owner "payload")
-  with
+  match Pie.Wayland.Clipboard.offer owner "payload" with
   | Error _ -> Alcotest.fail "offer failed"
   | Ok () ->
       Eio.Time.sleep (Eio.Stdenv.clock env) 0.25;
@@ -207,19 +191,13 @@ let test_repeated_offers_bounded () =
       ~process_mgr:(Eio.Stdenv.process_mgr env)
       ~copy_program:copy ()
   in
-  match
-    Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env)
-      (Pie.Wayland.Clipboard.offer owner "0")
-  with
+  match Pie.Wayland.Clipboard.offer owner "0" with
   | Error _ -> Alcotest.fail "first offer failed"
   | Ok () ->
       let fds_one = fd_count () in
       let kids_one = child_count () in
       for i = 1 to 99 do
-        match
-          Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env)
-            (Pie.Wayland.Clipboard.offer owner (string_of_int i))
-        with
+        match Pie.Wayland.Clipboard.offer owner (string_of_int i) with
         | Ok () -> ()
         | Error _ -> Alcotest.fail "offer failed during replacement"
       done;
@@ -234,15 +212,13 @@ let test_shutdown_settles () =
     write_exec dir "wl-copy" "cat > /dev/null\nwhile :; do sleep 0.05; done\n"
   in
   Eio_main.run @@ fun env ->
-  (Eio.Switch.run @@ fun sw ->
-   let owner =
-     Pie.Wayland.Clipboard.create ~sw
-       ~process_mgr:(Eio.Stdenv.process_mgr env)
-       ~copy_program:copy ()
-   in
-   ignore
-     (Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env)
-        (Pie.Wayland.Clipboard.offer owner "payload")));
+  ( Eio.Switch.run @@ fun sw ->
+    let owner =
+      Pie.Wayland.Clipboard.create ~sw
+        ~process_mgr:(Eio.Stdenv.process_mgr env)
+        ~copy_program:copy ()
+    in
+    ignore (Pie.Wayland.Clipboard.offer owner "payload") );
   Alcotest.(check bool) "switch settled" true true
 
 let test_settled_before_replacement () =
@@ -257,15 +233,13 @@ let test_settled_before_replacement () =
       ~process_mgr:(Eio.Stdenv.process_mgr env)
       ~copy_program:copy ()
   in
-  let offer text =
-    Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env)
-      (Pie.Wayland.Clipboard.offer owner text)
-  in
+  let offer text = Pie.Wayland.Clipboard.offer owner text in
   (match offer "a" with Ok () -> () | Error _ -> Alcotest.fail "first offer");
   let kids = child_count () in
   let fds = fd_count () in
   (match offer "b" with Ok () -> () | Error _ -> Alcotest.fail "second offer");
-  Alcotest.(check int) "children settled before next helper" kids (child_count ());
+  Alcotest.(check int)
+    "children settled before next helper" kids (child_count ());
   Alcotest.(check int) "fds settled before next helper" fds (fd_count ())
 
 let test_natural_exit_releases_pipes () =
@@ -280,9 +254,7 @@ let test_natural_exit_releases_pipes () =
   in
   let fds_idle = fd_count () in
   let kids_idle = child_count () in
-  ignore
-    (Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env)
-       (Pie.Wayland.Clipboard.offer owner "payload"));
+  ignore (Pie.Wayland.Clipboard.offer owner "payload");
   Eio.Time.sleep (Eio.Stdenv.clock env) 0.2;
   Alcotest.(check int) "natural exit fds" fds_idle (fd_count ());
   Alcotest.(check int) "natural exit children" kids_idle (child_count ())
@@ -291,7 +263,9 @@ let test_large_stdout_discarded () =
   with_temp_dir @@ fun dir ->
   let copy =
     write_exec dir "wl-copy"
-      "dd if=/dev/zero bs=65536 count=128 status=none\ncat > /dev/null\nwhile :; do sleep 0.05; done\n"
+      "dd if=/dev/zero bs=65536 count=128 status=none\n\
+       cat > /dev/null\n\
+       while :; do sleep 0.05; done\n"
   in
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
@@ -300,10 +274,7 @@ let test_large_stdout_discarded () =
       ~process_mgr:(Eio.Stdenv.process_mgr env)
       ~copy_program:copy ()
   in
-  match
-    Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env)
-      (Pie.Wayland.Clipboard.offer owner "payload")
-  with
+  match Pie.Wayland.Clipboard.offer owner "payload" with
   | Error _ -> Alcotest.fail "large stdout should be discarded"
   | Ok () -> ()
 
@@ -334,8 +305,7 @@ let setup_paste_path dir ~wtype_body =
   let stdin_path = Filename.concat dir "stdin" in
   let wtype_args = Filename.concat dir "wtype-args" in
   let alive = Filename.concat dir "alive" in
-  ignore
-    (write_exec dir "wl-paste" ("touch \"" ^ inspected ^ "\"\n"));
+  ignore (write_exec dir "wl-paste" ("touch \"" ^ inspected ^ "\"\n"));
   ignore
     (write_exec dir "niri"
        "printf '%s\n' '{\"id\":1,\"title\":\"t\",\"app_id\":\"app\"}'\n");
@@ -353,19 +323,17 @@ let run_configured_inject ~dir ~copy env sw text =
       ~process_mgr:(Eio.Stdenv.process_mgr env)
       ~copy_program:copy ()
   in
-  Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env)
-    (Pie.Input.Text_injection.inject ~clipboard_owner:owner
-       ~text_entry_rules:paste_rules
-       ~process_mgr:(Eio.Stdenv.process_mgr env)
-       text)
+  Pie.Input.Text_injection.inject ~clock:(Eio.Stdenv.clock env)
+    ~clipboard_owner:owner ~text_entry_rules:paste_rules
+    ~process_mgr:(Eio.Stdenv.process_mgr env)
+    text
 
 let test_inject_paste_key_success previous =
   with_temp_dir @@ fun dir ->
   let wtype_args = Filename.concat dir "wtype-args" in
   let inspected, stdin_path, _, alive, copy =
     setup_paste_path dir
-      ~wtype_body:
-        ("printf '%s\n' \"$*\" >> \"" ^ wtype_args ^ "\"\n")
+      ~wtype_body:("printf '%s\n' \"$*\" >> \"" ^ wtype_args ^ "\"\n")
   in
   let old_path = Option.value ~default:"" (Sys.getenv_opt "PATH") in
   with_env
@@ -384,8 +352,10 @@ let test_inject_paste_key_success previous =
   | Ok result ->
       Eio.Time.sleep (Eio.Stdenv.clock env) 0.1;
       Alcotest.(check bool)
-        "did not inspect previous" false (Sys.file_exists inspected);
-      Alcotest.(check string) "exact stdin" "offered-text"
+        "did not inspect previous" false
+        (Sys.file_exists inspected);
+      Alcotest.(check string)
+        "exact stdin" "offered-text"
         (In_channel.with_open_text stdin_path In_channel.input_all);
       let keys = In_channel.with_open_text wtype_args In_channel.input_all in
       Alcotest.(check string) "exact one ctrl-v" "-M ctrl -k v -m ctrl\n" keys;
@@ -415,14 +385,14 @@ let test_inject_paste_key_fail_retains_helper () =
   let kids_before = child_count () in
   match run_configured_inject ~dir ~copy env sw "payload" with
   | Ok _ -> Alcotest.fail "key failure reported success"
-  | Error (Eta.Cause.Fail (`Wtype_error _)) ->
+  | Error (`Wtype_error _) ->
       Eio.Time.sleep (Eio.Stdenv.clock env) 0.1;
-      Alcotest.(check bool)
-        "did not inspect" false (Sys.file_exists inspected);
+      Alcotest.(check bool) "did not inspect" false (Sys.file_exists inspected);
       Alcotest.(check bool)
         "committed helper retained" true (Sys.file_exists alive);
       Alcotest.(check bool)
-        "no extra helper" true (child_count () - kids_before <= 2)
+        "no extra helper" true
+        (child_count () - kids_before <= 2)
   | Error _ -> Alcotest.fail "unexpected error shape"
 
 let test_cli_type_stays_type () =
@@ -445,9 +415,9 @@ let test_cli_type_stays_type () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   match
-    Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env)
-      (Pie.Input.Text_injection.inject
-         ~process_mgr:(Eio.Stdenv.process_mgr env) "hello")
+    Pie.Input.Text_injection.inject ~clock:(Eio.Stdenv.clock env)
+      ~process_mgr:(Eio.Stdenv.process_mgr env)
+      "hello"
   with
   | Error _ -> Alcotest.fail "CLI type path failed"
   | Ok result ->
@@ -455,7 +425,8 @@ let test_cli_type_stays_type () =
         "typed outcome" true
         (result.outcome = Pie.Input.Text_injection.Typed);
       Alcotest.(check bool)
-        "did not inspect clipboard" false (Sys.file_exists inspected);
+        "did not inspect clipboard" false
+        (Sys.file_exists inspected);
       let keys = In_channel.with_open_text wtype_args In_channel.input_all in
       Alcotest.(check string) "typed argv not ctrl-v" "-- hello\n" keys
 
@@ -465,49 +436,76 @@ let test_paste_handoff_delay ~cancel () =
   let keys = Filename.concat dir "handoff-keys" in
   let inspected, _, _, alive, copy =
     setup_paste_path dir
-      ~wtype_body:("test -f " ^ Filename.quote released ^ " || exit 42\n"
-        ^ "printf key > " ^ Filename.quote keys ^ "\n")
+      ~wtype_body:
+        ("test -f " ^ Filename.quote released ^ " || exit 42\n"
+       ^ "printf key > " ^ Filename.quote keys ^ "\n")
   in
   let old_path = Option.value ~default:"" (Sys.getenv_opt "PATH") in
   with_env
-    [ ("PATH", dir ^ ":" ^ old_path); ("XDG_SESSION_TYPE", "wayland");
-      ("WAYLAND_DISPLAY", "pie-fake"); ("XDG_CURRENT_DESKTOP", "niri");
-      ("NIRI_SOCKET", Filename.concat dir "niri.sock") ]
+    [
+      ("PATH", dir ^ ":" ^ old_path);
+      ("XDG_SESSION_TYPE", "wayland");
+      ("WAYLAND_DISPLAY", "pie-fake");
+      ("XDG_CURRENT_DESKTOP", "niri");
+      ("NIRI_SOCKET", Filename.concat dir "niri.sock");
+    ]
   @@ fun () ->
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
-  let owner = Pie.Wayland.Clipboard.create ~sw
-      ~process_mgr:(Eio.Stdenv.process_mgr env) ~copy_program:copy () in
+  let owner =
+    Pie.Wayland.Clipboard.create ~sw
+      ~process_mgr:(Eio.Stdenv.process_mgr env)
+      ~copy_program:copy ()
+  in
   let waited = ref [] in
-  let now = ref 0 in
-  let runtime = Eta_eio.Runtime.create ~sw ~clock ~now_ms:(fun () -> !now)
-      ~sleep:(fun duration ->
-        let ms = Eta.Duration.to_ms duration in
-        waited := ms :: !waited;
-        Alcotest.(check bool) "no key before handoff wait" false (Sys.file_exists keys);
-        Eio.Time.with_timeout_exn clock 1.0 (fun () ->
-          while not (Sys.file_exists alive) do Eio.Time.sleep clock 0.001 done);
-        if cancel then Eio.Fiber.await_cancel ();
-        now := !now + ms;
-        Out_channel.with_open_bin released (fun out -> output_string out "released")) () in
-  let run () = Eta_eio.Runtime.run runtime
-      (Pie.Input.Text_injection.inject ~clipboard_owner:owner
-         ~text_entry_rules:paste_rules ~process_mgr:(Eio.Stdenv.process_mgr env)
-         "offered-text") in
+  let now = ref 0. in
+  let module Clock = struct
+    type t = unit
+    type time = float
+
+    let now () = !now
+
+    let sleep_until () target =
+      let ms = int_of_float (Float.round ((target -. !now) *. 1000.)) in
+      waited := ms :: !waited;
+      Alcotest.(check bool)
+        "no key before handoff wait" false (Sys.file_exists keys);
+      Eio.Time.with_timeout_exn clock 1.0 (fun () ->
+          while not (Sys.file_exists alive) do
+            Eio.Time.sleep clock 0.001
+          done);
+      if cancel then Eio.Fiber.await_cancel ();
+      now := target;
+      Out_channel.with_open_bin released (fun out ->
+          output_string out "released")
+  end in
+  let fake_clock = Eio.Resource.T ((), Eio.Time.Pi.clock (module Clock)) in
+  let run () =
+    Pie.Input.Text_injection.inject ~clock:fake_clock ~clipboard_owner:owner
+      ~text_entry_rules:paste_rules
+      ~process_mgr:(Eio.Stdenv.process_mgr env)
+      "offered-text"
+  in
   if cancel then (
     (match Eio.Time.with_timeout_exn clock 0.1 run with
-     | exception Eio.Time.Timeout -> ()
-     | _ -> Alcotest.fail "handoff wait should be cancelled");
-    Alcotest.(check bool) "cancel never sends paste key" false (Sys.file_exists keys))
+    | exception Eio.Time.Timeout -> ()
+    | _ -> Alcotest.fail "handoff wait should be cancelled");
+    Alcotest.(check bool)
+      "cancel never sends paste key" false (Sys.file_exists keys))
   else (
     (match run () with
-     | Ok result -> Alcotest.(check bool) "receipt still unconfirmed" true
-         (result.outcome = Pie.Input.Text_injection.Clipboard_key_attempted)
-     | Error _ -> Alcotest.fail "paste key ran without the handoff interval");
+    | Ok result ->
+        Alcotest.(check bool)
+          "receipt still unconfirmed" true
+          (result.outcome = Pie.Input.Text_injection.Clipboard_key_attempted)
+    | Error _ -> Alcotest.fail "paste key ran without the handoff interval");
     Alcotest.(check bool) "key sent after interval" true (Sys.file_exists keys));
-  Alcotest.(check (list int)) "one 25ms handoff interval" [25] (List.rev !waited);
-  Alcotest.(check bool) "no clipboard inspection" false (Sys.file_exists inspected)
+  Alcotest.(check (list int))
+    "one 25ms handoff interval" [ 25 ] (List.rev !waited);
+  Alcotest.(check bool)
+    "no clipboard inspection" false
+    (Sys.file_exists inspected)
 
 let () =
   Alcotest.run "clipboard_owner"
@@ -548,7 +546,8 @@ let () =
               test_inject_paste_key_success "application/octet-stream");
           Alcotest.test_case "inject key fail retains helper" `Quick
             test_inject_paste_key_fail_retains_helper;
-          Alcotest.test_case "CLI type stays type" `Quick test_cli_type_stays_type;
+          Alcotest.test_case "CLI type stays type" `Quick
+            test_cli_type_stays_type;
           Alcotest.test_case "paste waits before key dispatch" `Quick
             (test_paste_handoff_delay ~cancel:false);
           Alcotest.test_case "cancelled handoff never sends paste" `Quick

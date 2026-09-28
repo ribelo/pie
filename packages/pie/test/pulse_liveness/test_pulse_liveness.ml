@@ -1,5 +1,32 @@
-open Eta.Syntax
+let ( let* ) = Result.bind
 
+let logger env =
+  Eta_observability.Logger.create ~service:"pie-test"
+    ~clock:(Eio.Stdenv.clock env)
+    ~mono_clock:(Eio.Stdenv.mono_clock env)
+    ~reporter:(Eta_observability.Logger.Reporter.records (fun _ -> ()))
+    ()
+
+let consume_stream stream =
+  let acc = ref [] in
+  let rec pull () =
+    match stream () with
+    | Ok None -> (Ok (), List.rev !acc)
+    | Error error -> (Error error, List.rev !acc)
+    | Ok (Some chunk) ->
+        acc := chunk :: !acc;
+        pull ()
+  in
+  pull ()
+
+let rec count_stream stream n =
+  match stream () with
+  | Ok None -> Ok n
+  | Error error -> Error error
+  | Ok (Some _) -> count_stream stream (n + 1)
+
+let pp_cause fmt (`Pulse_error e) = Pie.Pulse.Client.pp_error fmt e
+let cause_has pred cause = pred cause
 let zero_cookie = Bytes.make Pie.Pulse.Defs.pa_native_cookie_length '\000'
 let request_timeout = Eta.Duration.ms 250
 
@@ -156,36 +183,24 @@ let run_backpressure ~chunks ~consume () =
   in
   let operation =
     Pie.Pulse.Client.with_client ~net:(Eio.Stdenv.net env) ~socket_path
-      ~cookie:zero_cookie ~request_timeout (fun client ->
+      ~clock:(Eio.Stdenv.clock env) ~logger:(logger env) ~cookie:zero_cookie
+      ~request_timeout (fun client ->
         Pie.Pulse.Client.with_record_stream client (fun _info stream ->
-            let consume_side =
-              if consume then
-                let acc = ref [] in
-                Eta_stream.run_for_each
-                  (fun chunk ->
-                    Eta.Effect.sync (fun () -> acc := chunk :: !acc))
-                  stream
-                |> Eta.Effect.to_exit
-                |> Eta.Effect.map (fun exit -> (exit, List.rev !acc))
-              else Eta.Effect.pure (Eta.Exit.ok (), [])
-            in
             let* info = Pie.Pulse.Client.get_server_info client in
-            let* consumed = consume_side in
-            Eta.Effect.pure (info, consumed)))
+            let consumed =
+              if consume then consume_stream stream else (Ok (), [])
+            in
+            Ok (info, consumed)))
   in
-  let result = Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env) operation in
+  let result = operation in
   (result, Atomic.get deleted)
-
-let cause_has pred cause = List.exists pred (Eta.Cause.failures cause)
 
 let test_server_info_survives chunks =
   match run_backpressure ~chunks ~consume:false () with
   | Ok _, true -> ()
   | Ok _, false -> Alcotest.fail "delete reply was not completed"
   | Error cause, _ ->
-      Alcotest.failf "server-info failed after %d chunks: %a" chunks
-        (Eta.Cause.pp (fun fmt (`Pulse_error e) ->
-             Pie.Pulse.Client.pp_error fmt e))
+      Alcotest.failf "server-info failed after %d chunks: %a" chunks pp_cause
         cause
 
 let test_63_server_info () = test_server_info_survives 63
@@ -193,9 +208,9 @@ let test_64_server_info () = test_server_info_survives 64
 
 let test_65_overload_and_server_info () =
   match run_backpressure ~chunks:65 ~consume:true () with
-  | Ok (_info, (Eta.Exit.Ok _, _)), deleted ->
+  | Ok (_info, (Ok _, _)), deleted ->
       Alcotest.failf "truncated stream succeeded delete=%b" deleted
-  | Ok (_info, (Eta.Exit.Error cause, _chunks)), deleted ->
+  | Ok (_info, (Error cause, _chunks)), deleted ->
       if not deleted then Alcotest.fail "delete reply was not completed";
       if
         not
@@ -207,11 +222,7 @@ let test_65_overload_and_server_info () =
                    true
                | _ -> false)
              cause)
-      then
-        Alcotest.failf "expected Recording_overload, got %a"
-          (Eta.Cause.pp (fun fmt (`Pulse_error e) ->
-               Pie.Pulse.Client.pp_error fmt e))
-          cause;
+      then Alcotest.failf "expected Recording_overload, got %a" pp_cause cause;
       if
         cause_has
           (function
@@ -220,14 +231,12 @@ let test_65_overload_and_server_info () =
           cause
       then Alcotest.fail "overload was classified as disconnect"
   | Error cause, _ ->
-      Alcotest.failf "connection failed instead of stream overload: %a"
-        (Eta.Cause.pp (fun fmt (`Pulse_error e) ->
-             Pie.Pulse.Client.pp_error fmt e))
+      Alcotest.failf "connection failed instead of stream overload: %a" pp_cause
         cause
 
 let test_65_tail_ordered_then_error () =
   match run_backpressure ~chunks:65 ~consume:true () with
-  | Ok (_info, (Eta.Exit.Error cause, chunks)), true ->
+  | Ok (_info, (Error cause, chunks)), true ->
       if List.length chunks <> 64 then
         Alcotest.failf "expected 64 admitted chunks, got %d"
           (List.length chunks);
@@ -244,7 +253,7 @@ let test_65_tail_ordered_then_error () =
                | _ -> false)
              cause)
       then Alcotest.fail "missing overload on consumed tail"
-  | Ok (_info, (Eta.Exit.Ok _, chunks)), _ ->
+  | Ok (_info, (Ok _, chunks)), _ ->
       Alcotest.failf "expected overload after %d chunks" (List.length chunks)
   | _ -> Alcotest.fail "unexpected tail result"
 
@@ -262,27 +271,19 @@ let test_cancel_closes_scope () =
   in
   let operation =
     Pie.Pulse.Client.with_client ~net:(Eio.Stdenv.net env) ~socket_path
-      ~cookie:zero_cookie ~request_timeout (fun client ->
+      ~clock:(Eio.Stdenv.clock env) ~logger:(logger env) ~cookie:zero_cookie
+      ~request_timeout (fun client ->
         Pie.Pulse.Client.with_record_stream client (fun _ stream ->
-            let cancel =
-              Eta.Effect.sync (fun () -> ())
-              |> Eta.Effect.map (fun () -> `Cancel)
-            in
-            Eta.Effect.race
-              [
-                Eta_stream.run_fold (fun n _ -> n + 1) 0 stream
-                |> Eta.Effect.map (fun _ -> `Body);
-                cancel;
-              ]))
+            Eio.Fiber.first
+              (fun () -> Result.map (fun _ -> `Body) (count_stream stream 0))
+              (fun () ->
+                Eio.Fiber.yield ();
+                Ok `Cancel)))
   in
-  match Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env) operation with
+  match operation with
   | Ok `Cancel -> ()
   | Ok `Body -> Alcotest.fail "expected cancel winner"
-  | Error cause ->
-      Alcotest.failf "cancel failed: %a"
-        (Eta.Cause.pp (fun fmt (`Pulse_error e) ->
-             Pie.Pulse.Client.pp_error fmt e))
-        cause
+  | Error cause -> Alcotest.failf "cancel failed: %a" pp_cause cause
 
 let test_broken_connection_disconnected () =
   Eio_main.run @@ fun env ->
@@ -295,10 +296,10 @@ let test_broken_connection_disconnected () =
   in
   let operation =
     Pie.Pulse.Client.with_client ~net:(Eio.Stdenv.net env) ~socket_path
-      ~cookie:zero_cookie ~request_timeout (fun client ->
-        Pie.Pulse.Client.get_server_info client)
+      ~clock:(Eio.Stdenv.clock env) ~logger:(logger env) ~cookie:zero_cookie
+      ~request_timeout (fun client -> Pie.Pulse.Client.get_server_info client)
   in
-  match Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env) operation with
+  match operation with
   | Error cause
     when cause_has
            (function
@@ -306,11 +307,7 @@ let test_broken_connection_disconnected () =
              | _ -> false)
            cause ->
       ()
-  | Error cause ->
-      Alcotest.failf "expected Disconnected, got %a"
-        (Eta.Cause.pp (fun fmt (`Pulse_error e) ->
-             Pie.Pulse.Client.pp_error fmt e))
-        cause
+  | Error cause -> Alcotest.failf "expected Disconnected, got %a" pp_cause cause
   | Ok _ -> Alcotest.fail "pending command survived broken connection"
 
 let kib n = n * 1024
@@ -352,24 +349,16 @@ let run_payloads ~payloads ~consume ~after () =
   in
   let operation =
     Pie.Pulse.Client.with_client ~net:(Eio.Stdenv.net env) ~socket_path
-      ~cookie:zero_cookie ~request_timeout (fun client ->
+      ~clock:(Eio.Stdenv.clock env) ~logger:(logger env) ~cookie:zero_cookie
+      ~request_timeout (fun client ->
         Pie.Pulse.Client.with_record_stream client (fun _info stream ->
-            let consume_side =
-              if consume then
-                let acc = ref [] in
-                Eta_stream.run_for_each
-                  (fun chunk ->
-                    Eta.Effect.sync (fun () -> acc := chunk :: !acc))
-                  stream
-                |> Eta.Effect.to_exit
-                |> Eta.Effect.map (fun exit -> (exit, List.rev !acc))
-              else Eta.Effect.pure (Eta.Exit.ok (), [])
-            in
             let* info = Pie.Pulse.Client.get_server_info client in
-            let* consumed = consume_side in
-            Eta.Effect.pure (info, consumed)))
+            let consumed =
+              if consume then consume_stream stream else (Ok (), [])
+            in
+            Ok (info, consumed)))
   in
-  let result = Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env) operation in
+  let result = operation in
   (result, Atomic.get deleted)
 
 let test_enormous_declared_payload () =
@@ -398,11 +387,12 @@ let test_enormous_declared_payload () =
   in
   let operation =
     Pie.Pulse.Client.with_client ~net:(Eio.Stdenv.net env) ~socket_path
-      ~cookie:zero_cookie ~request_timeout (fun client ->
+      ~clock:(Eio.Stdenv.clock env) ~logger:(logger env) ~cookie:zero_cookie
+      ~request_timeout (fun client ->
         Pie.Pulse.Client.with_record_stream client (fun _ stream ->
-            Eta_stream.run_fold (fun n _ -> n + 1) 0 stream))
+            count_stream stream 0))
   in
-  match Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env) operation with
+  match operation with
   | Error cause
     when cause_has
            (function
@@ -412,10 +402,7 @@ let test_enormous_declared_payload () =
            cause ->
       ()
   | Error cause ->
-      Alcotest.failf "expected Protocol_error, got %a"
-        (Eta.Cause.pp (fun fmt (`Pulse_error e) ->
-             Pie.Pulse.Client.pp_error fmt e))
-        cause
+      Alcotest.failf "expected Protocol_error, got %a" pp_cause cause
   | Ok _ -> Alcotest.fail "enormous declared length was accepted"
 
 let test_byte_cap_then_control () =
@@ -424,21 +411,14 @@ let test_byte_cap_then_control () =
   | Ok _, true -> ()
   | Ok _, false -> Alcotest.fail "delete reply was not completed under byte cap"
   | Error cause, _ ->
-      Alcotest.failf "at-cap queue lost control: %a"
-        (Eta.Cause.pp (fun fmt (`Pulse_error e) ->
-             Pie.Pulse.Client.pp_error fmt e))
-        cause
+      Alcotest.failf "at-cap queue lost control: %a" pp_cause cause
 
 let test_byte_cap_overload () =
   let payloads =
-    [
-      Bytes.make half_mib 'a';
-      Bytes.make half_mib 'b';
-      Bytes.make 1 'c';
-    ]
+    [ Bytes.make half_mib 'a'; Bytes.make half_mib 'b'; Bytes.make 1 'c' ]
   in
   match run_payloads ~payloads ~consume:true ~after:`Control () with
-  | Ok (_info, (Eta.Exit.Error cause, chunks)), deleted ->
+  | Ok (_info, (Error cause, chunks)), deleted ->
       if not deleted then Alcotest.fail "delete reply was not completed";
       let admitted = List.fold_left (fun n c -> n + Bytes.length c) 0 chunks in
       if admitted > queue_cap then
@@ -455,17 +435,12 @@ let test_byte_cap_overload () =
                | _ -> false)
              cause)
       then
-        Alcotest.failf "expected byte Recording_overload, got %a"
-          (Eta.Cause.pp (fun fmt (`Pulse_error e) ->
-               Pie.Pulse.Client.pp_error fmt e))
-          cause
-  | Ok (_info, (Eta.Exit.Ok _, chunks)), _ ->
+        Alcotest.failf "expected byte Recording_overload, got %a" pp_cause cause
+  | Ok (_info, (Ok _, chunks)), _ ->
       Alcotest.failf "expected overload after %d bytes"
         (List.fold_left (fun n c -> n + Bytes.length c) 0 chunks)
   | Error cause, _ ->
-      Alcotest.failf "connection failed instead of stream overload: %a"
-        (Eta.Cause.pp (fun fmt (`Pulse_error e) ->
-             Pie.Pulse.Client.pp_error fmt e))
+      Alcotest.failf "connection failed instead of stream overload: %a" pp_cause
         cause
 
 let test_cancel_while_byte_full () =
@@ -487,27 +462,19 @@ let test_cancel_while_byte_full () =
   in
   let operation =
     Pie.Pulse.Client.with_client ~net:(Eio.Stdenv.net env) ~socket_path
-      ~cookie:zero_cookie ~request_timeout (fun client ->
+      ~clock:(Eio.Stdenv.clock env) ~logger:(logger env) ~cookie:zero_cookie
+      ~request_timeout (fun client ->
         Pie.Pulse.Client.with_record_stream client (fun _ stream ->
-            let cancel =
-              Eta.Effect.sync (fun () -> ())
-              |> Eta.Effect.map (fun () -> `Cancel)
-            in
-            Eta.Effect.race
-              [
-                Eta_stream.run_fold (fun n _ -> n + 1) 0 stream
-                |> Eta.Effect.map (fun _ -> `Body);
-                cancel;
-              ]))
+            Eio.Fiber.first
+              (fun () -> Result.map (fun _ -> `Body) (count_stream stream 0))
+              (fun () ->
+                Eio.Fiber.yield ();
+                Ok `Cancel)))
   in
-  match Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env) operation with
+  match operation with
   | Ok `Cancel -> ()
   | Ok `Body -> Alcotest.fail "expected cancel winner"
-  | Error cause ->
-      Alcotest.failf "cancel failed: %a"
-        (Eta.Cause.pp (fun fmt (`Pulse_error e) ->
-             Pie.Pulse.Client.pp_error fmt e))
-        cause
+  | Error cause -> Alcotest.failf "cancel failed: %a" pp_cause cause
 
 let () =
   Alcotest.run "pulse_liveness"
@@ -526,9 +493,8 @@ let () =
             test_cancel_closes_scope;
           Alcotest.test_case "broken connection remains disconnected" `Quick
             test_broken_connection_disconnected;
-          Alcotest.test_case
-            "enormous declared payload rejected without body" `Quick
-            test_enormous_declared_payload;
+          Alcotest.test_case "enormous declared payload rejected without body"
+            `Quick test_enormous_declared_payload;
           Alcotest.test_case "variable chunks at byte cap then control lives"
             `Quick test_byte_cap_then_control;
           Alcotest.test_case "variable chunks over byte cap overload" `Quick

@@ -7,10 +7,9 @@
   alcotest
   eio_main
   eta
-  eta_eio
-  eta_stream
-  eta_http_eio
-  eta_http_tls_openssl
+  eta_test
+  eio
+  eta_http
   unix
   threads
   yojson

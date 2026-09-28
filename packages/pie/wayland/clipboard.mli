@@ -9,14 +9,10 @@ val create :
   t
 (** Create the owner on [sw]. Shutdown retires the active helper. *)
 
-val offer :
-  t ->
-  string ->
-  (unit, [> `Clipboard_error of string ]) Eta.Effect.t
-(** Replace the active offer. Retires the previous owned helper first.
-    Stdin EOF and helper liveness are not compositor readiness. *)
+val offer : t -> string -> (unit, [ `Clipboard_error of string ]) result
+(** Replace the active offer. Retires the previous owned helper first. Stdin EOF
+    and helper liveness are not compositor readiness. *)
 
-val shutdown :
-  t -> (unit, [> `Clipboard_error of string ]) Eta.Effect.t
-(** Retire the active helper and await it. Identity-safe: does not clear a
-    newer owner. *)
+val shutdown : t -> (unit, [ `Clipboard_error of string ]) result
+(** Retire the active helper and await it. Identity-safe: does not clear a newer
+    owner. *)

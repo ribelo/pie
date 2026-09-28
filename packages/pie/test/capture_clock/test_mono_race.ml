@@ -1,4 +1,4 @@
-(* PIE026 diagnosis: Effect.race mock Mono.sleep vs queue take, 7s real timeout.
+(* PIE026 diagnosis: Concurrent.race mock Mono.sleep vs queue take, 7s real timeout.
    No pie library. Never changes the host clock. *)
 
 let mtime_of_ms ms = Mtime.of_uint64_ns (Int64.mul (Int64.of_int ms) 1_000_000L)
@@ -25,23 +25,21 @@ let test_race_sleep_vs_empty_take_wakes () =
       in
       pump 500);
   let timeout =
-    Eta.Effect.sync (fun () ->
-        note "sleep-registered";
-        Eio.Time.Mono.sleep mono 2.0;
-        note "sleep-finished")
-    |> Eta.Effect.map (fun () -> `Timeout)
+   fun () ->
+    note "sleep-registered";
+    Eio.Time.Mono.sleep mono 2.0;
+    note "sleep-finished";
+    Ok `Timeout
   in
   let take =
-    Eta.Effect.sync (fun () ->
-        note "take-blocked";
-        Eio.Stream.take q)
-    |> Eta.Effect.map (fun () -> `Item)
+   fun () ->
+    note "take-blocked";
+    ignore (Eio.Stream.take q);
+    Ok `Item
   in
-  let operation = Eta.Effect.race [ timeout; take ] in
+  let operation () = Eta.Concurrent.race ~sw [ timeout; take ] in
   let result =
-    try
-      Eio.Time.with_timeout_exn real 7.0 (fun () ->
-          Eta_eio.run_once ~sw ~clock:real operation)
+    try Eio.Time.with_timeout_exn real 7.0 (fun () -> operation ())
     with Eio.Time.Timeout -> Alcotest.fail ("7s real timeout: " ^ dump ())
   in
   Atomic.set stop_pump true;
@@ -50,7 +48,7 @@ let test_race_sleep_vs_empty_take_wakes () =
       note "winner-timeout";
       Alcotest.(check bool) "sleep won race" true true
   | Ok `Item -> Alcotest.fail ("take won unexpectedly: " ^ dump ())
-  | Error _ -> Alcotest.fail ("effect error: " ^ dump ())
+  | Error _ -> Alcotest.fail ("race error: " ^ dump ())
 
 let test_canceled_sleeper_unregisters () =
   stages := [];
@@ -65,25 +63,22 @@ let test_canceled_sleeper_unregisters () =
       note "enqueue";
       Eio.Stream.add q "item");
   let timeout =
-    Eta.Effect.sync (fun () ->
-        note "sleep-registered";
-        Eio.Time.Mono.sleep mono 30.0;
-        note "sleep-finished-unexpected")
-    |> Eta.Effect.map (fun () -> `Timeout)
+   fun () ->
+    note "sleep-registered";
+    Eio.Time.Mono.sleep mono 30.0;
+    note "sleep-finished-unexpected";
+    Ok `Timeout
   in
   let take =
-    Eta.Effect.sync (fun () ->
-        note "take-blocked";
-        let v = Eio.Stream.take q in
-        note "take-won";
-        v)
-    |> Eta.Effect.map (fun _ -> `Item)
+   fun () ->
+    note "take-blocked";
+    ignore (Eio.Stream.take q);
+    note "take-won";
+    Ok `Item
   in
-  let operation = Eta.Effect.race [ timeout; take ] in
+  let operation () = Eta.Concurrent.race ~sw [ timeout; take ] in
   let result =
-    try
-      Eio.Time.with_timeout_exn real 7.0 (fun () ->
-          Eta_eio.run_once ~sw ~clock:real operation)
+    try Eio.Time.with_timeout_exn real 7.0 (fun () -> operation ())
     with Eio.Time.Timeout -> Alcotest.fail ("7s real timeout: " ^ dump ())
   in
   match result with
@@ -93,27 +88,25 @@ let test_canceled_sleeper_unregisters () =
         "canceled sleeper did not finish" true
         (not (List.mem "sleep-finished-unexpected" !stages))
   | Ok `Timeout -> Alcotest.fail ("sleep won: " ^ dump ())
-  | Error _ -> Alcotest.fail ("effect error: " ^ dump ())
+  | Error _ -> Alcotest.fail ("race error: " ^ dump ())
 
 let test_par_finite_body_with_blocked_take () =
   Eio_main.run @@ fun env ->
   let real = Eio.Stdenv.clock env in
   let q = Eio.Stream.create 1 in
-  let body =
-    Eta.Effect.par
-      (Eta.Effect.sync (fun () -> ignore (Eio.Stream.take q)))
-      (Eta.Effect.fail (`Done "finite"))
-    |> Eta.Effect.map (fun _ -> ())
-  in
   match
     try
       Eio.Switch.run @@ fun inner ->
       Eio.Time.with_timeout_exn real 7.0 (fun () ->
-          Eta_eio.run_once ~sw:inner ~clock:real body)
+          Eta.Concurrent.par ~sw:inner
+            (fun () ->
+              ignore (Eio.Stream.take q);
+              Ok ())
+            (fun () -> Error (`Done "finite")))
     with Eio.Time.Timeout -> Alcotest.fail "par finite body blocked 7s"
   with
   | Error _ -> ()
-  | Ok () -> Alcotest.fail "expected finite body error"
+  | Ok _ -> Alcotest.fail "expected finite body error"
 
 let () =
   Alcotest.run "mono_race"

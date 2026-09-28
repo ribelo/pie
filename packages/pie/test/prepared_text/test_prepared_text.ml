@@ -187,26 +187,21 @@ let pp_xdotool_error ppf = function
 
 let run_ok ~pp_error operation =
   Eio_main.run @@ fun env ->
-  Eio.Switch.run @@ fun sw ->
   match
-    Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env)
-      (operation (Eio.Stdenv.process_mgr env))
+    operation ~clock:(Eio.Stdenv.clock env) (Eio.Stdenv.process_mgr env)
   with
   | Ok value -> value
-  | Error cause ->
-      Alcotest.failf "operation failed: %a" (Eta.Cause.pp pp_error) cause
+  | Error error -> Alcotest.failf "operation failed: %a" pp_error error
 
 let run_error ~pp_error operation =
   Eio_main.run @@ fun env ->
-  Eio.Switch.run @@ fun sw ->
   match
-    Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env)
-      (operation (Eio.Stdenv.process_mgr env))
+    operation ~clock:(Eio.Stdenv.clock env) (Eio.Stdenv.process_mgr env)
   with
   | Ok _ -> Alcotest.fail "expected helper failure, got Ok"
-  | Error cause ->
+  | Error error ->
       ignore pp_error;
-      cause
+      error
 
 let wtype_type text = { helper = "wtype"; args = [ "--"; text ] }
 
@@ -313,14 +308,14 @@ let test_prepare_collapse_policy () =
 
 let test_leaf_empty_noop helper type_text pp_error () =
   with_fixtures (fun sandbox ->
-      run_ok ~pp_error (fun process_mgr -> type_text ~process_mgr "");
+      run_ok ~pp_error (fun ~clock:_ process_mgr -> type_text ~process_mgr "");
       Alcotest.(check invocations_testable)
         (helper ^ " empty is no-op")
         [] (invocations sandbox))
 
 let test_leaf_whitespace_emitted helper expected type_text pp_error () =
   with_fixtures (fun sandbox ->
-      run_ok ~pp_error (fun process_mgr -> type_text ~process_mgr "  ");
+      run_ok ~pp_error (fun ~clock:_ process_mgr -> type_text ~process_mgr "  ");
       Alcotest.(check invocations_testable)
         (helper ^ " whitespace-only emitted verbatim")
         [ expected "  " ]
@@ -334,7 +329,7 @@ let test_type_text_preserves ~session ~newline_action ~expected ~source () =
         Text.prepare_text ~method_:Text.Type ~newline_action source
       in
       let backend = Text.choose_backend (backend_of_session session) in
-      run_ok ~pp_error:pp_type_error (fun process_mgr ->
+      run_ok ~pp_error:pp_type_error (fun ~clock:_ process_mgr ->
           Text.type_text ~newline_action ~process_mgr ~backend prepared);
       let actual = invocations sandbox in
       require_literal_separator actual;
@@ -345,8 +340,8 @@ let test_type_text_preserves ~session ~newline_action ~expected ~source () =
 let test_inject_preserves ~session ~rules ~expected ~source () =
   with_fixtures ~session (fun sandbox ->
       let result =
-        run_ok ~pp_error:pp_inject_error (fun process_mgr ->
-            Text.inject ~newline_rules:rules ~process_mgr source)
+        run_ok ~pp_error:pp_inject_error (fun ~clock process_mgr ->
+            Text.inject ~clock ~newline_rules:rules ~process_mgr source)
       in
       let newline_action =
         match rules with
@@ -369,11 +364,11 @@ let test_inject_preserves ~session ~rules ~expected ~source () =
 let test_x11_inject_rules_rejected ~rules () =
   with_fixtures ~session:"x11" (fun sandbox ->
       let cause =
-        run_error ~pp_error:pp_inject_error (fun process_mgr ->
-            Text.inject ~newline_rules:rules ~process_mgr evidence_text)
+        run_error ~pp_error:pp_inject_error (fun ~clock process_mgr ->
+            Text.inject ~clock ~newline_rules:rules ~process_mgr evidence_text)
       in
       (match cause with
-      | Eta.Cause.Fail (`Injection_error msg) ->
+      | `Injection_error msg ->
           if msg = "" then Alcotest.fail "empty injection error";
           let lower = String.lowercase_ascii msg in
           if
@@ -387,10 +382,7 @@ let test_x11_inject_rules_rejected ~rules () =
                 loop 0)
               [ "alacritty"; "codex"; "niri command"; "stderr" ]
           then Alcotest.failf "error leaked helper details: %s" msg
-      | _ ->
-          Alcotest.failf "expected Injection_error: %a"
-            (Eta.Cause.pp pp_inject_error)
-            cause);
+      | _ -> Alcotest.failf "expected Injection_error: %a" pp_inject_error cause);
       Alcotest.(check invocations_testable)
         "no emission on x11 rule rejection" [] (invocations sandbox))
 
@@ -402,8 +394,8 @@ let test_inject_collapse () =
           ~newline_action:Text.Collapse_to_space source
       in
       let result =
-        run_ok ~pp_error:pp_inject_error (fun process_mgr ->
-            Text.inject ~process_mgr source)
+        run_ok ~pp_error:pp_inject_error (fun ~clock process_mgr ->
+            Text.inject ~clock ~process_mgr source)
       in
       let actual = invocations sandbox in
       Alcotest.(check string) "reported collapsed text" prepared result.text;
@@ -418,7 +410,7 @@ let test_crlf_segments ~session ~newline_action ~type_event ~key_event () =
         Text.prepare_text ~method_:Text.Type ~newline_action crlf_text
       in
       let backend = Text.choose_backend (backend_of_session session) in
-      run_ok ~pp_error:pp_type_error (fun process_mgr ->
+      run_ok ~pp_error:pp_type_error (fun ~clock:_ process_mgr ->
           Text.type_text ~newline_action ~process_mgr ~backend prepared);
       let actual = invocations sandbox in
       Alcotest.(check (list string))
@@ -429,22 +421,8 @@ let test_crlf_segments ~session ~newline_action ~type_event ~key_event () =
         [ type_event "top  "; key_event; type_event "  indented" ]
         actual)
 
-let error_message cause =
-  let rec find = function
-    | Eta.Cause.Fail
-        (`Wtype_error msg | `Xdotool_error msg | `Injection_error msg) ->
-        Some msg
-    | Eta.Cause.Sequential causes -> List.find_map find causes
-    | Eta.Cause.Concurrent causes -> List.find_map find causes
-    | Eta.Cause.Suppressed { primary; _ } -> find primary
-    | _ -> None
-  in
-  match find cause with
-  | Some msg -> msg
-  | None ->
-      Alcotest.failf "typed helper failure not visible: %a"
-        (Eta.Cause.pp pp_type_error)
-        cause
+let error_message = function
+  | `Wtype_error msg | `Xdotool_error msg | `Injection_error msg -> msg
 
 let test_later_helper_failure ~session ~newline_action () =
   with_fixtures ~session ~fail_on_key:true (fun sandbox ->
@@ -453,7 +431,7 @@ let test_later_helper_failure ~session ~newline_action () =
       in
       let backend = Text.choose_backend (backend_of_session session) in
       let cause =
-        run_error ~pp_error:pp_type_error (fun process_mgr ->
+        run_error ~pp_error:pp_type_error (fun ~clock:_ process_mgr ->
             Text.type_text ~newline_action ~process_mgr ~backend prepared)
       in
       let msg = error_message cause in

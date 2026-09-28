@@ -1,4 +1,20 @@
-open Eta.Syntax
+let ( let* ) = Result.bind
+
+let logger env =
+  Eta_observability.Logger.create ~service:"pie-test"
+    ~clock:(Eio.Stdenv.clock env)
+    ~mono_clock:(Eio.Stdenv.mono_clock env)
+    ~reporter:(Eta_observability.Logger.Reporter.records (fun _ -> ()))
+    ()
+
+let finite_pull chunks =
+  let cursor = ref (List.to_seq chunks) in
+  fun () ->
+    match !cursor () with
+    | Seq.Nil -> Ok None
+    | Seq.Cons (head, tail) ->
+        cursor := tail;
+        Ok (Some head)
 
 let s16le samples =
   let bytes = Bytes.create (List.length samples * 2) in
@@ -9,11 +25,7 @@ let spec rate : Pie.Pulse.Defs.sample_spec =
   { format = Pie.Pulse.Defs.Pa_sample_format.s16le; channels = 1; rate }
 
 let acquire_chunks rate chunks k =
-  k
-    {
-      Pie.Commands.Record.format = spec rate;
-      audio = Eta_stream.Stream.from_iterable chunks;
-    }
+  k { Pie.Commands.Record.format = spec rate; audio = finite_pull chunks }
 
 let unix_io = Pie.Commands.Record.unix_io
 
@@ -21,10 +33,10 @@ let run ~output_path ~duration_sec ~chunks ?(rate = 16000) ?(io = unix_io) () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   Pie.Commands.Record.run ~sw ~net:(Eio.Stdenv.net env)
-    ~clock:(Eio.Stdenv.clock env) ~output_path ~duration_sec
+    ~clock:(Eio.Stdenv.clock env) ~logger:(logger env) ~output_path
+    ~duration_sec
     ~acquire:(acquire_chunks rate chunks)
     ~io ()
-  |> fun op -> Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env) op
 
 let leftovers output_path =
   let dir = Filename.dirname output_path in
@@ -57,18 +69,14 @@ let wav_data path =
       seek_in ic 44;
       really_input_string ic (in_channel_length ic - 44))
 
-let cause_text cause =
-  Format.asprintf "%a"
-    (Eta.Cause.pp (fun fmt -> function
-      | `Stt_error m -> Format.pp_print_string fmt m
-      | `Pulse_error e ->
-          Format.pp_print_string fmt (Pie.Pulse.Client.error_message e)))
-    cause
+let cause_text = function
+  | `Stt_error message -> message
+  | `Pulse_error error -> Pie.Pulse.Client.error_message error
 
 let expect_fail pred result =
   match result with
-  | Eta.Exit.Ok () -> Alcotest.fail "expected record failure"
-  | Eta.Exit.Error cause ->
+  | Ok () -> Alcotest.fail "expected record failure"
+  | Error cause ->
       if not (pred cause) then
         Alcotest.failf "unexpected failure: %s" (cause_text cause)
 
@@ -94,11 +102,11 @@ let test_partition_identical () =
   (try Sys.remove a with _ -> ());
   (try Sys.remove b with _ -> ());
   (match run ~output_path:a ~duration_sec:1. ~chunks:[ whole ] () with
-  | Eta.Exit.Ok () -> ()
-  | Eta.Exit.Error c -> Alcotest.failf "whole: %s" (cause_text c));
+  | Ok () -> ()
+  | Error c -> Alcotest.failf "whole: %s" (cause_text c));
   (match run ~output_path:b ~duration_sec:1. ~chunks:[ left; right ] () with
-  | Eta.Exit.Ok () -> ()
-  | Eta.Exit.Error c -> Alcotest.failf "parts: %s" (cause_text c));
+  | Ok () -> ()
+  | Error c -> Alcotest.failf "parts: %s" (cause_text c));
   Alcotest.(check string) "faithful pcm" (wav_data a) (wav_data b);
   Sys.remove a;
   Sys.remove b
@@ -111,8 +119,8 @@ let test_header_negotiated_rate () =
        ~chunks:[ s16le [ 1; 2 ] ]
        ()
    with
-  | Eta.Exit.Ok () -> ()
-  | Eta.Exit.Error c -> Alcotest.failf "rate: %s" (cause_text c));
+  | Ok () -> ()
+  | Error c -> Alcotest.failf "rate: %s" (cause_text c));
   Alcotest.(check int) "wav sample rate" 48000 (wav_rate path);
   Alcotest.(check int) "wav byte rate" (48000 * 2) (wav_byte_rate path);
   Sys.remove path
@@ -126,12 +134,12 @@ let test_duration_before_acquire duration_sec =
     Eio_main.run @@ fun env ->
     Eio.Switch.run @@ fun sw ->
     Pie.Commands.Record.run ~sw ~net:(Eio.Stdenv.net env)
-      ~clock:(Eio.Stdenv.clock env) ~output_path:path ~duration_sec
+      ~clock:(Eio.Stdenv.clock env) ~logger:(logger env) ~output_path:path
+      ~duration_sec
       ~acquire:(fun k ->
         Atomic.set acquired true;
         acquire_chunks 16000 [ s16le [ 1 ] ] k)
       ()
-    |> Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env)
   in
   Alcotest.(check bool) "did not acquire" false (Atomic.get acquired);
   Alcotest.(check bool) "output untouched" dest_existed (Sys.file_exists path);
@@ -183,17 +191,18 @@ let test_read_failure_preserves_dest () =
     Eio_main.run @@ fun env ->
     Eio.Switch.run @@ fun sw ->
     Pie.Commands.Record.run ~sw ~net:(Eio.Stdenv.net env)
-      ~clock:(Eio.Stdenv.clock env) ~output_path:path ~duration_sec:1.
+      ~clock:(Eio.Stdenv.clock env) ~logger:(logger env) ~output_path:path
+      ~duration_sec:1.
       ~acquire:(fun k ->
         k
           {
             Pie.Commands.Record.format = spec 16000;
             audio =
-              Eta_stream.Stream.fail
-                (`Pulse_error (Pie.Pulse.Client.Protocol_error "read boom"));
+              (fun () ->
+                Error
+                  (`Pulse_error (Pie.Pulse.Client.Protocol_error "read boom")));
           })
       ()
-    |> Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env)
   in
   expect_fail (contains "read boom") result;
   let ic = open_in_bin path in
@@ -208,7 +217,7 @@ let test_completed_one_wav () =
   match
     run ~output_path:path ~duration_sec:1. ~chunks:[ s16le [ 5; 6 ] ] ()
   with
-  | Eta.Exit.Ok () ->
+  | Ok () ->
       Alcotest.(check bool) "published" true (Sys.file_exists path);
       Alcotest.(check string)
         "candidate gone" ""
@@ -216,7 +225,7 @@ let test_completed_one_wav () =
       Alcotest.(check int) "rate" 16000 (wav_rate path);
       Alcotest.(check int) "byte rate" 32000 (wav_byte_rate path);
       Sys.remove path
-  | Eta.Exit.Error c -> Alcotest.failf "complete: %s" (cause_text c)
+  | Error c -> Alcotest.failf "complete: %s" (cause_text c)
 
 let test_riff_duration_before_acquire () = test_duration_before_acquire 200_000.
 
@@ -234,8 +243,8 @@ let test_collision_leaves_other_candidate () =
   (match
      run ~output_path:path ~duration_sec:1. ~chunks:[ s16le [ 1; 2 ] ] ()
    with
-  | Eta.Exit.Ok () -> ()
-  | Eta.Exit.Error c -> Alcotest.failf "coll: %s" (cause_text c));
+  | Ok () -> ()
+  | Error c -> Alcotest.failf "coll: %s" (cause_text c));
   let ic = open_in_bin other in
   let kept = really_input_string ic (in_channel_length ic) in
   close_in ic;
@@ -289,12 +298,12 @@ let test_capture_finalizer_preserves_dest () =
     Eio_main.run @@ fun env ->
     Eio.Switch.run @@ fun sw ->
     Pie.Commands.Record.run ~sw ~net:(Eio.Stdenv.net env)
-      ~clock:(Eio.Stdenv.clock env) ~output_path:path ~duration_sec:1.
+      ~clock:(Eio.Stdenv.clock env) ~logger:(logger env) ~output_path:path
+      ~duration_sec:1.
       ~acquire:(fun k ->
         let* () = acquire_chunks 16000 [ s16le [ 1; 2 ] ] k in
-        Eta.Effect.fail (`Stt_error "finalizer boom"))
+        Error (`Stt_error "finalizer boom"))
       ()
-    |> Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env)
   in
   expect_fail (contains "finalizer boom") result;
   let ic = open_in_bin path in
@@ -312,25 +321,34 @@ let test_cancel_preserves_dest () =
   let result =
     Eio_main.run @@ fun env ->
     Eio.Switch.run @@ fun sw ->
-    let record =
-      Pie.Commands.Record.run ~sw ~net:(Eio.Stdenv.net env)
-        ~clock:(Eio.Stdenv.clock env) ~output_path:path ~duration_sec:30.
-        ~acquire:(fun k ->
-          k
-            {
-              Pie.Commands.Record.format = spec 16000;
-              audio = Eta_stream.Stream.from_effect Eta.Effect.never;
-            })
-        ()
-      |> Eta.Effect.map (fun () -> `Body)
-    in
-    Eta.Effect.race [ record; Eta.Effect.pure `Cancel ]
-    |> Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env)
+    let started, signal_started = Eio.Promise.create () in
+    let never, _ = Eio.Promise.create () in
+    Eio.Fiber.first
+      (fun () ->
+        let result =
+          Pie.Commands.Record.run ~sw ~net:(Eio.Stdenv.net env)
+            ~clock:(Eio.Stdenv.clock env) ~logger:(logger env) ~output_path:path
+            ~duration_sec:30.
+            ~acquire:(fun k ->
+              k
+                {
+                  Pie.Commands.Record.format = spec 16000;
+                  audio =
+                    (fun () ->
+                      Eio.Promise.resolve signal_started ();
+                      Eio.Promise.await never);
+                })
+            ()
+        in
+        Result.map (fun () -> `Body) result)
+      (fun () ->
+        Eio.Promise.await started;
+        Ok `Cancel)
   in
   (match result with
-  | Eta.Exit.Ok `Cancel -> ()
-  | Eta.Exit.Ok `Body -> Alcotest.fail "expected cancel"
-  | Eta.Exit.Error c -> Alcotest.failf "cancel: %s" (cause_text c));
+  | Ok `Cancel -> ()
+  | Ok `Body -> Alcotest.fail "expected cancel"
+  | Error c -> Alcotest.failf "cancel: %s" (cause_text c));
   let ic = open_in_bin path in
   let old = really_input_string ic (in_channel_length ic) in
   close_in ic;
@@ -343,8 +361,8 @@ let test_long_stream_size () =
   (try Sys.remove path with _ -> ());
   let chunks = List.init 1000 (fun i -> s16le [ i land 0x7fff ]) in
   (match run ~output_path:path ~duration_sec:1. ~chunks () with
-  | Eta.Exit.Ok () -> ()
-  | Eta.Exit.Error c -> Alcotest.failf "long: %s" (cause_text c));
+  | Ok () -> ()
+  | Error c -> Alcotest.failf "long: %s" (cause_text c));
   Alcotest.(check int) "data bytes" 2000 (String.length (wav_data path));
   Sys.remove path
 
@@ -382,23 +400,17 @@ let test_placeholder_write_failure () =
     Eio_main.run @@ fun env ->
     Eio.Switch.run @@ fun sw ->
     Pie.Commands.Record.run ~sw ~net:(Eio.Stdenv.net env)
-      ~clock:(Eio.Stdenv.clock env) ~output_path:path ~duration_sec:1.
+      ~clock:(Eio.Stdenv.clock env) ~logger:(logger env) ~output_path:path
+      ~duration_sec:1.
       ~acquire:(fun k ->
         Atomic.set acquired true;
         acquire_chunks 16000 [ s16le [ 1; 2 ] ] k)
       ~io ()
-    |> Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env)
   in
   Alcotest.(check bool) "acquired" true (Atomic.get acquired);
   Alcotest.(check bool) "no dest" false (Sys.file_exists path);
   Alcotest.(check bool) "no leftovers" true (leftovers path = []);
   expect_fail (fun _ -> true) result
-
-let rec cause_has_finalizer = function
-  | Eta.Cause.Finalizer _ | Eta.Cause.Suppressed _ -> true
-  | Eta.Cause.Sequential cs | Eta.Cause.Concurrent cs ->
-      List.exists cause_has_finalizer cs
-  | _ -> false
 
 let test_dual_close_unlink_failure () =
   let path = temp_wav "dual" in
@@ -420,12 +432,12 @@ let test_dual_close_unlink_failure () =
     run ~output_path:path ~duration_sec:1. ~chunks:[ s16le [ 1; 2 ] ] ~io ()
   in
   (match result with
-  | Eta.Exit.Ok () -> Alcotest.fail "expected dual failure"
-  | Eta.Exit.Error cause ->
+  | Ok () -> Alcotest.fail "expected dual failure"
+  | Error cause ->
       if not (contains "close boom" cause) then
         Alcotest.failf "missing close failure: %s" (cause_text cause);
-      if not (cause_has_finalizer cause) then
-        Alcotest.failf "missing unlink finalizer: %s" (cause_text cause);
+      if not (contains "unlink boom" cause) then
+        Alcotest.failf "missing unlink cleanup: %s" (cause_text cause);
       Alcotest.(check bool) "unlink attempted" true (Atomic.get unlinked));
   let ic = open_in_bin path in
   let old = really_input_string ic (in_channel_length ic) in
@@ -439,11 +451,11 @@ let test_defer_two_runs () =
   (try Sys.remove a with _ -> ());
   (try Sys.remove b with _ -> ());
   (match run ~output_path:a ~duration_sec:1. ~chunks:[ s16le [ 1; 2 ] ] () with
-  | Eta.Exit.Ok () -> ()
-  | Eta.Exit.Error c -> Alcotest.failf "d1: %s" (cause_text c));
+  | Ok () -> ()
+  | Error c -> Alcotest.failf "d1: %s" (cause_text c));
   (match run ~output_path:b ~duration_sec:1. ~chunks:[ s16le [ 3; 4 ] ] () with
-  | Eta.Exit.Ok () -> ()
-  | Eta.Exit.Error c -> Alcotest.failf "d2: %s" (cause_text c));
+  | Ok () -> ()
+  | Error c -> Alcotest.failf "d2: %s" (cause_text c));
   Alcotest.(check bool) "a published" true (Sys.file_exists a);
   Alcotest.(check bool) "b published" true (Sys.file_exists b);
   Sys.remove a;
@@ -460,18 +472,19 @@ let test_close_once_construction_does_not_clear_claim () =
   let state : Pie.Commands.Record.candidate =
     { path = cand; fd; close_pending = true; data_length = 0; rate = 16000 }
   in
-  let _constructed = Pie.Commands.Record.close_once unix_io state in
-  Alcotest.(check bool) "construction leaves pending" true state.close_pending;
+  (match Pie.Commands.Record.close_once unix_io state with
+  | Ok () -> ()
+  | Error _ -> Alcotest.fail "close failed");
+  Alcotest.(check bool) "direct close clears pending" false state.close_pending;
   let owned = ref (Some state) in
   let published = Atomic.make false in
   (match
      Eio_main.run @@ fun env ->
      Eio.Switch.run @@ fun sw ->
      Pie.Commands.Record.cleanup unix_io published owned
-     |> Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env)
    with
-  | Eta.Exit.Ok () -> ()
-  | Eta.Exit.Error c -> Alcotest.failf "cleanup: %s" (cause_text c));
+  | Ok () -> ()
+  | Error c -> Alcotest.failf "cleanup: %s" (cause_text c));
   Alcotest.(check bool) "cleanup closed" false state.close_pending;
   Alcotest.(check bool) "candidate unlinked" false (Sys.file_exists cand)
 

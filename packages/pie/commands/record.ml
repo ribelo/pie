@@ -1,4 +1,4 @@
-open Eta.Syntax
+let ( let* ) = Result.bind
 
 (* Audio.Pcm.build_pcm_wav_header uses Int32.of_int bit patterns.
    On 64-bit that encodes RIFF uint32 values 0..0xFFFFFFFF. *)
@@ -9,7 +9,7 @@ type run_error = [ `Pulse_error of Pulse.Client.error | `Stt_error of string ]
 
 type capture = {
   format : Pulse.Defs.sample_spec;
-  audio : (bytes, [ `Pulse_error of Pulse.Client.error ]) Eta_stream.Stream.t;
+  audio : unit -> (bytes option, [ `Pulse_error of Pulse.Client.error ]) result;
 }
 
 type file_io = {
@@ -98,11 +98,9 @@ let validate_projected ~duration_sec ~rate =
 let io_error label exn = record_error (label ^ ": " ^ Printexc.to_string exn)
 
 let run_io label f =
-  Eta.Effect.sync (fun () ->
-      try Ok (f ()) with
-      | Eio.Cancel.Cancelled _ as exn -> raise exn
-      | exn -> Error (io_error label exn))
-  |> Eta.Effect.bind Eta.Effect.from_result
+  try Ok (f ()) with
+  | Eio.Cancel.Cancelled _ as exn -> raise exn
+  | exn -> Error (io_error label exn)
 
 let max_candidate_attempts = 1024
 
@@ -133,72 +131,52 @@ let close_once io (state : candidate) =
         io.close state.fd))
 
 let cleanup io published owned =
-  Eta.Effect.defer (fun () ->
-      let close_eff =
-        match !owned with
-        | Some st -> close_once io st
-        | None -> Eta.Effect.unit
-      in
-      let unlink_eff =
-        match !owned with
-        | Some st when not (Atomic.get published) ->
-            run_io "cleanup unlink" (fun () -> io.unlink st.path)
-        | _ -> Eta.Effect.unit
-      in
-      close_eff |> Eta.Effect.finally unlink_eff)
+  let close_result =
+    match !owned with Some state -> close_once io state | None -> Ok ()
+  in
+  let unlink_result =
+    match !owned with
+    | Some state when not (Atomic.get published) ->
+        run_io "cleanup unlink" (fun () -> io.unlink state.path)
+    | _ -> Ok ()
+  in
+  match (close_result, unlink_result) with
+  | Ok (), Ok () -> Ok ()
+  | Error error, Ok () | Ok (), Error error -> Error (error :> run_error)
+  | Error (`Stt_error a), Error (`Stt_error b) ->
+      Error (`Stt_error (a ^ "; " ^ b))
 
 let claim_candidate io output_path ~rate owned =
-  Eta.Effect.sync (fun () ->
-      try
-        match open_unique_candidate io output_path with
-        | Error e -> Error e
-        | Ok (path, fd) ->
-            let state =
-              { path; fd; close_pending = true; data_length = 0; rate }
-            in
-            owned := Some state;
-            Ok state
-      with
-      | Eio.Cancel.Cancelled _ as exn -> raise exn
-      | exn -> Error (io_error "open candidate" exn))
-  |> Eta.Effect.bind Eta.Effect.from_result
+  let* path, fd = open_unique_candidate io output_path in
+  let state = { path; fd; close_pending = true; data_length = 0; rate } in
+  owned := Some state;
+  Ok state
 
-let capture_bounded ~io ~state ~duration_ms capture =
-  let write_chunk chunk =
-    Eta.Effect.sync (fun () ->
-        try
-          let next = state.data_length + Bytes.length chunk in
-          if next > max_riff_data_length then
-            raise (Recording_io "captured audio exceeds RIFF WAV size");
-          io.write state.fd chunk;
-          state.data_length <- next
-        with
-        | Eio.Cancel.Cancelled _ as exn -> raise exn
-        | Recording_io _ as exn -> raise exn
-        | exn -> raise (Recording_io (Printexc.to_string exn)))
+let capture_bounded ~clock ~io ~state ~duration_ms capture =
+  let rec read_audio () =
+    match capture.audio () with
+    | Error error -> Error (widen_pulse error)
+    | Ok None -> Ok ()
+    | Ok (Some chunk) ->
+        let next = state.data_length + Bytes.length chunk in
+        if next > max_riff_data_length then
+          Error (record_error "captured audio exceeds RIFF WAV size")
+        else
+          let* () = run_io "write chunk" (fun () -> io.write state.fd chunk) in
+          state.data_length <- next;
+          read_audio ()
   in
-  let timer =
-    Eta.Effect.delay
-      (Eta.Duration.ms duration_ms)
-      (Eta.Effect.fail `Timer_elapsed)
-  in
-  let stream =
-    Eta_stream.run_for_each write_chunk capture.audio
-    |> Eta.Effect.map_error (fun err -> `Stream_error (widen_pulse err))
-  in
-  Eta.Effect.with_background timer (fun () -> stream)
-  |> Ptt_loop.recover_single_failure (function
-    | `Timer_elapsed -> Some Eta.Effect.unit
-    | `Stream_error _ -> None)
-  |> Eta.Effect.map_error (function
-    | `Timer_elapsed -> record_error "uncatchable timer-elapsed compound"
-    | `Stream_error err -> err)
+  Eio.Fiber.first
+    (fun () ->
+      Eio.Time.sleep clock (float_of_int duration_ms /. 1000.);
+      Ok ())
+    read_audio
 
 let finalize_header io (state : candidate) =
   if state.data_length land 1 <> 0 then
-    Eta.Effect.fail (record_error "captured audio is not 16-bit sample aligned")
+    Error (record_error "captured audio is not 16-bit sample aligned")
   else if state.data_length > max_riff_data_length then
-    Eta.Effect.fail (record_error "captured audio exceeds RIFF WAV size")
+    Error (record_error "captured audio exceeds RIFF WAV size")
   else
     let header =
       Audio.Pcm.build_pcm_wav_header ~data_length:state.data_length
@@ -208,58 +186,66 @@ let finalize_header io (state : candidate) =
     let* () = run_io "write header" (fun () -> io.write state.fd header) in
     run_io "flush" (fun () -> io.fsync state.fd)
 
-let default_acquire ~net k =
-  Pulse.Client.with_client ~net @@ fun client ->
+let default_acquire ~net ~clock ~logger k =
+  Pulse.Client.with_client ~net ~clock ~logger @@ fun client ->
   Pulse.Client.with_record_stream client @@ fun info audio ->
   k { format = info.sample_spec; audio }
 
-let run ~sw:_ ~net ~clock:_ ~output_path ~duration_sec ?(planned_rate = 16000)
-    ?acquire ?(io = unix_io) () =
-  match validate_duration duration_sec with
-  | Error error -> Eta.Effect.fail error
-  | Ok duration_ms -> (
-      match validate_projected ~duration_sec ~rate:planned_rate with
-      | Error error -> Eta.Effect.fail error
-      | Ok () ->
-          let acquire = Option.value acquire ~default:(default_acquire ~net) in
-          Eta.Effect.defer (fun () ->
-              let owned = ref None in
-              let published = Atomic.make false in
-              let work =
-                let* () =
-                  acquire (fun capture ->
-                      let* () =
-                        Eta.Effect.from_result (validate_spec capture.format)
-                      in
-                      let* () =
-                        Eta.Effect.from_result
-                          (validate_projected ~duration_sec
-                             ~rate:capture.format.rate)
-                      in
-                      let* state =
-                        claim_candidate io output_path ~rate:capture.format.rate
-                          owned
-                      in
-                      let* () =
-                        run_io "candidate header" (fun () ->
-                            io.write state.fd (Bytes.make 44 '\000'))
-                      in
-                      capture_bounded ~io ~state ~duration_ms capture)
-                in
-                match !owned with
-                | None ->
-                    Eta.Effect.fail
-                      (record_error "capture produced no candidate")
-                | Some state ->
-                    let* () = finalize_header io state in
-                    let* () = close_once io state in
-                    let* () =
-                      run_io "publish" (fun () ->
-                          io.rename state.path output_path;
-                          Atomic.set published true)
-                    in
-                    Eta.Effect.sync (fun () ->
-                        Printf.printf "Recorded %d bytes → %s\n%!"
-                          state.data_length output_path)
+let run ~sw:_ ~net ~clock ~logger ~output_path ~duration_sec
+    ?(planned_rate = 16000) ?acquire ?(io = unix_io) () =
+  let* duration_ms = validate_duration duration_sec in
+  let* () = validate_projected ~duration_sec ~rate:planned_rate in
+  let acquire =
+    Option.value acquire ~default:(default_acquire ~net ~clock ~logger)
+  in
+  let owned = ref None in
+  let published = Atomic.make false in
+  (* Cleanup runs on success, typed failure, defect and cancellation. *)
+  let cleanup_pending = ref true in
+  Fun.protect
+    ~finally:(fun () ->
+      if !cleanup_pending then ignore (cleanup io published owned))
+    (fun () ->
+      let work : (unit, run_error) result =
+        let* () =
+          acquire (fun capture ->
+              let* () = validate_spec capture.format in
+              let* () =
+                validate_projected ~duration_sec ~rate:capture.format.rate
               in
-              work |> Eta.Effect.finally (cleanup io published owned)))
+              let* state =
+                claim_candidate io output_path ~rate:capture.format.rate owned
+              in
+              let* () =
+                run_io "candidate header" (fun () ->
+                    io.write state.fd (Bytes.make 44 '\000'))
+              in
+              capture_bounded ~clock ~io ~state ~duration_ms capture)
+        in
+        match !owned with
+        | None -> Error (record_error "capture produced no candidate")
+        | Some state ->
+            let* () = finalize_header io state in
+            let* () = close_once io state in
+            let* () =
+              run_io "publish" (fun () ->
+                  io.rename state.path output_path;
+                  Atomic.set published true)
+            in
+            Printf.printf "Recorded %d bytes → %s\n%!" state.data_length
+              output_path;
+            Ok ()
+      in
+      let result = work in
+      let released = cleanup io published owned in
+      cleanup_pending := false;
+      match (result, released) with
+      | Ok (), Ok () -> Ok ()
+      | Error error, Ok () -> Error error
+      | Ok (), Error error -> Error error
+      | Error (`Stt_error a), Error (`Stt_error b) ->
+          Error (`Stt_error (a ^ "; " ^ b))
+      | Error (`Pulse_error error), Error (`Stt_error cleanup) ->
+          Error
+            (record_error (Pulse.Client.error_message error ^ "; " ^ cleanup))
+      | Error error, Error _ -> Error error)

@@ -1,7 +1,6 @@
 type backend = Wtype | Xdotool
 type session_type = Wayland | X11
 type entry_method = Type | Paste
-
 type outcome = Typed | Clipboard_key_attempted
 
 type result = {
@@ -107,13 +106,12 @@ let choose_backend = function Wayland -> Wtype | X11 -> Xdotool
 
 let detect_session () =
   match Sys.getenv_opt "XDG_SESSION_TYPE" with
-  | Some "wayland" -> Eta.Effect.pure Wayland
-  | Some "x11" -> Eta.Effect.pure X11
+  | Some "wayland" -> Ok Wayland
+  | Some "x11" -> Ok X11
   | _ ->
-      if Sys.getenv_opt "WAYLAND_DISPLAY" <> None then Eta.Effect.pure Wayland
-      else if Sys.getenv_opt "DISPLAY" <> None then Eta.Effect.pure X11
-      else
-        Eta.Effect.fail (`Injection_error "could not detect graphical session")
+      if Sys.getenv_opt "WAYLAND_DISPLAY" <> None then Ok Wayland
+      else if Sys.getenv_opt "DISPLAY" <> None then Ok X11
+      else Error (`Injection_error "could not detect graphical session")
 
 (* Conservative Niri session: Wayland + XDG_CURRENT_DESKTOP colon-token
    "niri" (case-insensitive) + nonempty NIRI_SOCKET. Otherwise fail before
@@ -142,7 +140,7 @@ let incompatible_session =
 
 let press_newline ~process_mgr ~backend action =
   match (backend, action) with
-  | _, Collapse_to_space -> Eta.Effect.unit
+  | _, Collapse_to_space -> Ok ()
   | Wtype, Shift_enter ->
       Wayland.Wtype.key ~process_mgr ~modifiers:[ "shift" ] "Return"
   | Wtype, Ctrl_j -> Wayland.Wtype.key ~process_mgr ~modifiers:[ "ctrl" ] "j"
@@ -150,16 +148,16 @@ let press_newline ~process_mgr ~backend action =
   | Xdotool, Ctrl_j -> X11.Xdotool.key ~process_mgr "ctrl+j"
 
 let type_segment ~process_mgr ~backend segment =
-  if String.length segment = 0 then Eta.Effect.unit
+  if String.length segment = 0 then Ok ()
   else
     match backend with
     | Wtype -> Wayland.Wtype.type_text ~process_mgr segment
     | Xdotool -> X11.Xdotool.type_text ~process_mgr segment
 
 let type_lines ~process_mgr ~backend ~newline_action text =
-  let open Eta.Syntax in
+  let open Result.Syntax in
   let rec loop = function
-    | [] -> Eta.Effect.unit
+    | [] -> Ok ()
     | [ segment ] -> type_segment ~process_mgr ~backend segment
     | segment :: rest ->
         let* () = type_segment ~process_mgr ~backend segment in
@@ -181,31 +179,33 @@ let prepare_text ~method_ ~newline_action text =
 let type_text ?(newline_action = Collapse_to_space) ~process_mgr ~backend text =
   let normalized = normalize_text text in
   if String.length normalized = 0 then
-    Eta.Effect.fail (`Injection_error "no text to inject after normalization")
+    Error (`Injection_error "no text to inject after normalization")
   else
     let typed = normalize_for_action newline_action normalized in
     if String.length typed = 0 then
-      Eta.Effect.fail (`Injection_error "no text to inject after normalization")
+      Error (`Injection_error "no text to inject after normalization")
     else if newline_action = Collapse_to_space then
       type_segment ~process_mgr ~backend typed
     else type_lines ~process_mgr ~backend ~newline_action typed
 
 let focused_window_for_rules ~process_mgr ~session ~newline_rules
     ~text_entry_rules =
-  if newline_rules = [] && text_entry_rules = [] then Eta.Effect.pure None
-  else if not (niri_session_compatible session) then
-    Eta.Effect.fail incompatible_session
+  if newline_rules = [] && text_entry_rules = [] then Ok None
+  else if not (niri_session_compatible session) then Error incompatible_session
   else
-    Niri.focused_window ~process_mgr ()
-    |> Eta.Effect.bind_error (fun (`Niri_error _) ->
-        Eta.Effect.fail unresolved_focus)
-    |> Eta.Effect.bind (function
-      | None -> Eta.Effect.fail unresolved_focus
-      | Some window -> Eta.Effect.pure (Some window))
+    match Niri.focused_window ~process_mgr () with
+    | Ok (Some window) -> Ok (Some window)
+    | Ok None | Error _ -> Error unresolved_focus
+
+type injection_error =
+  [ `Clipboard_error of string
+  | `Injection_error of string
+  | `Wtype_error of string
+  | `Xdotool_error of string ]
 
 let inject ?clipboard_owner ?(newline_rules = []) ?(text_entry_rules = [])
-    ~process_mgr text =
-  let open Eta.Syntax in
+    ~clock ~process_mgr text =
+  let open Result.Syntax in
   let* session = detect_session () in
   let backend = choose_backend session in
   let* focused_window =
@@ -216,29 +216,30 @@ let inject ?clipboard_owner ?(newline_rules = []) ?(text_entry_rules = [])
   let method_ = entry_method_for_window text_entry_rules focused_window in
   let prepared = prepare_text ~method_ ~newline_action text in
   if String.length prepared = 0 then
-    Eta.Effect.fail (`Injection_error "no text to inject after normalization")
+    Error (`Injection_error "no text to inject after normalization")
   else
     let* () =
       match (method_, session, clipboard_owner) with
-      | Type, _, _ -> type_text ~newline_action ~process_mgr ~backend prepared
+      | Type, _, _ ->
+          (type_text ~newline_action ~process_mgr ~backend prepared
+            :> (unit, injection_error) Stdlib.result)
       | Paste, Wayland, Some owner ->
-          let* () = Wayland.Clipboard.offer owner prepared in
+          let* () =
+            (Wayland.Clipboard.offer owner prepared
+              :> (unit, injection_error) Stdlib.result)
+          in
           (* Preserve the original helper-to-key scheduling interval. Closing
              stdin is not a Wayland publication acknowledgement; this grace
              period mitigates the startup race, not a receipt guarantee. *)
-          let* () = Eta.Effect.sleep (Eta.Duration.ms 25) in
-          Wayland.Wtype.key ~process_mgr ~modifiers:[ "ctrl" ] "v"
+          Eio.Time.sleep clock 0.025;
+          (Wayland.Wtype.key ~process_mgr ~modifiers:[ "ctrl" ] "v"
+            :> (unit, injection_error) Stdlib.result)
       | Paste, Wayland, None ->
-          Eta.Effect.fail
-            (`Injection_error "paste entry requires a clipboard owner")
+          Error (`Injection_error "paste entry requires a clipboard owner")
       | Paste, X11, _ ->
-          Eta.Effect.fail
-            (`Injection_error "paste entry is not supported on X11")
+          Error (`Injection_error "paste entry is not supported on X11")
     in
     let outcome =
-      match method_ with
-      | Type -> Typed
-      | Paste -> Clipboard_key_attempted
+      match method_ with Type -> Typed | Paste -> Clipboard_key_attempted
     in
-    Eta.Effect.pure
-      { session_type = session; backend; method_; text = prepared; outcome }
+    Ok { session_type = session; backend; method_; text = prepared; outcome }

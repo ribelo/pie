@@ -37,8 +37,7 @@ let failure_message ~prog exn =
   | Eio.Exn.Io _ -> Printf.sprintf "%s failed: io-failure" base
   | Unix.Unix_error (_, "execve", _) ->
       Printf.sprintf "%s failed: io-failure" base
-  | Failure msg
-    when String.length msg >= 7 && String.sub msg 0 7 = "execve:" ->
+  | Failure msg when String.length msg >= 7 && String.sub msg 0 7 = "execve:" ->
       Printf.sprintf "%s failed: io-failure" base
   | other -> raise other
 
@@ -56,15 +55,15 @@ let discarded_stderr =
   fun () -> Eio.Resource.T ((), ops)
 
 let run ~process_mgr ~prog ~args =
-  Eta.Effect.sync_exn
-    (fun () ->
-      Eio.Process.run process_mgr ~stdout:(discarded_stderr ())
-        ~stderr:(discarded_stderr ()) (prog :: args))
-    ~catch:(fun exn -> `Subprocess_error (failure_message ~prog exn))
+  try
+    Eio.Process.run process_mgr ~stdout:(discarded_stderr ())
+      ~stderr:(discarded_stderr ()) (prog :: args);
+    Ok ()
+  with exn -> Error (`Subprocess_error (failure_message ~prog exn))
 
 let run_capture ~process_mgr ~prog ~args =
-  Eta.Effect.sync_exn
-    (fun () ->
-      Eio.Process.parse_out process_mgr Eio.Buf_read.take_all
-        ~stderr:(discarded_stderr ()) (prog :: args))
-    ~catch:(fun exn -> `Subprocess_error (failure_message ~prog exn))
+  try
+    Ok
+      (Eio.Process.parse_out process_mgr Eio.Buf_read.take_all
+         ~stderr:(discarded_stderr ()) (prog :: args))
+  with exn -> Error (`Subprocess_error (failure_message ~prog exn))

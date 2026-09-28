@@ -2,12 +2,4 @@
 
 (test
  (name test_pulse_liveness)
- (libraries
-  pie
-  alcotest
-  eio_main
-  eta
-  eta_eio
-  eta_stream
-  unix
-  cstruct))
+ (libraries pie alcotest eio_main eta eta_test eio unix cstruct))

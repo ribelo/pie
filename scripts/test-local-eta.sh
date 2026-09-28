@@ -34,7 +34,7 @@ mkdir -p "$mirror" "$run/logs" "$run/alcotest"
 cp -rs "$eta_root/lib" "$mirror/lib"
 ln -s "$eta_root/dune-project" "$mirror/dune-project"
 
-packages=eta,eta_ai,eta_ai_openai_codec,eta_ai_openrouter,eta_blocking,eta_component,eta_eio,eta_http,eta_http_h1,eta_http_h2,eta_http_tls_openssl,eta_http_ws,eta_http_eio,eta_linux_input,eta_observability,eta_otel,eta_otel_eio,eta_redacted,eta_stream,eta_stream_eio
+packages=eta,eta_ai,eta_ai_openai_codec,eta_ai_openrouter,eta_blocking,eta_eio,eta_http,eta_http_h1,eta_http_h2,eta_http_tls_openssl,eta_http_ws,eta_http_eio,eta_observability,eta_otel,eta_otel_eio,eta_redacted,eta_stream,eta_stream_eio
 dune build --root "$mirror" --only-packages "$packages" @install
 dune install --root "$mirror" --only-packages "$packages" --prefix "$prefix"
 export OCAMLPATH="$prefix/lib${OCAMLPATH:+:$OCAMLPATH}"

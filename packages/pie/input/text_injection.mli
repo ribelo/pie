@@ -2,10 +2,12 @@ type backend = Wtype | Xdotool
 type session_type = Wayland | X11
 type entry_method = Type | Paste
 
-type outcome = Typed | Clipboard_key_attempted
-(** [Typed] is the Type path. [Clipboard_key_attempted] means the configured
-    Paste path offered text and sent Ctrl-V as a best-effort key; it is not a
-    compositor or target receipt. *)
+type outcome =
+  | Typed
+  | Clipboard_key_attempted
+      (** [Typed] is the Type path. [Clipboard_key_attempted] means the
+          configured Paste path offered text and sent Ctrl-V as a best-effort
+          key; it is not a compositor or target receipt. *)
 
 type result = {
   session_type : session_type;
@@ -44,7 +46,8 @@ val prepare_text :
 val choose_backend : session_type -> backend
 
 val detect_session :
-  unit -> (session_type, ([> `Injection_error of string ] as 'err)) Eta.Effect.t
+  unit ->
+  (session_type, ([> `Injection_error of string ] as 'err)) Stdlib.result
 
 val type_text :
   ?newline_action:newline_action ->
@@ -57,19 +60,20 @@ val type_text :
      | `Xdotool_error of string ]
      as
      'err) )
-  Eta.Effect.t
+  Stdlib.result
 
 val inject :
   ?clipboard_owner:Wayland.Clipboard.t ->
   ?newline_rules:newline_rule list ->
   ?text_entry_rules:text_entry_rule list ->
+  clock:_ Eio.Time.clock ->
   process_mgr:_ Eio.Process.mgr ->
   string ->
   ( result,
-    ([> `Clipboard_error of string
+    ([ `Clipboard_error of string
      | `Injection_error of string
      | `Wtype_error of string
      | `Xdotool_error of string ]
      as
      'err) )
-  Eta.Effect.t
+  Stdlib.result

@@ -7,12 +7,13 @@
   eta
   eta_ai
   eta_ai_openrouter
-  eta_eio
+  eta_ai_realtime
+  eta_app
+  eta_ipc
+  eta_json
   eta_http
-  eta_http_eio
   eta_observability
-  eta_otel_eio
-  eta_stream
+  eta_otel
   eio
   eio_main
   yojson

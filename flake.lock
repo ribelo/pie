@@ -14,20 +14,23 @@
         "oxcaml": [
           "oxcaml"
         ],
+        "oxcaml-lsp": "oxcaml-lsp",
+        "oxcaml-merlin-src": "oxcaml-merlin-src",
         "oxcaml-opam-repository": [
           "oxcaml-opam-repository"
         ]
       },
       "locked": {
-        "lastModified": 1787810289,
-        "narHash": "sha256-4RSQX4GFROrYgN1VNQ2Gz3FS8SsqqhPe1agmVNMwpEk=",
-        "ref": "master",
-        "rev": "09dab48f9b320e17e34c5ccc7a42d10230f7f437",
-        "revCount": 2775,
+        "lastModified": 1790591931,
+        "narHash": "sha256-DkUi7WIuHdaW0xt04L7E9jjx7cZie5y9oR+HQRCVN1Y=",
+        "ref": "eta-next",
+        "rev": "786876a6c08776badccd3a366c601c1c1086d12d",
+        "revCount": 3050,
         "type": "git",
         "url": "file:///home/ribelo/projects/ribelo/ocaml/Eta"
       },
       "original": {
+        "ref": "eta-next",
         "type": "git",
         "url": "file:///home/ribelo/projects/ribelo/ocaml/Eta"
       }
@@ -260,6 +263,40 @@
         "owner": "oxcaml",
         "ref": "5.4.0-ox2",
         "repo": "oxcaml",
+        "type": "github"
+      }
+    },
+    "oxcaml-lsp": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1784755478,
+        "narHash": "sha256-dCxyrBcpzt0u9QCvwsJmSe8OONrM3MbhyRvM4koXv2M=",
+        "owner": "oxcaml",
+        "repo": "ocaml-lsp",
+        "rev": "f617d31c54fdc19270cbab4a21e2ebd260182f66",
+        "type": "github"
+      },
+      "original": {
+        "owner": "oxcaml",
+        "repo": "ocaml-lsp",
+        "rev": "f617d31c54fdc19270cbab4a21e2ebd260182f66",
+        "type": "github"
+      }
+    },
+    "oxcaml-merlin-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1783350791,
+        "narHash": "sha256-Z8uILVCHQxUQYFA+h+oapja0hbSsV9plrRFZGw6kbB4=",
+        "owner": "oxcaml",
+        "repo": "oxcaml",
+        "rev": "2bc3d7bd8298793af4f807724dce6bfd57df1b84",
+        "type": "github"
+      },
+      "original": {
+        "owner": "oxcaml",
+        "repo": "oxcaml",
+        "rev": "2bc3d7bd8298793af4f807724dce6bfd57df1b84",
         "type": "github"
       }
     },

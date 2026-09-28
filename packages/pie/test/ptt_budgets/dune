@@ -2,13 +2,4 @@
 
 (test
  (name test_ptt_budgets)
- (libraries
-  pie
-  alcotest
-  eio_main
-  eta
-  eta_eio
-  eta_stream
-  eta_stream_eio
-  unix
-  threads))
+ (libraries pie alcotest eio_main eta eta_test eio unix threads))

@@ -1,6 +1,5 @@
 (* PIE023 untrusted local bus boundary. Never the desktop session bus. *)
 
-open Eta.Syntax
 module Monitor = Pie.Keyboard.Monitor
 
 let rec rm_rf path =
@@ -56,19 +55,20 @@ let with_sandbox f =
   Unix.mkdir dir 0o700;
   Fun.protect ~finally:(fun () -> rm_rf dir) (fun () -> f dir)
 
+let contains ~needle haystack =
+  let needle_len = String.length needle in
+  let haystack_len = String.length haystack in
+  let rec scan i =
+    i <= haystack_len - needle_len
+    && (String.sub haystack i needle_len = needle || scan (i + 1))
+  in
+  needle_len = 0 || scan 0
+
 let expect_unsupported f needle =
   match f () with
   | exception Monitor.Unsupported_input msg ->
-      if
-        (not (String.length needle = 0))
-        && not
-             (let n = String.length needle in
-              let h = String.length msg in
-              let rec scan i =
-                i <= h - n && (String.sub msg i n = needle || scan (i + 1))
-              in
-              scan 0)
-      then Alcotest.failf "unexpected unsupported %S" msg
+      if not (contains ~needle msg) then
+        Alcotest.failf "unexpected unsupported %S" msg
   | _ -> Alcotest.fail "expected Unsupported_input"
 
 let test_address_path_and_guid () =
@@ -263,7 +263,51 @@ let complete_watch flow =
   in
   loop 1
 
-let show_cause cause = Eta.Cause.pretty (fun _ -> "<err>") cause
+let run_direct operation = Eta.Scope.run (fun _ -> operation ())
+
+let show_cause cause =
+  Format.asprintf "%a"
+    (Eta.Cause.pp (fun ppf _ -> Format.pp_print_string ppf "<err>"))
+    cause
+
+let rec defects = function
+  | Eta.Cause.Die (exn, _) -> [ exn ]
+  | Eta.Cause.Finalizer cause -> defects cause
+  | Eta.Cause.Suppressed { primary; finalizer } ->
+      defects primary @ defects finalizer
+  | Eta.Cause.Concurrent causes -> List.concat_map defects causes
+  | Eta.Cause.Fail _ | Eta.Cause.Interrupt _ -> []
+
+let rec failures = function
+  | Eta.Cause.Fail error -> [ error ]
+  | Eta.Cause.Finalizer cause -> failures cause
+  | Eta.Cause.Suppressed { primary; finalizer } ->
+      failures primary @ failures finalizer
+  | Eta.Cause.Concurrent causes -> List.concat_map failures causes
+  | Eta.Cause.Die _ | Eta.Cause.Interrupt _ -> []
+
+let harness_deadline ~clock duration operation =
+  Eta.Timeout.timeout ~clock duration operation
+  |> Result.map_error (function `Timeout -> `Harness_timeout | error -> error)
+
+let expect_input_lost ~label result =
+  match result with
+  | Eta.Exit.Success _ ->
+      Alcotest.failf "%s: consumer succeeded after input loss" label
+  | Eta.Exit.Failure cause -> (
+      match failures cause with
+      | [ `Harness_timeout ] ->
+          Alcotest.failf "%s: consumer hung; expected Input_lost" label
+      | _ ->
+          let hit =
+            List.exists
+              (fun exn ->
+                match exn with Monitor.Input_lost -> true | _ -> false)
+              (defects cause)
+          in
+          if not hit then
+            Alcotest.failf "%s: expected Input_lost, got %s" label
+              (show_cause cause))
 
 let test_stalled_setup_times_out () =
   with_sandbox @@ fun dir ->
@@ -272,26 +316,24 @@ let test_stalled_setup_times_out () =
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
   let process_mgr = Eio.Stdenv.process_mgr env in
-  let rt = Eta_eio.Runtime.create ~sw ~clock () in
   with_fake ~sw ~net ~clock ~dir park_auth (fun ~await_conn ->
       let baseline = fd_count () in
       let result =
-        Eta_eio.Runtime.run rt
-          (Monitor.with_monitor_budgets ~budgets:short_budgets ~sw ~net
-             ~process_mgr (fun _ -> Eta.Effect.unit))
+        run_direct (fun () ->
+            Monitor.with_monitor_budgets ~budgets:short_budgets ~sw ~net ~clock
+              ~process_mgr (fun _ -> Ok ()))
       in
       (match result with
-      | Eta.Exit.Error cause ->
-          let dies = Eta.Cause.defects cause in
+      | Eta.Exit.Failure cause ->
           let hit =
             List.exists
-              (fun (d : Eta.Cause.die) ->
-                match d.exn with Monitor.Setup_timeout -> true | _ -> false)
-              dies
+              (fun exn ->
+                match exn with Monitor.Setup_timeout -> true | _ -> false)
+              (defects cause)
           in
           if not hit then
             Alcotest.failf "expected Setup_timeout, got %s" (show_cause cause)
-      | Eta.Exit.Ok _ -> Alcotest.fail "stalled setup succeeded");
+      | Eta.Exit.Success _ -> Alcotest.fail "stalled setup succeeded");
       await_conn ();
       Alcotest.(check int) "timeout closed the flow" baseline (fd_count ()))
 
@@ -302,7 +344,6 @@ let test_unwatch_budget_still_closes () =
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
   let process_mgr = Eio.Stdenv.process_mgr env in
-  let rt = Eta_eio.Runtime.create ~sw ~clock () in
   with_fake ~sw ~net ~clock ~dir
     (fun flow ->
       complete_watch flow;
@@ -310,19 +351,19 @@ let test_unwatch_budget_still_closes () =
     (fun ~await_conn ->
       let baseline = fd_count () in
       let result =
-        Eta_eio.Runtime.run rt
-          (Monitor.with_monitor_budgets
-             ~budgets:
-               {
-                 Monitor.acquire = Eta.Duration.seconds 2;
-                 unwatch = Eta.Duration.ms 0;
-               }
-             ~sw ~net ~process_mgr
-             (fun _ -> Eta.Effect.unit))
+        run_direct (fun () ->
+            Monitor.with_monitor_budgets
+              ~budgets:
+                {
+                  Monitor.acquire = Eta.Duration.seconds 2;
+                  unwatch = Eta.Duration.ms 0;
+                }
+              ~sw ~net ~clock ~process_mgr
+              (fun _ -> Ok ()))
       in
       (match result with
-      | Eta.Exit.Ok () -> ()
-      | Eta.Exit.Error cause ->
+      | Eta.Exit.Success () -> ()
+      | Eta.Exit.Failure cause ->
           Alcotest.failf "unwatch budget failed consumer %s" (show_cause cause));
       await_conn ();
       Alcotest.(check int) "unwatch budget closed" baseline (fd_count ()))
@@ -373,7 +414,6 @@ let test_wrong_sender_is_ignored () =
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
   let process_mgr = Eio.Stdenv.process_mgr env in
-  let rt = Eta_eio.Runtime.create ~sw ~clock () in
   with_fake ~sw ~net ~clock ~dir
     (fun flow ->
       complete_watch flow;
@@ -384,30 +424,35 @@ let test_wrong_sender_is_ignored () =
       drain_until_eof flow)
     (fun ~await_conn ->
       let result =
-        Eta_eio.Runtime.run rt
-          (Monitor.with_monitor_budgets
-             ~budgets:
-               {
-                 Monitor.acquire = Eta.Duration.seconds 2;
-                 unwatch = Eta.Duration.ms 50;
-               }
-             ~sw ~net ~process_mgr
-             (fun keyboard ->
-               Eta.Effect.sync (fun () ->
-                   try
-                     Some
-                       (Eio.Time.with_timeout_exn clock 0.1 (fun () ->
-                            Eio.Stream.take (Monitor.subscribe keyboard)))
-                   with Eio.Time.Timeout -> None)
-               |> Eta.Effect.timeout_as (Eta.Duration.ms 200)
-                    ~on_timeout:`Harness_timeout))
+        run_direct (fun () ->
+            harness_deadline ~clock (Eta.Duration.ms 200) (fun () ->
+                Monitor.with_monitor_budgets
+                  ~budgets:
+                    {
+                      Monitor.acquire = Eta.Duration.seconds 2;
+                      unwatch = Eta.Duration.ms 50;
+                    }
+                  ~sw ~net ~clock ~process_mgr
+                  (fun keyboard ->
+                    match
+                      Eta.Timeout.timeout ~clock (Eta.Duration.ms 100)
+                        (fun () ->
+                          Ok (Eio.Stream.take (Monitor.subscribe keyboard)))
+                    with
+                    | Ok event -> Ok (Some event)
+                    | Error `Timeout -> Ok None)))
       in
       await_conn ();
       match result with
-      | Eta.Exit.Ok None -> ()
-      | Eta.Exit.Ok (Some _) -> Alcotest.fail "wrong sender was accepted"
-      | Eta.Exit.Error cause ->
-          Alcotest.failf "wrong sender test failed %s" (show_cause cause))
+      | Eta.Exit.Success None -> ()
+      | Eta.Exit.Success (Some _) -> Alcotest.fail "wrong sender was accepted"
+      | Eta.Exit.Failure cause -> (
+          match failures cause with
+          | [ `Harness_timeout ] ->
+              Alcotest.fail
+                "wrong sender: consumer outlived the harness deadline"
+          | _ -> Alcotest.failf "wrong sender test failed %s" (show_cause cause)
+          ))
 
 let test_expected_sender_is_accepted () =
   with_sandbox @@ fun dir ->
@@ -416,7 +461,6 @@ let test_expected_sender_is_accepted () =
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
   let process_mgr = Eio.Stdenv.process_mgr env in
-  let rt = Eta_eio.Runtime.create ~sw ~clock () in
   with_fake ~sw ~net ~clock ~dir
     (fun flow ->
       complete_watch flow;
@@ -427,24 +471,27 @@ let test_expected_sender_is_accepted () =
       drain_until_eof flow)
     (fun ~await_conn ->
       let result =
-        Eta_eio.Runtime.run rt
-          (Monitor.with_monitor_budgets
-             ~budgets:
-               {
-                 Monitor.acquire = Eta.Duration.seconds 2;
-                 unwatch = Eta.Duration.ms 50;
-               }
-             ~sw ~net ~process_mgr
-             (fun keyboard ->
-               Eta.Effect.sync (fun () ->
-                   Eio.Stream.take (Monitor.subscribe keyboard))))
+        run_direct (fun () ->
+            harness_deadline ~clock (Eta.Duration.seconds 2) (fun () ->
+                Monitor.with_monitor_budgets
+                  ~budgets:
+                    {
+                      Monitor.acquire = Eta.Duration.seconds 2;
+                      unwatch = Eta.Duration.ms 50;
+                    }
+                  ~sw ~net ~clock ~process_mgr
+                  (fun keyboard ->
+                    Ok (Eio.Stream.take (Monitor.subscribe keyboard)))))
       in
       await_conn ();
       match result with
-      | Eta.Exit.Ok event ->
+      | Eta.Exit.Success event ->
           Alcotest.(check int) "keysym" 65470 event.Monitor.keysym
-      | Eta.Exit.Error cause ->
-          Alcotest.failf "expected sender failed %s" (show_cause cause))
+      | Eta.Exit.Failure cause -> (
+          match failures cause with
+          | [ `Harness_timeout ] ->
+              Alcotest.fail "expected sender: no key event before the deadline"
+          | _ -> Alcotest.failf "expected sender failed %s" (show_cause cause)))
 
 let test_owner_change_is_input_lost () =
   with_sandbox @@ fun dir ->
@@ -453,7 +500,6 @@ let test_owner_change_is_input_lost () =
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
   let process_mgr = Eio.Stdenv.process_mgr env in
-  let rt = Eta_eio.Runtime.create ~sw ~clock () in
   with_fake ~sw ~net ~clock ~dir
     (fun flow ->
       complete_watch flow;
@@ -467,30 +513,21 @@ let test_owner_change_is_input_lost () =
       drain_until_eof flow)
     (fun ~await_conn ->
       let result =
-        Eta_eio.Runtime.run rt
-          (Monitor.with_monitor_budgets
-             ~budgets:
-               {
-                 Monitor.acquire = Eta.Duration.seconds 2;
-                 unwatch = Eta.Duration.ms 50;
-               }
-             ~sw ~net ~process_mgr
-             (fun _ -> Eta.Effect.never)
-          |> Eta.Effect.timeout_as (Eta.Duration.seconds 2)
-               ~on_timeout:`Harness_timeout)
+        run_direct (fun () ->
+            harness_deadline ~clock (Eta.Duration.seconds 2) (fun () ->
+                Monitor.with_monitor_budgets
+                  ~budgets:
+                    {
+                      Monitor.acquire = Eta.Duration.seconds 2;
+                      unwatch = Eta.Duration.ms 50;
+                    }
+                  ~sw ~net ~clock ~process_mgr
+                  (fun _ ->
+                    ignore (Eio.Fiber.await_cancel ());
+                    Ok ())))
       in
       await_conn ();
-      match result with
-      | Eta.Exit.Error cause ->
-          let hit =
-            List.exists
-              (fun (d : Eta.Cause.die) ->
-                match d.exn with Monitor.Input_lost -> true | _ -> false)
-              (Eta.Cause.defects cause)
-          in
-          if not hit then
-            Alcotest.failf "expected Input_lost, got %s" (show_cause cause)
-      | Eta.Exit.Ok _ -> Alcotest.fail "owner change did not fail consumer")
+      expect_input_lost ~label:"owner change" result)
 
 let test_owner_loss_during_setup () =
   with_sandbox @@ fun dir ->
@@ -498,7 +535,6 @@ let test_owner_loss_during_setup () =
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
-  let rt = Eta_eio.Runtime.create ~sw ~clock () in
   with_fake ~sw ~net ~clock ~dir
     (fun flow ->
       ignore (read_auth_line flow);
@@ -522,23 +558,13 @@ let test_owner_loss_during_setup () =
       loop 1)
     (fun ~await_conn ->
       let result =
-        Eta_eio.Runtime.run rt
-          (Eta.Effect.sync (fun () ->
-               ignore (Monitor.connect_and_watch ~sw ~net)))
+        run_direct (fun () ->
+            harness_deadline ~clock (Eta.Duration.seconds 2) (fun () ->
+                ignore (Monitor.connect_and_watch ~sw ~net);
+                Ok ()))
       in
       await_conn ();
-      match result with
-      | Eta.Exit.Error cause ->
-          let hit =
-            List.exists
-              (fun (d : Eta.Cause.die) ->
-                match d.exn with Monitor.Input_lost -> true | _ -> false)
-              (Eta.Cause.defects cause)
-          in
-          if not hit then
-            Alcotest.failf "expected setup Input_lost, got %s"
-              (show_cause cause)
-      | Eta.Exit.Ok _ -> Alcotest.fail "setup ignored owner loss")
+      expect_input_lost ~label:"owner loss during setup" result)
 
 let test_noc_wrong_sender_ignored () =
   with_sandbox @@ fun dir ->
@@ -547,7 +573,6 @@ let test_noc_wrong_sender_ignored () =
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
   let process_mgr = Eio.Stdenv.process_mgr env in
-  let rt = Eta_eio.Runtime.create ~sw ~clock () in
   with_fake ~sw ~net ~clock ~dir
     (fun flow ->
       complete_watch flow;
@@ -565,24 +590,29 @@ let test_noc_wrong_sender_ignored () =
       drain_until_eof flow)
     (fun ~await_conn ->
       let result =
-        Eta_eio.Runtime.run rt
-          (Monitor.with_monitor_budgets
-             ~budgets:
-               {
-                 Monitor.acquire = Eta.Duration.seconds 2;
-                 unwatch = Eta.Duration.ms 50;
-               }
-             ~sw ~net ~process_mgr
-             (fun keyboard ->
-               Eta.Effect.sync (fun () ->
-                   Eio.Stream.take (Monitor.subscribe keyboard))))
+        run_direct (fun () ->
+            harness_deadline ~clock (Eta.Duration.seconds 2) (fun () ->
+                Monitor.with_monitor_budgets
+                  ~budgets:
+                    {
+                      Monitor.acquire = Eta.Duration.seconds 2;
+                      unwatch = Eta.Duration.ms 50;
+                    }
+                  ~sw ~net ~clock ~process_mgr
+                  (fun keyboard ->
+                    Ok (Eio.Stream.take (Monitor.subscribe keyboard)))))
       in
       await_conn ();
       match result with
-      | Eta.Exit.Ok _ -> ()
-      | Eta.Exit.Error cause ->
-          Alcotest.failf "spoofed NameOwnerChanged took down watch %s"
-            (show_cause cause))
+      | Eta.Exit.Success _ -> ()
+      | Eta.Exit.Failure cause -> (
+          match failures cause with
+          | [ `Harness_timeout ] ->
+              Alcotest.fail
+                "spoofed NameOwnerChanged: no key event before the deadline"
+          | _ ->
+              Alcotest.failf "spoofed NameOwnerChanged took down watch %s"
+                (show_cause cause)))
 
 let test_production_budget_is_ten_seconds () =
   Alcotest.(check int)
@@ -764,7 +794,6 @@ let test_forged_get_name_owner_sender () =
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
-  let rt = Eta_eio.Runtime.create ~sw ~clock () in
   with_fake ~sw ~net ~clock ~dir
     (fun flow ->
       ignore (read_auth_line flow);
@@ -791,27 +820,38 @@ let test_forged_get_name_owner_sender () =
       try loop 1 with End_of_file -> ())
     (fun ~await_conn ->
       let result =
-        Eta_eio.Runtime.run rt
-          (Eta.Effect.sync (fun () ->
-               ignore (Monitor.connect_and_watch ~sw ~net)))
+        run_direct (fun () ->
+            harness_deadline ~clock (Eta.Duration.seconds 2) (fun () ->
+                ignore (Monitor.connect_and_watch ~sw ~net);
+                Ok ()))
       in
       await_conn ();
       match result with
-      | Eta.Exit.Error cause ->
-          let text = show_cause cause in
-          if not (String.length text >= 6) then Alcotest.fail text;
-          let needles = [ "sender"; "mismatch" ] in
-          List.iter
-            (fun needle ->
-              let n = String.length needle in
-              let h = String.length text in
-              let rec scan i =
-                i <= h - n && (String.sub text i n = needle || scan (i + 1))
+      | Eta.Exit.Failure cause -> (
+          match failures cause with
+          | [ `Harness_timeout ] ->
+              Alcotest.fail
+                "forged GetNameOwner sender: no rejection before the deadline"
+          | _ ->
+              let text =
+                match
+                  List.find_map
+                    (function
+                      | Monitor.Unsupported_input msg -> Some msg | _ -> None)
+                    (defects cause)
+                with
+                | Some msg -> msg
+                | None -> show_cause cause
               in
-              if not (scan 0) then
-                Alcotest.failf "expected %S in %s" needle text)
-            needles
-      | Eta.Exit.Ok _ -> Alcotest.fail "forged GetNameOwner sender was accepted")
+              if String.length text < 6 then Alcotest.fail text;
+              let needles = [ "sender"; "mismatch" ] in
+              List.iter
+                (fun needle ->
+                  if not (contains ~needle text) then
+                    Alcotest.failf "expected %S in %s" needle text)
+                needles)
+      | Eta.Exit.Success _ ->
+          Alcotest.fail "forged GetNameOwner sender was accepted")
 
 let wait_exists path n =
   let rec loop i =
@@ -925,30 +965,29 @@ let test_isolated_dbus_daemon_optional () =
                       in
                       serve 3)));
           let unique = Eio.Promise.await named in
-          let rt = Eta_eio.Runtime.create ~sw ~clock () in
           let result =
             Fun.protect
               ~finally:(fun () ->
                 (try Eio.Promise.resolve resolve_release () with _ -> ());
                 Eio.Promise.await peer_done)
               (fun () ->
-                Eta_eio.Runtime.run rt
-                  (Monitor.with_monitor_budgets
-                     ~budgets:
-                       {
-                         Monitor.acquire = Eta.Duration.seconds 2;
-                         unwatch = Eta.Duration.ms 50;
-                       }
-                     ~sw ~net ~process_mgr
-                     (fun keyboard ->
-                       Eta.Effect.sync (fun () ->
-                           Eio.Stream.take (Monitor.subscribe keyboard)))))
+                run_direct (fun () ->
+                    harness_deadline ~clock (Eta.Duration.seconds 5) (fun () ->
+                        Monitor.with_monitor_budgets
+                          ~budgets:
+                            {
+                              Monitor.acquire = Eta.Duration.seconds 2;
+                              unwatch = Eta.Duration.ms 50;
+                            }
+                          ~sw ~net ~clock ~process_mgr
+                          (fun keyboard ->
+                            Ok (Eio.Stream.take (Monitor.subscribe keyboard))))))
           in
           match result with
-          | Eta.Exit.Ok event ->
+          | Eta.Exit.Success event ->
               Alcotest.(check bool) "unique name" true (unique.[0] = ':');
               Alcotest.(check int) "keysym" 65470 event.Monitor.keysym
-          | Eta.Exit.Error cause ->
+          | Eta.Exit.Failure cause ->
               Alcotest.failf "private dbus-daemon handshake failed %s"
                 (show_cause cause))
   | _ -> ()

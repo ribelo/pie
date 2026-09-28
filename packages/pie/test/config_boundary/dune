@@ -2,4 +2,4 @@
 
 (test
  (name test_config_boundary)
- (libraries pie alcotest eio_main eta eta_eio eta_stream unix threads))
+ (libraries pie alcotest eio_main eta eta_test eio unix threads))

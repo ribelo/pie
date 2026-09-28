@@ -52,7 +52,11 @@ let with_slot t f =
       Eio.Semaphore.release t.slots;
       value
   | Error primary -> (
-      match try Eio.Semaphore.release t.slots; None with cleanup -> Some cleanup
+      match
+        try
+          Eio.Semaphore.release t.slots;
+          None
+        with cleanup -> Some cleanup
       with
       | None -> raise primary
       | Some cleanup -> raise (combine primary cleanup))
@@ -98,8 +102,7 @@ let spawn t text =
                 (fun () -> `Dead (Eio.Process.await process))
             with
             | `Dead _ ->
-                resolve_once resolve_ready
-                  (Error "clipboard helper failed")
+                resolve_once resolve_ready (Error "clipboard helper failed")
             | `Copied ->
                 resolve_once resolve_ready (Ok (Eio.Process.pid process));
                 ignore (Eio.Process.await process)
@@ -110,14 +113,14 @@ let spawn t text =
               resolve_once resolve_ready (Error "clipboard helper failed");
               raise exn
           | Eio.Exn.Multiple _ as exn -> raise exn
-          | exn ->
-              resolve_once resolve_ready (Error (known_message exn)));
+          | exn -> resolve_once resolve_ready (Error (known_message exn)));
       `Stop_daemon);
   {
     token;
     pid = 0;
     cancel =
-      (fun () -> match !sw_r with None -> () | Some sw -> Eio.Switch.fail sw Retired);
+      (fun () ->
+        match !sw_r with None -> () | Some sw -> Eio.Switch.fail sw Retired);
     settled;
     ready;
   }
@@ -139,10 +142,15 @@ let offer_sync t text =
         committed := true
   with
   | Clipboard_failure _ as exn -> raise exn
-  | exn ->
-      (match try kill_await helper; None with cleanup -> Some cleanup with
-       | None -> raise exn
-       | Some cleanup -> raise (combine exn cleanup))
+  | exn -> (
+      match
+        try
+          kill_await helper;
+          None
+        with cleanup -> Some cleanup
+      with
+      | None -> raise exn
+      | Some cleanup -> raise (combine exn cleanup))
 
 let create ~sw ~process_mgr ?(copy_program = "wl-copy") () =
   let copy_program =
@@ -165,15 +173,12 @@ let create ~sw ~process_mgr ?(copy_program = "wl-copy") () =
   t
 
 let of_sync f =
-  Eta.Effect.sync (fun () ->
-      try Ok (f ()) with
-      | Eio.Cancel.Cancelled _ as exn -> raise exn
-      | Eio.Exn.Multiple _ as exn -> raise exn
-      | Bundle _ as exn -> raise exn
-      | Clipboard_failure message -> Error (`Clipboard_error message)
-      | exn -> Error (`Clipboard_error (known_message exn)))
-  |> Eta.Effect.flatten_result
+  try Ok (f ()) with
+  | Eio.Cancel.Cancelled _ as exn -> raise exn
+  | Eio.Exn.Multiple _ as exn -> raise exn
+  | Bundle _ as exn -> raise exn
+  | Clipboard_failure message -> Error (`Clipboard_error message)
+  | exn -> Error (`Clipboard_error (known_message exn))
 
 let offer t text = of_sync (fun () -> offer_sync t text)
-
 let shutdown t = of_sync (fun () -> with_slot t (fun () -> retire_current t))

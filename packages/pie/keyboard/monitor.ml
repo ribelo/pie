@@ -803,28 +803,31 @@ let read_loop ~owner pin flow t =
   in
   loop ()
 
-let with_monitor_budgets ~budgets ~sw ~net ~process_mgr:_ f =
-  let acquire =
-    Eta.Effect.sync (fun () ->
-        let t = create () in
-        let flow, owner, pin = setup_watch ~close:Eio.Flow.close ~sw ~net in
-        (t, flow, owner, pin))
-    |> Eta.Effect.timeout budgets.acquire
-    |> Eta.Effect.or_die (fun `Timeout -> Setup_timeout)
+let with_monitor_budgets ~budgets ~sw ~net ~clock ~process_mgr:_ f =
+  let t, flow, owner, pin =
+    match
+      Eta.Timeout.timeout ~clock budgets.acquire (fun () ->
+          let t = create () in
+          let flow, owner, pin = setup_watch ~close:Eio.Flow.close ~sw ~net in
+          Ok (t, flow, owner, pin))
+    with
+    | Ok value -> value
+    | Error `Timeout -> raise Setup_timeout
   in
-  let release (_t, flow, owner, _pin) =
-    let write =
-      Eta.Effect.sync (fun () -> unwatch_write ~destination:owner flow)
-      |> Eta.Effect.timeout budgets.unwatch
-      |> Eta.Effect.ignore_errors
-    in
-    write
-    |> Eta.Effect.finally (Eta.Effect.sync (fun () -> Eio.Flow.close flow))
+  let release () =
+    Fun.protect
+      ~finally:(fun () -> Eio.Flow.close flow)
+      (fun () ->
+        ignore
+          (Eta.Timeout.timeout ~clock budgets.unwatch (fun () ->
+               unwatch_write ~destination:owner flow;
+               Ok ())))
   in
-  Eta.Effect.with_resource ~acquire ~release (fun (t, flow, owner, pin) ->
-      Eta.Effect.with_background ~name:"keyboard.monitor"
-        (Eta.Effect.sync (fun () -> read_loop ~owner pin flow t))
-        (fun () -> f t))
+  Fun.protect ~finally:release @@ fun () ->
+  Eta.Concurrent.with_background ~sw
+    (fun () -> Ok (read_loop ~owner pin flow t))
+    (fun () -> f t)
 
-let with_monitor ~sw ~net ~process_mgr f =
-  with_monitor_budgets ~budgets:production_budgets ~sw ~net ~process_mgr f
+let with_monitor ~sw ~net ~clock ~process_mgr f =
+  with_monitor_budgets ~budgets:production_budgets ~sw ~net ~clock ~process_mgr
+    f

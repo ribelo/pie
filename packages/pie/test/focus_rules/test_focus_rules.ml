@@ -145,20 +145,16 @@ let pp_err ppf = function
   | `Niri_error m ->
       Format.pp_print_string ppf m
 
-let run_inject ~newline_rules ~text_entry_rules text process_mgr =
-  Text.inject ~newline_rules ~text_entry_rules ~process_mgr text
+let run_inject ~newline_rules ~text_entry_rules text ~clock process_mgr =
+  Text.inject ~newline_rules ~text_entry_rules ~clock ~process_mgr text
 
 let run_once operation =
   Eio_main.run @@ fun env ->
-  Eio.Switch.run @@ fun sw ->
-  Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env)
-    (operation (Eio.Stdenv.process_mgr env))
+  operation ~clock:(Eio.Stdenv.clock env) (Eio.Stdenv.process_mgr env)
 
-let injection_msg cause =
-  match cause with
-  | Eta.Cause.Fail (`Injection_error msg) -> msg
-  | _ ->
-      Alcotest.failf "expected Injection_error: %a" (Eta.Cause.pp pp_err) cause
+let injection_msg = function
+  | `Injection_error msg -> msg
+  | error -> Alcotest.failf "expected Injection_error: %a" pp_err error
 
 let assert_content_free msg =
   let lower = String.lowercase_ascii msg in
@@ -197,8 +193,8 @@ let source = "hello\nworld"
 
 let expect_fail ~newline_rules ~text_entry_rules sandbox =
   match run_once (run_inject ~newline_rules ~text_entry_rules source) with
-  | Eta.Exit.Ok _ -> Alcotest.fail "expected selection failure"
-  | Eta.Exit.Error cause ->
+  | Ok _ -> Alcotest.fail "expected selection failure"
+  | Error cause ->
       let msg = injection_msg cause in
       assert_content_free msg;
       Alcotest.(check bool) "no emission" false (emitted sandbox);
@@ -206,11 +202,10 @@ let expect_fail ~newline_rules ~text_entry_rules sandbox =
 
 let expect_ok ~newline_rules ~text_entry_rules sandbox =
   match run_once (run_inject ~newline_rules ~text_entry_rules source) with
-  | Eta.Exit.Ok result ->
+  | Ok result ->
       Alcotest.(check bool) "emitted" true (emitted sandbox);
       result
-  | Eta.Exit.Error cause ->
-      Alcotest.failf "unexpected failure: %a" (Eta.Cause.pp pp_err) cause
+  | Error cause -> Alcotest.failf "unexpected failure: %a" pp_err cause
 
 let combinations =
   [

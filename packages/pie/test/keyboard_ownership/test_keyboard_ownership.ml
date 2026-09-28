@@ -1,7 +1,6 @@
 (* Isolated PIE021 keyboard setup/input-loss ownership.
    Private Unix D-Bus fake only. No real session bus, keystrokes, or credentials. *)
 
-open Eta.Syntax
 module Monitor = Pie.Keyboard.Monitor
 
 let rec rm_rf path =
@@ -66,7 +65,26 @@ let with_sandbox f =
   Unix.mkdir dir 0o700;
   Fun.protect ~finally:(fun () -> rm_rf dir) (fun () -> f dir)
 
-let show_cause cause = Eta.Cause.pretty (fun _ -> "<err>") cause
+let show_cause cause =
+  Format.asprintf "%a"
+    (Eta.Cause.pp (fun ppf _ -> Format.pp_print_string ppf "<err>"))
+    cause
+
+let rec defects = function
+  | Eta.Cause.Die (exn, _) -> [ exn ]
+  | Eta.Cause.Finalizer cause -> defects cause
+  | Eta.Cause.Suppressed { primary; finalizer } ->
+      defects primary @ defects finalizer
+  | Eta.Cause.Concurrent causes -> List.concat_map defects causes
+  | Eta.Cause.Fail _ | Eta.Cause.Interrupt _ -> []
+
+let rec failures = function
+  | Eta.Cause.Fail error -> [ error ]
+  | Eta.Cause.Finalizer cause -> failures cause
+  | Eta.Cause.Suppressed { primary; finalizer } ->
+      failures primary @ failures finalizer
+  | Eta.Cause.Concurrent causes -> List.concat_map failures causes
+  | Eta.Cause.Die _ | Eta.Cause.Interrupt _ -> []
 
 let drain_until_eof flow =
   let buf = Cstruct.create 256 in
@@ -301,42 +319,39 @@ let with_fake_bus ~sw ~net ~clock ~dir ~count script ?on_stage f =
           "server connection scope did not close (client likely leaked the \
            flow)")
 
-let run_rt rt eff = Eta_eio.Runtime.run rt eff
+let run_direct operation = Eta.Scope.run (fun _ -> operation ())
 
 let expect_die ~label ~needle result =
   match result with
-  | Eta.Exit.Ok _ -> Alcotest.fail (label ^ ": expected defect, got success")
-  | Eta.Exit.Error cause ->
-      let dies = Eta.Cause.defects cause in
+  | Eta.Exit.Success _ ->
+      Alcotest.fail (label ^ ": expected defect, got success")
+  | Eta.Exit.Failure cause ->
+      let dies = defects cause in
       if dies = [] then
         Alcotest.failf "%s: expected defect, got %s" label (show_cause cause);
       let matched =
-        List.exists
-          (fun (die : Eta.Cause.die) ->
-            contains ~needle (Printexc.to_string die.exn)
-            || contains ~needle (Printexc.to_string die.Eta.Cause.exn))
-          dies
+        List.exists (fun die -> contains ~needle (Printexc.to_string die)) dies
       in
       if not matched then
         Alcotest.failf "%s: expected %S in %s" label needle (show_cause cause)
 
 let expect_input_lost ~label result =
   match result with
-  | Eta.Exit.Ok _ ->
+  | Eta.Exit.Success _ ->
       Alcotest.fail (label ^ ": consumer succeeded after input loss")
-  | Eta.Exit.Error cause -> (
-      match Eta.Cause.failures cause with
+  | Eta.Exit.Failure cause -> (
+      match failures cause with
       | [ `Harness_timeout ] ->
           Alcotest.fail
             (label ^ ": consumer hung; background treated EOF as success")
       | _ ->
           if Eta.Cause.is_interrupt_only cause then
             Alcotest.fail (label ^ ": input loss became interruption");
-          let dies = Eta.Cause.defects cause in
+          let dies = defects cause in
           let hit =
             List.exists
-              (fun (die : Eta.Cause.die) ->
-                match die.exn with
+              (fun die ->
+                match die with
                 | Monitor.Input_lost -> true
                 | Failure msg ->
                     contains ~needle:"endian" msg
@@ -354,14 +369,12 @@ let test_rejected_auth_fd_flat () =
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
-  let rt = Eta_eio.Runtime.create ~sw ~clock () in
   with_fake_bus ~sw ~net ~clock ~dir ~count:100 Reject_auth (fun ~await_conn ->
       let baseline = fd_count () in
       for i = 1 to 100 do
         let result =
-          run_rt rt
-            (Eta.Effect.sync (fun () ->
-                 ignore (Monitor.connect_and_watch ~sw ~net)))
+          run_direct (fun () ->
+              Ok (ignore (Monitor.connect_and_watch ~sw ~net)))
         in
         expect_die ~label:(Printf.sprintf "auth %d" i) ~needle:"auth" result;
         await_conn ();
@@ -381,13 +394,10 @@ let test_failed_hello_closes () =
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
-  let rt = Eta_eio.Runtime.create ~sw ~clock () in
   with_fake_bus ~sw ~net ~clock ~dir ~count:1 Fail_hello (fun ~await_conn ->
       let baseline = fd_count () in
       let result =
-        run_rt rt
-          (Eta.Effect.sync (fun () ->
-               ignore (Monitor.connect_and_watch ~sw ~net)))
+        run_direct (fun () -> Ok (ignore (Monitor.connect_and_watch ~sw ~net)))
       in
       expect_die ~label:"hello" ~needle:"Hello" result;
       await_conn ();
@@ -400,13 +410,10 @@ let test_failed_watch_closes () =
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
-  let rt = Eta_eio.Runtime.create ~sw ~clock () in
   with_fake_bus ~sw ~net ~clock ~dir ~count:1 Fail_watch (fun ~await_conn ->
       let baseline = fd_count () in
       let result =
-        run_rt rt
-          (Eta.Effect.sync (fun () ->
-               ignore (Monitor.connect_and_watch ~sw ~net)))
+        run_direct (fun () -> Ok (ignore (Monitor.connect_and_watch ~sw ~net)))
       in
       expect_die ~label:"watch" ~needle:"WatchKeyboard" result;
       await_conn ();
@@ -422,15 +429,14 @@ let rec exn_texts exn =
 
 let cause_texts cause =
   List.concat_map
-    (fun (die : Eta.Cause.die) ->
-      Printexc.to_string die.exn :: exn_texts die.exn)
-    (Eta.Cause.defects cause)
+    (fun die -> Printexc.to_string die :: exn_texts die)
+    (defects cause)
   |> String.concat "\n"
 
 let expect_combined ~label ~needles result =
   match result with
-  | Eta.Exit.Ok _ -> Alcotest.fail (label ^ ": expected combined failure")
-  | Eta.Exit.Error cause ->
+  | Eta.Exit.Success _ -> Alcotest.fail (label ^ ": expected combined failure")
+  | Eta.Exit.Failure cause ->
       let text = cause_texts cause ^ "\n" ^ show_cause cause in
       List.iter
         (fun needle ->
@@ -448,13 +454,12 @@ let test_auth_reject_combines_close_failure () =
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
-  let rt = Eta_eio.Runtime.create ~sw ~clock () in
   with_fake_bus ~sw ~net ~clock ~dir ~count:1 Reject_auth (fun ~await_conn ->
       let baseline = fd_count () in
       let result =
-        run_rt rt
-          (Eta.Effect.sync (fun () ->
-               ignore
+        run_direct (fun () ->
+            Ok
+              (ignore
                  (Monitor.connect_and_watch_with ~close:close_then_raise ~sw
                     ~net)))
       in
@@ -471,16 +476,15 @@ let test_auth_cancel_combines_close_failure () =
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
-  let rt = Eta_eio.Runtime.create ~sw ~clock () in
   let seen, resolve_seen = Eio.Promise.create () in
   with_fake_bus ~sw ~net ~clock ~dir ~count:1 (Park `Auth)
     ~on_stage:(fun _ -> Eio.Promise.resolve resolve_seen ())
     (fun ~await_conn ->
       let baseline = fd_count () in
       let result =
-        run_rt rt
-          (Eta.Effect.sync (fun () ->
-               Eio.Cancel.sub (fun cc ->
+        run_direct (fun () ->
+            Ok
+              (Eio.Cancel.sub (fun cc ->
                    Eio.Fiber.fork ~sw (fun () ->
                        Eio.Promise.await seen;
                        Eio.Cancel.cancel cc (Failure "stage-cancel"));
@@ -501,14 +505,13 @@ let test_unwatch_cancel_combines_close_failure () =
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
-  let rt = Eta_eio.Runtime.create ~sw ~clock () in
   with_fake_bus ~sw ~net ~clock ~dir ~count:1 (Watch_then `Hold)
     (fun ~await_conn ->
       let baseline = fd_count () in
       let result =
-        run_rt rt
-          (Eta.Effect.sync (fun () ->
-               let flow = Monitor.connect_and_watch ~sw ~net in
+        run_direct (fun () ->
+            Ok
+              (let flow = Monitor.connect_and_watch ~sw ~net in
                Eio.Cancel.sub (fun cc ->
                    Eio.Cancel.cancel cc (Failure "unwatch-cancel");
                    Monitor.unwatch_and_close_with ~close:close_then_raise flow)))
@@ -526,32 +529,32 @@ let cancel_at_stage stage () =
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
-  let rt = Eta_eio.Runtime.create ~sw ~clock () in
   let seen, resolve_seen = Eio.Promise.create () in
   with_fake_bus ~sw ~net ~clock ~dir ~count:1 (Park stage)
     ~on_stage:(fun reached ->
       if reached = stage then Eio.Promise.resolve resolve_seen ())
     (fun ~await_conn ->
       let baseline = fd_count () in
-      let operation =
-        Eta.Effect.race
+      let operation () =
+        Eta.Concurrent.race ~sw
           [
-            Eta.Effect.sync (fun () ->
-                ignore (Monitor.connect_and_watch ~sw ~net))
-            |> Eta.Effect.map (fun () -> `Setup_finished);
-            Eta.Effect.sync (fun () -> Eio.Promise.await seen)
-            |> Eta.Effect.map (fun () -> `Cancelled_at_stage);
+            (fun () ->
+              ignore (Monitor.connect_and_watch ~sw ~net);
+              Ok `Setup_finished);
+            (fun () ->
+              Eio.Promise.await seen;
+              Ok `Cancelled_at_stage);
           ]
       in
-      (match run_rt rt operation with
-      | Eta.Exit.Ok `Cancelled_at_stage -> ()
-      | Eta.Exit.Ok `Setup_finished ->
+      (match run_direct operation with
+      | Eta.Exit.Success `Cancelled_at_stage -> ()
+      | Eta.Exit.Success `Setup_finished ->
           Alcotest.fail "setup completed before tagged cancellation"
-      | Eta.Exit.Error cause when Eta.Cause.is_interrupt_only cause ->
+      | Eta.Exit.Failure cause when Eta.Cause.is_interrupt_only cause ->
           Alcotest.fail
             "Eta.race used a failed/interrupt branch as cancellation; \
              the              tagged success branch must win"
-      | Eta.Exit.Error cause ->
+      | Eta.Exit.Failure cause ->
           Alcotest.failf "unexpected race failure: %s" (show_cause cause));
       await_conn ();
       Alcotest.(check int)
@@ -563,27 +566,24 @@ let test_failed_unwatch_write_still_closes () =
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
-  let rt = Eta_eio.Runtime.create ~sw ~clock () in
   with_fake_bus ~sw ~net ~clock ~dir ~count:1 (Watch_then `Eof)
     (fun ~await_conn ->
       let result =
-        run_rt rt
-          (Eta.Effect.sync (fun () -> Monitor.connect_and_watch ~sw ~net)
-          |> Eta.Effect.bind (fun flow ->
-              Eta.Effect.sync (fun () ->
-                  await_conn ();
-                  let before = fd_count () in
-                  Monitor.unwatch_and_close flow;
-                  let after = fd_count () in
-                  if after >= before then
-                    Alcotest.failf
-                      "failed Unwatch write skipped close: fd \
-                       before=%d                           after=%d"
-                      before after)))
+        run_direct (fun () ->
+            let flow = Monitor.connect_and_watch ~sw ~net in
+            await_conn ();
+            let before = fd_count () in
+            Monitor.unwatch_and_close flow;
+            let after = fd_count () in
+            if after >= before then
+              Alcotest.failf
+                "failed Unwatch write skipped close: fd before=%d after=%d"
+                before after;
+            Ok ())
       in
       match result with
-      | Eta.Exit.Ok () -> ()
-      | Eta.Exit.Error cause ->
+      | Eta.Exit.Success () -> ()
+      | Eta.Exit.Failure cause ->
           Alcotest.failf "unwatch/close raised %s" (show_cause cause))
 
 let test_unexpected_eof_fails_consumer () =
@@ -593,28 +593,30 @@ let test_unexpected_eof_fails_consumer () =
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
   let process_mgr = Eio.Stdenv.process_mgr env in
-  let rt = Eta_eio.Runtime.create ~sw ~clock () in
   with_fake_bus ~sw ~net ~clock ~dir ~count:1 (Watch_then `Eof)
     (fun ~await_conn ->
-      let operation =
-        Monitor.with_monitor ~sw ~net ~process_mgr (fun _keyboard ->
-            Eta.Effect.never)
-        |> Eta.Effect.timeout_as (Eta.Duration.seconds 2)
-             ~on_timeout:`Harness_timeout
+      let operation () =
+        Eta.Timeout.timeout ~clock (Eta.Duration.seconds 2) (fun () ->
+            Monitor.with_monitor ~sw ~net ~clock ~process_mgr (fun _keyboard ->
+                Eio.Fiber.await_cancel ();
+                Ok ()))
+        |> Result.map_error (function
+          | `Timeout -> `Harness_timeout
+          | error -> error)
       in
-      let result = run_rt rt operation in
+      let result = run_direct operation in
       await_conn ();
       expect_input_lost ~label:"unexpected EOF" result;
       match result with
-      | Eta.Exit.Error cause ->
+      | Eta.Exit.Failure cause ->
           let hit =
             List.exists
-              (fun (die : Eta.Cause.die) ->
-                match die.exn with Monitor.Input_lost -> true | _ -> false)
-              (Eta.Cause.defects cause)
+              (fun die ->
+                match die with Monitor.Input_lost -> true | _ -> false)
+              (defects cause)
           in
           Alcotest.(check bool) "EOF is named Input_lost" true hit
-      | Eta.Exit.Ok _ -> ())
+      | Eta.Exit.Success _ -> ())
 
 let test_malformed_packet_fails_consumer () =
   with_sandbox @@ fun dir ->
@@ -623,25 +625,28 @@ let test_malformed_packet_fails_consumer () =
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
   let process_mgr = Eio.Stdenv.process_mgr env in
-  let rt = Eta_eio.Runtime.create ~sw ~clock () in
   with_fake_bus ~sw ~net ~clock ~dir ~count:1 (Watch_then `Malformed)
     (fun ~await_conn ->
-      let operation =
-        Monitor.with_monitor ~sw ~net ~process_mgr (fun _keyboard ->
-            Eta.Effect.never)
-        |> Eta.Effect.timeout_as (Eta.Duration.seconds 2)
-             ~on_timeout:`Harness_timeout
+      let operation () =
+        Eta.Timeout.timeout ~clock (Eta.Duration.seconds 2) (fun () ->
+            Monitor.with_monitor ~sw ~net ~clock ~process_mgr (fun _keyboard ->
+                Eio.Fiber.await_cancel ();
+                Ok ()))
+        |> Result.map_error (function
+          | `Timeout -> `Harness_timeout
+          | error -> error)
       in
-      let result = run_rt rt operation in
+      let result = run_direct operation in
       await_conn ();
       match result with
-      | Eta.Exit.Ok _ -> Alcotest.fail "malformed packet: consumer succeeded"
-      | Eta.Exit.Error cause -> (
-          match Eta.Cause.failures cause with
+      | Eta.Exit.Success _ ->
+          Alcotest.fail "malformed packet: consumer succeeded"
+      | Eta.Exit.Failure cause -> (
+          match failures cause with
           | [ `Harness_timeout ] ->
               Alcotest.fail "malformed packet swallowed; consumer hung"
           | _ ->
-              let dies = Eta.Cause.defects cause in
+              let dies = defects cause in
               if dies = [] then
                 Alcotest.failf "expected parse defect, got %s"
                   (show_cause cause)))
@@ -653,18 +658,17 @@ let test_normal_disconnect_closes () =
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
   let process_mgr = Eio.Stdenv.process_mgr env in
-  let rt = Eta_eio.Runtime.create ~sw ~clock () in
   with_fake_bus ~sw ~net ~clock ~dir ~count:1 (Watch_then `Hold)
     (fun ~await_conn ->
       let baseline = fd_count () in
       let result =
-        run_rt rt
-          (Monitor.with_monitor ~sw ~net ~process_mgr (fun _keyboard ->
-               Eta.Effect.unit))
+        run_direct (fun () ->
+            Monitor.with_monitor ~sw ~net ~clock ~process_mgr (fun _keyboard ->
+                Ok ()))
       in
       (match result with
-      | Eta.Exit.Ok () -> ()
-      | Eta.Exit.Error cause ->
+      | Eta.Exit.Success () -> ()
+      | Eta.Exit.Failure cause ->
           Alcotest.failf "normal disconnect failed: %s" (show_cause cause));
       await_conn ();
       Alcotest.(check int)

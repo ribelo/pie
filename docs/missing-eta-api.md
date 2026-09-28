@@ -25,13 +25,3 @@ Pie currently wraps Codex Realtime WebSocket connection in a ten-second total
 `Eta.Effect.timeout_as`. The established WebSocket stream is deliberately not
 wrapped in that deadline. A future Eta connection-timeout parameter should
 replace the total-effect establishment workaround. (`etagap-g1ip`)
-
-## Named background cancellation
-
-On the current Eta `master`, naming an `Eta.Effect.with_background` reader can
-convert the scope's internal cancellation into an anonymous interruption. Eta
-then reports a successful foreground body as `Finalizer(Interrupt)` instead of
-recognizing clean background shutdown. Pie therefore keeps the PulseAudio
-reader scoped with unnamed `with_background` and preserves runtime cancellation
-when its Eio socket switch exits. This workaround can be removed when Eta's
-effect instrumentation preserves the original interruption identity.

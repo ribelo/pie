@@ -12,15 +12,4 @@
 (test
  (name test_streaming_resampling)
  (modules test_streaming_resampling)
- (libraries
-  pie
-  alcotest
-  eio_main
-  eta
-  eta_eio
-  eta_http
-  eta_http_eio
-  eta_http_tls_openssl
-  eta_stream
-  unix
-  cstruct))
+ (libraries pie alcotest eio_main eta eta_test eta_http eio unix cstruct))

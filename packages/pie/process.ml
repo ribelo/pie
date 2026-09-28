@@ -1,49 +1,8 @@
-(** Process door: optional OTEL scope, stderr logfmt tee, HTTP client, and exit
-    mapping.
+(** HTTP and optional telemetry assembly for the Door. The Door owns signals,
+    the logger, the root switch, and the final process exit. *)
 
-    OTEL export is opt-in through [PIE_OTLP]. [Eta_eio.run_main] does not expose
-    the Eio environment. This module uses the same public [Exit] verbs and
-    signal-to-interrupt mapping as [run_main], and installs HTTP independently
-    of whether OTEL export is enabled. *)
-
-exception Process_interrupt
-
-let stderr_logger : Eta.Capabilities.logger =
-  object
-    method log record =
-      try
-        Printf.eprintf "%s\n%!" (Eta_observability.Logger.format_logfmt record)
-      with Invalid_argument _ ->
-        Printf.eprintf
-          "level=error body=\"invalid log attributes\" component=pie\n%!"
-  end
-
-let process_http_client : Eta_http_eio.Client.t option ref = ref None
-
-let http_client ~sw ~net =
-  match !process_http_client with
-  | Some client -> client
-  | None -> Eta_http_eio.Client.make_h1 ~sw ~net ()
-
-let emit_sync ?(attrs = []) ~level body =
-  let record : Eta_observability.Logger.record =
-    {
-      level;
-      body;
-      ts_ms = int_of_float (Unix.gettimeofday () *. 1000.0);
-      attrs = ("component", "pie") :: attrs;
-      trace_id = "";
-      span_id = "";
-    }
-  in
-  stderr_logger#log record
-
-let with_stderr_tee computation =
-  Eta_observability.intercept_log
-    (fun record ->
-      stderr_logger#log record;
-      Eta_observability.Keep)
-    computation
+let make_http ~sw ~net ~clock =
+  Eta_http.Client.create ~sw ~net ~clock ~tls:(Eta_http.Client.tls ()) ()
 
 let otel_enabled () =
   match Sys.getenv_opt "PIE_OTLP" with
@@ -53,69 +12,29 @@ let otel_enabled () =
       | "1" | "true" | "yes" | "on" -> true
       | _ -> false)
 
-let install_signal_interrupt ~sw ~clock =
-  let fired = Atomic.make false in
-  let live = Atomic.make true in
-  let fire _ = Atomic.set fired true in
-  let previous_int = Sys.Safe.signal Sys.sigint (Sys.Signal_handle fire) in
-  let previous_term = Sys.Safe.signal Sys.sigterm (Sys.Signal_handle fire) in
-  Eio.Fiber.fork_daemon ~sw (fun () ->
-      while (not (Atomic.get fired)) && Atomic.get live do
-        Eio.Time.sleep clock 0.05
-      done;
-      if Atomic.get live && Atomic.get fired then
-        Eio.Switch.fail sw Process_interrupt;
-      `Stop_daemon);
-  fun () ->
-    Atomic.set live false;
-    Atomic.set fired true;
-    Sys.Safe.set_signal Sys.sigint previous_int;
-    Sys.Safe.set_signal Sys.sigterm previous_term
-
-let run ~pp_err mk_eff =
-  try
-    Eio_main.run @@ fun env ->
-    Eio.Switch.run @@ fun sw ->
-    let clock = Eio.Stdenv.clock env in
-    let net = Eio.Stdenv.net env in
-    let restore = install_signal_interrupt ~sw ~clock in
-    Fun.protect ~finally:restore @@ fun () ->
-    let client = Eta_http_eio.Client.make_h1 ~sw ~net () in
-    process_http_client := Some client;
-    Fun.protect
-      ~finally:(fun () -> process_http_client := None)
-      (fun () ->
-        let body () =
-          mk_eff ~env ~sw
-          |> Eta.Effect.map_error (fun err -> `App err)
-          |> Eta_observability.annotate_logs [ ("component", "pie") ]
-        in
-        let pp fmt = function
-          | `Invalid_config message -> Format.pp_print_string fmt message
-          | `App err -> pp_err fmt err
-          | `Startup_failed cause ->
-              Format.fprintf fmt "OTEL startup failed: %a"
-                (Eta.Cause.pp (fun fmt () -> Format.pp_print_string fmt "()"))
-                cause
-        in
-        let exit =
-          if otel_enabled () then
-            Eta_otel_eio.with_otlp ~service_name:"pie"
-              ~attrs:[ ("service.version", "0.1.0") ]
-              ~sw ~net ~clock
-              (fun () -> with_stderr_tee (body ()))
-          else
-            Eta_eio.run_once ~sw ~clock
-              (Eta_observability.with_logger stderr_logger (body ()))
-        in
-        match exit with
-        | Ok _ -> 0
-        | Error cause when Eta.Cause.is_interrupt_only cause -> 130
-        | Error _ as error ->
-            (match Eta.Exit.render_error ~pp_err:pp error with
-            | Some message -> Printf.eprintf "%s\n%!" message
-            | None -> ());
-            Eta.Exit.process_code error ~ok:(fun _ -> 0))
-  with
-  | Process_interrupt -> 130
-  | Eio.Cancel.Cancelled _ -> 130
+let telemetry ~sw (env : _ Eta_app.Env.t) _config : Eta_app.telemetry =
+  if not (otel_enabled ()) then { reporters = []; span_ids = None }
+  else
+    let endpoint =
+      match Sys.getenv_opt "OTEL_EXPORTER_OTLP_ENDPOINT" with
+      | Some url when String.trim url <> "" -> url
+      | _ -> "http://localhost:4318"
+    in
+    let http_client = make_http ~sw ~net:env.base#net ~clock:env.base#clock in
+    let on_error error =
+      Format.eprintf "Pie OTLP export failed: %a@." Eta_otel.pp_error error
+    in
+    match
+      Eta_otel.create ~sw ~clock:env.base#clock ~http_client ~endpoint
+        ~service_name:"pie"
+        ~resource:[ ("service.version", "0.1.0") ]
+        ~on_error ()
+    with
+    | Ok exporter ->
+        {
+          reporters = [ Eta_otel.reporter exporter ];
+          span_ids = Some (Eta_otel.span_ids exporter);
+        }
+    | Error error ->
+        failwith
+          (Format.asprintf "Pie OTLP startup failed: %a" Eta_otel.pp_error error)

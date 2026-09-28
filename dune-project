@@ -10,21 +10,21 @@
  (description "Pie OCaml library.")
  (depends
   (ocaml
-   (>= 5.2.0))
+   (>= 5.4.0))
   (dune
    (>= 3.0))
   (eta
    (>= 0.1.0))
   eta_ai
   eta_ai_openrouter
-  eta_component
-  eta_eio
+  eta_ai_realtime
+  eta_app
   eta_http
-  eta_http_eio
-  (eta_http_tls_openssl :with-test)
+  eta_ipc
+  eta_json
   eta_observability
-  eta_otel_eio
-  eta_stream
+  eta_otel
+  (eta_test :with-test)
   (eio
    (>= 1.0))
   (yojson
