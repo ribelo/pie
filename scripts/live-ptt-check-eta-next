@@ -98,7 +98,7 @@ trap cleanup EXIT INT TERM
 printf '\nPrivate result: %s\nPrivate diagnostic log: %s\n' "$result" "$log"
 printf 'Building Pie into a temporary prefix (never into the shared switch)...\n'
 if ! (cd "$root" && timeout 1500 nix develop -c env DUNE_CACHE=disabled \
-  DUNE_BUILD_DIR="$work/build" dune install --only-packages pie --prefix "$work/prefix") \
+  DUNE_BUILD_DIR="$work/build" sh -c 'dune build -p pie @install && dune install --only-packages pie --prefix "$0"' "$work/prefix") \
   > "$work/build.log" 2>&1; then
   printf 'Build failed; inspect %s/build.log\n' "$work" >&2
   printf 'Build: failed\n' >> "$result"
