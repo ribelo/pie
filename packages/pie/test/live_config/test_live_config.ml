@@ -41,7 +41,7 @@ let event ?(state = 0) ?(keysym = transcribe_keysym) ?(keycode = 75) ~released
     () : Pie.Keyboard.Monitor.key_event =
   { released; state; keysym; unichar = 0; keycode }
 
-let wait_until ?(steps = 50) ~clock pred =
+let wait_until ?(steps = 100) ~clock pred =
   let rec loop n =
     if pred () then ()
     else if n <= 0 then Alcotest.fail "deadline"
@@ -55,6 +55,10 @@ let pp_run_error fmt = function
   | `Pulse_error error ->
       Format.pp_print_string fmt (Pie.Pulse.Client.error_message error)
   | `Ptt_error msg -> Format.pp_print_string fmt msg
+  | `Ptt_cause cause ->
+      Eta.Cause.pp
+        (fun fmt (`Ptt_error msg) -> Format.pp_print_string fmt msg)
+        fmt cause
 
 let fail_cause cause =
   Alcotest.failf "workflow failed: %a" (Eta.Cause.pp pp_run_error) cause
@@ -79,33 +83,38 @@ type audio_cmd = Chunk of bytes | Fail of Pie.Pulse.Client.error
 
 let make_audio ?(takes = Atomic.make 0) () =
   let cmd = Eio.Stream.create 16 in
-  let rec source () =
-    Eta_stream.Stream.from_effect
-      (Eta.Effect.sync (fun () ->
-           let item = Eio.Stream.take cmd in
-           Atomic.incr takes;
-           item)
-      |> Eta.Effect.bind (function
-        | Chunk bytes -> Eta.Effect.pure bytes
-        | Fail error -> Eta.Effect.fail (`Pulse_error error)))
-    |> Eta_stream.Stream.flat_map (fun chunk ->
-        Eta_stream.Stream.concat (Eta_stream.Stream.succeed chunk) (source ()))
+  let source () =
+    match Eio.Stream.take cmd with
+    | Chunk bytes ->
+        Atomic.incr takes;
+        Ok (Some bytes)
+    | Fail error ->
+        Atomic.incr takes;
+        Error (`Pulse_error error)
   in
-  (cmd, source ())
+  (cmd, source)
 
 let offer_pcm cmd = Eio.Stream.add cmd (Chunk loud_pcm)
 
-let with_workflow_background ~sw ~clock workflow assertions =
+let test_logger env =
+  Eta_observability.Logger.create ~service:"pie-live-config-test"
+    ~clock:(Eio.Stdenv.clock env)
+    ~mono_clock:(Eio.Stdenv.mono_clock env)
+    ~reporter:(Eta_observability.Logger.Reporter.records (fun _ -> ()))
+    ()
+
+let with_workflow_background ~sw ~clock:_ workflow assertions =
   match
-    Eta_eio.run_once ~sw ~clock
-      (Eta.Effect.with_background ~name:"pie.live-config.workflow" workflow
-         (fun () -> Eta.Effect.sync assertions))
+    Eta.Concurrent.with_background ~sw workflow (fun () ->
+        assertions ();
+        Ok ())
   with
   | Ok () -> ()
-  | Error cause -> fail_cause cause
+  | Error error -> fail_cause (Eta.Cause.Fail error)
 
-let run_live ~sw ~net ~process_mgr ~mono_clock ~dir ~config_control ~stt
-    ~deliver ~keyboard ~audio ?ptt_transcribe_keysym ?ptt_translate_keysym () =
+let run_live ~sw ~fs ~clock ~logger ~net ~process_mgr ~mono_clock ~dir
+    ~config_control ~stt ~deliver ~keyboard ~audio ?ptt_transcribe_keysym
+    ?ptt_translate_keysym () =
   let socket_path = Filename.concat dir "control.sock" in
   let retry_dir = Filename.concat dir "recordings" in
   (try Unix.mkdir retry_dir 0o700
@@ -113,9 +122,11 @@ let run_live ~sw ~net ~process_mgr ~mono_clock ~dir ~config_control ~stt
   let inputs =
     { Pie.Assistant.Service.keyboard; audio; source_name = Some "test-source" }
   in
-  Pie.Assistant.Service.run_with_inputs ~sw ~net ~process_mgr ~mono_clock
-    ~inputs ~config_control ~stt ~deliver ~socket_path ~retry_dir
-    ~min_duration_ms:0 ?ptt_transcribe_keysym ?ptt_translate_keysym ()
+  fun () ->
+    Pie.Assistant.Service.run_with_inputs ~sw ~net ~fs ~clock ~logger
+      ~process_mgr ~mono_clock ~inputs ~config_control ~stt ~deliver
+      ~socket_path ~retry_dir ~min_duration_ms:0 ?ptt_transcribe_keysym
+      ?ptt_translate_keysym ()
 
 let cycle ~clock ~keyboard ~audio_q ~delivered ?state ?keysym ?keycode () =
   Pie.Keyboard.Monitor.emit keyboard
@@ -139,13 +150,14 @@ let test_cli_override_before_and_after_reload () =
       let load _ =
         (base_config ~transcribe:(Atomic.get file_transcribe) (), stamp ())
       in
-      let stt _ _ _ = Eta.Effect.pure "ok" in
+      let stt _ _ _ = Ok "ok" in
       let deliver _ _ text =
-        Eta.Effect.sync (fun () ->
-            Atomic.set delivered (text :: Atomic.get delivered))
+        Atomic.set delivered (text :: Atomic.get delivered);
+        Ok ()
       in
       let workflow =
-        run_live ~sw ~net:(Eio.Stdenv.net env)
+        run_live ~sw ~fs:(Eio.Stdenv.fs env) ~clock:(Eio.Stdenv.clock env)
+          ~logger:(test_logger env) ~net:(Eio.Stdenv.net env)
           ~process_mgr:(Eio.Stdenv.process_mgr env)
           ~mono_clock:(Eio.Stdenv.mono_clock env)
           ~dir ~config_control:{ stamp; load } ~stt ~deliver ~keyboard ~audio
@@ -189,12 +201,14 @@ let test_physical_release_after_binding_reload () =
       let load _ =
         (base_config ~transcribe:(Atomic.get transcribe) (), stamp ())
       in
-      let stt _ _ _ = Eta.Effect.pure "held" in
+      let stt _ _ _ = Ok "held" in
       let deliver _ _ text =
-        Eta.Effect.sync (fun () -> Atomic.set delivered [ text ])
+        Atomic.set delivered [ text ];
+        Ok ()
       in
       let workflow =
-        run_live ~sw ~net:(Eio.Stdenv.net env)
+        run_live ~sw ~fs:(Eio.Stdenv.fs env) ~clock:(Eio.Stdenv.clock env)
+          ~logger:(test_logger env) ~net:(Eio.Stdenv.net env)
           ~process_mgr:(Eio.Stdenv.process_mgr env)
           ~mono_clock:(Eio.Stdenv.mono_clock env)
           ~dir ~config_control:{ stamp; load } ~stt ~deliver ~keyboard ~audio ()
@@ -228,12 +242,14 @@ let test_modifier_reload_while_held () =
       let load _ =
         (base_config ~transcribe_shift:(Atomic.get shift) (), stamp ())
       in
-      let stt _ _ _ = Eta.Effect.pure "shift-held" in
+      let stt _ _ _ = Ok "shift-held" in
       let deliver _ _ text =
-        Eta.Effect.sync (fun () -> Atomic.set delivered [ text ])
+        Atomic.set delivered [ text ];
+        Ok ()
       in
       let workflow =
-        run_live ~sw ~net:(Eio.Stdenv.net env)
+        run_live ~sw ~fs:(Eio.Stdenv.fs env) ~clock:(Eio.Stdenv.clock env)
+          ~logger:(test_logger env) ~net:(Eio.Stdenv.net env)
           ~process_mgr:(Eio.Stdenv.process_mgr env)
           ~mono_clock:(Eio.Stdenv.mono_clock env)
           ~dir ~config_control:{ stamp; load } ~stt ~deliver ~keyboard ~audio ()
@@ -264,9 +280,10 @@ let test_mod5_latch_survives_key_release () =
       let delivered = Atomic.make [] in
       let stamp () = [ Some (1, 1, 0, 0.) ] in
       let load _ = (base_config (), stamp ()) in
-      let stt _ _ _ = Eta.Effect.pure "latched" in
+      let stt _ _ _ = Ok "latched" in
       let deliver _ _ text =
-        Eta.Effect.sync (fun () -> Atomic.set delivered [ text ])
+        Atomic.set delivered [ text ];
+        Ok ()
       in
       let feeding = Atomic.make true in
       Eio.Fiber.fork ~sw (fun () ->
@@ -279,7 +296,8 @@ let test_mod5_latch_survives_key_release () =
           in
           loop ());
       let workflow =
-        run_live ~sw ~net:(Eio.Stdenv.net env)
+        run_live ~sw ~fs:(Eio.Stdenv.fs env) ~clock:(Eio.Stdenv.clock env)
+          ~logger:(test_logger env) ~net:(Eio.Stdenv.net env)
           ~process_mgr:(Eio.Stdenv.process_mgr env)
           ~mono_clock:(Eio.Stdenv.mono_clock env)
           ~dir ~config_control:{ stamp; load } ~stt ~deliver ~keyboard ~audio ()
@@ -326,12 +344,14 @@ let test_invalid_reload_keeps_last_good () =
           raise (Pie.Config.Stt.Config_error "synthetic reload failure");
         (base_config (), stamp ())
       in
-      let stt _ _ _ = Eta.Effect.pure "last-good" in
+      let stt _ _ _ = Ok "last-good" in
       let deliver _ _ text =
-        Eta.Effect.sync (fun () -> Atomic.set delivered [ text ])
+        Atomic.set delivered [ text ];
+        Ok ()
       in
       let workflow =
-        run_live ~sw ~net:(Eio.Stdenv.net env)
+        run_live ~sw ~fs:(Eio.Stdenv.fs env) ~clock:(Eio.Stdenv.clock env)
+          ~logger:(test_logger env) ~net:(Eio.Stdenv.net env)
           ~process_mgr:(Eio.Stdenv.process_mgr env)
           ~mono_clock:(Eio.Stdenv.mono_clock env)
           ~dir ~config_control:{ stamp; load } ~stt ~deliver ~keyboard ~audio ()
@@ -358,12 +378,14 @@ let test_threshold_reload_does_not_change_active_attempt () =
       let peak = Atomic.make 0.0 in
       let stamp () = [ Some (1, 1, Atomic.get gen, 0.) ] in
       let load _ = (base_config ~peak:(Atomic.get peak) (), stamp ()) in
-      let stt _ _ _ = Eta.Effect.pure "snapshot" in
+      let stt _ _ _ = Ok "snapshot" in
       let deliver _ _ text =
-        Eta.Effect.sync (fun () -> Atomic.set delivered [ text ])
+        Atomic.set delivered [ text ];
+        Ok ()
       in
       let workflow =
-        run_live ~sw ~net:(Eio.Stdenv.net env)
+        run_live ~sw ~fs:(Eio.Stdenv.fs env) ~clock:(Eio.Stdenv.clock env)
+          ~logger:(test_logger env) ~net:(Eio.Stdenv.net env)
           ~process_mgr:(Eio.Stdenv.process_mgr env)
           ~mono_clock:(Eio.Stdenv.mono_clock env)
           ~dir ~config_control:{ stamp; load } ~stt ~deliver ~keyboard ~audio ()
@@ -428,12 +450,14 @@ let test_failed_on_press_different_key_not_stuck () =
           },
           stamp () )
       in
-      let stt _ _ _ = Eta.Effect.pure "ok" in
+      let stt _ _ _ = Ok "ok" in
       let deliver _ _ text =
-        Eta.Effect.sync (fun () -> Atomic.set delivered [ text ])
+        Atomic.set delivered [ text ];
+        Ok ()
       in
       let workflow =
-        run_live ~sw ~net:(Eio.Stdenv.net env)
+        run_live ~sw ~fs:(Eio.Stdenv.fs env) ~clock:(Eio.Stdenv.clock env)
+          ~logger:(test_logger env) ~net:(Eio.Stdenv.net env)
           ~process_mgr:(Eio.Stdenv.process_mgr env)
           ~mono_clock:(Eio.Stdenv.mono_clock env)
           ~dir ~config_control:{ stamp; load } ~stt ~deliver ~keyboard ~audio ()
@@ -483,13 +507,14 @@ let test_autorepeat_press_does_not_restart_capture () =
       let delivered = Atomic.make [] in
       let stamp () = [ Some (1, 1, 0, 0.) ] in
       let load _ = (base_config (), stamp ()) in
-      let stt _ _ _ = Eta.Effect.pure "once" in
+      let stt _ _ _ = Ok "once" in
       let deliver _ _ text =
-        Eta.Effect.sync (fun () ->
-            Atomic.set delivered (text :: Atomic.get delivered))
+        Atomic.set delivered (text :: Atomic.get delivered);
+        Ok ()
       in
       let workflow =
-        run_live ~sw ~net:(Eio.Stdenv.net env)
+        run_live ~sw ~fs:(Eio.Stdenv.fs env) ~clock:(Eio.Stdenv.clock env)
+          ~logger:(test_logger env) ~net:(Eio.Stdenv.net env)
           ~process_mgr:(Eio.Stdenv.process_mgr env)
           ~mono_clock:(Eio.Stdenv.mono_clock env)
           ~dir ~config_control:{ stamp; load } ~stt ~deliver ~keyboard ~audio ()
@@ -514,12 +539,14 @@ let test_busy_second_key_repeat_ignored_until_keyup () =
       let delivered = Atomic.make [] in
       let stamp () = [ Some (1, 1, 0, 0.) ] in
       let load _ = (base_config (), stamp ()) in
-      let stt _ _ _ = Eta.Effect.pure "ok" in
+      let stt _ _ _ = Ok "ok" in
       let deliver _ _ text =
-        Eta.Effect.sync (fun () -> Atomic.set delivered [ text ])
+        Atomic.set delivered [ text ];
+        Ok ()
       in
       let workflow =
-        run_live ~sw ~net:(Eio.Stdenv.net env)
+        run_live ~sw ~fs:(Eio.Stdenv.fs env) ~clock:(Eio.Stdenv.clock env)
+          ~logger:(test_logger env) ~net:(Eio.Stdenv.net env)
           ~process_mgr:(Eio.Stdenv.process_mgr env)
           ~mono_clock:(Eio.Stdenv.mono_clock env)
           ~dir ~config_control:{ stamp; load } ~stt ~deliver ~keyboard ~audio ()
@@ -562,12 +589,14 @@ let test_mod5_autorepeat_does_not_toggle_latch () =
       let delivered = Atomic.make [] in
       let stamp () = [ Some (1, 1, 0, 0.) ] in
       let load _ = (base_config (), stamp ()) in
-      let stt _ _ _ = Eta.Effect.pure "latched" in
+      let stt _ _ _ = Ok "latched" in
       let deliver _ _ text =
-        Eta.Effect.sync (fun () -> Atomic.set delivered [ text ])
+        Atomic.set delivered [ text ];
+        Ok ()
       in
       let workflow =
-        run_live ~sw ~net:(Eio.Stdenv.net env)
+        run_live ~sw ~fs:(Eio.Stdenv.fs env) ~clock:(Eio.Stdenv.clock env)
+          ~logger:(test_logger env) ~net:(Eio.Stdenv.net env)
           ~process_mgr:(Eio.Stdenv.process_mgr env)
           ~mono_clock:(Eio.Stdenv.mono_clock env)
           ~dir ~config_control:{ stamp; load } ~stt ~deliver ~keyboard ~audio ()
@@ -598,6 +627,36 @@ let test_mod5_autorepeat_does_not_toggle_latch () =
             "next physical Mod5 press stops latch" [ "latched" ]
             (Atomic.get delivered)))
 
+let test_service_cancellation_closes_listener () =
+  Eio_main.run @@ fun env ->
+  with_dir (fun dir ->
+      Eio.Switch.run @@ fun sw ->
+      let clock = Eio.Stdenv.clock env in
+      let keyboard = Pie.Keyboard.Monitor.create () in
+      let _, audio = make_audio () in
+      let stamp () = [ Some (1, 1, 0, 0.) ] in
+      let load _ = (base_config (), stamp ()) in
+      let stopped = Atomic.make false in
+      let socket_path = Filename.concat dir "control.sock" in
+      let workflow =
+        run_live ~sw ~fs:(Eio.Stdenv.fs env) ~clock ~logger:(test_logger env)
+          ~net:(Eio.Stdenv.net env)
+          ~process_mgr:(Eio.Stdenv.process_mgr env)
+          ~mono_clock:(Eio.Stdenv.mono_clock env)
+          ~dir ~config_control:{ stamp; load }
+          ~stt:(fun _ _ _ -> Ok "unused")
+          ~deliver:(fun _ _ _ -> Ok ())
+          ~keyboard ~audio ()
+      in
+      with_workflow_background ~sw ~clock
+        (fun () ->
+          Fun.protect ~finally:(fun () -> Atomic.set stopped true) workflow)
+        (fun () -> wait_until ~clock (fun () -> Sys.file_exists socket_path));
+      Alcotest.(check bool) "service fiber settled" true (Atomic.get stopped);
+      Alcotest.(check bool)
+        "listener path removed" false
+        (Sys.file_exists socket_path))
+
 let test_cli_override_applied_to_published_record () =
   let file = base_config ~transcribe:file_keysym () in
   let published =
@@ -615,6 +674,8 @@ let () =
     [
       ( "publication",
         [
+          Alcotest.test_case "service cancellation removes owned listener"
+            `Quick test_service_cancellation_closes_listener;
           Alcotest.test_case "CLI override is the published record" `Quick
             test_cli_override_applied_to_published_record;
           Alcotest.test_case "CLI override before and after reload" `Quick

@@ -1,9 +1,8 @@
-open Eta.Syntax
-
+let ( let* ) = Result.bind
 let default_min_duration_ms = 120
 let config_path = Paths.stt_config_path
 
-let watched_paths () =
+let watched_paths ?(config_path = config_path) () =
   let prompts_dir = Filename.concat (Filename.dirname config_path) "prompts" in
   [
     config_path;
@@ -18,26 +17,26 @@ let stamp path =
       (stat.Unix.st_dev, stat.Unix.st_ino, stat.Unix.st_size, stat.Unix.st_mtime)
   with Unix.Unix_error _ -> None
 
-let config_stamp () = List.map stamp (watched_paths ())
+let config_stamp ?(config_path = config_path) () =
+  List.map stamp (watched_paths ~config_path ())
 
-let load_snapshot attempts =
-  let before = config_stamp () in
-  let config = Config.Stt.load ~config_path () in
-  let after = config_stamp () in
-  if before = after then (config, after)
-  else if attempts > 0 then
-    let rec retry n =
-      let b = config_stamp () in
-      let c = Config.Stt.load ~config_path () in
-      let a = config_stamp () in
-      if b = a then (c, a)
-      else if n > 0 then retry (n - 1)
-      else
-        raise
-          (Config.Stt.Config_error "config changed repeatedly while loading")
+let load_snapshot ~fs ~source attempts =
+  let config_path = Config.Stt.source_path source in
+  let stamp () = config_stamp ~config_path () in
+  let rec retry n =
+    let before = stamp () in
+    let config =
+      match Config.Stt.load ~fs ~source () with
+      | Ok cfg -> cfg
+      | Error (`Config msg) -> raise (Config.Stt.Config_error msg)
     in
-    retry (attempts - 1)
-  else raise (Config.Stt.Config_error "config changed repeatedly while loading")
+    let after = stamp () in
+    if before = after then (config, after)
+    else if n > 0 then retry (n - 1)
+    else
+      raise (Config.Stt.Config_error "config changed repeatedly while loading")
+  in
+  retry attempts
 
 type ptt_mode = Transcribe | Translate
 type ptt_binding = { keysym : int; shift : bool }
@@ -206,6 +205,7 @@ let rec ptt_status_of_failures = function
   | _ :: rest -> ptt_status_of_failures rest
 
 let status_of_cause cause =
+  let failures = Eta.Cause.failures cause in
   let rec pulse acc = function
     | [] -> acc
     | `Pulse_error (Pulse.Client.Recording_overload _ as err) :: _ -> Some err
@@ -213,9 +213,16 @@ let status_of_cause cause =
         pulse (match acc with None -> Some err | Some _ -> acc) rest
     | _ :: rest -> pulse acc rest
   in
-  match pulse None (Eta.Cause.failures cause) with
+  match pulse None failures with
   | Some err -> diagnostic_pulse err
-  | None -> ptt_status_of_failures (Eta.Cause.failures cause)
+  | None ->
+      ptt_status_of_failures
+        (List.concat_map
+           (function
+             | `Ptt_error _ as error -> [ error ]
+             | `Ptt_cause cause -> Eta.Cause.failures cause
+             | `Pulse_error _ -> [])
+           failures)
 
 let ptt_of_injection error = ptt_error (injection_error_message error)
 let stt_of_ptt (`Ptt_error msg) = `Stt_error msg
@@ -318,7 +325,8 @@ let startup_config_json ?(config_path = Paths.stt_config_path)
     ]
   |> Yojson.Safe.pretty_to_string
 
-let run_stt ~sw ~net ~process_mgr:_ (config : Config.Stt.t) mode pcm_bytes =
+let run_stt ~sw ~net ~clock ~logger ~process_mgr:_ (config : Config.Stt.t) mode
+    pcm_bytes =
   let prompt_template =
     match mode with
     | Transcribe -> config.transcription_prompt
@@ -330,11 +338,11 @@ let run_stt ~sw ~net ~process_mgr:_ (config : Config.Stt.t) mode pcm_bytes =
       let pcm_bytes = normalize_for_stt config pcm_bytes in
       match mode with
       | Transcribe ->
-          Stt.Codex_realtime.transcribe_with_prompt ~sw ~net
+          Stt.Codex_realtime.transcribe_with_prompt ~sw ~net ~clock
             ~model:resolved_model.model ~language:config.transcription_language
             ~prompt_template pcm_bytes
       | Translate ->
-          Stt.Codex_realtime.translate_with_prompt ~sw ~net
+          Stt.Codex_realtime.translate_with_prompt ~sw ~net ~clock
             ~model:resolved_model.model
             ~source_language:config.translation_source_language
             ~target_language:config.translation_target_language ~prompt_template
@@ -343,41 +351,37 @@ let run_stt ~sw ~net ~process_mgr:_ (config : Config.Stt.t) mode pcm_bytes =
       let pcm_bytes = normalize_for_stt config pcm_bytes in
       match mode with
       | Transcribe ->
-          Stt.Openrouter.transcribe_with_prompt ~sw ~net
+          Stt.Openrouter.transcribe_with_prompt ~sw ~net ~clock ~logger
             ~model:resolved_model.model ~language:config.transcription_language
             ~prompt_template ?thinking_effort:config.thinking_effort pcm_bytes
       | Translate ->
-          Stt.Openrouter.translate_with_prompt ~sw ~net
+          Stt.Openrouter.translate_with_prompt ~sw ~net ~clock ~logger
             ~model:resolved_model.model
             ~source_language:config.translation_source_language
             ~target_language:config.translation_target_language ~prompt_template
             ?thinking_effort:config.thinking_effort pcm_bytes)
 
-let inject_and_report ~process_mgr ?clipboard_owner ~newline_rules
-    ~text_entry_rules mode text =
+let inject_and_report ~clock ~process_mgr ?clipboard_owner ~newline_rules
+    ~text_entry_rules _mode text =
   let normalized = Input.Text_injection.normalize_text text in
-  if String.length normalized = 0 then
-    let* () =
-      Desktop.Notification.notify_warning ~process_mgr "pie: no transcript"
-        "Speech-to-text produced no transcript text. Try speaking louder or \
-         checking microphone input."
-      |> Eta.Effect.ignore_errors
-    in
-    Eta.Effect.unit
+  if String.length normalized = 0 then (
+    ignore
+      (Desktop.Notification.notify_warning ~process_mgr "pie: no transcript"
+         "Speech-to-text produced no transcript text. Try speaking louder or \
+          checking microphone input.");
+    Ok ())
   else
-    let* result =
+    match
       Input.Text_injection.inject ?clipboard_owner ~newline_rules
-        ~text_entry_rules ~process_mgr normalized
-      |> Eta.Effect.bind_error (fun error ->
-          let* () =
-            Desktop.Notification.notify_warning ~process_mgr
-              "pie: text entry failed"
-              (diagnostic_injection error)
-            |> Eta.Effect.ignore_errors
-          in
-          Eta.Effect.fail (ptt_of_injection error))
-    in
-    Eta.Effect.sync (fun () ->
+        ~text_entry_rules ~clock ~process_mgr normalized
+    with
+    | Error error ->
+        ignore
+          (Desktop.Notification.notify_warning ~process_mgr
+             "pie: text entry failed"
+             (diagnostic_injection error));
+        Error (ptt_of_injection error)
+    | Ok result ->
         Printf.printf "%s %d chars via %s (%s)\n%!"
           (match result.outcome with
           | Input.Text_injection.Typed -> "Typed"
@@ -385,7 +389,8 @@ let inject_and_report ~process_mgr ?clipboard_owner ~newline_rules
               "Paste key dispatched; receipt unconfirmed")
           (String.length result.text)
           (match result.backend with Wtype -> "wtype" | Xdotool -> "xdotool")
-          (match result.session_type with Wayland -> "Wayland" | X11 -> "X11"))
+          (match result.session_type with Wayland -> "Wayland" | X11 -> "X11");
+        Ok ()
 
 module Active = Recording.Retry_store.Active
 
@@ -401,10 +406,7 @@ let mode_of_active_metadata = function
   | Active.Audio { mode; _ } | Active.Text { mode; _ } -> mode_of_retry mode
 
 let ptt_of_retry (`Retry_store msg) = `Ptt_error ("recording:" ^ msg)
-
-let retry_result = function
-  | Ok v -> Eta.Effect.pure v
-  | Error e -> Eta.Effect.fail (ptt_of_retry e)
+let retry_result result = Result.map_error ptt_of_retry result
 
 let is_blank text =
   let n = String.length text in
@@ -423,9 +425,10 @@ let rethrow_non_io = function
   | exn -> raise exn
 
 let recording_file_effect operation f =
-  Eta.Effect.sync_exn f ~catch:(fun exn ->
-      ignore (rethrow_non_io exn);
-      `Ptt_error ("recording:" ^ operation))
+  try Ok (f ())
+  with (Unix.Unix_error _ | Sys_error _) as exn ->
+    ignore (rethrow_non_io exn);
+    Error (`Ptt_error ("recording:" ^ operation))
 
 (* PIE004: one attempt owner for admission, the private Draft writer and
    final settlement. Admission is released and unpublished drafts aborted on
@@ -492,93 +495,80 @@ let current_writer owner =
   | Closed -> None
 
 let abort_unpublished owner =
-  Eta.Effect.sync (fun () ->
-      match current_writer owner with
-      | None -> Ok ()
-      | Some writer ->
-          let result = Active.abort_writer writer in
-          owner.stage := Closed;
-          result)
-  |> Eta.Effect.bind retry_result
+  match current_writer owner with
+  | None -> Ok ()
+  | Some writer ->
+      let result = Active.abort_writer writer in
+      owner.stage := Closed;
+      retry_result result
 
 let seal_writer owner =
-  Eta.Effect.sync (fun () ->
-      match !(owner.stage) with
-      | Closed | Sealed _ -> Ok ()
-      | Capturing writer -> (
-          match Active.close_writer writer with
-          | Ok () ->
-              owner.stage := Sealed writer;
-              Ok ()
-          | Error e -> Error e))
-  |> Eta.Effect.bind retry_result
+  match !(owner.stage) with
+  | Closed | Sealed _ -> Ok ()
+  | Capturing writer ->
+      let* () = retry_result (Active.close_writer writer) in
+      owner.stage := Sealed writer;
+      Ok ()
 
 let publish_sealed_audio owner =
-  Eta.Effect.sync (fun () ->
-      match !(owner.stage) with
-      | Sealed writer -> (
-          match Active.publish_audio owner.store writer with
-          | Ok _ ->
-              owner.stage := Closed;
-              Ok ()
-          | Error e -> Error e)
-      | Capturing _ | Closed -> Ok ())
-  |> Eta.Effect.bind retry_result
+  match !(owner.stage) with
+  | Sealed writer ->
+      let* _ = retry_result (Active.publish_audio owner.store writer) in
+      owner.stage := Closed;
+      Ok ()
+  | Capturing _ | Closed -> Ok ()
 
 let publish_recognized_text owner text ~dispatch_uncertain =
-  let publish =
-    Eta.Effect.sync (fun () ->
-        match
-          Active.publish_text owner.store ~mode:(retry_mode owner.mode) ~text
-            ~dispatch_uncertain
-        with
-        | Ok _ -> Ok ()
-        | Error e -> Error e)
-    |> Eta.Effect.bind retry_result
+  let result = abort_unpublished owner in
+  let published =
+    retry_result
+      (Active.publish_text owner.store ~mode:(retry_mode owner.mode) ~text
+         ~dispatch_uncertain)
   in
-  abort_unpublished owner |> Eta.Effect.finally publish
+  match (result, published) with
+  | (Error _ as error), _ -> error
+  | Ok (), published -> Result.map (fun _ -> ()) published
 
 let set_attempt_phase owner phase =
-  Eta.Effect.sync (fun () ->
-      ignore
-        (Recording.Coordinator.set_phase owner.coordinator owner.attempt phase))
+  ignore (Recording.Coordinator.set_phase owner.coordinator owner.attempt phase);
+  Ok ()
 
 let settle_attempt owner =
   let* () = set_attempt_phase owner Recording.Phase.Finishing in
-  Eta.Effect.sync (fun () -> Atomic.compare_and_set owner.settled false true)
-  |> Eta.Effect.bind (function
-    | false -> Eta.Effect.unit
-    | true ->
-        abort_unpublished owner
-        |> Eta.Effect.finally
-             (Eta.Effect.sync (fun () ->
-                  ignore
-                    (Recording.Coordinator.release owner.coordinator
-                       owner.attempt))))
+  if Atomic.compare_and_set owner.settled false true then (
+    let result = abort_unpublished owner in
+    ignore (Recording.Coordinator.release owner.coordinator owner.attempt);
+    result)
+  else Ok ()
 
 (* One recognition -> delivery stage used by live capture and RetryLatest.
    Blank / provider failure stay on Audio. Delivery failure publishes the
    exact recognized text (dispatch_uncertain is a warning, not a retry veto). *)
 let recognize_then_deliver ~recognize ~deliver ~on_provider_failure ~on_blank
     ~on_delivery_failure ~on_success =
-  recognize
-  |> Eta.Effect.on_error (fun _ -> on_provider_failure)
-  |> Eta.Effect.bind (fun text ->
-      if is_blank text then
-        Eta.Effect.fail (`Ptt_error "stt:no_transcript")
-        |> Eta.Effect.finally on_blank
-      else
-        deliver text
-        |> Eta.Effect.on_error (fun _ -> on_delivery_failure text)
-        |> Eta.Effect.bind (fun () -> on_success))
+  match recognize () with
+  | Error _ as failure ->
+      ignore (on_provider_failure ());
+      failure
+  | Ok text when is_blank text ->
+      ignore (on_blank ());
+      Error (`Ptt_error "stt:no_transcript")
+  | Ok text -> (
+      match deliver text with
+      | Error _ as failure ->
+          ignore (on_delivery_failure text ());
+          failure
+      | Ok () -> on_success ())
 
 let unless_cancelled attempt action =
-  Eta.Effect.sync (fun () -> Recording.Coordinator.cancel_signalled attempt)
-  |> Eta.Effect.bind (function true -> Eta.Effect.unit | false -> action)
+  if Recording.Coordinator.cancel_signalled attempt then Ok () else action ()
 
 let deliver_retained_text ~deliver ~on_delivery_failure ~on_success text =
-  recognize_then_deliver ~recognize:(Eta.Effect.pure text) ~deliver
-    ~on_provider_failure:Eta.Effect.unit ~on_blank:Eta.Effect.unit
+  recognize_then_deliver
+    ~recognize:(fun () -> Ok text)
+    ~deliver
+    ~on_provider_failure:(fun () -> Ok ())
+    ~on_blank:(fun () -> Ok ())
     ~on_delivery_failure ~on_success
 
 (* Seal capture, then the shared recognition/delivery stage. *)
@@ -589,13 +579,14 @@ let after_capture owner ~deliver recognize =
     let* () = set_attempt_phase owner Recording.Phase.Delivering in
     deliver text
   in
-  let guarded action = unless_cancelled owner.attempt action in
+  let guarded action () = unless_cancelled owner.attempt action in
   recognize_then_deliver ~recognize ~deliver
-    ~on_provider_failure:(guarded (publish_sealed_audio owner))
-    ~on_blank:(guarded (publish_sealed_audio owner))
+    ~on_provider_failure:(guarded (fun () -> publish_sealed_audio owner))
+    ~on_blank:(guarded (fun () -> publish_sealed_audio owner))
     ~on_delivery_failure:(fun text ->
-      guarded (publish_recognized_text owner text ~dispatch_uncertain:true))
-    ~on_success:(abort_unpublished owner)
+      guarded (fun () ->
+          publish_recognized_text owner text ~dispatch_uncertain:true))
+    ~on_success:(fun () -> abort_unpublished owner)
 
 (* Tee PCM into the attempt Draft. Admission is released only by the
    outermost run_acquired_attempt on_settle, after provider scope finalizers. *)
@@ -606,210 +597,195 @@ let attempt_handle owner (handle : Ptt_loop.handle) : Ptt_loop.handle =
         let* () =
           match !(owner.stage) with
           | Capturing writer -> retry_result (Active.append_audio writer chunk)
-          | Sealed _ | Closed ->
-              Eta.Effect.fail (`Ptt_error "recording:writer-closed")
+          | Sealed _ | Closed -> Error (`Ptt_error "recording:writer-closed")
         in
         handle.offer chunk);
     finish = handle.finish;
     cancel =
-      handle.cancel |> Eta.Effect.on_exit (fun _ -> abort_unpublished owner);
+      (fun () ->
+        let result = handle.cancel () in
+        ignore (abort_unpublished owner);
+        result);
   }
 
 (* Recording is stopped by the attempt settlement, after provider and delivery
    completion, so a press received while the operation still processes is
    rejected instead of admitted as a second attempt. *)
-let production_stt ~sw ~net ~process_mgr config mode bytes =
-  run_stt ~sw ~net ~process_mgr config mode bytes
-  |> Eta.Effect.map_error (function
-      | `Stt_error msg
-      | `Subprocess_error msg
-      | `Niri_error msg
-      | `Ptt_error msg
-      -> `Ptt_error msg)
+let production_stt ~sw ~net ~clock ~logger ~process_mgr config mode bytes =
+  Result.map_error ptt_of_stt
+    (run_stt ~sw ~net ~clock ~logger ~process_mgr config mode bytes)
 
-let production_deliver ~process_mgr ?clipboard_owner (config : Config.Stt.t)
-    mode text =
-  inject_and_report ~process_mgr ?clipboard_owner
+let production_deliver ~clock ~process_mgr ?clipboard_owner
+    (config : Config.Stt.t) mode text =
+  inject_and_report ~clock ~process_mgr ?clipboard_owner
     ~newline_rules:config.newline_rules
     ~text_entry_rules:config.text_entry_rules mode text
 
 let make_clip_handle ~owner ~stt ~deliver ~config mode =
   {
-    Ptt_loop.offer = (fun _chunk -> Eta.Effect.unit);
+    Ptt_loop.offer = (fun _chunk -> Ok ());
     finish =
       Ptt_loop.Buffered
         (fun clip ->
           after_capture owner
             ~deliver:(fun text -> deliver config mode text)
-            (stt config mode clip.Ptt_loop.pcm_bytes));
-    cancel = Eta.Effect.unit;
+            (fun () -> stt config mode clip.Ptt_loop.pcm_bytes));
+    cancel = (fun () -> Ok ());
   }
 
-let make_streaming_transcribe_handle ~sw ~net ~process_mgr:_ ~owner ~config
-    ~deliver =
-  let model = (resolved_model_for_mode config Transcribe).model in
-  let prompt_template = config.Config.Stt.transcription_prompt in
-  Eta.Effect.pure
-    (Ptt_loop.Scoped
-       (fun use ->
-         (* A setup failure before [use] still settles admission and closes the
-            retained writer; settlement is idempotent, so the handle's own
-            settlement is not repeated. *)
-         Stt.Codex_realtime.with_transcription_stream ~sw ~net ~model
-           ~language:config.transcription_language ~prompt_template
-           (fun stream ->
-             let handle =
-               {
-                 Ptt_loop.offer =
-                   (fun chunk ->
-                     stream.offer_chunk chunk |> Eta.Effect.map_error ptt_of_stt);
-                 finish =
-                   Ptt_loop.Streaming
-                     (fun ~duration_ms:_ ->
-                       after_capture owner
-                         ~deliver:(fun text -> deliver config Transcribe text)
-                         (stream.finish_stream ()
-                         |> Eta.Effect.map_error ptt_of_stt));
-                 cancel =
-                   stream.cancel_stream |> Eta.Effect.map_error ptt_of_stt;
-               }
-             in
-             use (attempt_handle owner handle)
-             |> Eta.Effect.map_error stt_of_ptt)
-         |> Eta.Effect.map_error ptt_of_stt))
+let make_streaming_handle ~sw ~net ~clock ~logger ~owner ~config ~deliver mode =
+  let model = (resolved_model_for_mode config mode).model in
+  let with_stream =
+    match mode with
+    | Transcribe ->
+        Stt.Codex_realtime.with_transcription_stream ~sw ~net ~clock ~logger
+          ~model ~language:config.transcription_language
+          ~prompt_template:config.transcription_prompt
+    | Translate ->
+        Stt.Codex_realtime.with_translation_stream ~sw ~net ~clock ~logger
+          ~model ~source_language:config.translation_source_language
+          ~target_language:config.translation_target_language
+          ~prompt_template:config.translation_prompt
+  in
+  Ptt_loop.Scoped
+    (fun use ->
+      let callback_error = ref None in
+      let stream_result =
+        with_stream (fun stream ->
+            let handle =
+              {
+                Ptt_loop.offer =
+                  (fun chunk ->
+                    Result.map_error ptt_of_stt (stream.offer_chunk chunk));
+                finish =
+                  Ptt_loop.Streaming
+                    (fun ~duration_ms:_ ->
+                      after_capture owner
+                        ~deliver:(fun text -> deliver config mode text)
+                        (fun () ->
+                          Result.map_error ptt_of_stt (stream.finish_stream ())));
+                cancel =
+                  (fun () ->
+                    Result.map_error ptt_of_stt (stream.cancel_stream ()));
+              }
+            in
+            match use (attempt_handle owner handle) with
+            | Ok () -> Ok ()
+            | Error error ->
+                callback_error := Some error;
+                Error (`Stt_error "ptt:callback"))
+      in
+      match !callback_error with
+      | Some error -> Error error
+      | None -> Result.map_error ptt_of_stt stream_result)
 
-let make_streaming_translate_handle ~sw ~net ~process_mgr:_ ~owner ~config
-    ~deliver =
-  let model = (resolved_model_for_mode config Translate).model in
-  let prompt_template = config.Config.Stt.translation_prompt in
-  Eta.Effect.pure
-    (Ptt_loop.Scoped
-       (fun use ->
-         Stt.Codex_realtime.with_translation_stream ~sw ~net ~model
-           ~source_language:config.translation_source_language
-           ~target_language:config.translation_target_language ~prompt_template
-           (fun stream ->
-             let handle =
-               {
-                 Ptt_loop.offer =
-                   (fun chunk ->
-                     stream.offer_chunk chunk |> Eta.Effect.map_error ptt_of_stt);
-                 finish =
-                   Ptt_loop.Streaming
-                     (fun ~duration_ms:_ ->
-                       after_capture owner
-                         ~deliver:(fun text -> deliver config Translate text)
-                         (stream.finish_stream ()
-                         |> Eta.Effect.map_error ptt_of_stt));
-                 cancel =
-                   stream.cancel_stream |> Eta.Effect.map_error ptt_of_stt;
-               }
-             in
-             use (attempt_handle owner handle)
-             |> Eta.Effect.map_error stt_of_ptt)
-         |> Eta.Effect.map_error ptt_of_stt))
-
-let to_ptt_error = function
-  | `Stt_error msg | `Niri_error msg | `Subprocess_error msg | `Ptt_error msg ->
-      `Ptt_error msg
-
-let acquire_and_run ~sw ~net ~process_mgr ~owner ~config ~stt ~deliver mode use
-    =
-  let as_ptt body = body |> Eta.Effect.map_error to_ptt_error in
+let acquire_and_run ~sw ~net ~clock ~logger ~owner ~config ~stt ~deliver mode
+    use =
   match
     try Ok (resolved_model_for_mode config mode)
     with Config.Stt.Config_error _ -> Error (`Ptt_error "config:model")
   with
-  | Error err -> Eta.Effect.fail err
+  | Error _ as error -> error
   | Ok resolved -> (
-      match (resolved.provider, mode) with
-      | Codex_realtime, Transcribe ->
-          make_streaming_transcribe_handle ~sw ~net ~process_mgr ~owner ~config
-            ~deliver
-          |> as_ptt
-          |> Eta.Effect.bind (function
-            | Ptt_loop.Scoped run -> as_ptt (run use)
-            | Ptt_loop.Handle handle -> as_ptt (use handle)
-            | Ptt_loop.Skip -> Eta.Effect.unit)
-      | Codex_realtime, Translate ->
-          make_streaming_translate_handle ~sw ~net ~process_mgr ~owner ~config
-            ~deliver
-          |> as_ptt
-          |> Eta.Effect.bind (function
-            | Ptt_loop.Scoped run -> as_ptt (run use)
-            | Ptt_loop.Handle handle -> as_ptt (use handle)
-            | Ptt_loop.Skip -> Eta.Effect.unit)
-      | _ ->
-          as_ptt
-            (use
-               (attempt_handle owner
-                  (make_clip_handle ~owner ~stt ~deliver ~config mode))))
+      let handle =
+        match resolved.provider with
+        | Codex_realtime ->
+            make_streaming_handle ~sw ~net ~clock ~logger ~owner ~config
+              ~deliver mode
+        | Openrouter ->
+            Ptt_loop.Handle
+              (attempt_handle owner
+                 (make_clip_handle ~owner ~stt ~deliver ~config mode))
+      in
+      match handle with
+      | Ptt_loop.Scoped run -> run use
+      | Ptt_loop.Handle handle -> use handle
+      | Ptt_loop.Skip -> Ok ())
 
-(* Private typed pause marker. catch_some recovers only a clean Owned_pause.
-   None preserves composite Body_error causes exactly. map_error then unwraps
-   Body_error structurally; a surviving Owned_pause in an uncatchable compound
-   becomes a stable Ptt_error without flattening other Fail leaves. *)
-let run_acquired_attempt ~attempt ~on_settle body =
-  let pause =
-    Recording.Coordinator.await_cancel attempt
-    |> Eta.Effect.bind (fun () -> Eta.Effect.fail `Owned_pause)
+(* The pause fiber cancels the body; settlement runs after its child scope has
+   unwound, including provider cleanup, whether it won or failed. *)
+let cause_of_ptt_error : Ptt_loop.error -> [ `Ptt_error of string ] Eta.Cause.t
+    = function
+  | `Ptt_error _ as error -> Eta.Cause.Fail error
+  | `Ptt_cause cause -> cause
+
+let run_acquired_attempt ~sw ~attempt
+    ~(on_settle : unit -> (unit, Ptt_loop.error) result)
+    (body : unit -> (unit, Ptt_loop.error) result) =
+  let settled = ref false in
+  let cleanup_result : (unit, Ptt_loop.error) result ref = ref (Ok ()) in
+  let settle () =
+    if not !settled then (
+      settled := true;
+      cleanup_result := on_settle ())
   in
-  Eta.Effect.with_background ~name:"pie.attempt.pause" pause (fun () ->
-      body |> Eta.Effect.map_error (fun err -> `Body_error err))
-  |> Ptt_loop.recover_single_failure (function
-    | `Owned_pause -> Some Eta.Effect.unit
-    | `Body_error _ -> None)
-  |> Eta.Effect.map_error (function
-    | `Owned_pause -> `Ptt_error "paused attempt failed during cleanup"
-    | `Body_error err -> err)
-  |> Eta.Effect.on_exit (fun _ -> on_settle)
+  let result =
+    Fun.protect ~finally:settle (fun () ->
+        Eta.Concurrent.with_background ~sw
+          (fun () ->
+            Recording.Coordinator.await_cancel attempt;
+            Error `Owned_pause)
+          (fun () ->
+            Result.map_error (fun error -> `Body_error error) (body ())))
+  in
+  let result =
+    match result with
+    | Ok () | Error `Owned_pause -> Ok ()
+    | Error (`Body_error error) -> Error error
+  in
+  match (result, !cleanup_result) with
+  | Error primary, Error finalizer ->
+      Error
+        (`Ptt_cause
+           (Eta.Cause.Suppressed
+              {
+                primary = cause_of_ptt_error primary;
+                finalizer = cause_of_ptt_error finalizer;
+              }))
+  | (Error _ as error), Ok () -> error
+  | Ok (), result -> result
 
-let on_press ~sw ~net ~process_mgr ~coordinator ~config ?store ?retry_dir
-    ?(stt = production_stt ~sw ~net ~process_mgr)
-    ?(deliver =
-      fun config mode text -> production_deliver ~process_mgr config mode text)
-    mode_name =
-  Eta.Effect.sync (fun () ->
-      let mode = mode_of_name mode_name in
-      ( mode,
-        Recording.Coordinator.try_start coordinator (recording_mode mode) () ))
-  |> Eta.Effect.bind (function
-    | _, Recording.Coordinator.Busy active ->
-        Eta.Effect.sync (fun () ->
-            Printf.eprintf "PTT ignored: %s is active\n%!"
-              (Recording.Coordinator.string_of_mode active))
-        |> Eta.Effect.map (fun () -> Ptt_loop.Skip)
-    | _, Recording.Coordinator.Disabled ->
-        Eta.Effect.sync (fun () ->
-            Printf.eprintf "PTT ignored: PIE is paused\n%!")
-        |> Eta.Effect.map (fun () -> Ptt_loop.Skip)
-    | mode, Recording.Coordinator.Started attempt -> (
-        let opened =
-          match store with
-          | Some store -> Ok store
-          | None -> (
-              match retry_dir with
-              | None -> Error (`Retry_store "no-store")
-              | Some root -> open_recovery_store ~root)
-        in
-        match opened with
-        | Error e ->
-            ignore (Recording.Coordinator.release coordinator attempt);
-            Eta.Effect.fail (ptt_of_retry e)
-        | Ok store -> (
-            match create_attempt_owner ~store ~coordinator ~attempt mode with
-            | Error err ->
-                ignore (Recording.Coordinator.release coordinator attempt);
-                Eta.Effect.fail err
-            | Ok owner ->
-                let* () = set_attempt_phase owner Recording.Phase.Recording in
-                Eta.Effect.pure
-                  (Ptt_loop.Scoped
-                     (fun k ->
-                       run_acquired_attempt ~attempt
-                         ~on_settle:(settle_attempt owner)
-                         (acquire_and_run ~sw ~net ~process_mgr ~owner ~config
-                            ~stt ~deliver mode k))))))
+let on_press ~sw ~net ~clock ~logger ~coordinator ~config ?store ?retry_dir ~stt
+    ~deliver mode_name =
+  let mode = mode_of_name mode_name in
+  match
+    Recording.Coordinator.try_start coordinator (recording_mode mode) ()
+  with
+  | Recording.Coordinator.Busy active ->
+      Printf.eprintf "PTT ignored: %s is active\n%!"
+        (Recording.Coordinator.string_of_mode active);
+      Ok Ptt_loop.Skip
+  | Recording.Coordinator.Disabled ->
+      Printf.eprintf "PTT ignored: PIE is paused\n%!";
+      Ok Ptt_loop.Skip
+  | Recording.Coordinator.Started attempt -> (
+      let opened =
+        match store with
+        | Some store -> Ok store
+        | None -> (
+            match retry_dir with
+            | None -> Error (`Retry_store "no-store")
+            | Some root -> open_recovery_store ~root)
+      in
+      match opened with
+      | Error error ->
+          ignore (Recording.Coordinator.release coordinator attempt);
+          Error (ptt_of_retry error)
+      | Ok store -> (
+          match create_attempt_owner ~store ~coordinator ~attempt mode with
+          | Error error ->
+              ignore (Recording.Coordinator.release coordinator attempt);
+              Error error
+          | Ok owner ->
+              let* () = set_attempt_phase owner Recording.Phase.Recording in
+              Ok
+                (Ptt_loop.Scoped
+                   (fun use ->
+                     run_acquired_attempt ~sw ~attempt
+                       ~on_settle:(fun () -> settle_attempt owner)
+                       (fun () ->
+                         acquire_and_run ~sw ~net ~clock ~logger ~owner ~config
+                           ~stt ~deliver mode use)))))
 
 (* PIE004: keyboard and RPC presses share one control path. The handler queues
    triggers for the same PTT loop and admission owner the keyboard path uses,
@@ -975,134 +951,156 @@ type 'audio owned_inputs = {
   source_name : string option;
 }
 
-let run_with_inputs ~sw ~net ~process_mgr ~mono_clock ~inputs ~config_control
-    ~stt ~deliver ~socket_path ~retry_dir ?ptt_transcribe_keysym
+let run_with_inputs ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock ~inputs
+    ~config_control ~stt ~deliver ~socket_path ~retry_dir
+    ?(config_path = config_path) ?initial_config ?ptt_transcribe_keysym
     ?ptt_translate_keysym ?(min_duration_ms = default_min_duration_ms)
     ?queue_pcm_bytes ?capture_pcm_bytes ?queue_capacity () =
-  let* initial_config, initial_stamp =
-    Eta.Effect.sync_exn
-      (fun () ->
-        Eio_unix.run_in_systhread ~label:"pie initial config load" (fun () ->
-            config_control.load 3))
-      ~catch:(function
-        | Config.Stt.Config_error _ ->
-            `Pulse_error (Pulse.Client.Protocol_error "config-load")
-        | _exn -> `Pulse_error (Pulse.Client.Protocol_error "config-load"))
-  in
-  let initial_effective =
-    try
-      with_cli_overrides ?ptt_transcribe_keysym ?ptt_translate_keysym
-        initial_config
-    with Config.Stt.Config_error _ -> failwith "config:bindings"
-  in
-  let current = ref initial_effective in
-  let last_stamp = ref initial_stamp in
-  let coordinator = Recording.Coordinator.create () in
-  let control : Ptt_loop.trigger Eio.Stream.t = Eio.Stream.create 1024 in
-  let retries : (Active.metadata * Recording.Coordinator.attempt) Eio.Stream.t =
-    Eio.Stream.create 16
-  in
-  let store_cell = ref None in
-  let get_store () =
-    match !store_cell with
-    | Some store -> Ok store
-    | None -> (
-        match open_recovery_store ~root:retry_dir with
-        | Ok store ->
-            store_cell := Some store;
-            Ok store
-        | Error e -> Error e)
-  in
-  let send_control trigger = Eio.Stream.add control trigger in
-  let* () =
-    Eta.Effect.sync (fun () ->
-        Assistant_service.Server.start ~sw ~net ~mono_clock ~socket_path
-          ~action_handler:
-            (action_handler ~coordinator ~send_control ~retries ~get_store)
-          coordinator;
-        Process.emit_sync ~level:Info "assistant_service started"
-          ~attrs:[ ("config.path", config_path) ];
-        Printf.printf "pie config:\n%s\n%!"
-          (startup_config_json ~config:initial_effective
-             ~ptt_transcribe_keysym:initial_effective.ptt_transcribe_keysym
-             ~ptt_translate_keysym:initial_effective.ptt_translate_keysym
-             ~min_duration_ms ()))
-  in
-  let watcher =
-    let rec loop () =
-      let* () = Eta.Effect.delay (Eta.Duration.ms 500) Eta.Effect.unit in
-      let expected_stamp = !last_stamp in
-      let* result =
-        Eta.Effect.sync (fun () ->
-            Eio_unix.run_in_systhread ~label:"pie config reload" (fun () ->
-                let next_stamp = config_control.stamp () in
-                if next_stamp = expected_stamp then `Unchanged
-                else
-                  try
-                    let config, loaded_stamp = config_control.load 3 in
-                    `Loaded (config, loaded_stamp)
-                  with _exn -> `Failed))
-      in
-      let* () =
-        match result with
-        | `Unchanged -> Eta.Effect.unit
+  Eio.Switch.check sw;
+  let run_on_switch ~sw =
+    let load_initial () =
+      match initial_config with
+      | Some config -> Ok (config, config_control.stamp ())
+      | None -> (
+          try Ok (config_control.load 3)
+          with Config.Stt.Config_error msg ->
+            Error (`Ptt_error ("config:" ^ msg)))
+    in
+    let* initial_config, initial_stamp = load_initial () in
+    let initial_effective =
+      try
+        Ok
+          (with_cli_overrides ?ptt_transcribe_keysym ?ptt_translate_keysym
+             initial_config)
+      with Config.Stt.Config_error msg -> Error (`Ptt_error ("config:" ^ msg))
+    in
+    let* initial_effective = initial_effective in
+    let current = ref initial_effective in
+    let last_stamp = ref initial_stamp in
+    let coordinator = Recording.Coordinator.create () in
+    let control : Ptt_loop.trigger Eio.Stream.t = Eio.Stream.create 1024 in
+    let retries : (Active.metadata * Recording.Coordinator.attempt) Eio.Stream.t
+        =
+      Eio.Stream.create 16
+    in
+    let store_cell = ref None in
+    let get_store () =
+      match !store_cell with
+      | Some store -> Ok store
+      | None -> (
+          match open_recovery_store ~root:retry_dir with
+          | Error _ as error -> error
+          | Ok store ->
+              store_cell := Some store;
+              Ok store)
+    in
+    let send_control trigger = Eio.Stream.add control trigger in
+    let* () =
+      Result.map_error
+        (fun error ->
+          `Ptt_error
+            (Format.asprintf "%a"
+               (fun fmt error ->
+                 Format.pp_print_string fmt
+                   (match error with
+                   | `Invalid_policy msg
+                   | `Ownership_conflict msg
+                   | `Bind_failed msg ->
+                       msg
+                   | `Unsafe_runtime_dir -> "unsafe runtime directory"
+                   | `Inaccessible_runtime_dir ->
+                       "inaccessible runtime directory"
+                   | `Active_listener -> "active listener"
+                   | `Lock_conflict -> "lock conflict"
+                   | `Lock_identity -> "lock identity"
+                   | `Probe_failed -> "stale probe failed"))
+               error))
+        (Assistant_service.Server.start ~sw ~net ~fs ~socket_path ~clock
+           ~action_handler:
+             (action_handler ~coordinator ~send_control ~retries ~get_store)
+           coordinator)
+    in
+    Eta_observability.Logger.info logger "assistant_service started"
+      ~fields:[ ("config.path", Eta_observability.Logger.String config_path) ];
+    Printf.printf "pie config:\n%s\n%!"
+      (startup_config_json ~config:initial_effective
+         ~ptt_transcribe_keysym:initial_effective.ptt_transcribe_keysym
+         ~ptt_translate_keysym:initial_effective.ptt_translate_keysym
+         ~min_duration_ms ());
+    let watcher () =
+      let rec loop () =
+        Eio.Time.sleep clock 0.5;
+        let expected_stamp = !last_stamp in
+        let result =
+          if config_control.stamp () = expected_stamp then `Unchanged
+          else
+            try
+              let config, loaded_stamp = config_control.load 3 in
+              `Loaded (config, loaded_stamp)
+            with Config.Stt.Config_error _ -> `Failed
+        in
+        (match result with
+        | `Unchanged -> ()
         | `Failed ->
-            Eta.Effect.sync (fun () ->
-                Process.emit_sync ~level:Error
+            Eta_observability.Logger.error logger
+              "Pie config reload failed; keeping previous config"
+              ~fields:
+                [ ("config.path", Eta_observability.Logger.String config_path) ]
+        | `Loaded (new_config, loaded_stamp) -> (
+            match
+              try
+                Ok
+                  (with_cli_overrides ?ptt_transcribe_keysym
+                     ?ptt_translate_keysym new_config)
+              with Config.Stt.Config_error _ -> Error ()
+            with
+            | Error () ->
+                Eta_observability.Logger.error logger
                   "Pie config reload failed; keeping previous config"
-                  ~attrs:
+                  ~fields:
                     [
-                      ("config.path", config_path);
-                      ("config.error", "config:reload");
-                    ])
-        | `Loaded (new_config, loaded_stamp) ->
-            Eta.Effect.sync (fun () ->
-                try
-                  current :=
-                    with_cli_overrides ?ptt_transcribe_keysym
-                      ?ptt_translate_keysym new_config;
-                  last_stamp := loaded_stamp;
-                  Process.emit_sync ~level:Info "Pie config reloaded"
-                    ~attrs:[ ("config.path", config_path) ]
-                with Config.Stt.Config_error _ ->
-                  Process.emit_sync ~level:Error
-                    "Pie config reload failed; keeping previous config"
-                    ~attrs:
-                      [
-                        ("config.path", config_path);
-                        ("config.error", "config:reload");
-                      ])
+                      ( "config.path",
+                        Eta_observability.Logger.String config_path );
+                    ]
+            | Ok config ->
+                current := config;
+                last_stamp := loaded_stamp;
+                Eta_observability.Logger.info logger "Pie config reloaded"
+                  ~fields:
+                    [
+                      ( "config.path",
+                        Eta_observability.Logger.String config_path );
+                    ]));
+        loop ()
       in
       loop ()
     in
-    loop ()
-  in
-  let ptt_loop =
-    let latch_keycode = ref None in
-    let ptt_config : Ptt_loop.config =
-      {
-        recognize =
-          make_live_recognizer ~coordinator ~latch_keycode
-            ~load_bindings:(fun () ->
-              let cfg = !current in
-              ( {
-                  keysym = cfg.ptt_transcribe_keysym;
-                  shift = cfg.ptt_transcribe_shift;
-                },
-                {
-                  keysym = cfg.ptt_translate_keysym;
-                  shift = cfg.ptt_translate_shift;
-                } ))
-            ();
-        min_duration_ms;
-        capture_thresholds =
-          (fun () ->
-            ( !current.Config.Stt.ptt_min_capture_rms,
-              !current.Config.Stt.ptt_min_capture_peak ));
-        log_prefix = (fun mode -> "assistant-ptt-" ^ mode);
-        source = inputs.source_name;
-        on_ready =
-          Eta.Effect.sync (fun () ->
+    let ptt_loop () =
+      let latch_keycode = ref None in
+      let ptt_config : Ptt_loop.config =
+        {
+          recognize =
+            make_live_recognizer ~coordinator ~latch_keycode
+              ~load_bindings:(fun () ->
+                let cfg = !current in
+                ( {
+                    keysym = cfg.ptt_transcribe_keysym;
+                    shift = cfg.ptt_transcribe_shift;
+                  },
+                  {
+                    keysym = cfg.ptt_translate_keysym;
+                    shift = cfg.ptt_translate_shift;
+                  } ))
+              ();
+          min_duration_ms;
+          capture_thresholds =
+            (fun () ->
+              ( !current.Config.Stt.ptt_min_capture_rms,
+                !current.Config.Stt.ptt_min_capture_peak ));
+          log_prefix = (fun mode -> "assistant-ptt-" ^ mode);
+          source = inputs.source_name;
+          on_ready =
+            (fun () ->
               let cfg = !current in
               Printf.printf
                 "PTT armed: transcribe=%d%s translate=%d%s source=%s\n%!"
@@ -1110,166 +1108,197 @@ let run_with_inputs ~sw ~net ~process_mgr ~mono_clock ~inputs ~config_control
                 (if cfg.ptt_transcribe_shift then "+shift" else "")
                 cfg.ptt_translate_keysym
                 (if cfg.ptt_translate_shift then "+shift" else "")
-                (Option.value ~default:"<default>" inputs.source_name));
-        on_press =
-          (fun mode_name ->
-            on_press ~sw ~net ~process_mgr ~coordinator ~config:!current
-              ?store:
-                (match get_store () with
-                | Ok store -> Some store
-                | Error _ -> None)
-              ~retry_dir ~stt ~deliver mode_name);
-        on_release =
-          (fun _ ->
-            Eta.Effect.sync (fun () ->
-                Option.iter
-                  (fun attempt ->
-                    ignore
-                      (Recording.Coordinator.set_phase coordinator attempt
-                         Recording.Phase.Stopping))
-                  (Recording.Coordinator.current_attempt coordinator)));
-        on_abort =
-          Eta.Effect.sync (fun () ->
-              not (Recording.Coordinator.snapshot coordinator).enabled);
-        admission_active =
-          (fun () -> Recording.Coordinator.is_active coordinator);
-        on_dead_input =
-          Desktop.Notification.notify_warning ~process_mgr
-            "pie: no microphone input"
-            "No input detected during push-to-talk. Your microphone may \
-             be              muted.";
-      }
+                (Option.value ~default:"<default>" inputs.source_name);
+              Ok ());
+          on_press =
+            (fun mode_name ->
+              on_press ~sw ~net ~clock ~logger ~coordinator ~config:!current
+                ?store:
+                  (match get_store () with
+                  | Ok store -> Some store
+                  | Error _ -> None)
+                ~retry_dir ~stt ~deliver mode_name);
+          on_release =
+            (fun _ ->
+              Option.iter
+                (fun attempt ->
+                  ignore
+                    (Recording.Coordinator.set_phase coordinator attempt
+                       Recording.Phase.Stopping))
+                (Recording.Coordinator.current_attempt coordinator);
+              Ok ());
+          on_abort =
+            (fun () ->
+              Ok (not (Recording.Coordinator.snapshot coordinator).enabled));
+          admission_active =
+            (fun () -> Recording.Coordinator.is_active coordinator);
+          on_dead_input =
+            (fun () ->
+              Result.map_error
+                (fun _ -> `Ptt_error "notification")
+                (Desktop.Notification.notify_warning ~process_mgr
+                   "pie: no microphone input"
+                   "No input detected during push-to-talk. Your microphone may \
+                    be muted."));
+        }
+      in
+      let publish_current_phase phase () =
+        Option.iter
+          (fun attempt ->
+            ignore (Recording.Coordinator.set_phase coordinator attempt phase))
+          (Recording.Coordinator.current_attempt coordinator);
+        Ok ()
+      in
+      let result =
+        Ptt_loop.run ~sw ~mono_clock ~logger ~control ~keyboard:inputs.keyboard
+          ~audio:inputs.audio ?queue_pcm_bytes ?capture_pcm_bytes
+          ?queue_capacity
+          ~on_capture_resumed:(publish_current_phase Recording.Phase.Recording)
+          ~on_low_input:(fun () ->
+            Result.map_error
+              (fun _ -> `Ptt_error "notification")
+              (Desktop.Notification.notify_warning ~process_mgr
+                 "pie: microphone input is very quiet"
+                 "Microphone input has stayed very quiet for 3 seconds. \
+                  Recording will continue."))
+          ptt_config
+      in
+      (match result with
+      | Error error ->
+          let status = status_of_cause (Eta.Cause.Fail error) in
+          Recording.Coordinator.set_error coordinator status;
+          Eta_observability.Logger.error logger "assistant input failed"
+            ~fields:
+              [ ("assistant.error", Eta_observability.Logger.String status) ]
+      | Ok () -> ());
+      result
     in
-    let publish_current_phase phase =
-      Eta.Effect.sync (fun () ->
-          Option.iter
-            (fun attempt ->
-              ignore (Recording.Coordinator.set_phase coordinator attempt phase))
-            (Recording.Coordinator.current_attempt coordinator))
-    in
-    Ptt_loop.run ~mono_clock ~control ~keyboard:inputs.keyboard
-      ~audio:inputs.audio ?queue_pcm_bytes ?capture_pcm_bytes ?queue_capacity
-      ~on_capture_resumed:(publish_current_phase Recording.Phase.Recording)
-      ~on_low_input:
-        (Desktop.Notification.notify_warning ~process_mgr
-           "pie: microphone input is very quiet"
-           "Microphone input has stayed very quiet for 3 seconds. Recording \
-            will continue.")
-      ptt_config
-    |> Eta.Effect.on_error (fun cause ->
-        Eta.Effect.sync (fun () ->
-            Recording.Coordinator.set_error coordinator (status_of_cause cause)))
-  in
-  let retry_loop =
-    let rec loop () =
-      let* metadata, attempt =
-        Eta.Effect.sync (fun () -> Eio.Stream.take retries)
-      in
-      let config = !current in
-      let mode = mode_of_active_metadata metadata in
-      let generation =
-        match metadata with
-        | Active.Audio { generation; _ } | Active.Text { generation; _ } ->
-            generation
-      in
-      let release =
-        Eta.Effect.sync (fun () ->
-            ignore (Recording.Coordinator.release coordinator attempt))
-      in
-      let publish_text_slot store text =
-        unless_cancelled attempt
-          (Eta.Effect.sync (fun () ->
-               Active.publish_text store ~mode:(retry_mode mode) ~text
-                 ~dispatch_uncertain:true)
-          |> Eta.Effect.bind retry_result
-          |> Eta.Effect.map (fun _ -> ()))
-      in
-      let clear_selected store =
-        Eta.Effect.sync (fun () -> Active.clear store generation)
-        |> Eta.Effect.bind retry_result
-        |> Eta.Effect.on_error (fun _ ->
-            Eta.Effect.sync (fun () ->
-                Recording.Coordinator.set_error coordinator "recovery:cleanup";
-                Process.emit_sync ~level:Error
-                  "retained recording retry cleanup failed"
-                  ~attrs:[ ("recording.error", "recovery:cleanup") ]))
-      in
-      let retry_body store =
-        match metadata with
-        | Active.Audio _ ->
-            let* pcm =
-              Eta.Effect.sync (fun () -> Active.load_audio store generation)
-              |> Eta.Effect.bind retry_result
-            in
-            let* () =
-              recognize_then_deliver ~recognize:(stt config mode pcm)
-                ~deliver:(fun text -> deliver config mode text)
-                ~on_provider_failure:Eta.Effect.unit ~on_blank:Eta.Effect.unit
-                ~on_delivery_failure:(publish_text_slot store)
-                ~on_success:Eta.Effect.unit
-            in
-            let* () = clear_selected store in
-            Eta.Effect.sync (fun () ->
-                Process.emit_sync ~level:Info
-                  "retained recording retry succeeded"
-                  ~attrs:[ ("recording.stage", "cleared") ])
-        | Active.Text _ ->
-            let* text =
-              Eta.Effect.sync (fun () -> Active.load_text store generation)
-              |> Eta.Effect.bind retry_result
-            in
-            let* () =
-              deliver_retained_text
-                ~deliver:(fun t -> deliver config mode t)
-                ~on_delivery_failure:(publish_text_slot store)
-                ~on_success:Eta.Effect.unit text
-            in
-            let* () = clear_selected store in
-            Eta.Effect.sync (fun () ->
-                Process.emit_sync ~level:Info
-                  "retained recording retry succeeded"
-                  ~attrs:[ ("recording.stage", "cleared") ])
-      in
-      let* () =
-        (match get_store () with
-          | Error e ->
-              let* () = release in
-              Eta.Effect.fail (ptt_of_retry e)
+    let retry_loop () =
+      let rec loop () =
+        let metadata, attempt = Eio.Stream.take retries in
+        let config = !current in
+        let mode = mode_of_active_metadata metadata in
+        let generation =
+          match metadata with
+          | Active.Audio { generation; _ } | Active.Text { generation; _ } ->
+              generation
+        in
+        let release () =
+          ignore (Recording.Coordinator.release coordinator attempt);
+          Ok ()
+        in
+        let publish_text_slot store text () =
+          unless_cancelled attempt (fun () ->
+              let* _ =
+                retry_result
+                  (Active.publish_text store ~mode:(retry_mode mode) ~text
+                     ~dispatch_uncertain:true)
+              in
+              Ok ())
+        in
+        let clear_selected store =
+          match retry_result (Active.clear store generation) with
+          | Ok () -> Ok ()
+          | Error _ as error ->
+              Recording.Coordinator.set_error coordinator "recovery:cleanup";
+              Eta_observability.Logger.error logger
+                "retained recording retry cleanup failed";
+              error
+        in
+        let retry_body store () =
+          let* () =
+            match metadata with
+            | Active.Audio _ ->
+                let* pcm = retry_result (Active.load_audio store generation) in
+                recognize_then_deliver
+                  ~recognize:(fun () -> stt config mode pcm)
+                  ~deliver:(fun text -> deliver config mode text)
+                  ~on_provider_failure:(fun () -> Ok ())
+                  ~on_blank:(fun () -> Ok ())
+                  ~on_delivery_failure:(publish_text_slot store)
+                  ~on_success:(fun () -> Ok ())
+            | Active.Text _ ->
+                let* text = retry_result (Active.load_text store generation) in
+                deliver_retained_text
+                  ~deliver:(fun t -> deliver config mode t)
+                  ~on_delivery_failure:(publish_text_slot store)
+                  ~on_success:(fun () -> Ok ())
+                  text
+          in
+          let* () = clear_selected store in
+          Eta_observability.Logger.info logger
+            "retained recording retry succeeded"
+            ~fields:
+              [ ("recording.stage", Eta_observability.Logger.String "cleared") ];
+          Ok ()
+        in
+        let result =
+          match get_store () with
+          | Error error ->
+              ignore (release ());
+              Error (ptt_of_retry error)
           | Ok store ->
-              run_acquired_attempt ~attempt ~on_settle:release
-                (retry_body store))
-        |> Eta.Effect.on_error (fun cause ->
-            Eta.Effect.sync (fun () ->
-                Recording.Coordinator.set_error coordinator
-                  (ptt_status_of_failures (Eta.Cause.failures cause));
-                Process.emit_sync ~level:Error "retained recording retry failed"
-                  ~attrs:[ ("recording.error", "stt:retry") ]))
-        |> Ptt_loop.recover_single_failure (function
-          | `Ptt_error "pcm:capture_budget" | `Ptt_error "pcm:queue_budget" ->
-              None
-          | `Ptt_error _ -> Some Eta.Effect.unit)
+              run_acquired_attempt ~sw ~attempt ~on_settle:release
+                (retry_body store)
+        in
+        (match result with
+        | Error error ->
+            Recording.Coordinator.set_error coordinator
+              (ptt_status_of_failures [ error ]);
+            Eta_observability.Logger.error logger
+              "retained recording retry failed"
+              ~fields:
+                [
+                  ( "recording.error",
+                    Eta_observability.Logger.String "stt:retry" );
+                ]
+        | Ok () -> ());
+        match result with
+        | Error (`Ptt_error "pcm:capture_budget" | `Ptt_error "pcm:queue_budget")
+          ->
+            result
+        | Ok () | Error (`Ptt_error _ | `Ptt_cause _) -> loop ()
       in
       loop ()
     in
-    loop ()
+    Eta.Concurrent.par ~sw watcher (fun () ->
+        let* (), () =
+          Eta.Concurrent.par ~sw ptt_loop (fun () ->
+              Result.map_error
+                (fun error -> (error :> Ptt_loop.run_error))
+                (retry_loop ()))
+        in
+        Ok ())
+    |> Result.map (fun _ -> ())
   in
-  Eta.Effect.par watcher
-    (Eta.Effect.par ptt_loop
-       (retry_loop |> Eta.Effect.map_error Ptt_loop.widen_ptt))
-  |> Eta.Effect.map (fun _ -> ())
+  (* A service owns its listener and workers rather than borrowing the Door's
+     switch. On a typed failure the local exception unwinds that switch, so the
+     listener is cancelled before the error result escapes. Cancellation of the
+     caller fiber also unwinds this switch and its children. *)
+  let exception Service_returned of (unit, Ptt_loop.run_error) result in
+  try
+    Eio.Switch.run (fun service_sw ->
+        raise (Service_returned (run_on_switch ~sw:service_sw)))
+  with Service_returned result -> result
 
-let run ~sw ~net ~clock:_ ~mono_clock ~process_mgr ?ptt_transcribe_keysym
-    ?ptt_translate_keysym ?(min_duration_ms = default_min_duration_ms) ?stdin:_
-    () =
-  let config_control = { stamp = config_stamp; load = load_snapshot } in
-  let stt = production_stt ~sw ~net ~process_mgr in
-  Pulse.Client.with_client ~net @@ fun client ->
+let run ~sw ~fs ~net ~clock ~mono_clock ~logger ~process_mgr ~config ~source
+    ?ptt_transcribe_keysym ?ptt_translate_keysym
+    ?(min_duration_ms = default_min_duration_ms) ?stdin:_ () =
+  let config_path = Config.Stt.source_path source in
+  let config_control =
+    {
+      stamp = (fun () -> config_stamp ~config_path ());
+      load = load_snapshot ~fs ~source;
+    }
+  in
+  let stt = production_stt ~sw ~net ~clock ~logger ~process_mgr in
+  Pulse.Client.with_client ~net ~clock ~logger @@ fun client ->
   Pulse.Client.with_record_stream client @@ fun info audio ->
-  Keyboard.Monitor.with_monitor ~sw ~net ~process_mgr @@ fun keyboard ->
+  Keyboard.Monitor.with_monitor ~sw ~net ~clock ~process_mgr @@ fun keyboard ->
   let clipboard_owner = Wayland.Clipboard.create ~sw ~process_mgr () in
-  let deliver = production_deliver ~process_mgr ~clipboard_owner in
-  run_with_inputs ~sw ~net ~process_mgr ~mono_clock
+  let deliver = production_deliver ~clock ~process_mgr ~clipboard_owner in
+  run_with_inputs ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
     ~inputs:{ keyboard; audio; source_name = info.Pulse.Defs.source_name }
-    ~config_control ~stt ~deliver ~socket_path:Paths.daemon_socket_path
-    ~retry_dir:Paths.failed_recordings_dir ?ptt_transcribe_keysym
-    ?ptt_translate_keysym ~min_duration_ms ()
+    ~config_control ~config_path ~initial_config:config ~stt ~deliver
+    ~socket_path:Paths.daemon_socket_path ~retry_dir:Paths.failed_recordings_dir
+    ?ptt_transcribe_keysym ?ptt_translate_keysym ~min_duration_ms ()

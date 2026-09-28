@@ -71,7 +71,15 @@ let completed_body text =
                `Assoc
                  [
                    ("type", `String "message");
-                   ("content", `List [ `Assoc [ ("text", `String inner) ] ]);
+                   ( "content",
+                     `List
+                       [
+                         `Assoc
+                           [
+                             ("type", `String "output_text");
+                             ("text", `String inner);
+                           ];
+                       ] );
                  ];
              ] );
        ])
@@ -134,9 +142,7 @@ let niri_script =
      '{\"id\":1,\"title\":\"SENTINEL_TITLE\",\"app_id\":\"SentinelApp\",\"pid\":1}'\n"
   ^ "exit 0\n"
 
-let pp_err ppf = function
-  | `Ptt_error m | `Stt_error m -> Format.pp_print_string ppf m
-  | _ -> Format.pp_print_string ppf "error"
+let pp_err ppf (`Ptt_error message) = Format.pp_print_string ppf message
 
 let absent_sentinels body =
   List.iter
@@ -182,6 +188,15 @@ let run_production ~mode ~cfg ~check_body () =
           Eio.Switch.run @@ fun sw ->
           let net = Eio.Stdenv.net env in
           let process_mgr = Eio.Stdenv.process_mgr env in
+          let clock = Eio.Stdenv.clock env in
+          let logger =
+            Eta_observability.Logger.create ~service:"pie-explicit-prompts-test"
+              ~clock
+              ~mono_clock:(Eio.Stdenv.mono_clock env)
+              ~reporter:
+                (Eta_observability.Logger.Reporter.records (fun _ -> ()))
+              ()
+          in
           let socket =
             Eio.Net.listen ~sw ~reuse_addr:true ~backlog:1 net
               (`Tcp (Eio.Net.Ipaddr.V4.loopback, 0))
@@ -199,15 +214,13 @@ let run_production ~mode ~cfg ~check_body () =
                   captured := read_http_request flow;
                   write_http_json flow (completed_body "ok")));
           let result =
-            Pie.Assistant.Service.production_stt ~sw ~net ~process_mgr cfg mode
-              pcm
-            |> Eta_eio.run_once ~sw ~clock:(Eio.Stdenv.clock env)
+            Pie.Assistant.Service.production_stt ~sw ~net ~clock ~logger
+              ~process_mgr cfg mode pcm
           in
           (match result with
-          | Eta.Exit.Ok _ -> ()
-          | Eta.Exit.Error cause ->
-              Alcotest.failf "production_stt failed: %a" (Eta.Cause.pp pp_err)
-                cause);
+          | Ok _ -> ()
+          | Error cause ->
+              Alcotest.failf "production_stt failed: %a" pp_err cause);
           check_body !captured;
           let log =
             match open_in_bin niri_log with

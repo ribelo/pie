@@ -258,8 +258,8 @@ let test_status_malformed_json () =
   ignore (require_exited_nonzero run.status);
   Alcotest.(check string) "stdout empty" "" run.stdout;
   Alcotest.(check bool)
-    "stderr identifies JSON decode error" true
-    (string_contains run.stderr "Json_error")
+    "stderr identifies malformed protocol response" true
+    (string_contains run.stderr "malformed-response")
 
 let test_status_protocol_error_nonzero () =
   with_temp_dir @@ fun runtime_dir ->
@@ -267,7 +267,8 @@ let test_status_protocol_error_nonzero () =
     with_reply ~runtime_dir {|{"active":false,"enabled":true}|} [ "status" ]
   in
   ignore (require_exited_nonzero run.status);
-  Alcotest.(check bool) "stdout is not invented off" false
+  Alcotest.(check bool)
+    "stdout is not invented off" false
     (string_contains run.stdout "off");
   Alcotest.(check bool)
     "stderr names missing-field" true
@@ -320,44 +321,63 @@ let test_harness_unknown_command_unblocks_server () =
 
 let test_subscriber_failed_connect_fds ~backend ~refused () =
   with_temp_dir @@ fun runtime_dir ->
-  let bound = if refused then (
-    let fd = Unix.socket ~cloexec:true Unix.PF_UNIX Unix.SOCK_STREAM 0 in
-    Unix.bind fd (Unix.ADDR_UNIX (Filename.concat runtime_dir "control.sock"));
-    Some fd) else None in
+  let bound =
+    if refused then (
+      let fd = Unix.socket ~cloexec:true Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+      Unix.bind fd (Unix.ADDR_UNIX (Filename.concat runtime_dir "control.sock"));
+      Some fd)
+    else None
+  in
   Fun.protect ~finally:(fun () -> Option.iter close_fd bound) @@ fun () ->
   let stdout_r, stdout_w = Unix.pipe ~cloexec:true () in
-  let null = Unix.openfile "/dev/null" [Unix.O_RDWR; Unix.O_CLOEXEC] 0 in
-  let env = [| "PATH=" ^ Option.value ~default:"/usr/bin" (Sys.getenv_opt "PATH");
-    "HOME=" ^ runtime_dir; "XDG_RUNTIME_DIR=" ^ runtime_dir;
-    "CAMELPIE_RUNTIME_DIR=" ^ runtime_dir; "OTEL_SDK_DISABLED=true";
-    "EIO_BACKEND=" ^ backend |] in
+  let null = Unix.openfile "/dev/null" [ Unix.O_RDWR; Unix.O_CLOEXEC ] 0 in
+  let env =
+    [|
+      "PATH=" ^ Option.value ~default:"/usr/bin" (Sys.getenv_opt "PATH");
+      "HOME=" ^ runtime_dir;
+      "XDG_RUNTIME_DIR=" ^ runtime_dir;
+      "CAMELPIE_RUNTIME_DIR=" ^ runtime_dir;
+      "OTEL_SDK_DISABLED=true";
+      "EIO_BACKEND=" ^ backend;
+    |]
+  in
   let pid =
-    match Unix.create_process_env pie_exe
-      [|pie_exe; "msg"; "subscribe"; "--interval-ms=1"|] env null stdout_w null with
+    match
+      Unix.create_process_env pie_exe
+        [| pie_exe; "msg"; "subscribe"; "--interval-ms=1" |]
+        env null stdout_w null
+    with
     | pid -> pid
     | exception exn ->
-        List.iter close_fd [stdout_r; stdout_w; null];
+        List.iter close_fd [ stdout_r; stdout_w; null ];
         raise exn
   in
   close_fd stdout_w;
   close_fd null;
   Fun.protect ~finally:(fun () ->
-    close_fd stdout_r;
-    (try Unix.kill pid Sys.sigterm with Unix.Unix_error (Unix.ESRCH, _, _) -> ());
-    ignore (Unix.waitpid [] pid)) @@ fun () ->
-  let ready, _, _ = Unix.select [stdout_r] [] [] child_deadline_s in
-  if ready = [] then Alcotest.fail "subscriber did not report unavailable daemon";
+      close_fd stdout_r;
+      (try Unix.kill pid Sys.sigterm
+       with Unix.Unix_error (Unix.ESRCH, _, _) -> ());
+      ignore (Unix.waitpid [] pid))
+  @@ fun () ->
+  let ready, _, _ = Unix.select [ stdout_r ] [] [] child_deadline_s in
+  if ready = [] then
+    Alcotest.fail "subscriber did not report unavailable daemon";
   let buffer = Bytes.create 4096 in
   let count = Unix.read stdout_r buffer 0 (Bytes.length buffer) in
-  Alcotest.(check bool) "expected unavailable daemon result" true
+  Alcotest.(check bool)
+    "expected unavailable daemon result" true
     (string_contains (Bytes.sub_string buffer 0 count) "daemon is not running");
-  let fd_count () = Array.length (Sys.readdir (Printf.sprintf "/proc/%d/fd" pid)) in
+  let fd_count () =
+    Array.length (Sys.readdir (Printf.sprintf "/proc/%d/fd" pid))
+  in
   let baseline = fd_count () in
   for _ = 1 to 20 do
     Thread.delay 0.01;
     let current = fd_count () in
-    Alcotest.(check bool) "failed connections do not accumulate (one in-flight allowed)"
-      true (current <= baseline + 1)
+    Alcotest.(check bool)
+      "failed connections do not accumulate (one in-flight allowed)" true
+      (current <= baseline + 1)
   done
 
 let () =
@@ -386,11 +406,16 @@ let () =
             test_retry_rejected;
         ] );
       ( "subscriber_fds",
-        List.concat_map (fun backend ->
-          List.map (fun refused ->
-            Alcotest.test_case (backend ^ if refused then " refused" else " absent")
-              `Quick (test_subscriber_failed_connect_fds ~backend ~refused))
-            [false; true]) ["linux"; "posix"] );
+        List.concat_map
+          (fun backend ->
+            List.map
+              (fun refused ->
+                Alcotest.test_case
+                  (backend ^ if refused then " refused" else " absent")
+                  `Quick
+                  (test_subscriber_failed_connect_fds ~backend ~refused))
+              [ false; true ])
+          [ "linux"; "posix" ] );
       ( "harness",
         [
           Alcotest.test_case "unknown command does not hang server join" `Quick
