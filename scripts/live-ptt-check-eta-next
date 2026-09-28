@@ -112,8 +112,14 @@ printf 'Check that one transcription reaches your focused test window.\n'
 printf 'Press Enter here when observation is complete; then restart pie.service yourself.\n'
 # The original auth environment (including CODEX_HOME and provider keys) is
 # retained for the authorized provider call. Desktop/audio access stays live.
+# Same secret source as the production wrapper; never printed.
+if [[ -z "${OPENROUTER_API_KEY:-}" && -r /run/agenix/openrouter-api-key ]]; then
+  OPENROUTER_API_KEY="$(cat /run/agenix/openrouter-api-key)"
+  export OPENROUTER_API_KEY
+fi
+# HOME stays the operator's (PulseAudio cookie, desktop tools) as in production.
 (
-  export HOME="$work/home" XDG_CONFIG_HOME="$work/config"
+  export XDG_CONFIG_HOME="$work/config"
   export XDG_CACHE_HOME="$work/cache" XDG_DATA_HOME="$work/data"
   export CAMELPIE_RUNTIME_DIR="$work/runtime" CODEX_HOME="$original_codex_home"
   exec "$work/prefix/bin/pie" assistant --config "$work/config/pie/stt.toml"
