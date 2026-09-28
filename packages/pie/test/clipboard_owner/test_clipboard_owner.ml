@@ -82,7 +82,6 @@ let test_no_inspection_exact_stdin previous =
   in
   match Pie.Wayland.Clipboard.offer owner "offered-text" with
   | Error (`Clipboard_error msg) -> Alcotest.failf "offer failed: %s" msg
-  | Error _ -> Alcotest.fail "unexpected offer error"
   | Ok () ->
       Eio.Time.sleep (Eio.Stdenv.clock env) 0.1;
       Alcotest.(check bool)
@@ -113,7 +112,6 @@ let test_known_spawn_failure_hides_secret () =
       Alcotest.(check bool)
         "no execve context" false
         (contains message "execve")
-  | Error _ -> Alcotest.fail "unexpected error shape"
 
 let test_copy_early_failure () =
   with_temp_dir @@ fun dir ->
@@ -128,7 +126,6 @@ let test_copy_early_failure () =
   match Pie.Wayland.Clipboard.offer owner "payload" with
   | Error (`Clipboard_error _) -> ()
   | Ok () -> Alcotest.fail "early copy failure reported success"
-  | Error _ -> Alcotest.fail "unexpected error shape"
 
 let test_cancellation_at_acquisition () =
   with_temp_dir @@ fun dir ->
@@ -459,15 +456,15 @@ let test_paste_handoff_delay ~cancel () =
       ~copy_program:copy ()
   in
   let waited = ref [] in
-  let now = ref 0. in
+  let virtual_now = ref 0. in
   let module Clock = struct
     type t = unit
     type time = float
 
-    let now () = !now
+    let now () = !virtual_now
 
     let sleep_until () target =
-      let ms = int_of_float (Float.round ((target -. !now) *. 1000.)) in
+      let ms = int_of_float (Float.round ((target -. !virtual_now) *. 1000.)) in
       waited := ms :: !waited;
       Alcotest.(check bool)
         "no key before handoff wait" false (Sys.file_exists keys);
@@ -476,7 +473,7 @@ let test_paste_handoff_delay ~cancel () =
             Eio.Time.sleep clock 0.001
           done);
       if cancel then Eio.Fiber.await_cancel ();
-      now := target;
+      virtual_now := target;
       Out_channel.with_open_bin released (fun out ->
           output_string out "released")
   end in

@@ -57,20 +57,22 @@ let pp_run_error fmt = function
   | `Pulse_error error ->
       Format.pp_print_string fmt (Pie.Pulse.Client.error_message error)
   | `Ptt_error msg -> Format.pp_print_string fmt msg
-  | `Ptt_cause cause -> Eta.Cause.pp
-      (fun fmt (`Ptt_error msg) -> Format.pp_print_string fmt msg) fmt cause
+  | `Ptt_cause cause ->
+      Eta.Cause.pp
+        (fun fmt (`Ptt_error msg) -> Format.pp_print_string fmt msg)
+        fmt cause
 
 let fail_cause cause =
   Alcotest.failf "workflow failed: %a" (Eta.Cause.pp pp_run_error) cause
 
-let fail_error error =
-  Alcotest.failf "workflow failed: %a" pp_run_error error
+let fail_error error = Alcotest.failf "workflow failed: %a" pp_run_error error
 
 let test_logger env =
   Eta_observability.Logger.create ~service:"pie-owner-test"
     ~clock:(Eio.Stdenv.clock env)
     ~mono_clock:(Eio.Stdenv.mono_clock env)
-    ~reporter:(Eta_observability.Logger.Reporter.writer ignore) ()
+    ~reporter:(Eta_observability.Logger.Reporter.writer ignore)
+    ()
 
 let rec rm_rf path =
   match Unix.lstat path with
@@ -159,8 +161,8 @@ let status_last_error ~net ~sw socket_path =
           | _ -> None)
       | _ -> None)
 
-let owner_workflow ~logger ~env ~sw ~net ~process_mgr ~mono_clock ~dir ~config_control ~stt
-    ~deliver ~keyboard ~audio =
+let owner_workflow ~logger ~env ~sw ~net ~process_mgr ~mono_clock ~dir
+    ~config_control ~stt ~deliver ~keyboard ~audio =
   let socket_path = Filename.concat dir "control.sock" in
   let retry_dir = Filename.concat dir "recordings" in
   (try Unix.mkdir retry_dir 0o700
@@ -170,15 +172,18 @@ let owner_workflow ~logger ~env ~sw ~net ~process_mgr ~mono_clock ~dir ~config_c
   in
   let workflow () =
     Pie.Assistant.Service.run_with_inputs ~sw ~net ~fs:(Eio.Stdenv.fs env)
-      ~clock:(Eio.Stdenv.clock env)
-      ~logger ~process_mgr ~mono_clock
-      ~inputs ~config_control ~stt ~deliver ~socket_path ~retry_dir
-      ~min_duration_ms:0 ()
+      ~clock:(Eio.Stdenv.clock env) ~logger ~process_mgr ~mono_clock ~inputs
+      ~config_control ~stt ~deliver ~socket_path ~retry_dir ~min_duration_ms:0
+      ()
   in
   (socket_path, retry_dir, workflow)
 
 let with_workflow_background ~sw ~clock:_ workflow assertions =
-  match Eio.Fiber.first workflow (fun () -> assertions (); Ok ()) with
+  match
+    Eio.Fiber.first workflow (fun () ->
+        assertions ();
+        Ok ())
+  with
   | Ok () -> ()
   | Error error -> fail_error error
 
@@ -190,7 +195,7 @@ let wait_for_recorded_pcm ~clock ~audio_q ~retry_dir =
       List.exists
         (fun path ->
           Filename.basename path = "draft.pcm"
-          && (try (Unix.stat path).st_size > 0 with Unix.Unix_error _ -> false))
+          && try (Unix.stat path).st_size > 0 with Unix.Unix_error _ -> false)
         (pcm_files retry_dir))
 
 let press_cycle ~clock ~keyboard ~audio_q ~retry_dir ~delivered =
@@ -224,11 +229,13 @@ let test_record_to_delivery_last_good_then_reload () =
         Ok config.Pie.Config.Stt.transcription_model
       in
       let deliver _config _mode text =
-        (Atomic.set delivered (text :: Atomic.get delivered); Ok ())
+        Atomic.set delivered (text :: Atomic.get delivered);
+        Ok ()
       in
       let _socket, retry_dir, workflow =
-        owner_workflow ~logger:(test_logger env) ~env ~sw ~net ~process_mgr ~mono_clock ~dir
-          ~config_control:{ stamp; load } ~stt ~deliver ~keyboard ~audio
+        owner_workflow ~logger:(test_logger env) ~env ~sw ~net ~process_mgr
+          ~mono_clock ~dir ~config_control:{ stamp; load } ~stt ~deliver
+          ~keyboard ~audio
       in
       with_workflow_background ~sw ~clock workflow (fun () ->
           Eio.Time.sleep clock 0.2;
@@ -256,10 +263,13 @@ let test_record_to_delivery_last_good_then_reload () =
 
 let assert_input_diagnostic memory expected =
   let module Logger = Eta_observability.Logger in
-  let records = Logger.Memory.find ~level:Logger.Error
-    ~field:("assistant.error", expected) memory in
-  Alcotest.(check bool) "sanitized lastError logged before teardown" true
-    (records <> [])
+  let records =
+    Logger.Memory.find ~level:Logger.Error
+      ~field:("assistant.error", expected)
+      memory
+  in
+  Alcotest.(check bool)
+    "sanitized lastError logged before teardown" true (records <> [])
 
 let test_required_input_failure_sets_last_error () =
   Eio_main.run @@ fun env ->
@@ -276,11 +286,16 @@ let test_required_input_failure_sets_last_error () =
       let delivered = Atomic.make [] in
       let stt _ _ _ = Ok "should-not-deliver" in
       let deliver _config _mode text =
-        (Atomic.set delivered (text :: Atomic.get delivered); Ok ())
+        Atomic.set delivered (text :: Atomic.get delivered);
+        Ok ()
       in
       let memory = Eta_observability.Logger.Memory.create () in
-      let logger = Eta_observability.Logger.create ~service:"assistant-owner-test"
-        ~clock ~mono_clock ~reporter:(Eta_observability.Logger.Memory.reporter memory) () in
+      let logger =
+        Eta_observability.Logger.create ~service:"assistant-owner-test" ~clock
+          ~mono_clock
+          ~reporter:(Eta_observability.Logger.Memory.reporter memory)
+          ()
+      in
       let _socket_path, retry_dir, workflow =
         owner_workflow ~logger ~env ~sw ~net ~process_mgr ~mono_clock ~dir
           ~config_control:{ stamp; load } ~stt ~deliver ~keyboard ~audio
@@ -294,10 +309,10 @@ let test_required_input_failure_sets_last_error () =
             (Pie.Pulse.Client.Protocol_error "SECRET_MARKER_user_audio"));
       match workflow () with
       | Ok () -> Alcotest.fail "input failure must fail the workflow"
-      | Error (`Pulse_error (Pie.Pulse.Client.Protocol_error _)) -> (
+      | Error (`Pulse_error (Pie.Pulse.Client.Protocol_error _)) ->
           Alcotest.(check (list string))
             "no delivery from truncated audio" [] (Atomic.get delivered);
-          assert_input_diagnostic memory "pulse:protocol")
+          assert_input_diagnostic memory "pulse:protocol"
       | Error error -> fail_error error)
 
 let test_recording_overload_cancels_attempt () =
@@ -315,11 +330,16 @@ let test_recording_overload_cancels_attempt () =
       let delivered = Atomic.make [] in
       let stt _ _ _ = Ok "should-not-deliver" in
       let deliver _config _mode text =
-        (Atomic.set delivered (text :: Atomic.get delivered); Ok ())
+        Atomic.set delivered (text :: Atomic.get delivered);
+        Ok ()
       in
       let memory = Eta_observability.Logger.Memory.create () in
-      let logger = Eta_observability.Logger.create ~service:"assistant-owner-test"
-        ~clock ~mono_clock ~reporter:(Eta_observability.Logger.Memory.reporter memory) () in
+      let logger =
+        Eta_observability.Logger.create ~service:"assistant-owner-test" ~clock
+          ~mono_clock
+          ~reporter:(Eta_observability.Logger.Memory.reporter memory)
+          ()
+      in
       let _socket_path, retry_dir, workflow =
         owner_workflow ~logger ~env ~sw ~net ~process_mgr ~mono_clock ~dir
           ~config_control:{ stamp; load } ~stt ~deliver ~keyboard ~audio
@@ -336,7 +356,7 @@ let test_recording_overload_cancels_attempt () =
                { stream_index = 1; capacity = 64 }));
       match workflow () with
       | Ok () -> Alcotest.fail "overload must fail the workflow"
-      | Error (`Pulse_error (Pie.Pulse.Client.Recording_overload _)) -> (
+      | Error (`Pulse_error (Pie.Pulse.Client.Recording_overload _)) ->
           Alcotest.(check (list string))
             "no delivery from overloaded audio" [] (Atomic.get delivered);
           (match pcm_files retry_dir with
@@ -344,7 +364,7 @@ let test_recording_overload_cancels_attempt () =
           | path :: _ ->
               Alcotest.(check int)
                 "retained writer closed" 0 (open_fds_for path));
-          assert_input_diagnostic memory "pulse:recording_overload")
+          assert_input_diagnostic memory "pulse:recording_overload"
       | Error error -> fail_error error)
 
 let test_cancel_waits_for_blocked_loader () =
@@ -381,8 +401,9 @@ let test_cancel_waits_for_blocked_loader () =
                 fun () ->
                   Eio.Fiber.fork ~sw:service_sw (fun () -> raise Cancel_service));
              let _socket, _retry, workflow =
-               owner_workflow ~logger:(test_logger env) ~env ~sw:service_sw ~net ~process_mgr ~mono_clock ~dir
-                 ~config_control:{ stamp; load } ~stt ~deliver ~keyboard ~audio
+               owner_workflow ~logger:(test_logger env) ~env ~sw:service_sw ~net
+                 ~process_mgr ~mono_clock ~dir ~config_control:{ stamp; load }
+                 ~stt ~deliver ~keyboard ~audio
              in
              ignore (workflow ())
            with
@@ -424,8 +445,9 @@ let test_cancelled_attempt_releases_recording_fd () =
       let stt _ _ _ = Ok "unused" in
       let deliver _ _ _ = Ok () in
       let _socket, retry_dir, workflow =
-        owner_workflow ~logger:(test_logger env) ~env ~sw ~net ~process_mgr ~mono_clock ~dir
-          ~config_control:{ stamp; load } ~stt ~deliver ~keyboard ~audio
+        owner_workflow ~logger:(test_logger env) ~env ~sw ~net ~process_mgr
+          ~mono_clock ~dir ~config_control:{ stamp; load } ~stt ~deliver
+          ~keyboard ~audio
       in
       with_workflow_background ~sw ~clock workflow (fun () ->
           Eio.Time.sleep clock 0.2;
@@ -724,13 +746,16 @@ let run_stream_child () =
       let stt config mode bytes =
         (Pie.Assistant.Service.production_stt ~sw ~net ~clock
            ~logger:(test_logger env) ~process_mgr config mode bytes
-          :> (string, Pie.Ptt_loop.error) result) in
+          :> (string, Pie.Ptt_loop.error) result)
+      in
       let deliver _config _mode text =
-        (Atomic.set delivered (text :: Atomic.get delivered); Ok ())
+        Atomic.set delivered (text :: Atomic.get delivered);
+        Ok ()
       in
       let _socket, _retry, workflow =
-        owner_workflow ~logger:(test_logger env) ~env ~sw ~net ~process_mgr ~mono_clock ~dir
-          ~config_control:{ stamp; load } ~stt ~deliver ~keyboard ~audio
+        owner_workflow ~logger:(test_logger env) ~env ~sw ~net ~process_mgr
+          ~mono_clock ~dir ~config_control:{ stamp; load } ~stt ~deliver
+          ~keyboard ~audio
       in
       mark "workflow_started";
       with_workflow_background ~sw ~clock workflow (fun () ->
@@ -838,23 +863,29 @@ let test_keyboard_input_lost_cancels_attempt () =
       let delivered = Atomic.make [] in
       let stt _ _ _ = Ok "should-not-deliver" in
       let deliver _config _mode text =
-        (Atomic.set delivered (text :: Atomic.get delivered); Ok ())
+        Atomic.set delivered (text :: Atomic.get delivered);
+        Ok ()
       in
       let _socket, retry_dir, workflow =
-        owner_workflow ~logger:(test_logger env) ~env ~sw ~net ~process_mgr ~mono_clock ~dir
-          ~config_control:{ stamp; load } ~stt ~deliver ~keyboard ~audio
+        owner_workflow ~logger:(test_logger env) ~env ~sw ~net ~process_mgr
+          ~mono_clock ~dir ~config_control:{ stamp; load } ~stt ~deliver
+          ~keyboard ~audio
       in
       Eio.Fiber.fork ~sw (fun () ->
           Eio.Time.sleep clock 0.2;
           Pie.Keyboard.Monitor.emit keyboard (key ~released:false);
           offer_pcm audio_q);
-      let outcome = Eta.Scope.run (fun child_sw ->
-          Eta.Concurrent.with_background ~sw:child_sw
-            (fun () -> Eio.Time.sleep clock 0.45;
-              raise Pie.Keyboard.Monitor.Input_lost)
-            workflow) in
+      let outcome =
+        Eta.Scope.run (fun child_sw ->
+            Eta.Concurrent.with_background ~sw:child_sw
+              (fun () ->
+                Eio.Time.sleep clock 0.45;
+                raise Pie.Keyboard.Monitor.Input_lost)
+              workflow)
+      in
       match outcome with
-      | Eta.Exit.Success () -> Alcotest.fail "Input_lost must fail the owner workflow"
+      | Eta.Exit.Success () ->
+          Alcotest.fail "Input_lost must fail the owner workflow"
       | Eta.Exit.Failure _ -> (
           Alcotest.(check (list string))
             "no delivery after keyboard Input_lost" [] (Atomic.get delivered);
@@ -878,7 +909,6 @@ let test_pause_latch_one_shot_resume_fresh_attempt () =
   Eio_main.run @@ fun env ->
   with_dir (fun dir ->
       Eio.Switch.run @@ fun sw ->
-
       let persist_path = Filename.concat dir "recording.json" in
       let coord = Pie.Recording.Coordinator.create ~persist_path () in
       let start () =
@@ -898,7 +928,8 @@ let test_pause_latch_one_shot_resume_fresh_attempt () =
         "pause signals current attempt" true
         (Pie.Recording.Coordinator.cancel_signalled a1);
       (match
-         ((Pie.Recording.Coordinator.await_cancel a1; Ok ()))
+         Pie.Recording.Coordinator.await_cancel a1;
+         Ok ()
        with
       | Ok () -> ()
       | Error _ -> Alcotest.fail "await_cancel after pause should return");
@@ -930,12 +961,14 @@ let test_fast_tap_settles_then_next_press_delivers () =
       let load _ = (base_config (), stamp ()) in
       let stt _ _ _ = Ok "after-fast-tap" in
       let deliver _ _ text =
-        (Atomic.set delivered (text :: Atomic.get delivered); Ok ())
+        Atomic.set delivered (text :: Atomic.get delivered);
+        Ok ()
       in
       let socket_path, retry_dir, workflow =
-        owner_workflow ~logger:(test_logger env) ~env ~sw ~net ~process_mgr:(Eio.Stdenv.process_mgr env)
-          ~mono_clock:(Eio.Stdenv.mono_clock env) ~dir
-          ~config_control:{ stamp; load } ~stt ~deliver ~keyboard ~audio
+        owner_workflow ~logger:(test_logger env) ~env ~sw ~net
+          ~process_mgr:(Eio.Stdenv.process_mgr env)
+          ~mono_clock:(Eio.Stdenv.mono_clock env)
+          ~dir ~config_control:{ stamp; load } ~stt ~deliver ~keyboard ~audio
       in
       let status key =
         try status_bool ~net ~sw socket_path key with _ -> false
@@ -949,7 +982,8 @@ let test_fast_tap_settles_then_next_press_delivers () =
           Alcotest.(check (list string))
             "empty fast tap did not deliver" [] (Atomic.get delivered);
           Alcotest.(check bool)
-            "empty fast tap released its slot" true (pcm_files retry_dir = []);
+            "empty fast tap released its slot" true
+            (pcm_files retry_dir = []);
           press_cycle ~clock ~keyboard ~audio_q ~retry_dir ~delivered;
           Alcotest.(check (list string))
             "next press admitted and delivered" [ "after-fast-tap" ]
@@ -970,11 +1004,13 @@ let test_pause_resume_fresh_attempt_delivers () =
       let load _ = (base_config (), stamp ()) in
       let stt _ _ _ = Ok "owned-text" in
       let deliver _config _mode text =
-        (Atomic.set delivered (text :: Atomic.get delivered); Ok ())
+        Atomic.set delivered (text :: Atomic.get delivered);
+        Ok ()
       in
       let socket_path, retry_dir, workflow =
-        owner_workflow ~logger:(test_logger env) ~env ~sw ~net ~process_mgr ~mono_clock ~dir
-          ~config_control:{ stamp; load } ~stt ~deliver ~keyboard ~audio
+        owner_workflow ~logger:(test_logger env) ~env ~sw ~net ~process_mgr
+          ~mono_clock ~dir ~config_control:{ stamp; load } ~stt ~deliver
+          ~keyboard ~audio
       in
       let status key =
         try status_bool ~net ~sw socket_path key with _ -> false
@@ -999,8 +1035,10 @@ let ptt_messages cause =
   Eta.Cause.failures cause |> List.map (function `Ptt_error msg -> msg)
 
 let start_attempt coord =
-  match Pie.Recording.Coordinator.try_start coord
-          Pie.Recording.Coordinator.Ptt_transcribe () with
+  match
+    Pie.Recording.Coordinator.try_start coord
+      Pie.Recording.Coordinator.Ptt_transcribe ()
+  with
   | Started attempt -> attempt
   | _ -> Alcotest.fail "expected Started"
 
@@ -1008,27 +1046,39 @@ let test_composite_body_failures_preserved () =
   Eio_main.run @@ fun env ->
   with_dir (fun dir ->
       Eio.Switch.run @@ fun sw ->
-      let coord = Pie.Recording.Coordinator.create
-        ~persist_path:(Filename.concat dir "recording.json") () in
+      let coord =
+        Pie.Recording.Coordinator.create
+          ~persist_path:(Filename.concat dir "recording.json")
+          ()
+      in
       let attempt = start_attempt coord in
       let body () =
         Eta.Concurrent.race ~sw
-          [ (fun () -> Error (`Ptt_error "one"));
-            (fun () -> Error (`Ptt_error "two")) ] in
-      let direct = match body () with
+          [
+            (fun () -> Error (`Ptt_error "one"));
+            (fun () -> Error (`Ptt_error "two"));
+          ]
+      in
+      let direct =
+        match body () with
         | Ok _ -> Alcotest.fail "body itself must fail"
-        | Error cause -> List.sort String.compare (ptt_messages cause) in
+        | Error cause -> List.sort String.compare (ptt_messages cause)
+      in
       let wrapped =
         Pie.Assistant.Service.run_acquired_attempt ~sw ~attempt
           ~on_settle:(fun () -> Ok ())
-          (fun () -> match body () with
+          (fun () ->
+            match body () with
             | Ok _ -> Ok ()
-            | Error cause -> Error (`Ptt_cause cause)) in
-      let actual = match wrapped with
+            | Error cause -> Error (`Ptt_cause cause))
+      in
+      let actual =
+        match wrapped with
         | Ok () -> Alcotest.fail "wrapper must retain body errors"
         | Error (`Ptt_cause cause) ->
             List.sort String.compare (ptt_messages cause)
-        | Error (`Ptt_error msg) -> [ msg ] in
+        | Error (`Ptt_error msg) -> [ msg ]
+      in
       Alcotest.(check (list string))
         "wrapper preserves body's typed Fail set" direct actual)
 
@@ -1037,57 +1087,87 @@ let test_owned_pause_plus_cleanup_is_not_ok () =
   with_dir (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
-      let coord = Pie.Recording.Coordinator.create
-        ~persist_path:(Filename.concat dir "recording.json") () in
+      let coord =
+        Pie.Recording.Coordinator.create
+          ~persist_path:(Filename.concat dir "recording.json")
+          ()
+      in
       let attempt = start_attempt coord in
       let never, _ = Eio.Promise.create () in
       Eio.Fiber.fork ~sw (fun () ->
-        Eio.Time.sleep clock 0.05;
-        Pie.Recording.Coordinator.set_enabled coord false);
-      match Pie.Assistant.Service.run_acquired_attempt ~sw ~attempt
-              ~on_settle:(fun () -> Error (`Ptt_error "close failed"))
-              (fun () -> Eio.Promise.await never; Ok ()) with
+          Eio.Time.sleep clock 0.05;
+          Pie.Recording.Coordinator.set_enabled coord false);
+      match
+        Pie.Assistant.Service.run_acquired_attempt ~sw ~attempt
+          ~on_settle:(fun () -> Error (`Ptt_error "close failed"))
+          (fun () ->
+            Eio.Promise.await never;
+            Ok ())
+      with
       | Ok () -> Alcotest.fail "owned pause plus cleanup failure must not be Ok"
       | Error (`Ptt_error "close failed") -> ()
       | Error _ -> Alcotest.fail "lost cleanup failure")
 
 let test_pulse_overload_and_cleanup_failures_preserved () =
   Eio_main.run @@ fun _env ->
-  match Eta.Scope.run (fun sw ->
-      Eio.Switch.on_release sw (fun () -> failwith "recording:close retained recording");
-      Error (`Pulse_error (Pie.Pulse.Client.Recording_overload
-        { stream_index = 1; capacity = 64 }))) with
-  | Eta.Exit.Success _ -> Alcotest.fail "composite Pulse and cleanup must stay failed"
-  | Failure cause ->
-      let overload = Eta.Cause.failures cause |> List.exists (function
-        | `Pulse_error (Pie.Pulse.Client.Recording_overload _) -> true
-        | _ -> false) in
+  match
+    Eta.Scope.run (fun sw ->
+        Eio.Switch.on_release sw (fun () ->
+            failwith "recording:close retained recording");
+        Error
+          (`Pulse_error
+             (Pie.Pulse.Client.Recording_overload
+                { stream_index = 1; capacity = 64 })))
+  with
+  | Eta.Exit.Success _ ->
+      Alcotest.fail "composite Pulse and cleanup must stay failed"
+  | Failure cause -> (
+      let overload =
+        Eta.Cause.failures cause
+        |> List.exists (function
+          | `Pulse_error (Pie.Pulse.Client.Recording_overload _) -> true
+          | _ -> false)
+      in
       Alcotest.(check bool) "Pulse Recording_overload remains" true overload;
-      (match cause with
+      match cause with
       | Eta.Cause.Suppressed { finalizer; _ } ->
-          Alcotest.(check bool) "cleanup failure remains as finalizer" true
+          Alcotest.(check bool)
+            "cleanup failure remains as finalizer" true
             (not (Eta.Cause.is_interrupt_only finalizer))
-      | _ -> Alcotest.failf "expected Suppressed cleanup, got %a"
-               (Eta.Cause.pp pp_run_error) cause)
+      | _ ->
+          Alcotest.failf "expected Suppressed cleanup, got %a"
+            (Eta.Cause.pp pp_run_error)
+            cause)
 
 let test_status_observer_defect_composes_with_pulse () =
   Eio_main.run @@ fun _env ->
-  match Eta.Scope.run (fun sw ->
-      Eio.Switch.on_release sw (fun () -> failwith "set_error persist");
-      Error (`Pulse_error (Pie.Pulse.Client.Recording_overload
-        { stream_index = 1; capacity = 64 }))) with
+  match
+    Eta.Scope.run (fun sw ->
+        Eio.Switch.on_release sw (fun () -> failwith "set_error persist");
+        Error
+          (`Pulse_error
+             (Pie.Pulse.Client.Recording_overload
+                { stream_index = 1; capacity = 64 })))
+  with
   | Eta.Exit.Success _ -> Alcotest.fail "observer defect must not succeed"
-  | Failure cause ->
-      let overload = Eta.Cause.failures cause |> List.exists (function
-        | `Pulse_error (Pie.Pulse.Client.Recording_overload _) -> true
-        | _ -> false) in
-      Alcotest.(check bool) "original Pulse Recording_overload remains" true overload;
-      (match cause with
+  | Failure cause -> (
+      let overload =
+        Eta.Cause.failures cause
+        |> List.exists (function
+          | `Pulse_error (Pie.Pulse.Client.Recording_overload _) -> true
+          | _ -> false)
+      in
+      Alcotest.(check bool)
+        "original Pulse Recording_overload remains" true overload;
+      match cause with
       | Eta.Cause.Suppressed { finalizer; _ } ->
-          Alcotest.(check bool) "observer defect composed as finalizer" true
+          Alcotest.(check bool)
+            "observer defect composed as finalizer" true
             (not (Eta.Cause.is_interrupt_only finalizer))
-      | _ -> Alcotest.failf "observer defect replaced Pulse: %a"
-               (Eta.Cause.pp pp_run_error) cause)
+      | _ ->
+          Alcotest.failf "observer defect replaced Pulse: %a"
+            (Eta.Cause.pp pp_run_error)
+            cause)
 
 let json_accepted line =
   match Yojson.Safe.from_string line with
@@ -1109,24 +1189,21 @@ let test_service_pre_handle_failure_then_fresh_press () =
   Eio_main.run @@ fun env ->
   with_dir (fun dir ->
       Eio.Switch.run @@ fun sw ->
-
       let net = Eio.Stdenv.net env in
 
       let persist_path = Filename.concat dir "recording.json" in
       let coordinator = Pie.Recording.Coordinator.create ~persist_path () in
       let bad =
         Pie.Assistant.Service.on_press ~sw ~clock:(Eio.Stdenv.clock env)
-          ~logger:(test_logger env) ~net ~coordinator
-          ~retry_dir:dir
+          ~logger:(test_logger env) ~net ~coordinator ~retry_dir:dir
           ~config:(base_config ~model:"openrouter/" ())
           ~stt:(fun _ _ _ -> Ok "unused")
-          ~deliver:(fun _ _ _ -> Ok ()) "transcribe"
+          ~deliver:(fun _ _ _ -> Ok ())
+          "transcribe"
       in
       (match bad with
       | Ok (Pie.Ptt_loop.Scoped use) -> (
-          match
-            (use (fun _ -> Ok ()))
-          with
+          match use (fun _ -> Ok ()) with
           | Error _ -> ()
           | Ok () -> Alcotest.fail "empty model must fail before handle")
       | Ok _ -> Alcotest.fail "empty model must fail before handle"
@@ -1138,27 +1215,28 @@ let test_service_pre_handle_failure_then_fresh_press () =
       let delivered = Atomic.make [] in
       let stt _ _ _ = Ok "fresh-after-setup-fail" in
       let deliver _ _ text =
-        (Atomic.set delivered [ text ]; Ok ())
+        Atomic.set delivered [ text ];
+        Ok ()
       in
       let good =
         Pie.Assistant.Service.on_press ~sw ~clock:(Eio.Stdenv.clock env)
-          ~logger:(test_logger env) ~net ~coordinator
-          ~retry_dir:dir ~stt ~deliver ~config:(base_config ()) "transcribe"
+          ~logger:(test_logger env) ~net ~coordinator ~retry_dir:dir ~stt
+          ~deliver ~config:(base_config ()) "transcribe"
       in
       (match good with
       | Ok (Pie.Ptt_loop.Scoped use) -> (
           match
-                          (use (fun handle ->
-                   Result.bind (handle.offer loud_pcm) (fun () ->
-                       match handle.finish with
-                       | Pie.Ptt_loop.Buffered f ->
-                           f
-                             {
-                               Pie.Ptt_loop.duration_ms = 10;
-                               pcm_bytes = loud_pcm;
-                             }
-                       | Pie.Ptt_loop.Streaming _ ->
-                           Alcotest.fail "expected Buffered finish")))
+            use (fun handle ->
+                Result.bind (handle.offer loud_pcm) (fun () ->
+                    match handle.finish with
+                    | Pie.Ptt_loop.Buffered f ->
+                        f
+                          {
+                            Pie.Ptt_loop.duration_ms = 10;
+                            pcm_bytes = loud_pcm;
+                          }
+                    | Pie.Ptt_loop.Streaming _ ->
+                        Alcotest.fail "expected Buffered finish"))
           with
           | Ok () -> ()
           | Error cause -> fail_error cause)
@@ -1173,7 +1251,6 @@ let test_delayed_old_cleanup_preserves_new_same_mode_attempt () =
   Eio_main.run @@ fun env ->
   with_dir (fun dir ->
       Eio.Switch.run @@ fun sw ->
-
       let net = Eio.Stdenv.net env in
 
       let persist_path = Filename.concat dir "recording.json" in
@@ -1202,10 +1279,11 @@ let test_delayed_old_cleanup_preserves_new_same_mode_attempt () =
       ignore (Pie.Recording.Coordinator.release coordinator first);
       let second =
         Pie.Assistant.Service.on_press ~sw ~clock:(Eio.Stdenv.clock env)
-          ~logger:(test_logger env) ~net ~coordinator
-          ~retry_dir:dir ~config:(base_config ())
+          ~logger:(test_logger env) ~net ~coordinator ~retry_dir:dir
+          ~config:(base_config ())
           ~stt:(fun _ _ _ -> Ok "unused")
-          ~deliver:(fun _ _ _ -> Ok ()) "transcribe"
+          ~deliver:(fun _ _ _ -> Ok ())
+          "transcribe"
       in
       (match second with
       | Ok (Pie.Ptt_loop.Scoped _ | Pie.Ptt_loop.Handle _) -> ()
@@ -1216,9 +1294,7 @@ let test_delayed_old_cleanup_preserves_new_same_mode_attempt () =
         | Some attempt -> Pie.Recording.Coordinator.attempt_id attempt
         | None -> Alcotest.fail "second attempt missing"
       in
-      (match
-                    (Pie.Assistant.Service.settle_attempt owner_a)
-       with
+      (match Pie.Assistant.Service.settle_attempt owner_a with
       | Ok () -> ()
       | Error cause -> fail_error cause);
       Alcotest.(check bool)
@@ -1247,11 +1323,13 @@ let test_busy_keyboard_and_rpc_then_fresh_cycle () =
       let load _ = (base_config (), stamp ()) in
       let stt _ _ _ = Ok "cycle-text" in
       let deliver _ _ text =
-        (Atomic.set delivered (text :: Atomic.get delivered); Ok ())
+        Atomic.set delivered (text :: Atomic.get delivered);
+        Ok ()
       in
       let socket_path, retry_dir, workflow =
-        owner_workflow ~logger:(test_logger env) ~env ~sw ~net ~process_mgr ~mono_clock ~dir
-          ~config_control:{ stamp; load } ~stt ~deliver ~keyboard ~audio
+        owner_workflow ~logger:(test_logger env) ~env ~sw ~net ~process_mgr
+          ~mono_clock ~dir ~config_control:{ stamp; load } ~stt ~deliver
+          ~keyboard ~audio
       in
       with_workflow_background ~sw ~clock workflow (fun () ->
           Eio.Time.sleep clock 0.2;
@@ -1279,15 +1357,18 @@ let test_busy_keyboard_and_rpc_then_fresh_cycle () =
 
 let test_cleanup_cancel_and_defect_both_visible () =
   Eio_main.run @@ fun _env ->
-  match Eta.Scope.run (fun sw ->
-      Eio.Switch.on_release sw (fun () ->
-          raise (Unix.Unix_error (Unix.EIO, "close", "")));
-      failwith "cleanup-defect") with
+  match
+    Eta.Scope.run (fun sw ->
+        Eio.Switch.on_release sw (fun () ->
+            raise (Unix.Unix_error (Unix.EIO, "close", "")));
+        failwith "cleanup-defect")
+  with
   | Eta.Exit.Success _ -> Alcotest.fail "defect and cleanup must stay failed"
-  | Eta.Exit.Failure cause ->
-      (match cause with
+  | Eta.Exit.Failure cause -> (
+      match cause with
       | Eta.Cause.Suppressed { primary = Eta.Cause.Die _; finalizer } ->
-          Alcotest.(check bool) "composed cleanup remains" true
+          Alcotest.(check bool)
+            "composed cleanup remains" true
             (not (Eta.Cause.is_interrupt_only finalizer))
       | _ -> Alcotest.fail "defect replaced the composite")
 
@@ -1306,16 +1387,19 @@ let test_capture_budget_sets_last_error () =
       let stt _ _ _ = Ok "should-not-deliver" in
       let deliver _ _ _ = Ok () in
       let memory = Eta_observability.Logger.Memory.create () in
-      let logger = Eta_observability.Logger.create ~service:"assistant-owner-test"
-        ~clock ~mono_clock
-        ~reporter:(Eta_observability.Logger.Memory.reporter memory) () in
+      let logger =
+        Eta_observability.Logger.create ~service:"assistant-owner-test" ~clock
+          ~mono_clock
+          ~reporter:(Eta_observability.Logger.Memory.reporter memory)
+          ()
+      in
       let socket_path = Filename.concat dir "control.sock" in
       let retry_dir = Filename.concat dir "recordings" in
       (try Unix.mkdir retry_dir 0o700
        with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
       let workflow () =
         Pie.Assistant.Service.run_with_inputs ~sw ~net ~fs:(Eio.Stdenv.fs env)
-      ~clock ~logger ~process_mgr ~mono_clock
+          ~clock ~logger ~process_mgr ~mono_clock
           ~inputs:
             {
               Pie.Assistant.Service.keyboard;
@@ -1330,17 +1414,21 @@ let test_capture_budget_sets_last_error () =
           Pie.Keyboard.Monitor.emit keyboard (key ~released:false);
           offer_pcm audio_q;
           Pie.Keyboard.Monitor.emit keyboard (key ~released:true));
-      let timed () = match workflow () with
+      let timed () =
+        match workflow () with
         | Ok () -> Ok ()
-        | Error e -> Error (e :> [ Pie.Ptt_loop.run_error | `Timeout ]) in
+        | Error e -> Error (e :> [ Pie.Ptt_loop.run_error | `Timeout ])
+      in
       match Eta.Timeout.timeout ~clock (Eta.Duration.seconds 6) timed with
       | Ok () -> Alcotest.fail "capture budget must fail the workflow"
       | Error `Timeout -> Alcotest.fail "deadline"
       | Error (`Ptt_error "pcm:capture_budget") ->
           assert_input_diagnostic memory "ptt:capture_budget"
       | Error (`Ptt_cause cause) ->
-          Alcotest.(check bool) "typed capture budget retained" true
-            (List.mem (`Ptt_error "pcm:capture_budget") (Eta.Cause.failures cause));
+          Alcotest.(check bool)
+            "typed capture budget retained" true
+            (List.mem (`Ptt_error "pcm:capture_budget")
+               (Eta.Cause.failures cause));
           assert_input_diagnostic memory "ptt:capture_budget"
       | Error error -> fail_error error)
 
@@ -1385,7 +1473,8 @@ let test_provider_failure_publishes_audio_then_retries_provider () =
       let stamp () = [ Some (1, 1, 0, 0.) ] in
       let load _ = (base_config (), stamp ()) in
       let socket_path, retry_dir, workflow =
-        owner_workflow ~logger:(test_logger env) ~env ~sw ~net:(Eio.Stdenv.net env)
+        owner_workflow ~logger:(test_logger env) ~env ~sw
+          ~net:(Eio.Stdenv.net env)
           ~process_mgr:(Eio.Stdenv.process_mgr env)
           ~mono_clock:(Eio.Stdenv.mono_clock env)
           ~dir ~config_control:{ stamp; load } ~stt ~deliver ~keyboard ~audio
@@ -1427,7 +1516,8 @@ let test_delivery_failure_publishes_text_retry_skips_provider () =
       let stamp () = [ Some (1, 1, 0, 0.) ] in
       let load _ = (base_config (), stamp ()) in
       let socket_path, retry_dir, workflow =
-        owner_workflow ~logger:(test_logger env) ~env ~sw ~net:(Eio.Stdenv.net env)
+        owner_workflow ~logger:(test_logger env) ~env ~sw
+          ~net:(Eio.Stdenv.net env)
           ~process_mgr:(Eio.Stdenv.process_mgr env)
           ~mono_clock:(Eio.Stdenv.mono_clock env)
           ~dir ~config_control:{ stamp; load } ~stt ~deliver ~keyboard ~audio
@@ -1503,7 +1593,8 @@ let test_blank_transcript_publishes_audio_without_inject () =
       let stamp () = [ Some (1, 1, 0, 0.) ] in
       let load _ = (base_config (), stamp ()) in
       let _socket, retry_dir, workflow =
-        owner_workflow ~logger:(test_logger env) ~env ~sw ~net:(Eio.Stdenv.net env)
+        owner_workflow ~logger:(test_logger env) ~env ~sw
+          ~net:(Eio.Stdenv.net env)
           ~process_mgr:(Eio.Stdenv.process_mgr env)
           ~mono_clock:(Eio.Stdenv.mono_clock env)
           ~dir ~config_control:{ stamp; load } ~stt ~deliver ~keyboard ~audio
@@ -1529,7 +1620,8 @@ let test_abort_does_not_publish () =
       let stamp () = [ Some (1, 1, 0, 0.) ] in
       let load _ = (base_config (), stamp ()) in
       let socket_path, retry_dir, workflow =
-        owner_workflow ~logger:(test_logger env) ~env ~sw ~net:(Eio.Stdenv.net env)
+        owner_workflow ~logger:(test_logger env) ~env ~sw
+          ~net:(Eio.Stdenv.net env)
           ~process_mgr:(Eio.Stdenv.process_mgr env)
           ~mono_clock:(Eio.Stdenv.mono_clock env)
           ~dir ~config_control:{ stamp; load } ~stt ~deliver ~keyboard ~audio
@@ -1567,7 +1659,8 @@ let test_startup_text_retry_skips_provider () =
       let stamp () = [ Some (1, 1, 0, 0.) ] in
       let load _ = (base_config (), stamp ()) in
       let socket_path, retry_dir, workflow =
-        owner_workflow ~logger:(test_logger env) ~env ~sw ~net:(Eio.Stdenv.net env)
+        owner_workflow ~logger:(test_logger env) ~env ~sw
+          ~net:(Eio.Stdenv.net env)
           ~process_mgr:(Eio.Stdenv.process_mgr env)
           ~mono_clock:(Eio.Stdenv.mono_clock env)
           ~dir ~config_control:{ stamp; load } ~stt ~deliver ~keyboard ~audio
@@ -1602,7 +1695,8 @@ let test_successive_failures_keep_latest_only () =
       let stamp () = [ Some (1, 1, 0, 0.) ] in
       let load _ = (base_config (), stamp ()) in
       let _socket, retry_dir, workflow =
-        owner_workflow ~logger:(test_logger env) ~env ~sw ~net:(Eio.Stdenv.net env)
+        owner_workflow ~logger:(test_logger env) ~env ~sw
+          ~net:(Eio.Stdenv.net env)
           ~process_mgr:(Eio.Stdenv.process_mgr env)
           ~mono_clock:(Eio.Stdenv.mono_clock env)
           ~dir ~config_control:{ stamp; load } ~stt ~deliver ~keyboard ~audio
@@ -1638,13 +1732,14 @@ let test_busy_and_disabled_retry_does_not_load_payload () =
       let clock = Eio.Stdenv.clock env in
       let stt _ _ _ = Ok "held" in
       let never, _ = Eio.Promise.create () in
-       let deliver _ _ _ = Eio.Promise.await never in
+      let deliver _ _ _ = Eio.Promise.await never in
       let keyboard = Pie.Keyboard.Monitor.create () in
       let audio_q, audio = make_audio () in
       let stamp () = [ Some (1, 1, 0, 0.) ] in
       let load _ = (base_config (), stamp ()) in
       let socket_path, _retry_dir, workflow =
-        owner_workflow ~logger:(test_logger env) ~env ~sw ~net:(Eio.Stdenv.net env)
+        owner_workflow ~logger:(test_logger env) ~env ~sw
+          ~net:(Eio.Stdenv.net env)
           ~process_mgr:(Eio.Stdenv.process_mgr env)
           ~mono_clock:(Eio.Stdenv.mono_clock env)
           ~dir ~config_control:{ stamp; load } ~stt ~deliver ~keyboard ~audio
@@ -1732,9 +1827,8 @@ let test_blueprint_on_press_does_not_publish () =
       let deliver _ _ _ = Ok () in
       let _blueprint =
         Pie.Assistant.Service.on_press ~sw ~clock:(Eio.Stdenv.clock env)
-          ~logger:(test_logger env) ~net:(Eio.Stdenv.net env)
-          ~coordinator ~retry_dir ~config:(base_config ()) ~stt ~deliver
-          "transcribe"
+          ~logger:(test_logger env) ~net:(Eio.Stdenv.net env) ~coordinator
+          ~retry_dir ~config:(base_config ()) ~stt ~deliver "transcribe"
       in
       Alcotest.(check (option string))
         "constructing on_press publishes nothing" None (peek_kind retry_dir))
@@ -1781,8 +1875,8 @@ let test_success_preserves_older_candidate () =
               | Ok
                   (Some
                      (Pie.Recording.Retry_store.Active.Text { generation; _ }))
-                when Pie.Recording.Retry_store.Active.generation_equal generation
-                       gen0 ->
+                when Pie.Recording.Retry_store.Active.generation_equal
+                       generation gen0 ->
                   ()
               | _ -> Alcotest.fail "older generation changed after success")))
 
@@ -1820,7 +1914,8 @@ let test_publication_failure_keeps_primary () =
         | `Replaced saved -> (
             try Unix.rename saved path with Unix.Unix_error _ -> ())
       in
-      let rec pub014_has_stt : [ `Ptt_error of string ] Eta.Cause.t -> bool = function
+      let rec pub014_has_stt : [ `Ptt_error of string ] Eta.Cause.t -> bool =
+        function
         | Eta.Cause.Fail (`Ptt_error "stt:unavailable") -> true
         | Concurrent xs -> List.exists pub014_has_stt xs
         | Suppressed { primary; finalizer } ->
@@ -1850,37 +1945,45 @@ let test_publication_failure_keeps_primary () =
       let deliver _ _ _ = Ok () in
       let retry_dir = Filename.concat dir "recordings" in
       Unix.mkdir retry_dir 0o700;
-      let store = match Pie.Recording.Retry_store.Active.open_store ~root:retry_dir with
+      let store =
+        match Pie.Recording.Retry_store.Active.open_store ~root:retry_dir with
         | Ok store -> store
-        | Error (`Retry_store msg) -> Alcotest.fail msg in
+        | Error (`Retry_store msg) -> Alcotest.fail msg
+      in
       let coordinator = Pie.Recording.Coordinator.create () in
       retry_dir_ref := retry_dir;
       Fun.protect
         ~finally:(fun () -> pub014_restore retry_dir !lock_save)
         (fun () ->
-          let press = Pie.Assistant.Service.on_press ~sw
-            ~net:(Eio.Stdenv.net env) ~clock
-            ~logger:(test_logger env) ~coordinator ~store ~retry_dir
-            ~config:(base_config ()) ~stt ~deliver "transcribe" in
+          let press =
+            Pie.Assistant.Service.on_press ~sw ~net:(Eio.Stdenv.net env) ~clock
+              ~logger:(test_logger env) ~coordinator ~store ~retry_dir
+              ~config:(base_config ()) ~stt ~deliver "transcribe"
+          in
           let finish handle =
             Result.bind (handle.Pie.Ptt_loop.offer loud_pcm) (fun () ->
                 match handle.Pie.Ptt_loop.finish with
                 | Pie.Ptt_loop.Buffered f ->
                     f { Pie.Ptt_loop.duration_ms = 10; pcm_bytes = loud_pcm }
-                | Pie.Ptt_loop.Streaming _ -> Alcotest.fail "expected Buffered") in
-          let outcome = match press with
+                | Pie.Ptt_loop.Streaming _ -> Alcotest.fail "expected Buffered")
+          in
+          let outcome =
+            match press with
             | Error _ as error -> error
             | Ok (Pie.Ptt_loop.Scoped use) -> use finish
             | Ok (Pie.Ptt_loop.Handle handle) -> finish handle
-            | Ok _ -> Alcotest.fail "expected active buffered attempt" in
+            | Ok _ -> Alcotest.fail "expected active buffered attempt"
+          in
           match outcome with
           | Ok () -> Alcotest.fail "expected publication compound"
           | Error (`Ptt_cause cause) ->
-              Alcotest.(check bool) "provider fault invoked" true
+              Alcotest.(check bool)
+                "provider fault invoked" true
                 (Atomic.get stt_n >= 1);
-              Alcotest.(check bool) "primary stt failure retained" true
-                (pub014_has_stt cause);
-              Alcotest.(check bool) "publication finalizer Fail composed" true
+              Alcotest.(check bool)
+                "primary stt failure retained" true (pub014_has_stt cause);
+              Alcotest.(check bool)
+                "publication finalizer Fail composed" true
                 (pub014_has_pub_fail cause)
           | Error (`Ptt_error msg) ->
               Alcotest.failf "missing publication compound: %s" msg))
@@ -1895,9 +1998,9 @@ let test_owned_cancel_cleanup_defect_preserves_older () =
       let started = Atomic.make false in
       let proceed, resolve_proceed = Eio.Promise.create () in
       let stt _ _ _ =
-        (Atomic.set started true;
-         Eio.Promise.await proceed;
-         failwith "provider-cleanup-defect")
+        Atomic.set started true;
+        Eio.Promise.await proceed;
+        failwith "provider-cleanup-defect"
       in
       let deliver _ _ _ = Ok () in
       let keyboard = Pie.Keyboard.Monitor.create () in
@@ -1907,14 +2010,18 @@ let test_owned_cancel_cleanup_defect_preserves_older () =
       let socket_path = Filename.concat dir "control.sock" in
       let outcome, resolve_outcome = Eio.Promise.create () in
       Eio.Fiber.fork ~sw (fun () ->
-          let exit = Eta.Scope.run (fun owner_sw ->
-              let _, _, workflow =
-                owner_workflow ~logger:(test_logger env) ~env ~sw:owner_sw
-                  ~net:(Eio.Stdenv.net env)
-                  ~process_mgr:(Eio.Stdenv.process_mgr env)
-                  ~mono_clock:(Eio.Stdenv.mono_clock env)
-                  ~dir ~config_control:{ stamp; load } ~stt ~deliver ~keyboard ~audio
-              in workflow ()) in
+          let exit =
+            Eta.Scope.run (fun owner_sw ->
+                let _, _, workflow =
+                  owner_workflow ~logger:(test_logger env) ~env ~sw:owner_sw
+                    ~net:(Eio.Stdenv.net env)
+                    ~process_mgr:(Eio.Stdenv.process_mgr env)
+                    ~mono_clock:(Eio.Stdenv.mono_clock env)
+                    ~dir ~config_control:{ stamp; load } ~stt ~deliver ~keyboard
+                    ~audio
+                in
+                workflow ())
+          in
           Eio.Promise.resolve resolve_outcome exit);
       Eio.Time.sleep clock 0.2;
       Pie.Keyboard.Monitor.emit keyboard (key ~released:false);
@@ -1939,15 +2046,18 @@ let test_owned_cancel_cleanup_defect_preserves_older () =
         "did not publish new audio" true
         (peek_kind retry_dir <> Some "audio");
       let rec has_defect = function
-        | Eta.Cause.Die (Failure msg, _) when msg = "provider-cleanup-defect" -> true
+        | Eta.Cause.Die (Failure msg, _) when msg = "provider-cleanup-defect" ->
+            true
         | Eta.Cause.Finalizer cause -> has_defect cause
         | Eta.Cause.Concurrent causes -> List.exists has_defect causes
         | Eta.Cause.Suppressed { primary; finalizer } ->
             has_defect primary || has_defect finalizer
-        | _ -> false in
+        | _ -> false
+      in
       match Eio.Promise.await outcome with
       | Eta.Exit.Failure cause ->
-          Alcotest.(check bool) "cleanup defect classified" true (has_defect cause)
+          Alcotest.(check bool)
+            "cleanup defect classified" true (has_defect cause)
       | Eta.Exit.Success _ -> Alcotest.fail "cleanup defect must not disappear")
 
 let test_admission_held_until_provider_finalizer () =
@@ -1986,7 +2096,8 @@ let test_admission_held_until_provider_finalizer () =
           finish =
             Pie.Ptt_loop.Buffered
               (fun _clip ->
-                (Atomic.set finish_returned true; Ok ()));
+                Atomic.set finish_returned true;
+                Ok ());
           cancel = (fun () -> Ok ());
         }
       in
@@ -1997,15 +2108,18 @@ let test_admission_held_until_provider_finalizer () =
             | Pie.Ptt_loop.Buffered f ->
                 Fun.protect
                   ~finally:(fun () -> Eio.Promise.await held)
-                  (fun () -> f { Pie.Ptt_loop.duration_ms = 10;
-                    pcm_bytes = loud_pcm })
+                  (fun () ->
+                    f { Pie.Ptt_loop.duration_ms = 10; pcm_bytes = loud_pcm })
             | Pie.Ptt_loop.Streaming _ ->
                 Alcotest.fail "expected Buffered finish"
           in
-          match Pie.Assistant.Service.run_acquired_attempt ~sw ~attempt
+          match
+            Pie.Assistant.Service.run_acquired_attempt ~sw ~attempt
               ~on_settle:(fun () ->
                 (Pie.Assistant.Service.settle_attempt owner
-                  :> (unit, Pie.Ptt_loop.error) result)) body with
+                  :> (unit, Pie.Ptt_loop.error) result))
+              body
+          with
           | Ok () -> ()
           | Error cause -> fail_error cause);
       wait_until ~clock (fun () -> Atomic.get finish_returned);
@@ -2035,15 +2149,16 @@ let inject_cause cause = Eta.Exit.Failure cause
 let recover_single_failure on_error exit =
   match Eta.Exit.to_result exit with
   | Ok (Ok value) -> Ok value
-  | Ok (Error error) -> (match on_error error with
-      | Some result -> Result.map_error (fun error -> Eta.Cause.Fail error) result
+  | Ok (Error error) -> (
+      match on_error error with
+      | Some result ->
+          Result.map_error (fun error -> Eta.Cause.Fail error) result
       | None -> Error (Eta.Cause.Fail error))
   | Error cause -> Error cause
 
 let test_recover_single_intended_fail () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-
   let recovered = Atomic.make false in
   let eff =
     inject_cause (Eta.Cause.Fail (`Ptt_error "stt:unavailable"))
@@ -2061,7 +2176,6 @@ let test_recover_single_intended_fail () =
 let test_recover_concurrent_ordinary_and_budget () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-
   let ran = Atomic.make false in
   let cause =
     Eta.Cause.Concurrent
@@ -2098,7 +2212,6 @@ let test_recover_concurrent_ordinary_and_budget () =
 let test_recover_concurrent_pause_and_body () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-
   let ran = Atomic.make false in
   let cause =
     Eta.Cause.Concurrent
@@ -2122,13 +2235,14 @@ let test_recover_concurrent_pause_and_body () =
 let test_recover_sequential_typed_pair () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-
   let ran = Atomic.make false in
   let cause =
-    Eta.Cause.Suppressed {
-      primary = Eta.Cause.Fail (`Ptt_error "stt:unavailable");
-      finalizer = Eta.Cause.Finalizer (Eta.Cause.Fail (`Ptt_error "inject:failed"));
-    }
+    Eta.Cause.Suppressed
+      {
+        primary = Eta.Cause.Fail (`Ptt_error "stt:unavailable");
+        finalizer =
+          Eta.Cause.Finalizer (Eta.Cause.Fail (`Ptt_error "inject:failed"));
+      }
   in
   let eff =
     inject_cause cause

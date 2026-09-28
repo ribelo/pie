@@ -493,7 +493,7 @@ let test_auth_cancel_combines_close_failure () =
                         ~net))))
       in
       expect_combined ~label:"cancel+close"
-        ~needles:[ "synthetic-close"; "interrupt" ]
+        ~needles:[ "synthetic-close"; "stage-cancel" ]
         result;
       await_conn ();
       Alcotest.(check int)
@@ -517,7 +517,7 @@ let test_unwatch_cancel_combines_close_failure () =
                    Monitor.unwatch_and_close_with ~close:close_then_raise flow)))
       in
       expect_combined ~label:"unwatch-cancel+close"
-        ~needles:[ "synthetic-close"; "interrupt" ]
+        ~needles:[ "synthetic-close"; "unwatch-cancel" ]
         result;
       await_conn ();
       Alcotest.(check int)
@@ -598,8 +598,7 @@ let test_unexpected_eof_fails_consumer () =
       let operation () =
         Eta.Timeout.timeout ~clock (Eta.Duration.seconds 2) (fun () ->
             Monitor.with_monitor ~sw ~net ~clock ~process_mgr (fun _keyboard ->
-                Eio.Fiber.await_cancel ();
-                Ok ()))
+                Eio.Fiber.await_cancel ()))
         |> Result.map_error (function
           | `Timeout -> `Harness_timeout
           | error -> error)
@@ -630,8 +629,7 @@ let test_malformed_packet_fails_consumer () =
       let operation () =
         Eta.Timeout.timeout ~clock (Eta.Duration.seconds 2) (fun () ->
             Monitor.with_monitor ~sw ~net ~clock ~process_mgr (fun _keyboard ->
-                Eio.Fiber.await_cancel ();
-                Ok ()))
+                Eio.Fiber.await_cancel ()))
         |> Result.map_error (function
           | `Timeout -> `Harness_timeout
           | error -> error)

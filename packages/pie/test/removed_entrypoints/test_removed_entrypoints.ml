@@ -128,7 +128,8 @@ let test_help_omits_removed_commands () =
     (fun name ->
       Alcotest.(check bool)
         (name ^ " absent from --help")
-        false (string_contains help name))
+        false
+        (string_contains help name))
     [ "ptt-portal"; "stt-interactive" ];
   let advertised_as_command name =
     let rec lines s =
@@ -152,7 +153,8 @@ let test_help_omits_removed_commands () =
     (fun name ->
       Alcotest.(check bool)
         (name ^ " not advertised as a command")
-        false (advertised_as_command name))
+        false
+        (advertised_as_command name))
     removed_commands;
   Alcotest.(check bool)
     "sentinel unused for --help" false (Sys.file_exists sentinel)

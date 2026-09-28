@@ -144,7 +144,7 @@ let find_eta_cmxa_env () =
 let find_tls_stub () =
   caml_ld_dirs ()
   |> List.find_map (fun dir ->
-      let stub = Filename.concat dir "dlleta_http_tls_openssl_stubs.so" in
+      let stub = Filename.concat dir "dlleta_http_stubs.so" in
       if Sys.file_exists stub then Some stub else None)
 
 let hash_map paths =
@@ -262,8 +262,8 @@ let package_native_inputs cmxa =
 let visible_native_inputs cmxa_paths =
   List.concat_map (fun cmxa -> cmxa :: package_native_inputs cmxa) cmxa_paths
 
-let known_tls_cmxa_name = "eta_http_tls_openssl.cmxa"
-let known_tls_stub_name = "libeta_http_tls_openssl_stubs.a"
+let known_tls_cmxa_name = "eta_http.cmxa"
+let known_tls_stub_name = "libeta_http_stubs.a"
 
 let linked_tls_stub_archive cmxa_paths =
   let tls_cmxas =
@@ -280,7 +280,7 @@ let linked_tls_stub_archive cmxa_paths =
       else Some stub
   | many ->
       failwith
-        ("duplicate linked eta_http_tls_openssl.cmxa versions: "
+        ("duplicate linked eta_http.cmxa versions: "
        ^ String.concat ", " many)
 
 type file_id = { name : string; path : string; sha256 : string }

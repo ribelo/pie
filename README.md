@@ -40,14 +40,14 @@ dune build --build-dir .scratch/example-build/dune --only-packages pie
 
 This does not install or restart anything.
 
-## Test against current local Eta master
+## Test against current local eta-next
 
 ```bash
 scripts/test-local-eta.sh
 ```
 
-The script enters `nix develop ../ocaml/Eta` for native libraries, mirrors the
-clean checked-out Eta `master` into ignored `_dev/eta-source`, builds and
+The script enters `nix develop ../ocaml/eta-next` for native libraries, mirrors the
+clean checked-out Eta `eta-next` into ignored `_dev/eta-source`, builds and
 installs only the needed Eta packages into ignored `_dev/eta-install`, then
 puts that local prefix ahead of the shared switch via `OCAMLPATH` and
 `CAML_LD_LIBRARY_PATH`. It builds Pie and runs **every registered test**
@@ -55,7 +55,7 @@ puts that local prefix ahead of the shared switch via `OCAMLPATH` and
 helpers. It never installs into the shared opam switch. Inspect
 `_dev/test-run/summary.tsv` for per-suite pass counts and
 `_dev/test-run/logs/` for test diagnostics. Set `ETA_PATH` to use a different
-local Eta checkout. The script refuses a dirty or non-master Eta checkout.
+local Eta checkout. The script refuses a dirty or non-eta-next Eta checkout.
 
 ## Provenance record
 
@@ -102,6 +102,21 @@ dune exec --build-dir .scratch/provenance-build/dune -- \
 ```
 
 A green helper test is not full-suite green and not deployment green.
+
+## Prepared live PTT check (operator only)
+
+`scripts/live-ptt-check-eta-next --dry-run` prints the complete operator
+sequence without building, touching the microphone/keyboard or calling a provider.
+There is no automated live PTT gate in the regular suites. After the lead
+authorizes a real provider call, the operator stops `pie.service` themselves,
+confirms it is inactive, then runs
+`scripts/live-ptt-check-eta-next --run --provider-calls-approved`. The script
+refuses an active service/socket, builds Pie into a private `/tmp` prefix,
+copies the configuration into a private directory and uses a separate control
+socket. The operator holds/releases their PTT key, observes one transcription,
+ends the check, then restarts and verifies `pie.service` themselves even if the
+check fails. Results and a restricted diagnostic log remain in `/tmp` for
+inspection. Never run this against the active production service.
 
 ## Authentication
 

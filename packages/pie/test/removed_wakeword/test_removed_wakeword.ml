@@ -174,9 +174,11 @@ let test_removed_names_fail_before_helpers () =
     removed_commands
 
 let load_error path =
-  match Pie.Config.Stt.load ~config_path:path () with
-  | exception Pie.Config.Stt.Config_error msg -> msg
-  | _ -> Alcotest.fail "expected Config_error"
+  Eio_main.run @@ fun env ->
+  match Pie.Config.Stt.load ~fs:(Eio.Stdenv.fs env)
+          ~source:(`Explicit path) () with
+  | Error (`Config msg) -> msg
+  | _ -> Alcotest.fail "expected config error"
 
 let test_wakeword_settings_rejected () =
   with_sandbox @@ fun dir ->
@@ -212,7 +214,13 @@ let test_ptt_config_without_wakeword_loads () =
      ptt_min_capture_peak = 0.0\n\
      ptt_transcribe_keysym = 65478\n\
      ptt_translate_keysym = 65479\n";
-  let config = Pie.Config.Stt.load ~config_path:path () in
+  let config =
+    Eio_main.run @@ fun env ->
+    match Pie.Config.Stt.load ~fs:(Eio.Stdenv.fs env)
+            ~source:(`Explicit path) () with
+    | Ok config -> config
+    | Error (`Config msg) -> Alcotest.fail msg
+  in
   Alcotest.(check (float 0.0)) "rms 0" 0.0 config.ptt_min_capture_rms;
   Alcotest.(check (float 0.0)) "peak 0" 0.0 config.ptt_min_capture_peak;
   Alcotest.(check int) "transcribe keysym" 65478 config.ptt_transcribe_keysym;

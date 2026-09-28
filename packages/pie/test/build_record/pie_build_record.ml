@@ -12,12 +12,9 @@ let rec arg i root build_dir output target =
   if i >= Array.length Sys.argv then (root, build_dir, output, target)
   else
     match Sys.argv.(i) with
-    | "--root" ->
-        arg (i + 2) (Some (need i)) build_dir output target
-    | "--build-dir" ->
-        arg (i + 2) root (Some (need i)) output target
-    | "--output" ->
-        arg (i + 2) root build_dir (Some (need i)) target
+    | "--root" -> arg (i + 2) (Some (need i)) build_dir output target
+    | "--build-dir" -> arg (i + 2) root (Some (need i)) output target
+    | "--output" -> arg (i + 2) root build_dir (Some (need i)) target
     | "--target" -> arg (i + 2) root build_dir output (need i)
     | _ -> usage ()
 

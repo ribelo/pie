@@ -2,13 +2,4 @@
 
 (test
  (name test_assistant_owner)
- (libraries
-  pie
-  alcotest
-  eio_main
-  eta
-  eio
-  eta_http
-  unix
-  yojson
-  cstruct))
+ (libraries pie alcotest eio_main eta eio eta_http unix yojson cstruct))

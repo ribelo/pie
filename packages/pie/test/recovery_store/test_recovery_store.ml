@@ -25,7 +25,9 @@ let rec rm_r path =
 
 let with_root f =
   let root = tmp_root () in
-  Fun.protect ~finally:(fun () -> try rm_r root with _ -> ()) (fun () -> f root)
+  Fun.protect
+    ~finally:(fun () -> try rm_r root with _ -> ())
+    (fun () -> f root)
 
 let even_pcm = Bytes.of_string "ABCD"
 
@@ -73,13 +75,13 @@ let test_publish_audio_and_reload () =
       | Error (`Retry_store m) -> Alcotest.fail ("peek err " ^ m)
       | Ok None -> Alcotest.fail "peek none after publish"
       | Ok (Some (A.Audio { mode = Translate; pcm_bytes = 4; generation }))
-        when A.generation_equal generation g ->
+        when A.generation_equal generation g -> (
           let pcm = fail_store (A.load_audio store g) in
           Alcotest.(check int) "pcm" 4 (Bytes.length pcm);
           let store2 = fail_store (A.open_store ~root) in
-          (match fail_store (A.peek store2) with
-          | Some (A.Audio { generation = g2; _ })
-            when A.generation_equal g2 g ->
+          match fail_store (A.peek store2) with
+          | Some (A.Audio { generation = g2; _ }) when A.generation_equal g2 g
+            ->
               ()
           | _ -> Alcotest.fail "startup reload missed audio")
       | _ -> Alcotest.fail "audio not published")
@@ -94,10 +96,17 @@ let test_publish_text_startup () =
       in
       let store2 = fail_store (A.open_store ~root) in
       match fail_store (A.peek store2) with
-      | Some (A.Text { mode = Transcribe; utf8_bytes = 5; dispatch_uncertain = true; generation })
+      | Some
+          (A.Text
+             {
+               mode = Transcribe;
+               utf8_bytes = 5;
+               dispatch_uncertain = true;
+               generation;
+             })
         when A.generation_equal generation g ->
-          Alcotest.(check string) "text"
-            "hello"
+          Alcotest.(check string)
+            "text" "hello"
             (fail_store (A.load_text store2 g))
       | _ -> Alcotest.fail "text startup reload")
 
@@ -136,7 +145,9 @@ let test_generation_clear_race () =
       fail_store (A.clear store a);
       match fail_store (A.peek store) with
       | Some (A.Text { generation; _ }) when A.generation_equal generation b ->
-          Alcotest.(check string) "kept" "two" (fail_store (A.load_text store b))
+          Alcotest.(check string)
+            "kept" "two"
+            (fail_store (A.load_text store b))
       | _ -> Alcotest.fail "late clear of A dropped B")
 
 let test_concurrent_instances_busy () =
@@ -194,7 +205,9 @@ let test_odd_and_budget () =
       | Error (`Retry_store m) when String.length m > 0 -> ()
       | _ -> Alcotest.fail "odd PCM published");
       fail_store (A.abort_writer w);
-      let too_big = String.make (Pie.Dictation_limits.result_utf8_bytes + 1) 'x' in
+      let too_big =
+        String.make (Pie.Dictation_limits.result_utf8_bytes + 1) 'x'
+      in
       (match
          A.publish_text store ~mode:Transcribe ~text:too_big
            ~dispatch_uncertain:false
@@ -261,8 +274,7 @@ let test_close_and_unlink_both_fail () =
         A.Test_hooks.with_close_and_unlink_fail (fun () -> A.abort_writer w)
       with
       | Error (`Retry_store m) ->
-          Alcotest.(check bool) "close reported" true
-            (String.length m > 0)
+          Alcotest.(check bool) "close reported" true (String.length m > 0)
       | Ok () -> Alcotest.fail "abort swallowed close+unlink failures")
 
 let test_emfile_is_error_not_none () =
@@ -321,7 +333,9 @@ let test_lockfile_survives () =
              ~dispatch_uncertain:false)
       in
       fail_store (A.clear store g);
-      let lock = Filename.concat (Filename.concat root "active") "publish.lock" in
+      let lock =
+        Filename.concat (Filename.concat root "active") "publish.lock"
+      in
       Alcotest.(check bool) "lock never unlinked" true (Sys.file_exists lock))
 
 let test_fsync_fail_closes_and_does_not_seal () =
@@ -351,8 +365,7 @@ let test_abort_after_publish_keeps_candidate () =
       match fail_store (A.peek store) with
       | Some (A.Audio { generation; _ }) when A.generation_equal generation g ->
           Alcotest.(check int)
-            "payload"
-            4
+            "payload" 4
             (Bytes.length (fail_store (A.load_audio store g)))
       | _ -> Alcotest.fail "abort after publish dropped candidate")
 
@@ -369,26 +382,25 @@ let test_retire_failure_then_abort_keeps_new () =
       let published =
         A.Test_hooks.with_unlink_fail (fun () -> A.publish_audio store w2)
       in
-      (match published with
-      | Ok g ->
+      match published with
+      | Ok g -> (
           fail_store (A.abort_writer w2);
-          (match fail_store (A.peek store) with
-          | Some (A.Audio { generation; _ }) when A.generation_equal generation g
-            ->
+          match fail_store (A.peek store) with
+          | Some (A.Audio { generation; _ })
+            when A.generation_equal generation g ->
               Alcotest.(check int)
-                "new payload"
-                4
+                "new payload" 4
                 (Bytes.length (fail_store (A.load_audio store g)))
           | _ -> Alcotest.fail "new candidate missing after abort")
-      | Error (`Retry_store _) ->
+      | Error (`Retry_store _) -> (
           fail_store (A.abort_writer w2);
-          (match fail_store (A.peek store) with
+          match fail_store (A.peek store) with
           | Some (A.Audio { mode = Translate; pcm_bytes = 4; generation }) ->
               Alcotest.(check int)
-                "new payload"
-                4
+                "new payload" 4
                 (Bytes.length (fail_store (A.load_audio store generation)))
-          | _ -> Alcotest.fail "indexed new candidate missing after retire fail")))
+          | _ -> Alcotest.fail "indexed new candidate missing after retire fail"
+          ))
 
 let test_close_reuse_abort_leaves_new_fd () =
   with_root (fun root ->

@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+# Operator-only live check. Never stops or starts the installed pie.service.
+set -euo pipefail
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+usage() {
+  cat <<'HELP'
+Usage: scripts/live-ptt-check-eta-next --dry-run
+       scripts/live-ptt-check-eta-next --run --provider-calls-approved
+
+Operator sequence (this script NEVER manages pie.service):
+  1. Obtain lead approval for a real transcription/provider call.
+  2. systemctl --user stop pie.service
+  3. Verify: systemctl --user is-active pie.service  # must say inactive
+  4. Run this script --run --provider-calls-approved. In a focused test window,
+     hold and release the configured transcribe PTT key, speak a short phrase,
+     and confirm exactly one transcription appears. Press Enter to finish.
+  5. Review the /tmp/pie-eta-next-live.* result path printed by the script.
+  6. systemctl --user start pie.service  # do this yourself, EVEN ON FAILURE
+  7. Verify: systemctl --user is-active pie.service  # must say active
+
+The script uses a private installation, config copy, socket and data directory.
+It refuses to start while the installed service or its socket is active.
+It never installs into the shared opam switch or calls a provider in dry-run.
+HELP
+}
+case "${1:-}" in
+  --dry-run)
+    [[ "$#" -eq 1 ]] || { usage >&2; exit 2; }
+    usage
+    printf '\nDry run: no build, service change, microphone access or provider call.\n'
+    exit 0 ;;
+  --run)
+    [[ "$#" -eq 2 && "${2:-}" == --provider-calls-approved ]] || {
+      usage >&2; echo 'Refusing live run without explicit provider approval.' >&2; exit 2;
+    } ;;
+  *) usage >&2; exit 2 ;;
+esac
+fail() { printf 'Refusing live check: %s\n' "$*" >&2; exit 1; }
+service_stopped() {
+  local state original_runtime
+  state="$(systemctl --user show pie.service --property=ActiveState --value)" ||
+    fail 'cannot verify pie.service state'
+  [[ "$state" == inactive ]] || fail "pie.service state is $state (expected inactive)"
+  original_runtime="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+  [[ ! -S "$original_runtime/pie/control.sock" ]] ||
+    fail "production socket exists: $original_runtime/pie/control.sock"
+  command -v pgrep >/dev/null 2>&1 || fail 'pgrep is required to verify no Pie process remains'
+  if pgrep -u "$(id -u)" -x pie >/dev/null 2>&1; then
+    fail 'a pie process is still running under this user'
+  fi
+}
+usage
+service_stopped
+# Once the operator stopped production, remind them even if early setup fails.
+trap 'printf "OPERATOR: systemctl --user start pie.service; verify active\n" >&2' EXIT
+source_config="${XDG_CONFIG_HOME:-$HOME/.config}/pie/stt.toml"
+[[ -r "$source_config" && -f "$source_config" ]] || fail "config not readable: $source_config"
+umask 077
+work="$(mktemp -d /tmp/pie-eta-next-live.XXXXXXXX)"
+result="$work/result.txt"
+log="$work/assistant.log"
+mkdir -p "$work/config/pie" "$work/runtime" "$work/data" "$work/cache" "$work/home"
+cp -- "$source_config" "$work/config/pie/stt.toml"
+if [[ -d "$(dirname "$source_config")/prompts" ]]; then
+  cp -R -- "$(dirname "$source_config")/prompts" "$work/config/pie/prompts"
+fi
+chmod 0600 "$work/config/pie/stt.toml"
+original_codex_home="${CODEX_HOME:-$HOME/.codex}"
+{
+  printf 'Pie eta-next live PTT check\n'
+  printf 'Working directory: %s\n' "$work"
+  printf 'Source commit: %s\n' "$(git -C "$root" rev-parse --short HEAD)"
+  printf 'Service at start: inactive (checked)\n'
+  printf 'Started: %s\n' "$(date -Is)"
+  printf 'Observation status: pending\n'
+} > "$result"
+child=""
+cleanup() {
+  trap - EXIT INT TERM
+  if [[ -n "$child" ]] && kill -0 "$child" 2>/dev/null; then
+    kill -INT "$child" 2>/dev/null || true
+    for ((i = 0; i < 100; i++)); do
+      kill -0 "$child" 2>/dev/null || break
+      sleep 0.1
+    done
+    if kill -0 "$child" 2>/dev/null; then
+      kill -TERM "$child" 2>/dev/null || true
+      sleep 1
+      kill -KILL "$child" 2>/dev/null || true
+    fi
+    wait "$child" 2>/dev/null || true
+  fi
+  printf '\nResults: %s\nLog: %s\n' "$result" "$log"
+  printf 'OPERATOR: systemctl --user start pie.service\n'
+  printf 'OPERATOR: systemctl --user is-active pie.service  # verify active\n'
+}
+trap cleanup EXIT INT TERM
+printf '\nPrivate result: %s\nPrivate diagnostic log: %s\n' "$result" "$log"
+printf 'Building Pie into a temporary prefix (never into the shared switch)...\n'
+if ! (cd "$root" && timeout 1500 nix develop -c env DUNE_CACHE=disabled \
+  DUNE_BUILD_DIR="$work/build" dune install --only-packages pie --prefix "$work/prefix") \
+  > "$work/build.log" 2>&1; then
+  printf 'Build failed; inspect %s/build.log\n' "$work" >&2
+  printf 'Build: failed\n' >> "$result"
+  exit 1
+fi
+printf 'Build: passed; executable: %s\n' "$work/prefix/bin/pie" >> "$result"
+[[ -x "$work/prefix/bin/pie" ]] || fail 'temp prefix has no pie executable'
+service_stopped
+printf '\nProduction is stopped. Speak a short phrase while holding the configured PTT key.\n'
+printf 'Check that one transcription reaches your focused test window.\n'
+printf 'Press Enter here when observation is complete; then restart pie.service yourself.\n'
+# The original auth environment (including CODEX_HOME and provider keys) is
+# retained for the authorized provider call. Desktop/audio access stays live.
+(
+  export HOME="$work/home" XDG_CONFIG_HOME="$work/config"
+  export XDG_CACHE_HOME="$work/cache" XDG_DATA_HOME="$work/data"
+  export CAMELPIE_RUNTIME_DIR="$work/runtime" CODEX_HOME="$original_codex_home"
+  exec "$work/prefix/bin/pie" assistant --config "$work/config/pie/stt.toml"
+) > "$log" 2>&1 &
+child=$!
+read -r -p 'Observed one successful PTT transcription? [yes/no]: ' observed || observed=no
+read -r -p 'Brief observation/error (do not paste credentials): ' note || note='interrupted'
+{
+  printf 'Outcome: %s\n' "$observed"
+  printf 'Observation: %s\n' "$note"
+  printf 'Completed: %s\n' "$(date -Is)"
+} >> "$result"
+[[ "$observed" == yes ]] || exit 1
+kill -0 "$child" 2>/dev/null || fail 'assistant exited during observation; inspect private log'

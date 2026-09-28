@@ -134,10 +134,13 @@ let test_readonly_dir_allows_fresh_read () =
   write_file path (auth_json token);
   Unix.chmod path 0o444;
   Unix.chmod dir 0o555;
-  with_codex_home dir @@ fun () ->
-  match run_access () with
-  | Ok got -> Alcotest.(check string) "readonly read" token got
-  | Error cause -> Alcotest.failf "readonly read failed: %s" (cause_text cause)
+  Fun.protect
+    ~finally:(fun () -> Unix.chmod dir 0o700)
+    (fun () ->
+      with_codex_home dir @@ fun () ->
+      match run_access () with
+      | Ok got -> Alcotest.(check string) "readonly read" token got
+      | Error cause -> Alcotest.failf "readonly read failed: %s" (cause_text cause))
 
 let test_two_callers_cannot_overwrite_newest () =
   with_sandbox @@ fun dir ->

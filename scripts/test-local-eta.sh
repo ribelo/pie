@@ -4,7 +4,7 @@
 set -euo pipefail
 
 pie_root="$(cd "$(dirname "$0")/.." && pwd -P)"
-eta_root="$(cd "${ETA_PATH:-$pie_root/../ocaml/Eta}" && pwd -P)"
+eta_root="$(cd "${ETA_PATH:-$pie_root/../ocaml/eta-next}" && pwd -P)"
 if [[ "${1:-}" != --in-shell ]]; then
   exec nix develop "$eta_root" -c bash "$0" --in-shell
 fi
@@ -16,9 +16,9 @@ pkg-config --exists openssl sqlite3 || {
   echo 'The Eta Nix shell must provide OpenSSL and SQLite native libraries.' >&2
   exit 1
 }
-if [[ "$(git -C "$eta_root" rev-parse HEAD)" != "$(git -C "$eta_root" rev-parse master)" ]] ||
+if [[ "$(git -C "$eta_root" rev-parse HEAD)" != "$(git -C "$eta_root" rev-parse eta-next)" ]] ||
    [[ -n "$(git -C "$eta_root" status --porcelain --untracked-files=no -- lib dune-project)" ]]; then
-  echo 'Eta must be checked out at its clean local master for this test.' >&2
+  echo 'Eta must be checked out at its clean local eta-next branch for this test.' >&2
   exit 1
 fi
 
@@ -34,16 +34,16 @@ mkdir -p "$mirror" "$run/logs" "$run/alcotest"
 cp -rs "$eta_root/lib" "$mirror/lib"
 ln -s "$eta_root/dune-project" "$mirror/dune-project"
 
-packages=eta,eta_ai,eta_ai_openai_codec,eta_ai_openrouter,eta_blocking,eta_eio,eta_http,eta_http_h1,eta_http_h2,eta_http_tls_openssl,eta_http_ws,eta_http_eio,eta_observability,eta_otel,eta_otel_eio,eta_redacted,eta_stream,eta_stream_eio
+packages=eta,eta_ai,eta_ai_openrouter,eta_ai_realtime,eta_app,eta_blocking,eta_http,eta_ipc,eta_json,eta_observability,eta_otel,eta_process,eta_rpc,eta_test
 dune build --root "$mirror" --only-packages "$packages" @install
 dune install --root "$mirror" --only-packages "$packages" --prefix "$prefix"
 export OCAMLPATH="$prefix/lib${OCAMLPATH:+:$OCAMLPATH}"
 export CAML_LD_LIBRARY_PATH="$prefix/lib/stublibs${CAML_LD_LIBRARY_PATH:+:$CAML_LD_LIBRARY_PATH}"
-if [[ "$(ocamlfind query eta_http_eio)" != "$prefix/lib/eta_http_eio" ]]; then
+if [[ "$(ocamlfind query eta_http)" != "$prefix/lib/eta_http" ]]; then
   echo 'Local Eta installation did not take precedence over the shared switch.' >&2
   exit 1
 fi
-printf 'Eta master: %s\n' "$(git -C "$eta_root" rev-parse --short HEAD)"
+printf 'Eta eta-next: %s\n' "$(git -C "$eta_root" rev-parse --short HEAD)"
 dune build --root "$pie_root" --build-dir "$build" --only-packages pie @all
 
 # Fail closed rather than accidentally using a real desktop/audio/session. Do

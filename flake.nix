@@ -65,6 +65,7 @@
                 !(
                   base == ".git"
                   || base == "_build"
+                  || base == "_build_u5"
                   || base == "_opam"
                   || base == ".opam"
                   || base == ".opam-oxcaml"
@@ -218,8 +219,8 @@
               eval "$(opam env --switch "$switch_name" --set-switch)"
 
               # etabuild-e0gr: install committed Eta master for development.
-              eta_path="''${ETA_PATH:-$repo_root/../ocaml/Eta}"
-              export ETA_OPAM_PACKAGES="''${ETA_OPAM_PACKAGES:-eta eta_ai eta_ai_openai_codec eta_ai_openrouter eta_blocking eta_eio eta_http eta_http_eio eta_http_h1 eta_http_h2 eta_http_tls_openssl eta_http_ws eta_otel eta_otel_eio eta_stream}"
+              eta_path="''${ETA_PATH:-$repo_root/../ocaml/eta-next}"
+              export ETA_OPAM_PACKAGES="''${ETA_OPAM_PACKAGES:-eta eta_ai eta_ai_openrouter eta_ai_realtime eta_app eta_blocking eta_http eta_ipc eta_json eta_observability eta_otel eta_process eta_rpc eta_test}"
               if command -v eta-opam-install-ox >/dev/null 2>&1; then
                 ETA_REPO_ROOT="$eta_path" eta-opam-install-ox
               elif [ -d "$eta_path" ]; then
