@@ -1268,7 +1268,11 @@ let run_with_inputs ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock ~inputs
         | Error (`Ptt_error "pcm:capture_budget" | `Ptt_error "pcm:queue_budget")
           ->
             result
-        | Ok () | Error (`Ptt_error _ | `Ptt_cause _) -> loop ()
+        | Ok () | Error (`Ptt_error _) -> loop ()
+        | Error (`Ptt_cause _) as compound ->
+            (* Only an exact failure is recovered; a compound cause (a failure with a
+               failing publication) ends the workflow, as ptt_loop does. *)
+            compound
       in
       loop ()
     in
