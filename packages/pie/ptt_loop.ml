@@ -434,20 +434,24 @@ let run ?control ?(on_capture_resumed = fun () -> Ok ())
           match result with
           | Ok () -> Ok ()
           | Error error -> (
+              (* The capture's failure is primary; a failing or raising cancel is its
+                 cleanup. Both are kept: a raising cancel must not drop the primary
+                 (the v1 interpreter composed them; direct style composes here). *)
+              let to_cause = function
+                | `Ptt_error _ as e -> Eta.Cause.Fail e
+                | `Ptt_cause c -> c
+              in
+              let with_cleanup finalizer =
+                Error
+                  (`Ptt_cause
+                     (Eta.Cause.Suppressed { primary = to_cause error; finalizer }))
+              in
               match handle.cancel () with
               | Ok () -> Error error
-              | Error (`Ptt_error cleanup) -> (
-                  match error with
-                  | `Ptt_error primary ->
-                      Error
-                        (`Ptt_cause
-                           (Eta.Cause.Concurrent
-                              [
-                                Eta.Cause.Fail (`Ptt_error primary);
-                                Eta.Cause.Fail (`Ptt_error cleanup);
-                              ]))
-                  | `Ptt_cause _ -> Error error)
-              | Error (`Ptt_cause _ as cleanup) -> Error cleanup)
+              | Error cleanup -> with_cleanup (to_cause cleanup)
+              | exception (Eio.Cancel.Cancelled _ as cancelled) -> raise cancelled
+              | exception exn ->
+                  with_cleanup (Eta.Cause.Die (exn, Printexc.get_raw_backtrace ())))
         in
         recover_operation mode "PTT capture failed" result
       in

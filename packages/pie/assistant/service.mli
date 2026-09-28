@@ -53,6 +53,17 @@ val create_attempt_owner :
 val attempt_handle : attempt_owner -> Ptt_loop.handle -> Ptt_loop.handle
 val settle_attempt : attempt_owner -> (unit, [ `Ptt_error of string ]) result
 
+val make_clip_handle :
+  owner:attempt_owner ->
+  stt:(Config.Stt.t -> ptt_mode -> bytes -> (string, Ptt_loop.error) result) ->
+  deliver:(Config.Stt.t -> ptt_mode -> string -> (unit, Ptt_loop.error) result) ->
+  config:Config.Stt.t ->
+  ptt_mode ->
+  Ptt_loop.handle
+(** The buffered (non-streaming) capture handle: [finish] seals the attempt's audio,
+    recognizes the whole clip with [stt] and delivers it, publishing sealed audio or the
+    recognized text on failure (see [on_press]). [offer] and [cancel] are no-ops. *)
+
 val run_acquired_attempt :
   sw:Eio.Switch.t ->
   attempt:Recording.Coordinator.attempt ->
