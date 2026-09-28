@@ -56,6 +56,26 @@ let handle_request ?action_handler coordinator = function
       | None ->
           rejected_action coordinator action "daemon actions are unavailable")
 
+(* eta_ipc binds only in a private directory (no group/other bits). Pie's runtime
+   directory is also where Coordinator persists recording.json, and [Fs.mkdir_p] (or an
+   older Pie, which created it 0755) may already have made it under the service umask.
+   Pie owns this directory: create it 0700, or tighten our own real directory that
+   nobody else can write (0755, 0750) to 0700. A group/other-writable directory, a
+   symlink, or one owned by someone else is left alone, and eta_ipc refuses it (as v1
+   refused a writable one). *)
+let secure_socket_dir dir =
+  match Unix.lstat dir with
+  | exception Unix.Unix_error (Unix.ENOENT, _, _) -> (
+      Fs.mkdir_p (Filename.dirname dir);
+      try Unix.mkdir dir 0o700 with Unix.Unix_error (Unix.EEXIST, _, _) -> ())
+  | st
+    when st.Unix.st_kind = Unix.S_DIR
+         && st.st_uid = Unix.getuid ()
+         && st.st_perm land 0o077 <> 0
+         && st.st_perm land 0o022 = 0 ->
+      Unix.chmod dir 0o700
+  | _ -> ()
+
 let start ~sw ~fs ~net ~clock ?(socket_path = Paths.daemon_socket_path)
     ?(budget = default_budget) ?action_handler coordinator =
   let policy =
@@ -67,6 +87,7 @@ let start ~sw ~fs ~net ~clock ?(socket_path = Paths.daemon_socket_path)
       egress = Eta.Duration.ms (int_of_float (budget.peer_timeout_s *. 300.));
     }
   in
+  secure_socket_dir (Filename.dirname socket_path);
   Eta_ipc.Listener.run ~sw ~fs ~net ~clock ~path:socket_path ~policy
     ~decode:Contract.decode_line ~encode:Contract.encode_response
     ~budget:(fun _ ->

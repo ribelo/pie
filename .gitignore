@@ -3,3 +3,12 @@ _dev/
 .opam-oxcaml/
 .opam-eta-src/
 *.install
+
+# Pie runtime droppings (written by the daemon into the repo when run from it)
+last-output.txt
+last-transcription.txt
+last-translation.txt
+last-two-translations.txt
+translations-since-*.txt
+.scratch/
+_build_*/

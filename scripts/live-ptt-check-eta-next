@@ -45,8 +45,11 @@ service_stopped() {
   [[ ! -S "$original_runtime/pie/control.sock" ]] ||
     fail "production socket exists: $original_runtime/pie/control.sock"
   command -v pgrep >/dev/null 2>&1 || fail 'pgrep is required to verify no Pie process remains'
-  if pgrep -u "$(id -u)" -x pie >/dev/null 2>&1; then
-    fail 'a pie process is still running under this user'
+  # Only the daemon counts: bare `pie` or `pie assistant …`. Clients such as the bar's
+  # `pie msg subscribe` poller run all the time and are not the service.
+  if pgrep -a -u "$(id -u)" -x pie 2>/dev/null |
+    awk '{ if (NF == 2 || $3 == "assistant") found = 1 } END { exit !found }'; then
+    fail 'a pie daemon is still running under this user'
   fi
 }
 usage

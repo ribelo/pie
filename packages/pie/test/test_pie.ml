@@ -932,6 +932,31 @@ let expect_listener_start = function
   | Ok () -> ()
   | Error _ -> Alcotest.fail "daemon listener did not start"
 
+(* A runtime directory left 0755 (by Fs.mkdir_p under the service umask, or by the v1
+   daemon) is Pie's own: the server tightens it to 0700 instead of failing with
+   "unsafe runtime directory" (found at the eta-next cut-over, 2026-09-28). *)
+let test_daemon_server_tightens_runtime_dir () =
+  run_test @@ fun env ->
+  let runtime =
+    Filename.concat (Lazy.force private_socket_dir) "loose-runtime"
+  in
+  (try Unix.mkdir runtime 0o755 with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
+  Unix.chmod runtime 0o755;
+  let socket_path = Filename.concat runtime "control.sock" in
+  let persist_path = Filename.concat runtime "recording.json" in
+  let coordinator = Pie.Recording.Coordinator.create ~persist_path () in
+  (try
+     Eio.Switch.run @@ fun sw ->
+     expect_listener_start
+       (Pie.Assistant_service.Server.start ~sw ~fs:(Eio.Stdenv.fs env)
+          ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env) ~socket_path
+          coordinator);
+     Eio.Switch.fail sw Exit
+   with Exit -> ());
+  Alcotest.(check int)
+    "runtime dir tightened" 0o700
+    ((Unix.stat runtime).Unix.st_perm land 0o777)
+
 let test_daemon_server_state () =
   run_test @@ fun env ->
   Eio.Switch.run @@ fun sw ->
@@ -5349,6 +5374,8 @@ let () =
       ( "daemon_server",
         [
           Alcotest.test_case "socket state" `Quick test_daemon_server_state;
+          Alcotest.test_case "loose runtime dir tightened" `Quick
+            test_daemon_server_tightens_runtime_dir;
           Alcotest.test_case "action handler" `Quick
             test_daemon_server_action_handler;
           Alcotest.test_case "unknown meeting method no admission" `Quick
