@@ -1,3 +1,5 @@
+let caps = Ox_test.powerbox () (* ^pcaps-n1rg *)
+
 (* PIE013 provider byte budgets. Synthetic PCM and local WS only. *)
 
 let ( let* ) = Result.bind
@@ -52,7 +54,7 @@ let with_listening f =
 
 let run_offer ~logger ~url ~sw ~net ~clock offer =
   let operation =
-    Codex.with_stream_session ~sw ~net ~clock ~logger ~url
+    Codex.with_stream_session ~caps ~sw ~net ~clock ~logger ~url
       ~access_token:"synthetic" ~mode:Codex.Transcription ~operation:"budget"
       ~model:"gpt-4o-mini-transcribe"
       ~cancel_message:"Codex realtime transcription cancelled" (fun handle ->
@@ -128,7 +130,7 @@ let test_buffered_capture_plus_one () =
   Eio.Switch.run @@ fun sw ->
   let pcm_bytes = pcm (Limits.capture_pcm_bytes + 1) in
   let operation =
-    Codex.run_realtime_session ~sw ~net:(Eio.Stdenv.net env)
+    Codex.run_realtime_session ~caps ~sw ~net:(Eio.Stdenv.net env)
       ~clock:(Eio.Stdenv.clock env) ~url:"ws://127.0.0.1:1"
       ~access_token:"synthetic" ~mode:Codex.Transcription
       ~input_sample_rate:16000 pcm_bytes
@@ -140,7 +142,7 @@ let test_openrouter_capture_plus_one () =
   Eio.Switch.run @@ fun sw ->
   let pcm_bytes = pcm (Limits.capture_pcm_bytes + 1) in
   let operation =
-    Pie.Stt.Openrouter.transcribe ~sw ~net:(Eio.Stdenv.net env)
+    Pie.Stt.Openrouter.transcribe ~caps ~sw ~net:(Eio.Stdenv.net env)
       ~clock:(Eio.Stdenv.clock env)
       ~api_key:(Ox_observability.Redact.make "synthetic")
       ~model:"m" ~language:"en" pcm_bytes
@@ -337,8 +339,9 @@ let run_buffered ~mode ~session_update ~script_handshake ~script_append
           ~after_append:script_append flow
       with _ -> ());
   let operation =
-    Codex.run_realtime_session ~sw ~net ~clock ~url ~access_token:"synthetic"
-      ~mode ~session_update ~input_sample_rate:16000 pcm_bytes
+    Codex.run_realtime_session ~caps ~sw ~net ~clock ~url
+      ~access_token:"synthetic" ~mode ~session_update ~input_sample_rate:16000
+      pcm_bytes
   in
   operation
 
@@ -484,7 +487,7 @@ let test_closed_after_success () =
           flow
       with _ -> ());
   let operation =
-    Codex.with_stream_session ~sw ~net ~clock ~logger ~url
+    Codex.with_stream_session ~caps ~sw ~net ~clock ~logger ~url
       ~access_token:"synthetic" ~mode:Codex.Transcription ~operation:"budget"
       ~model:"gpt-4o-mini-transcribe"
       ~session_update:

@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Pie capability gate (^pcaps-uus2): use the gate installed with this Ox build.
+set -euo pipefail
+cd "$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)"
+
+if ! lib_dir="$(ocamlfind query ox_caps 2>/dev/null)"; then
+  echo "caps-gate: ox_caps is not installed (ocamlfind query ox_caps failed)" >&2
+  exit 2
+fi
+gate="$lib_dir/../../share/ox_caps/caps-gate"
+if [ ! -f "$gate" ]; then
+  echo "caps-gate: no gate script at $gate" >&2
+  exit 2
+fi
+
+exec bash "$gate" "$@" packages

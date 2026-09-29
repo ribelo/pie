@@ -1,3 +1,5 @@
+let caps = Ox_test.powerbox () (* ^pcaps-n1rg *)
+
 (* PIE003 soak: repeated realtime lifetimes (buffered and streaming, ws and
    wss) must settle their owned socket readers and return every descriptor they
    opened (^pienext-jlmd, ^pienext-4ps6, ^pienext-b3x8). Direct style: one Eio
@@ -315,8 +317,8 @@ let session_update =
     ~model:"gpt-realtime-2" ()
 
 let run_buffered ~sw ~net ~clock ?ca_file ~url () =
-  Pie.Stt.Codex_realtime.run_realtime_session ~sw ~net ~clock ?ca_file ~url
-    ~access_token:"synthetic-soak-token"
+  Pie.Stt.Codex_realtime.run_realtime_session ~caps ~sw ~net ~clock ?ca_file
+    ~url ~access_token:"synthetic-soak-token"
     ~mode:Pie.Stt.Codex_realtime.Transcription ~session_update
     ~input_sample_rate:16000 pcm
 
@@ -329,8 +331,8 @@ let run_streaming ~sw ~net ~clock ?ca_file ~url ?on_audio_pull () =
       Option.iter (fun resolve -> resolve ()) on_audio_pull;
       Ok (Some pcm))
   in
-  Pie.Stt.Codex_realtime.run_realtime_stream_session ~sw ~net ~clock ?ca_file
-    ~url ~access_token:"synthetic-soak-token"
+  Pie.Stt.Codex_realtime.run_realtime_stream_session ~caps ~sw ~net ~clock
+    ?ca_file ~url ~access_token:"synthetic-soak-token"
     ~mode:Pie.Stt.Codex_realtime.Transcription ~session_update
     ~input_sample_rate:16000 audio
 

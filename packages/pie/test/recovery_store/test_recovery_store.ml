@@ -1,3 +1,5 @@
+let caps = Ox_test.powerbox () (* ^pcaps-n1rg *)
+
 module A = Pie.Recording.Retry_store.Active
 
 let fail_store = function
@@ -33,7 +35,7 @@ let even_pcm = Bytes.of_string "ABCD"
 
 let test_umask_private () =
   with_root (fun root ->
-      let store = fail_store (A.open_store ~root) in
+      let store = fail_store (A.open_store ~caps ~root) in
       let active = Filename.concat root "active" in
       let st = Unix.lstat active in
       Alcotest.(check int) "dir 0700" 0o700 (st.st_perm land 0o777);
@@ -52,7 +54,7 @@ let test_umask_private () =
 
 let test_draft_and_sealed_unpublished () =
   with_root (fun root ->
-      let store = fail_store (A.open_store ~root) in
+      let store = fail_store (A.open_store ~caps ~root) in
       let w = fail_store (A.open_audio_writer store ~mode:Transcribe) in
       fail_store (A.append_audio w even_pcm);
       (match fail_store (A.peek store) with
@@ -66,7 +68,7 @@ let test_draft_and_sealed_unpublished () =
 
 let test_publish_audio_and_reload () =
   with_root (fun root ->
-      let store = fail_store (A.open_store ~root) in
+      let store = fail_store (A.open_store ~caps ~root) in
       let w = fail_store (A.open_audio_writer store ~mode:Translate) in
       fail_store (A.append_audio w even_pcm);
       fail_store (A.close_writer w);
@@ -78,7 +80,7 @@ let test_publish_audio_and_reload () =
         when A.generation_equal generation g -> (
           let pcm = fail_store (A.load_audio store g) in
           Alcotest.(check int) "pcm" 4 (Bytes.length pcm);
-          let store2 = fail_store (A.open_store ~root) in
+          let store2 = fail_store (A.open_store ~caps ~root) in
           match fail_store (A.peek store2) with
           | Some (A.Audio { generation = g2; _ }) when A.generation_equal g2 g
             ->
@@ -88,13 +90,13 @@ let test_publish_audio_and_reload () =
 
 let test_publish_text_startup () =
   with_root (fun root ->
-      let store = fail_store (A.open_store ~root) in
+      let store = fail_store (A.open_store ~caps ~root) in
       let g =
         fail_store
           (A.publish_text store ~mode:Transcribe ~text:"hello"
              ~dispatch_uncertain:true)
       in
-      let store2 = fail_store (A.open_store ~root) in
+      let store2 = fail_store (A.open_store ~caps ~root) in
       match fail_store (A.peek store2) with
       | Some
           (A.Text
@@ -112,7 +114,7 @@ let test_publish_text_startup () =
 
 let test_symlink_fifo_unrelated () =
   with_root (fun root ->
-      let store = fail_store (A.open_store ~root) in
+      let store = fail_store (A.open_store ~caps ~root) in
       let g =
         fail_store
           (A.publish_text store ~mode:Transcribe ~text:"ok"
@@ -131,7 +133,7 @@ let test_symlink_fifo_unrelated () =
 
 let test_generation_clear_race () =
   with_root (fun root ->
-      let store = fail_store (A.open_store ~root) in
+      let store = fail_store (A.open_store ~caps ~root) in
       let a =
         fail_store
           (A.publish_text store ~mode:Transcribe ~text:"one"
@@ -152,8 +154,8 @@ let test_generation_clear_race () =
 
 let test_concurrent_instances_busy () =
   with_root (fun root ->
-      let store1 = fail_store (A.open_store ~root) in
-      let store2 = fail_store (A.open_store ~root) in
+      let store1 = fail_store (A.open_store ~caps ~root) in
+      let store2 = fail_store (A.open_store ~caps ~root) in
       let gate = Atomic.make 0 in
       let r1 = ref (Ok ()) in
       let r2 = ref (Ok ()) in
@@ -191,13 +193,13 @@ let test_failed_create () =
   Fun.protect
     ~finally:(fun () -> try Unix.unlink path with _ -> ())
     (fun () ->
-      match A.open_store ~root:path with
+      match A.open_store ~caps ~root:path with
       | Error (`Retry_store _) -> ()
       | Ok _ -> Alcotest.fail "opened store on a file")
 
 let test_odd_and_budget () =
   with_root (fun root ->
-      let store = fail_store (A.open_store ~root) in
+      let store = fail_store (A.open_store ~caps ~root) in
       let w = fail_store (A.open_audio_writer store ~mode:Transcribe) in
       fail_store (A.append_audio w (Bytes.of_string "A"));
       fail_store (A.close_writer w);
@@ -228,7 +230,7 @@ let test_historical_untouched () =
       let oc = open_out_bin sentinel in
       output_string oc "HIST";
       close_out oc;
-      let store = fail_store (A.open_store ~root) in
+      let store = fail_store (A.open_store ~caps ~root) in
       fail_store
         (A.publish_text store ~mode:Transcribe ~text:"new"
            ~dispatch_uncertain:false)
@@ -244,7 +246,7 @@ let test_historical_untouched () =
 
 let test_success_clear () =
   with_root (fun root ->
-      let store = fail_store (A.open_store ~root) in
+      let store = fail_store (A.open_store ~caps ~root) in
       let g =
         fail_store
           (A.publish_text store ~mode:Transcribe ~text:"bye"
@@ -257,7 +259,7 @@ let test_success_clear () =
 
 let test_fchmod_after_open_fails () =
   with_root (fun root ->
-      let store = fail_store (A.open_store ~root) in
+      let store = fail_store (A.open_store ~caps ~root) in
       match
         A.Test_hooks.with_fchmod_fail (fun () ->
             A.open_audio_writer store ~mode:Transcribe)
@@ -267,7 +269,7 @@ let test_fchmod_after_open_fails () =
 
 let test_close_and_unlink_both_fail () =
   with_root (fun root ->
-      let store = fail_store (A.open_store ~root) in
+      let store = fail_store (A.open_store ~caps ~root) in
       let w = fail_store (A.open_audio_writer store ~mode:Transcribe) in
       fail_store (A.append_audio w even_pcm);
       match
@@ -279,7 +281,7 @@ let test_close_and_unlink_both_fail () =
 
 let test_emfile_is_error_not_none () =
   with_root (fun root ->
-      let store = fail_store (A.open_store ~root) in
+      let store = fail_store (A.open_store ~caps ~root) in
       fail_store
         (A.publish_text store ~mode:Transcribe ~text:"x"
            ~dispatch_uncertain:false)
@@ -298,7 +300,7 @@ let test_malicious_slot_symlink () =
           let oc = open_out_bin sentinel in
           output_string oc "KEEP";
           close_out oc;
-          let store = fail_store (A.open_store ~root) in
+          let store = fail_store (A.open_store ~caps ~root) in
           let g =
             fail_store
               (A.publish_text store ~mode:Transcribe ~text:"old"
@@ -326,7 +328,7 @@ let test_malicious_slot_symlink () =
 
 let test_lockfile_survives () =
   with_root (fun root ->
-      let store = fail_store (A.open_store ~root) in
+      let store = fail_store (A.open_store ~caps ~root) in
       let g =
         fail_store
           (A.publish_text store ~mode:Transcribe ~text:"x"
@@ -340,7 +342,7 @@ let test_lockfile_survives () =
 
 let test_fsync_fail_closes_and_does_not_seal () =
   with_root (fun root ->
-      let store = fail_store (A.open_store ~root) in
+      let store = fail_store (A.open_store ~caps ~root) in
       let w = fail_store (A.open_audio_writer store ~mode:Transcribe) in
       fail_store (A.append_audio w even_pcm);
       (match A.Test_hooks.with_fsync_fail (fun () -> A.close_writer w) with
@@ -356,7 +358,7 @@ let test_fsync_fail_closes_and_does_not_seal () =
 
 let test_abort_after_publish_keeps_candidate () =
   with_root (fun root ->
-      let store = fail_store (A.open_store ~root) in
+      let store = fail_store (A.open_store ~caps ~root) in
       let w = fail_store (A.open_audio_writer store ~mode:Transcribe) in
       fail_store (A.append_audio w even_pcm);
       fail_store (A.close_writer w);
@@ -371,7 +373,7 @@ let test_abort_after_publish_keeps_candidate () =
 
 let test_retire_failure_then_abort_keeps_new () =
   with_root (fun root ->
-      let store = fail_store (A.open_store ~root) in
+      let store = fail_store (A.open_store ~caps ~root) in
       let w1 = fail_store (A.open_audio_writer store ~mode:Transcribe) in
       fail_store (A.append_audio w1 even_pcm);
       fail_store (A.close_writer w1);
@@ -404,7 +406,7 @@ let test_retire_failure_then_abort_keeps_new () =
 
 let test_close_reuse_abort_leaves_new_fd () =
   with_root (fun root ->
-      let store = fail_store (A.open_store ~root) in
+      let store = fail_store (A.open_store ~caps ~root) in
       let w = fail_store (A.open_audio_writer store ~mode:Transcribe) in
       fail_store (A.append_audio w even_pcm);
       (match A.Test_hooks.with_close_fail (fun () -> A.close_writer w) with
@@ -424,7 +426,7 @@ let test_close_reuse_abort_leaves_new_fd () =
 
 let test_publish_text_error_preserves_rollback () =
   with_root (fun root ->
-      let store = fail_store (A.open_store ~root) in
+      let store = fail_store (A.open_store ~caps ~root) in
       fail_store
         (A.publish_text store ~mode:Transcribe ~text:"keep"
            ~dispatch_uncertain:false)
@@ -453,7 +455,7 @@ let test_active_symlink_leaves_outside_unchanged () =
           output_string oc "KEEP";
           close_out oc;
           Unix.symlink outside (Filename.concat root "active");
-          (match A.open_store ~root with
+          (match A.open_store ~caps ~root with
           | Error (`Retry_store _) -> ()
           | Ok _ -> Alcotest.fail "followed active symlink");
           let st = Unix.lstat outside in
@@ -468,7 +470,7 @@ let test_insecure_active_rejected_not_repaired () =
       let active = Filename.concat root "active" in
       Unix.mkdir active 0o755;
       Unix.chmod active 0o755;
-      (match A.open_store ~root with
+      (match A.open_store ~caps ~root with
       | Error (`Retry_store _) -> ()
       | Ok _ -> Alcotest.fail "accepted insecure active");
       let st = Unix.lstat active in
@@ -482,7 +484,7 @@ let test_writable_root_rejected () =
   Fun.protect
     ~finally:(fun () -> try rm_r root with _ -> ())
     (fun () ->
-      (match A.open_store ~root with
+      (match A.open_store ~caps ~root with
       | Error (`Retry_store _) -> ()
       | Ok _ -> Alcotest.fail "accepted group/other writable root");
       let st = Unix.lstat root in
@@ -501,7 +503,7 @@ let test_owned_0755_root_sentinel_unchanged () =
       let oc = open_out_bin sentinel in
       output_string oc "HIST";
       close_out oc;
-      let store = fail_store (A.open_store ~root) in
+      let store = fail_store (A.open_store ~caps ~root) in
       let rst = Unix.lstat root in
       Alcotest.(check int) "root left 0755" 0o755 (rst.st_perm land 0o777);
       let ic = open_in_bin sentinel in

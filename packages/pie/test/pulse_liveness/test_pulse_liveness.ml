@@ -1,3 +1,4 @@
+let caps = Ox_test.powerbox () (* ^pcaps-n1rg *)
 let ( let* ) = Result.bind
 
 let logger env =
@@ -182,7 +183,7 @@ let run_backpressure ~chunks ~consume () =
         drain_eof flow)
   in
   let operation =
-    Pie.Pulse.Client.with_client ~net:(Eio.Stdenv.net env) ~socket_path
+    Pie.Pulse.Client.with_client ~caps ~net:(Eio.Stdenv.net env) ~socket_path
       ~clock:(Eio.Stdenv.clock env) ~logger:(logger env) ~cookie:zero_cookie
       ~request_timeout (fun client ->
         Pie.Pulse.Client.with_record_stream client (fun _info stream ->
@@ -270,7 +271,7 @@ let test_cancel_closes_scope () =
         drain_eof flow)
   in
   let operation =
-    Pie.Pulse.Client.with_client ~net:(Eio.Stdenv.net env) ~socket_path
+    Pie.Pulse.Client.with_client ~caps ~net:(Eio.Stdenv.net env) ~socket_path
       ~clock:(Eio.Stdenv.clock env) ~logger:(logger env) ~cookie:zero_cookie
       ~request_timeout (fun client ->
         Pie.Pulse.Client.with_record_stream client (fun _ stream ->
@@ -295,7 +296,7 @@ let test_broken_connection_disconnected () =
         Eio.Flow.shutdown flow `All)
   in
   let operation =
-    Pie.Pulse.Client.with_client ~net:(Eio.Stdenv.net env) ~socket_path
+    Pie.Pulse.Client.with_client ~caps ~net:(Eio.Stdenv.net env) ~socket_path
       ~clock:(Eio.Stdenv.clock env) ~logger:(logger env) ~cookie:zero_cookie
       ~request_timeout (fun client -> Pie.Pulse.Client.get_server_info client)
   in
@@ -348,7 +349,7 @@ let run_payloads ~payloads ~consume ~after () =
         drain_eof flow)
   in
   let operation =
-    Pie.Pulse.Client.with_client ~net:(Eio.Stdenv.net env) ~socket_path
+    Pie.Pulse.Client.with_client ~caps ~net:(Eio.Stdenv.net env) ~socket_path
       ~clock:(Eio.Stdenv.clock env) ~logger:(logger env) ~cookie:zero_cookie
       ~request_timeout (fun client ->
         Pie.Pulse.Client.with_record_stream client (fun _info stream ->
@@ -386,7 +387,7 @@ let test_enormous_declared_payload () =
         drain_eof flow)
   in
   let operation =
-    Pie.Pulse.Client.with_client ~net:(Eio.Stdenv.net env) ~socket_path
+    Pie.Pulse.Client.with_client ~caps ~net:(Eio.Stdenv.net env) ~socket_path
       ~clock:(Eio.Stdenv.clock env) ~logger:(logger env) ~cookie:zero_cookie
       ~request_timeout (fun client ->
         Pie.Pulse.Client.with_record_stream client (fun _ stream ->
@@ -461,7 +462,7 @@ let test_cancel_while_byte_full () =
         drain_eof flow)
   in
   let operation =
-    Pie.Pulse.Client.with_client ~net:(Eio.Stdenv.net env) ~socket_path
+    Pie.Pulse.Client.with_client ~caps ~net:(Eio.Stdenv.net env) ~socket_path
       ~clock:(Eio.Stdenv.clock env) ~logger:(logger env) ~cookie:zero_cookie
       ~request_timeout (fun client ->
         Pie.Pulse.Client.with_record_stream client (fun _ stream ->

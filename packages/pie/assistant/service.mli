@@ -29,6 +29,7 @@ val effective_bindings :
       when a keysym is not positive or both bindings are equal. *)
 
 val startup_config_json :
+  caps:< Ox_caps.Cap.env ; .. > ->
   ?config_path:string ->
   config:Config.Stt.t ->
   ptt_transcribe_keysym:int ->
@@ -40,10 +41,13 @@ val startup_config_json :
     contains secrets. *)
 
 val default_min_duration_ms : int
-val config_path : string
-val config_stamp : ?config_path:string -> unit -> config_stamp
+val config_path : caps:< Ox_caps.Cap.env ; .. > -> string
+
+val config_stamp :
+  caps:< Ox_caps.Cap.env ; .. > -> ?config_path:string -> unit -> config_stamp
 
 val load_snapshot :
+  caps:< Ox_caps.Cap.env ; .. > ->
   fs:_ Eio.Path.t ->
   source:Ox_app.Config.source ->
   int ->
@@ -95,6 +99,7 @@ val run_acquired_attempt :
     returns [Ptt_cause (Suppressed {primary; finalizer})], retaining both. *)
 
 val production_stt :
+  caps:< Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.time ; .. > ->
   sw:Eio.Switch.t ->
   net:[> `Generic ] Eio.Net.ty Eio.Resource.t ->
   clock:_ Eio.Time.clock ->
@@ -106,6 +111,13 @@ val production_stt :
   (string, [ `Ptt_error of string ]) result
 
 val on_press :
+  caps:
+    < Ox_caps.Cap.env
+    ; Ox_caps.Cap.fs_read
+    ; Ox_caps.Cap.fs_write
+    ; Ox_caps.Cap.time
+    ; Ox_caps.Cap.stderr
+    ; .. > ->
   sw:Eio.Switch.t ->
   net:[> `Generic ] Eio.Net.ty Eio.Resource.t ->
   clock:_ Eio.Time.clock ->
@@ -120,6 +132,15 @@ val on_press :
   (Ptt_loop.press_result, Ptt_loop.error) result
 
 val run_with_inputs :
+  caps:
+    < Ox_caps.Cap.env
+    ; Ox_caps.Cap.fs_read
+    ; Ox_caps.Cap.fs_write
+    ; Ox_caps.Cap.time
+    ; Ox_caps.Cap.stdout
+    ; Ox_caps.Cap.stderr
+    ; Ox_caps.Cap.network
+    ; .. > ->
   sw:Eio.Switch.t ->
   net:[> `Generic ] Eio.Net.ty Eio.Resource.t ->
   fs:_ Eio.Path.t ->
@@ -147,6 +168,15 @@ val run_with_inputs :
   (unit, Ptt_loop.run_error) result
 
 val run :
+  caps:
+    < Ox_caps.Cap.env
+    ; Ox_caps.Cap.fs_read
+    ; Ox_caps.Cap.fs_write
+    ; Ox_caps.Cap.time
+    ; Ox_caps.Cap.stdout
+    ; Ox_caps.Cap.stderr
+    ; Ox_caps.Cap.network
+    ; .. > ->
   sw:Eio.Switch.t ->
   fs:_ Eio.Path.t ->
   net:[> `Generic ] Eio.Net.ty Eio.Resource.t ->

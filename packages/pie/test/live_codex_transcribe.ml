@@ -1,3 +1,5 @@
+let caps = Ox_test.powerbox () (* ^pcaps-n1rg *)
+
 let read_file path =
   let input = open_in_bin path in
   Fun.protect
@@ -40,7 +42,7 @@ let () =
   let result =
     try
       Eio.Time.with_timeout_exn clock 45.0 (fun () ->
-          Pie.Stt.Codex_realtime.transcribe_with_prompt ~sw
+          Pie.Stt.Codex_realtime.transcribe_with_prompt ~caps ~sw
             ~net:(Eio.Stdenv.net env) ~clock ~model ~language:"English"
             ~prompt_template:
               "Transcribe the spoken English words. Return only the transcript \

@@ -59,6 +59,11 @@ type state = {
 
 type t = {
   persist_path : string;
+  caps :
+    < Ox_caps.Cap.env
+    ; Ox_caps.Cap.fs_write
+    ; Ox_caps.Cap.time
+    ; Ox_caps.Cap.stderr >;
   logger : Ox_observability.Logger.t option;
   state : state ref;
   mutex : Eio.Mutex.t;
@@ -138,9 +143,10 @@ let json_of_snapshot (snapshot : snapshot) =
 let mkdir_p = Fs.mkdir_p
 
 let write_state t =
+  let caps = t.caps in
   let snapshot = snapshot_of_state !(t.state) in
-  mkdir_p (Filename.dirname t.persist_path);
-  let oc = open_out_bin t.persist_path in
+  mkdir_p ~caps (Filename.dirname t.persist_path);
+  let oc = Ox_caps.Cap_stdlib.open_out_bin ~caps t.persist_path in
   Fun.protect
     ~finally:(fun () -> close_out_noerr oc)
     (fun () ->
@@ -152,6 +158,7 @@ let write_state t =
    is authoritative, so a transient write failure is logged rather than
    crashing the daemon's hot path. *)
 let persist t =
+  let caps = t.caps in
   try write_state t
   with exn -> (
     match t.logger with
@@ -164,14 +171,26 @@ let persist t =
             ]
           "failed to write recording state"
     | None ->
-        Format.eprintf "failed to write recording state (%s): %s@."
-          t.persist_path (Printexc.to_string exn))
+        Ox_caps.Cap_stdlib.eprintf ~caps
+          "failed to write recording state (%s): %s@." t.persist_path
+          (Printexc.to_string exn))
 
-let create ?logger ?(persist_path = Paths.recording_state_path) () =
-  let now = Unix.gettimeofday () in
+let create ~caps ?logger ?persist_path () =
+  let persist_path =
+    Option.value persist_path ~default:(Paths.recording_state_path ~caps)
+  in
+  let caps =
+    (caps
+      :> < Ox_caps.Cap.env
+         ; Ox_caps.Cap.fs_write
+         ; Ox_caps.Cap.time
+         ; Ox_caps.Cap.stderr >)
+  in
+  let now = Ox_caps.Cap_unix.gettimeofday ~caps () in
   let t =
     {
       persist_path;
+      caps;
       logger;
       state = ref (initial_state now);
       mutex = Eio.Mutex.create ();
@@ -196,6 +215,7 @@ let mutate t f = locked t (fun () -> mutate_unlocked t f)
 
 (* Phase publication never releases admission, and stale owners cannot change it. *)
 let set_phase t (attempt : attempt) phase =
+  let caps = t.caps in
   locked t @@ fun () ->
   let current = !(t.state) in
   match current.mode with
@@ -210,18 +230,19 @@ let set_phase t (attempt : attempt) phase =
               {
                 current with
                 phase = Some phase;
-                updated_at = Unix.gettimeofday ();
+                updated_at = Ox_caps.Cap_unix.gettimeofday ~caps ();
               } ))
   | _ -> false
 
 let try_start t mode ?transcript_path () =
+  let caps = t.caps in
   mutate t (fun current ->
       if not current.enabled then (Disabled, current)
       else
         match current.mode with
         | Some active -> (Busy active.mode, current)
         | None ->
-            let now = Unix.gettimeofday () in
+            let now = Ox_caps.Cap_unix.gettimeofday ~caps () in
             let attempt = make_attempt mode in
             ( Started attempt,
               {
@@ -238,10 +259,11 @@ let try_start t mode ?transcript_path () =
    an earlier same-mode attempt reports [false] and leaves the current owner
    untouched. *)
 let release t attempt =
+  let caps = t.caps in
   mutate t (fun current ->
       match current.mode with
       | Some active when active.id = attempt.id ->
-          let now = Unix.gettimeofday () in
+          let now = Ox_caps.Cap_unix.gettimeofday ~caps () in
           ( true,
             {
               enabled = current.enabled;
@@ -259,32 +281,46 @@ let release t attempt =
    in-flight attempt is therefore consistent with in-memory enabled=false even
    when the state file write fails. *)
 let set_enabled t enabled =
+  let caps = t.caps in
   mutate t (fun current ->
       (if not enabled then
          match current.mode with
          | Some attempt -> signal_cancel attempt
          | None -> ());
-      ((), { current with enabled; updated_at = Unix.gettimeofday () }))
+      ( (),
+        {
+          current with
+          enabled;
+          updated_at = Ox_caps.Cap_unix.gettimeofday ~caps ();
+        } ))
 
 let toggle_enabled t =
+  let caps = t.caps in
   mutate t (fun current ->
       let enabled = not current.enabled in
       (if not enabled then
          match current.mode with
          | Some attempt -> signal_cancel attempt
          | None -> ());
-      (enabled, { current with enabled; updated_at = Unix.gettimeofday () }))
+      ( enabled,
+        {
+          current with
+          enabled;
+          updated_at = Ox_caps.Cap_unix.gettimeofday ~caps ();
+        } ))
 
 let set_error t message =
+  let caps = t.caps in
   mutate t (fun current ->
       ( (),
         {
           current with
           last_error = Some message;
-          updated_at = Unix.gettimeofday ();
+          updated_at = Ox_caps.Cap_unix.gettimeofday ~caps ();
         } ))
 
 let clear t =
+  let caps = t.caps in
   mutate t (fun current ->
       let next =
         {
@@ -294,7 +330,7 @@ let clear t =
           started_at = None;
           transcript_path = None;
           last_error = None;
-          updated_at = Unix.gettimeofday ();
+          updated_at = Ox_caps.Cap_unix.gettimeofday ~caps ();
         }
       in
       ((), next))

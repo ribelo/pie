@@ -2,4 +2,4 @@
 
 (test
  (name test_assistant_owner)
- (libraries pie alcotest eio_main ox eio ox_http unix yojson cstruct))
+ (libraries ox_test pie alcotest eio_main ox eio ox_http unix yojson cstruct))

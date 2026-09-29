@@ -398,15 +398,15 @@ let door_spec : t Ox_app.Config.t =
     env = (fun ~getenv:_ config -> config);
   }
 
-let default_source () =
+let default_source ~caps () =
   Ox_app.Config.resolve_with ~file_name:"stt.toml" ~name:"pie" ~config:None
-    ~getenv:Sys.getenv_opt
+    ~getenv:(Ox_caps.Cap_sys.getenv_opt ~caps)
 
 let source_path : Ox_app.Config.source -> string = function
   | `Default path | `Explicit path -> path
 
-let load ~fs ?source ?read () =
-  let source = Option.value source ~default:(default_source ()) in
+let load ~caps ~fs ?source ?read () =
+  let source = Option.value source ~default:(default_source ~caps ()) in
   let path = source_path source in
   let read =
     Option.value read ~default:(fun path ->
@@ -415,7 +415,8 @@ let load ~fs ?source ?read () =
   in
   let result =
     Ox_app.Config.load_with ~missing:`Required ~spec:door_spec
-      ~getenv:Sys.getenv_opt ~read ~source
+      ~getenv:(Ox_caps.Cap_sys.getenv_opt ~caps)
+      ~read ~source
   in
   let result =
     match result with

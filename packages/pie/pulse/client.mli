@@ -24,6 +24,7 @@ val record_stream_capacity : int
 type t
 
 val with_client :
+  caps:< Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; .. > ->
   net:[> `Generic ] Eio.Net.ty Eio.Resource.t ->
   clock:_ Eio.Time.clock ->
   logger:Ox_observability.Logger.t ->

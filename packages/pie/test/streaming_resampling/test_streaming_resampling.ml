@@ -1,3 +1,5 @@
+let caps = Ox_test.powerbox () (* ^pcaps-n1rg *)
+
 (* Isolated PIE012 chunk-invariant resampling.
    Synthetic PCM and a local fake WebSocket only. No provider, mic or secrets. *)
 
@@ -477,7 +479,7 @@ let run_streaming_sender chunks ~from_rate =
   let operation =
     try
       Eio.Time.with_timeout_exn clock 5.0 (fun () ->
-          Codex.run_realtime_stream_session ~sw ~net ~clock ~url
+          Codex.run_realtime_stream_session ~caps ~sw ~net ~clock ~url
             ~access_token:"synthetic-resampling-token" ~mode:Codex.Transcription
             ~input_sample_rate:from_rate audio)
     with Eio.Time.Timeout -> Error (`Stt_error "timeout")
@@ -515,7 +517,7 @@ let test_buffered_odd_is_stt_error () =
   Eio.Switch.run @@ fun sw ->
   let odd = Bytes.make 1 '\x00' in
   let run rate =
-    Codex.run_realtime_session ~sw ~net:(Eio.Stdenv.net env)
+    Codex.run_realtime_session ~caps ~sw ~net:(Eio.Stdenv.net env)
       ~clock:(Eio.Stdenv.clock env) ~url:"ws://127.0.0.1:1"
       ~access_token:"synthetic-resampling-token" ~mode:Codex.Transcription
       ~input_sample_rate:rate odd
@@ -545,7 +547,7 @@ let test_buffered_huge_rate_is_stt_error () =
   Eio.Switch.run @@ fun sw ->
   let pcm = pcm_of_samples [| 1; 2 |] in
   let operation =
-    Codex.run_realtime_session ~sw ~net:(Eio.Stdenv.net env)
+    Codex.run_realtime_session ~caps ~sw ~net:(Eio.Stdenv.net env)
       ~clock:(Eio.Stdenv.clock env) ~url:"ws://127.0.0.1:1"
       ~access_token:"synthetic-resampling-token" ~mode:Codex.Transcription
       ~input_sample_rate:max_int pcm
@@ -631,7 +633,7 @@ let test_translation_tail_before_retire () =
   let operation =
     try
       Eio.Time.with_timeout_exn clock 5.0 (fun () ->
-          Codex.run_realtime_stream_session ~sw ~net ~clock ~url
+          Codex.run_realtime_stream_session ~caps ~sw ~net ~clock ~url
             ~access_token:"synthetic-resampling-token" ~mode:Codex.Translation
             ~translation_output_drain_ms:200 ~input_sample_rate:from_rate audio)
     with Eio.Time.Timeout -> Error (`Stt_error "timeout")
@@ -649,7 +651,7 @@ let test_streaming_nonpositive_rate () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let operation =
-    Codex.run_realtime_stream_session ~sw ~net:(Eio.Stdenv.net env)
+    Codex.run_realtime_stream_session ~caps ~sw ~net:(Eio.Stdenv.net env)
       ~clock:(Eio.Stdenv.clock env) ~url:"ws://127.0.0.1:1"
       ~access_token:"synthetic-resampling-token" ~mode:Codex.Transcription
       ~input_sample_rate:0

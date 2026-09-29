@@ -1,6 +1,6 @@
-let find_executable name =
+let find_executable ~caps name =
   let paths =
-    match Sys.getenv_opt "PATH" with
+    match Ox_caps.Cap_sys.getenv_opt ~caps "PATH" with
     | Some p -> String.split_on_char ':' p
     | None -> [ "/usr/bin"; "/bin"; "/usr/local/bin" ]
   in

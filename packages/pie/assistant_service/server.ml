@@ -63,21 +63,25 @@ let handle_request ?action_handler coordinator = function
    nobody else can write (0755, 0750) to 0700. A group/other-writable directory, a
    symlink, or one owned by someone else is left alone, and ox_ipc refuses it (as v1
    refused a writable one). *)
-let secure_socket_dir dir =
+let secure_socket_dir ~caps dir =
   match Unix.lstat dir with
   | exception Unix.Unix_error (Unix.ENOENT, _, _) -> (
-      Fs.mkdir_p (Filename.dirname dir);
-      try Unix.mkdir dir 0o700 with Unix.Unix_error (Unix.EEXIST, _, _) -> ())
+      Fs.mkdir_p ~caps (Filename.dirname dir);
+      try Ox_caps.Cap_unix.mkdir ~caps dir 0o700
+      with Unix.Unix_error (Unix.EEXIST, _, _) -> ())
   | st
     when st.Unix.st_kind = Unix.S_DIR
          && st.st_uid = Unix.getuid ()
          && st.st_perm land 0o077 <> 0
          && st.st_perm land 0o022 = 0 ->
-      Unix.chmod dir 0o700
+      Ox_caps.Cap_unix.chmod ~caps dir 0o700
   | _ -> ()
 
-let start ~sw ~fs ~net ~clock ?(socket_path = Paths.daemon_socket_path)
-    ?(budget = default_budget) ?action_handler coordinator =
+let start ~caps ~sw ~fs ~net ~clock ?socket_path ?(budget = default_budget)
+    ?action_handler coordinator =
+  let socket_path =
+    Option.value socket_path ~default:(Paths.daemon_socket_path ~caps)
+  in
   let policy =
     {
       Ox_ipc.Listener.default_policy with
@@ -87,8 +91,8 @@ let start ~sw ~fs ~net ~clock ?(socket_path = Paths.daemon_socket_path)
       egress = Ox.Duration.ms (int_of_float (budget.peer_timeout_s *. 300.));
     }
   in
-  secure_socket_dir (Filename.dirname socket_path);
-  Ox_ipc.Listener.run ~sw ~fs ~net ~clock ~path:socket_path ~policy
+  secure_socket_dir ~caps (Filename.dirname socket_path);
+  Ox_ipc.Listener.run ~caps ~sw ~fs ~net ~clock ~path:socket_path ~policy
     ~decode:Contract.decode_line ~encode:Contract.encode_response
     ~budget:(fun _ ->
       Some (Ox.Duration.ms (int_of_float (budget.peer_timeout_s *. 400.))))

@@ -153,26 +153,27 @@ let parse_bus_address address =
       | None, None ->
           raise (Unsupported_input "unix address missing path or abstract"))
 
-let session_bus_address_string () =
-  match Sys.getenv_opt "DBUS_SESSION_BUS_ADDRESS" with
+let session_bus_address_string ~caps () =
+  match Ox_caps.Cap_sys.getenv_opt ~caps "DBUS_SESSION_BUS_ADDRESS" with
   | Some value -> value
   | None ->
       let runtime =
-        match Sys.getenv_opt "XDG_RUNTIME_DIR" with
+        match Ox_caps.Cap_sys.getenv_opt ~caps "XDG_RUNTIME_DIR" with
         | Some value -> value
         | None -> "/run/user/" ^ string_of_int (Unix.getuid ())
       in
       "unix:path=" ^ Filename.concat runtime "bus"
 
-let session_bus_address () = parse_bus_address (session_bus_address_string ())
+let session_bus_address ~caps () =
+  parse_bus_address (session_bus_address_string ~caps ())
 
-let session_bus_sockaddr () =
-  match session_bus_address () with
+let session_bus_sockaddr ~caps () =
+  match session_bus_address ~caps () with
   | { endpoint = Filesystem path; _ } -> `Unix path
   | { endpoint = Abstract name; _ } -> `Unix ("\000" ^ name)
 
-let session_bus_path () =
-  match session_bus_address () with
+let session_bus_path ~caps () =
+  match session_bus_address ~caps () with
   | { endpoint = Filesystem path; _ } -> path
   | { endpoint = Abstract _; _ } ->
       raise (Unsupported_input "unix:abstract is not a filesystem path")
@@ -697,8 +698,8 @@ let reraise_after_close ~close flow (primary_exn, primary_bt) =
       in
       Printexc.raise_with_backtrace exn bt
 
-let setup_watch ~close ~sw ~net =
-  let flow = Eio.Net.connect ~sw net (session_bus_sockaddr ()) in
+let setup_watch ~caps ~close ~sw ~net =
+  let flow = Eio.Net.connect ~sw net (session_bus_sockaddr ~caps ()) in
   match
     try
       let pin = { a11y_owner = None; bus_unique = None; lost = false } in
@@ -747,12 +748,12 @@ let setup_watch ~close ~sw ~net =
   | Ok conn -> conn
   | Error err -> reraise_after_close ~close flow err
 
-let connect_and_watch_with ~close ~sw ~net =
-  let flow, _owner, _pin = setup_watch ~close ~sw ~net in
+let connect_and_watch_with ~caps ~close ~sw ~net =
+  let flow, _owner, _pin = setup_watch ~caps ~close ~sw ~net in
   flow
 
-let connect_and_watch ~sw ~net =
-  connect_and_watch_with ~close:Eio.Flow.close ~sw ~net
+let connect_and_watch ~caps ~sw ~net =
+  connect_and_watch_with ~caps ~close:Eio.Flow.close ~sw ~net
 
 let ordinary_io_failure exn =
   match exn with
@@ -803,12 +804,14 @@ let read_loop ~owner pin flow t =
   in
   loop ()
 
-let with_monitor_budgets ~budgets ~sw ~net ~clock ~process_mgr:_ f =
+let with_monitor_budgets ~caps ~budgets ~sw ~net ~clock ~process_mgr:_ f =
   let t, flow, owner, pin =
     match
       Ox.Timeout.timeout ~clock budgets.acquire (fun () ->
           let t = create () in
-          let flow, owner, pin = setup_watch ~close:Eio.Flow.close ~sw ~net in
+          let flow, owner, pin =
+            setup_watch ~caps ~close:Eio.Flow.close ~sw ~net
+          in
           Ok (t, flow, owner, pin))
     with
     | Ok value -> value
@@ -833,6 +836,6 @@ let with_monitor_budgets ~budgets ~sw ~net ~clock ~process_mgr:_ f =
     (fun () -> Ok (read_loop ~owner pin flow t))
     (fun () -> f t)
 
-let with_monitor ~sw ~net ~clock ~process_mgr f =
-  with_monitor_budgets ~budgets:production_budgets ~sw ~net ~clock ~process_mgr
-    f
+let with_monitor ~caps ~sw ~net ~clock ~process_mgr f =
+  with_monitor_budgets ~caps ~budgets:production_budgets ~sw ~net ~clock
+    ~process_mgr f

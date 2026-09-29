@@ -15,7 +15,11 @@ module Active : sig
       }
 
   val generation_equal : generation -> generation -> bool
-  val open_store : root:string -> (store, [> `Retry_store of string ]) result
+
+  val open_store :
+    caps:< Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.time ; .. > ->
+    root:string ->
+    (store, [> `Retry_store of string ]) result
 
   val open_audio_writer :
     store -> mode:mode -> (writer, [> `Retry_store of string ]) result

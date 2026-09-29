@@ -3,4 +3,4 @@
 (executable
  (public_name pie)
  (name pie)
- (libraries pie cmdliner eio_main ox ox_app))
+ (libraries pie cmdliner eio_main ox ox_app ox_caps))

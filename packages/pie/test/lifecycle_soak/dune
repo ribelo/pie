@@ -2,4 +2,14 @@
 
 (test
  (name test_lifecycle_soak)
- (libraries pie alcotest eio_main ox ox_http eio eio.unix unix cstruct))
+ (libraries
+  ox_test
+  pie
+  alcotest
+  eio_main
+  ox
+  ox_http
+  eio
+  eio.unix
+  unix
+  cstruct))

@@ -1,4 +1,4 @@
-val mkdir_p : string -> unit
+val mkdir_p : caps:< Ox_caps.Cap.fs_write ; .. > -> string -> unit
 
 val snapshot_of_coordinator :
   Recording.Coordinator.t -> Contract.recording_snapshot
@@ -19,6 +19,7 @@ val err_lock_identity : string
 val err_malformed_request : string
 
 val start :
+  caps:< Ox_caps.Cap.env ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.network ; .. > ->
   sw:Eio.Switch.t ->
   fs:_ Eio.Path.t ->
   net:_ Eio.Net.ty Eio.Resource.t ->

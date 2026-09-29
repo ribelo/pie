@@ -1,3 +1,5 @@
+let caps = Ox_test.powerbox () (* ^pcaps-n1rg *)
+
 module S = Pie.Assistant_service.Server
 
 let with_temp_dir f =
@@ -17,7 +19,7 @@ let socket_in dir = Filename.concat dir "control.sock"
 let persist_in dir = Filename.concat dir "recording.json"
 
 let coordinator dir =
-  Pie.Recording.Coordinator.create ~persist_path:(persist_in dir) ()
+  Pie.Recording.Coordinator.create ~caps ~persist_path:(persist_in dir) ()
 
 exception Start_error of S.error
 
@@ -34,7 +36,7 @@ let category = function
 
 let start_in ~sw env ~socket_path ?budget coordinator =
   match
-    S.start ~sw ~fs:(Eio.Stdenv.fs env) ~net:(Eio.Stdenv.net env)
+    S.start ~caps ~sw ~fs:(Eio.Stdenv.fs env) ~net:(Eio.Stdenv.net env)
       ~clock:(Eio.Stdenv.clock env) ~socket_path ?budget coordinator
   with
   | Ok () -> ()

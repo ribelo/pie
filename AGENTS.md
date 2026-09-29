@@ -21,3 +21,4 @@ uncommitted work is effectively lost work.
 - When subagents implement slices, the coordinating session reviews each result
   and commits it before starting dependent work.
 - Push only when the user asks.
+- Dangerous calls go through `Ox_caps.Cap_*` and require a capability in the signature; `scripts/caps-gate` checks production code.

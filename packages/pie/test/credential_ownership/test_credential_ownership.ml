@@ -1,3 +1,5 @@
+let caps = Ox_test.powerbox () (* ^pcaps-n1rg *)
+
 (* PIE010: shared Codex auth.json is read-only. No refresh/write. *)
 
 let string_contains hay needle =
@@ -76,11 +78,11 @@ let auth_json token =
     token
 
 let cause_text (`Stt_error message) = message
-let run_access () = Pie.Stt.Codex_realtime.Codex_auth.access_token ()
+let run_access () = Pie.Stt.Codex_realtime.Codex_auth.access_token ~caps ()
 
 let run_realtime ~client_env =
   ignore client_env;
-  Pie.Stt.Codex_realtime.realtime_access_token ~client:() ()
+  Pie.Stt.Codex_realtime.realtime_access_token ~caps ~client:() ()
 
 let with_codex_home dir f =
   Unix.putenv "CODEX_HOME" dir;
@@ -162,10 +164,10 @@ let test_two_callers_cannot_overwrite_newest () =
   let first_done, resolve_first = Eio.Promise.create () in
   let second_done, resolve_second = Eio.Promise.create () in
   Eio.Fiber.fork ~sw (fun () ->
-      let result = Pie.Stt.Codex_realtime.Codex_auth.access_token () in
+      let result = Pie.Stt.Codex_realtime.Codex_auth.access_token ~caps () in
       Eio.Promise.resolve resolve_first result);
   Eio.Fiber.fork ~sw (fun () ->
-      let result = Pie.Stt.Codex_realtime.Codex_auth.access_token () in
+      let result = Pie.Stt.Codex_realtime.Codex_auth.access_token ~caps () in
       Eio.Promise.resolve resolve_second result);
   Unix.rename tmp path;
   ignore (Eio.Promise.await first_done);
@@ -211,7 +213,7 @@ let test_cancel_leaves_no_temp_or_fd () =
   Eio_main.run @@ fun _env ->
   Eio.Switch.run @@ fun sw ->
   Eio.Fiber.fork ~sw (fun () ->
-      ignore (Pie.Stt.Codex_realtime.Codex_auth.access_token ()));
+      ignore (Pie.Stt.Codex_realtime.Codex_auth.access_token ~caps ()));
   let temps =
     Array.to_list (Sys.readdir dir)
     |> List.filter (fun name -> name <> "auth.json")

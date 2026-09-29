@@ -1,3 +1,5 @@
+let caps = Ox_test.powerbox () (* ^pcaps-n1rg *)
+
 (* Isolated PIE021 keyboard setup/input-loss ownership.
    Private Unix D-Bus fake only. No real session bus, keystrokes, or credentials. *)
 
@@ -373,7 +375,7 @@ let test_rejected_auth_fd_flat () =
       for i = 1 to 100 do
         let result =
           run_direct (fun () ->
-              Ok (ignore (Monitor.connect_and_watch ~sw ~net)))
+              Ok (ignore (Monitor.connect_and_watch ~caps ~sw ~net)))
         in
         expect_die ~label:(Printf.sprintf "auth %d" i) ~needle:"auth" result;
         await_conn ();
@@ -396,7 +398,8 @@ let test_failed_hello_closes () =
   with_fake_bus ~sw ~net ~clock ~dir ~count:1 Fail_hello (fun ~await_conn ->
       let baseline = fd_count () in
       let result =
-        run_direct (fun () -> Ok (ignore (Monitor.connect_and_watch ~sw ~net)))
+        run_direct (fun () ->
+            Ok (ignore (Monitor.connect_and_watch ~caps ~sw ~net)))
       in
       expect_die ~label:"hello" ~needle:"Hello" result;
       await_conn ();
@@ -412,7 +415,8 @@ let test_failed_watch_closes () =
   with_fake_bus ~sw ~net ~clock ~dir ~count:1 Fail_watch (fun ~await_conn ->
       let baseline = fd_count () in
       let result =
-        run_direct (fun () -> Ok (ignore (Monitor.connect_and_watch ~sw ~net)))
+        run_direct (fun () ->
+            Ok (ignore (Monitor.connect_and_watch ~caps ~sw ~net)))
       in
       expect_die ~label:"watch" ~needle:"WatchKeyboard" result;
       await_conn ();
@@ -459,8 +463,8 @@ let test_auth_reject_combines_close_failure () =
         run_direct (fun () ->
             Ok
               (ignore
-                 (Monitor.connect_and_watch_with ~close:close_then_raise ~sw
-                    ~net)))
+                 (Monitor.connect_and_watch_with ~caps ~close:close_then_raise
+                    ~sw ~net)))
       in
       expect_combined ~label:"auth+close"
         ~needles:[ "auth"; "synthetic-close" ]
@@ -488,8 +492,8 @@ let test_auth_cancel_combines_close_failure () =
                        Eio.Promise.await seen;
                        Eio.Cancel.cancel cc (Failure "stage-cancel"));
                    ignore
-                     (Monitor.connect_and_watch_with ~close:close_then_raise ~sw
-                        ~net))))
+                     (Monitor.connect_and_watch_with ~caps
+                        ~close:close_then_raise ~sw ~net))))
       in
       expect_combined ~label:"cancel+close"
         ~needles:[ "synthetic-close"; "stage-cancel" ]
@@ -510,7 +514,7 @@ let test_unwatch_cancel_combines_close_failure () =
       let result =
         run_direct (fun () ->
             Ok
-              (let flow = Monitor.connect_and_watch ~sw ~net in
+              (let flow = Monitor.connect_and_watch ~caps ~sw ~net in
                Eio.Cancel.sub (fun cc ->
                    Eio.Cancel.cancel cc (Failure "unwatch-cancel");
                    Monitor.unwatch_and_close_with ~close:close_then_raise flow)))
@@ -538,7 +542,7 @@ let cancel_at_stage stage () =
         Ox.Concurrent.race ~sw
           [
             (fun () ->
-              ignore (Monitor.connect_and_watch ~sw ~net);
+              ignore (Monitor.connect_and_watch ~caps ~sw ~net);
               Ok `Setup_finished);
             (fun () ->
               Eio.Promise.await seen;
@@ -569,7 +573,7 @@ let test_failed_unwatch_write_still_closes () =
     (fun ~await_conn ->
       let result =
         run_direct (fun () ->
-            let flow = Monitor.connect_and_watch ~sw ~net in
+            let flow = Monitor.connect_and_watch ~caps ~sw ~net in
             await_conn ();
             let before = fd_count () in
             Monitor.unwatch_and_close flow;
@@ -596,8 +600,8 @@ let test_unexpected_eof_fails_consumer () =
     (fun ~await_conn ->
       let operation () =
         Ox.Timeout.timeout ~clock (Ox.Duration.seconds 2) (fun () ->
-            Monitor.with_monitor ~sw ~net ~clock ~process_mgr (fun _keyboard ->
-                Eio.Fiber.await_cancel ()))
+            Monitor.with_monitor ~caps ~sw ~net ~clock ~process_mgr
+              (fun _keyboard -> Eio.Fiber.await_cancel ()))
         |> Result.map_error (function
           | `Timeout -> `Harness_timeout
           | error -> error)
@@ -627,8 +631,8 @@ let test_malformed_packet_fails_consumer () =
     (fun ~await_conn ->
       let operation () =
         Ox.Timeout.timeout ~clock (Ox.Duration.seconds 2) (fun () ->
-            Monitor.with_monitor ~sw ~net ~clock ~process_mgr (fun _keyboard ->
-                Eio.Fiber.await_cancel ()))
+            Monitor.with_monitor ~caps ~sw ~net ~clock ~process_mgr
+              (fun _keyboard -> Eio.Fiber.await_cancel ()))
         |> Result.map_error (function
           | `Timeout -> `Harness_timeout
           | error -> error)
@@ -660,8 +664,8 @@ let test_normal_disconnect_closes () =
       let baseline = fd_count () in
       let result =
         run_direct (fun () ->
-            Monitor.with_monitor ~sw ~net ~clock ~process_mgr (fun _keyboard ->
-                Ok ()))
+            Monitor.with_monitor ~caps ~sw ~net ~clock ~process_mgr
+              (fun _keyboard -> Ok ()))
       in
       (match result with
       | Ox.Exit.Success () -> ()

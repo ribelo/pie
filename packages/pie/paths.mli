@@ -1,11 +1,11 @@
-val xdg_data_home : string
-val xdg_config_home : string
-val xdg_runtime_dir : string
-val data_dir : string
-val config_dir : string
-val runtime_dir : string
-val daemon_socket_path : string
-val recording_state_path : string
-val failed_recordings_dir : string
-val stt_config_path : string
-val prompts_dir : string
+val xdg_data_home : caps:< Ox_caps.Cap.env ; .. > -> string
+val xdg_config_home : caps:< Ox_caps.Cap.env ; .. > -> string
+val xdg_runtime_dir : caps:< Ox_caps.Cap.env ; .. > -> string
+val data_dir : caps:< Ox_caps.Cap.env ; .. > -> string
+val config_dir : caps:< Ox_caps.Cap.env ; .. > -> string
+val runtime_dir : caps:< Ox_caps.Cap.env ; .. > -> string
+val daemon_socket_path : caps:< Ox_caps.Cap.env ; .. > -> string
+val recording_state_path : caps:< Ox_caps.Cap.env ; .. > -> string
+val failed_recordings_dir : caps:< Ox_caps.Cap.env ; .. > -> string
+val stt_config_path : caps:< Ox_caps.Cap.env ; .. > -> string
+val prompts_dir : caps:< Ox_caps.Cap.env ; .. > -> string

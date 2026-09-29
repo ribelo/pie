@@ -5,9 +5,9 @@ let notify_send ~process_mgr title message =
     ~args:[ "--urgency=normal"; title; message ]
   |> Result.map_error (fun (`Subprocess_error msg) -> `Notification_error msg)
 
-let notify_warning ~process_mgr title message =
+let notify_warning ~caps ~process_mgr title message =
   match notify_send ~process_mgr title message with
   | Ok () -> Ok ()
   | Error _ ->
-      Printf.eprintf "Notification failed\n%!";
+      Ox_caps.Cap_stdlib.eprintf ~caps "Notification failed\n%!";
       Ok ()

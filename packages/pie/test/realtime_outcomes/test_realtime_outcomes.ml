@@ -1,3 +1,5 @@
+let caps = Ox_test.powerbox () (* ^pcaps-n1rg *)
+
 (* PIE011: readiness vs terminal status on a local scripted WebSocket. *)
 
 module Codex = Pie.Stt.Codex_realtime
@@ -219,7 +221,7 @@ let run_session ~mode ~script ~drain_ms =
   let result =
     try
       Eio.Time.with_timeout_exn clock 3.0 (fun () ->
-          Codex.run_realtime_session ~sw ~net ~clock ~url
+          Codex.run_realtime_session ~caps ~sw ~net ~clock ~url
             ~access_token:"synthetic" ~mode ?session_update
             ~translation_output_drain_ms:drain_ms ~input_sample_rate:16000 pcm)
     with Eio.Time.Timeout -> Error (`Stt_error "timeout")

@@ -1,3 +1,4 @@
+let caps = Ox_test.powerbox () (* ^pcaps-n1rg *)
 let ( let* ) = Result.bind
 
 let logger env =
@@ -27,12 +28,12 @@ let spec rate : Pie.Pulse.Defs.sample_spec =
 let acquire_chunks rate chunks k =
   k { Pie.Commands.Record.format = spec rate; audio = finite_pull chunks }
 
-let unix_io = Pie.Commands.Record.unix_io
+let unix_io = Pie.Commands.Record.unix_io ~caps
 
 let run ~output_path ~duration_sec ~chunks ?(rate = 16000) ?(io = unix_io) () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  Pie.Commands.Record.run ~sw ~net:(Eio.Stdenv.net env)
+  Pie.Commands.Record.run ~caps ~sw ~net:(Eio.Stdenv.net env)
     ~clock:(Eio.Stdenv.clock env) ~logger:(logger env) ~output_path
     ~duration_sec
     ~acquire:(acquire_chunks rate chunks)
@@ -133,7 +134,7 @@ let test_duration_before_acquire duration_sec =
   let result =
     Eio_main.run @@ fun env ->
     Eio.Switch.run @@ fun sw ->
-    Pie.Commands.Record.run ~sw ~net:(Eio.Stdenv.net env)
+    Pie.Commands.Record.run ~caps ~sw ~net:(Eio.Stdenv.net env)
       ~clock:(Eio.Stdenv.clock env) ~logger:(logger env) ~output_path:path
       ~duration_sec
       ~acquire:(fun k ->
@@ -190,7 +191,7 @@ let test_read_failure_preserves_dest () =
   let result =
     Eio_main.run @@ fun env ->
     Eio.Switch.run @@ fun sw ->
-    Pie.Commands.Record.run ~sw ~net:(Eio.Stdenv.net env)
+    Pie.Commands.Record.run ~caps ~sw ~net:(Eio.Stdenv.net env)
       ~clock:(Eio.Stdenv.clock env) ~logger:(logger env) ~output_path:path
       ~duration_sec:1.
       ~acquire:(fun k ->
@@ -297,7 +298,7 @@ let test_capture_finalizer_preserves_dest () =
   let result =
     Eio_main.run @@ fun env ->
     Eio.Switch.run @@ fun sw ->
-    Pie.Commands.Record.run ~sw ~net:(Eio.Stdenv.net env)
+    Pie.Commands.Record.run ~caps ~sw ~net:(Eio.Stdenv.net env)
       ~clock:(Eio.Stdenv.clock env) ~logger:(logger env) ~output_path:path
       ~duration_sec:1.
       ~acquire:(fun k ->
@@ -326,7 +327,7 @@ let test_cancel_preserves_dest () =
     Eio.Fiber.first
       (fun () ->
         let result =
-          Pie.Commands.Record.run ~sw ~net:(Eio.Stdenv.net env)
+          Pie.Commands.Record.run ~caps ~sw ~net:(Eio.Stdenv.net env)
             ~clock:(Eio.Stdenv.clock env) ~logger:(logger env) ~output_path:path
             ~duration_sec:30.
             ~acquire:(fun k ->
@@ -399,7 +400,7 @@ let test_placeholder_write_failure () =
   let result =
     Eio_main.run @@ fun env ->
     Eio.Switch.run @@ fun sw ->
-    Pie.Commands.Record.run ~sw ~net:(Eio.Stdenv.net env)
+    Pie.Commands.Record.run ~caps ~sw ~net:(Eio.Stdenv.net env)
       ~clock:(Eio.Stdenv.clock env) ~logger:(logger env) ~output_path:path
       ~duration_sec:1.
       ~acquire:(fun k ->

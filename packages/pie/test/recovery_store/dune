@@ -2,4 +2,4 @@
 
 (test
  (name test_recovery_store)
- (libraries pie alcotest unix threads))
+ (libraries ox_test pie alcotest unix threads))

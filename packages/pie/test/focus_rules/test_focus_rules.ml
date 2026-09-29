@@ -1,3 +1,5 @@
+let caps = Ox_test.powerbox () (* ^pcaps-n1rg *)
+
 (* PIE027: unresolved formatting rules fail before emission.
    Fake niri/wtype/xdotool on a private PATH. No real desktop. *)
 
@@ -146,7 +148,7 @@ let pp_err ppf = function
       Format.pp_print_string ppf m
 
 let run_inject ~newline_rules ~text_entry_rules text ~clock process_mgr =
-  Text.inject ~newline_rules ~text_entry_rules ~clock ~process_mgr text
+  Text.inject ~caps ~newline_rules ~text_entry_rules ~clock ~process_mgr text
 
 let run_once operation =
   Eio_main.run @@ fun env ->

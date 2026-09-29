@@ -29,7 +29,16 @@ val iso_of_unix : float -> string
 val json_of_snapshot : snapshot -> Yojson.Safe.t
 
 val create :
-  ?logger:Ox_observability.Logger.t -> ?persist_path:string -> unit -> t
+  caps:
+    < Ox_caps.Cap.env
+    ; Ox_caps.Cap.fs_write
+    ; Ox_caps.Cap.time
+    ; Ox_caps.Cap.stderr
+    ; .. > ->
+  ?logger:Ox_observability.Logger.t ->
+  ?persist_path:string ->
+  unit ->
+  t
 
 val snapshot : t -> snapshot
 val is_active : t -> bool

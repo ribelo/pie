@@ -1,3 +1,4 @@
+let caps = Ox_test.powerbox () (* ^pcaps-n1rg *)
 let pcm = Bytes.make 320 '\001'
 let case_env = "PIE_OR_CASE"
 
@@ -152,11 +153,11 @@ let run_public ~body ~op () =
   let operation =
     match op with
     | Transcribe ->
-        Pie.Stt.Openrouter.transcribe_with_prompt ~sw ~net ~clock ~logger
+        Pie.Stt.Openrouter.transcribe_with_prompt ~caps ~sw ~net ~clock ~logger
           ~model:"test-model" ~language:"en" ~prompt_template:"Transcribe."
           pcm_bytes
     | Translate ->
-        Pie.Stt.Openrouter.translate_with_prompt ~sw ~net ~clock ~logger
+        Pie.Stt.Openrouter.translate_with_prompt ~caps ~sw ~net ~clock ~logger
           ~model:"test-model" ~source_language:"en" ~target_language:"pl"
           ~prompt_template:"Translate." pcm_bytes
   in

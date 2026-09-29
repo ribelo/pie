@@ -1,3 +1,5 @@
+let caps = Ox_test.powerbox () (* ^pcaps-n1rg *)
+
 let contains hay needle =
   let rec loop i =
     i + String.length needle <= String.length hay
@@ -76,7 +78,7 @@ let test_no_inspection_exact_stdin previous =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let owner =
-    Pie.Wayland.Clipboard.create ~sw
+    Pie.Wayland.Clipboard.create ~caps ~sw
       ~process_mgr:(Eio.Stdenv.process_mgr env)
       ~copy_program:copy ()
   in
@@ -99,7 +101,7 @@ let test_known_spawn_failure_hides_secret () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let owner =
-    Pie.Wayland.Clipboard.create ~sw
+    Pie.Wayland.Clipboard.create ~caps ~sw
       ~process_mgr:(Eio.Stdenv.process_mgr env)
       ~copy_program:secret ()
   in
@@ -119,7 +121,7 @@ let test_copy_early_failure () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let owner =
-    Pie.Wayland.Clipboard.create ~sw
+    Pie.Wayland.Clipboard.create ~caps ~sw
       ~process_mgr:(Eio.Stdenv.process_mgr env)
       ~copy_program:copy ()
   in
@@ -133,7 +135,7 @@ let test_cancellation_at_acquisition () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun owner_sw ->
   let owner =
-    Pie.Wayland.Clipboard.create ~sw:owner_sw
+    Pie.Wayland.Clipboard.create ~caps ~sw:owner_sw
       ~process_mgr:(Eio.Stdenv.process_mgr env)
       ~copy_program:copy ()
   in
@@ -165,7 +167,7 @@ let test_slow_consumer_still_alive () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let owner =
-    Pie.Wayland.Clipboard.create ~sw
+    Pie.Wayland.Clipboard.create ~caps ~sw
       ~process_mgr:(Eio.Stdenv.process_mgr env)
       ~copy_program:copy ()
   in
@@ -184,7 +186,7 @@ let test_repeated_offers_bounded () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let owner =
-    Pie.Wayland.Clipboard.create ~sw
+    Pie.Wayland.Clipboard.create ~caps ~sw
       ~process_mgr:(Eio.Stdenv.process_mgr env)
       ~copy_program:copy ()
   in
@@ -211,7 +213,7 @@ let test_shutdown_settles () =
   Eio_main.run @@ fun env ->
   ( Eio.Switch.run @@ fun sw ->
     let owner =
-      Pie.Wayland.Clipboard.create ~sw
+      Pie.Wayland.Clipboard.create ~caps ~sw
         ~process_mgr:(Eio.Stdenv.process_mgr env)
         ~copy_program:copy ()
     in
@@ -226,7 +228,7 @@ let test_settled_before_replacement () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let owner =
-    Pie.Wayland.Clipboard.create ~sw
+    Pie.Wayland.Clipboard.create ~caps ~sw
       ~process_mgr:(Eio.Stdenv.process_mgr env)
       ~copy_program:copy ()
   in
@@ -245,7 +247,7 @@ let test_natural_exit_releases_pipes () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let owner =
-    Pie.Wayland.Clipboard.create ~sw
+    Pie.Wayland.Clipboard.create ~caps ~sw
       ~process_mgr:(Eio.Stdenv.process_mgr env)
       ~copy_program:copy ()
   in
@@ -267,7 +269,7 @@ let test_large_stdout_discarded () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let owner =
-    Pie.Wayland.Clipboard.create ~sw
+    Pie.Wayland.Clipboard.create ~caps ~sw
       ~process_mgr:(Eio.Stdenv.process_mgr env)
       ~copy_program:copy ()
   in
@@ -316,11 +318,11 @@ let setup_paste_path dir ~wtype_body =
 
 let run_configured_inject ~dir ~copy env sw text =
   let owner =
-    Pie.Wayland.Clipboard.create ~sw
+    Pie.Wayland.Clipboard.create ~caps ~sw
       ~process_mgr:(Eio.Stdenv.process_mgr env)
       ~copy_program:copy ()
   in
-  Pie.Input.Text_injection.inject ~clock:(Eio.Stdenv.clock env)
+  Pie.Input.Text_injection.inject ~caps ~clock:(Eio.Stdenv.clock env)
     ~clipboard_owner:owner ~text_entry_rules:paste_rules
     ~process_mgr:(Eio.Stdenv.process_mgr env)
     text
@@ -412,7 +414,7 @@ let test_cli_type_stays_type () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   match
-    Pie.Input.Text_injection.inject ~clock:(Eio.Stdenv.clock env)
+    Pie.Input.Text_injection.inject ~caps ~clock:(Eio.Stdenv.clock env)
       ~process_mgr:(Eio.Stdenv.process_mgr env)
       "hello"
   with
@@ -451,7 +453,7 @@ let test_paste_handoff_delay ~cancel () =
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let owner =
-    Pie.Wayland.Clipboard.create ~sw
+    Pie.Wayland.Clipboard.create ~caps ~sw
       ~process_mgr:(Eio.Stdenv.process_mgr env)
       ~copy_program:copy ()
   in
@@ -479,8 +481,8 @@ let test_paste_handoff_delay ~cancel () =
   end in
   let fake_clock = Eio.Resource.T ((), Eio.Time.Pi.clock (module Clock)) in
   let run () =
-    Pie.Input.Text_injection.inject ~clock:fake_clock ~clipboard_owner:owner
-      ~text_entry_rules:paste_rules
+    Pie.Input.Text_injection.inject ~caps ~clock:fake_clock
+      ~clipboard_owner:owner ~text_entry_rules:paste_rules
       ~process_mgr:(Eio.Stdenv.process_mgr env)
       "offered-text"
   in

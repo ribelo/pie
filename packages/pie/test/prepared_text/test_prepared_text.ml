@@ -1,3 +1,5 @@
+let caps = Ox_test.powerbox () (* ^pcaps-n1rg *)
+
 (* Isolated PIE020 prepared-text integrity controls.
    Fake wtype/xdotool/niri on a private PATH. Never real desktop helpers. *)
 
@@ -330,7 +332,7 @@ let test_type_text_preserves ~session ~newline_action ~expected ~source () =
       in
       let backend = Text.choose_backend (backend_of_session session) in
       run_ok ~pp_error:pp_type_error (fun ~clock:_ process_mgr ->
-          Text.type_text ~newline_action ~process_mgr ~backend prepared);
+          Text.type_text ~caps ~newline_action ~process_mgr ~backend prepared);
       let actual = invocations sandbox in
       require_literal_separator actual;
       Alcotest.(check invocations_testable) "emitted argv" expected actual;
@@ -341,7 +343,7 @@ let test_inject_preserves ~session ~rules ~expected ~source () =
   with_fixtures ~session (fun sandbox ->
       let result =
         run_ok ~pp_error:pp_inject_error (fun ~clock process_mgr ->
-            Text.inject ~clock ~newline_rules:rules ~process_mgr source)
+            Text.inject ~caps ~clock ~newline_rules:rules ~process_mgr source)
       in
       let newline_action =
         match rules with
@@ -365,7 +367,8 @@ let test_x11_inject_rules_rejected ~rules () =
   with_fixtures ~session:"x11" (fun sandbox ->
       let cause =
         run_error ~pp_error:pp_inject_error (fun ~clock process_mgr ->
-            Text.inject ~clock ~newline_rules:rules ~process_mgr evidence_text)
+            Text.inject ~caps ~clock ~newline_rules:rules ~process_mgr
+              evidence_text)
       in
       (match cause with
       | `Injection_error msg ->
@@ -395,7 +398,7 @@ let test_inject_collapse () =
       in
       let result =
         run_ok ~pp_error:pp_inject_error (fun ~clock process_mgr ->
-            Text.inject ~clock ~process_mgr source)
+            Text.inject ~caps ~clock ~process_mgr source)
       in
       let actual = invocations sandbox in
       Alcotest.(check string) "reported collapsed text" prepared result.text;
@@ -411,7 +414,7 @@ let test_crlf_segments ~session ~newline_action ~type_event ~key_event () =
       in
       let backend = Text.choose_backend (backend_of_session session) in
       run_ok ~pp_error:pp_type_error (fun ~clock:_ process_mgr ->
-          Text.type_text ~newline_action ~process_mgr ~backend prepared);
+          Text.type_text ~caps ~newline_action ~process_mgr ~backend prepared);
       let actual = invocations sandbox in
       Alcotest.(check (list string))
         "CRLF segments keep internal spaces" [ "top  "; "  indented" ]
@@ -432,7 +435,7 @@ let test_later_helper_failure ~session ~newline_action () =
       let backend = Text.choose_backend (backend_of_session session) in
       let cause =
         run_error ~pp_error:pp_type_error (fun ~clock:_ process_mgr ->
-            Text.type_text ~newline_action ~process_mgr ~backend prepared)
+            Text.type_text ~caps ~newline_action ~process_mgr ~backend prepared)
       in
       let msg = error_message cause in
       Alcotest.(check bool)
@@ -496,17 +499,21 @@ let () =
       ( "leaf",
         [
           Alcotest.test_case "wtype empty string no-op" `Quick
-            (test_leaf_empty_noop "wtype" Pie.Wayland.Wtype.type_text
+            (test_leaf_empty_noop "wtype"
+               (Pie.Wayland.Wtype.type_text ~caps)
                pp_wtype_error);
           Alcotest.test_case "xdotool empty string no-op" `Quick
-            (test_leaf_empty_noop "xdotool" Pie.X11.Xdotool.type_text
+            (test_leaf_empty_noop "xdotool"
+               (Pie.X11.Xdotool.type_text ~caps)
                pp_xdotool_error);
           Alcotest.test_case "wtype whitespace-only emitted verbatim" `Quick
             (test_leaf_whitespace_emitted "wtype" wtype_type
-               Pie.Wayland.Wtype.type_text pp_wtype_error);
+               (Pie.Wayland.Wtype.type_text ~caps)
+               pp_wtype_error);
           Alcotest.test_case "xdotool whitespace-only emitted verbatim" `Quick
             (test_leaf_whitespace_emitted "xdotool" xdotool_type
-               Pie.X11.Xdotool.type_text pp_xdotool_error);
+               (Pie.X11.Xdotool.type_text ~caps)
+               pp_xdotool_error);
         ] );
       ( "type_text",
         [

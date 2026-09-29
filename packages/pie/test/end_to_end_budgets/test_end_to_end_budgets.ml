@@ -1,3 +1,5 @@
+let caps = Ox_test.powerbox () (* ^pcaps-n1rg *)
+
 (* PIE013 private e2e: one long-lived Service.run_with_inputs workflow over a
    private socket, retry store and synthetic audio; no provider, no keyboard, no
    microphone, no live control socket.
@@ -131,7 +133,7 @@ let draft_count retry_dir =
   |> List.length
 
 let peek_meta retry_dir =
-  match Pie.Recording.Retry_store.Active.open_store ~root:retry_dir with
+  match Pie.Recording.Retry_store.Active.open_store ~caps ~root:retry_dir with
   | Error _ -> None
   | Ok store -> (
       match Pie.Recording.Retry_store.Active.peek store with
@@ -185,7 +187,7 @@ let owner_workflow ~logger ~env ~sw ~net ~process_mgr ~mono_clock ~dir
     { Pie.Assistant.Service.keyboard; audio; source_name = Some "e2e" }
   in
   let workflow () =
-    Pie.Assistant.Service.run_with_inputs ~sw ~net ~fs:(Eio.Stdenv.fs env)
+    Pie.Assistant.Service.run_with_inputs ~caps ~sw ~net ~fs:(Eio.Stdenv.fs env)
       ~clock:(Eio.Stdenv.clock env) ~logger ~process_mgr ~mono_clock ~inputs
       ~config_control ~stt ~deliver ~socket_path ~retry_dir ~min_duration_ms:0
       ()
@@ -463,7 +465,7 @@ let peek_generation retry_dir =
 let seed_audio retry_dir =
   (try Unix.mkdir retry_dir 0o700
    with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
-  match Active.open_store ~root:retry_dir with
+  match Active.open_store ~caps ~root:retry_dir with
   | Error (`Retry_store msg) -> Alcotest.fail msg
   | Ok store -> (
       match
@@ -485,7 +487,7 @@ let seed_audio retry_dir =
 let seed_text retry_dir text =
   (try Unix.mkdir retry_dir 0o700
    with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
-  match Active.open_store ~root:retry_dir with
+  match Active.open_store ~caps ~root:retry_dir with
   | Error (`Retry_store msg) -> Alcotest.fail msg
   | Ok store -> (
       match
@@ -658,7 +660,7 @@ let test_text_retry_held_delivery_cleanup_stt_zero () =
               match peek_meta retry_dir with
               | Some (Active.Text { generation; _ })
                 when Active.generation_equal generation gen0 -> (
-                  match Active.open_store ~root:retry_dir with
+                  match Active.open_store ~caps ~root:retry_dir with
                   | Error (`Retry_store msg) -> Alcotest.fail msg
                   | Ok store -> (
                       match Active.load_text store generation with

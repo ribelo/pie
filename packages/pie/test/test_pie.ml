@@ -1,3 +1,5 @@
+let caps = Ox_test.powerbox () (* ^pcaps-n1rg *)
+
 open Pie
 open Ox.Result.Syntax
 
@@ -162,7 +164,7 @@ let test_keyboard_monitor_session_bus_path_abstract_socket () =
   Fun.protect
     ~finally:(fun () -> restore_dbus_env old)
     (fun () ->
-      match Pie.Keyboard.Monitor.session_bus_path () with
+      match Pie.Keyboard.Monitor.session_bus_path ~caps () with
       | exception Pie.Keyboard.Monitor.Unsupported_input msg ->
           Alcotest.(check string)
             "abstract is not a filesystem path"
@@ -214,7 +216,7 @@ let test_keyboard_dbus_key_event_parse () =
 let test_recording_coordinator_transitions () =
   run_test @@ fun _ ->
   let path = Filename.temp_file "pie-recording" ".json" in
-  let coordinator = Recording.Coordinator.create ~persist_path:path () in
+  let coordinator = Recording.Coordinator.create ~caps ~persist_path:path () in
   let initial = Recording.Coordinator.snapshot coordinator in
   Alcotest.(check bool) "enabled" true initial.enabled;
   Alcotest.(check string) "idle" "idle" initial.mode;
@@ -250,7 +252,9 @@ let test_recording_coordinator_release_preserves_newer_same_mode_attempt () =
   Fun.protect
     ~finally:(fun () -> if Sys.file_exists path then Sys.remove path)
     (fun () ->
-      let coordinator = Recording.Coordinator.create ~persist_path:path () in
+      let coordinator =
+        Recording.Coordinator.create ~caps ~persist_path:path ()
+      in
       let first =
         match
           Recording.Coordinator.try_start coordinator
@@ -533,7 +537,7 @@ let test_pulse_client_set_client_name_error_is_typed () =
       let buffer = Cstruct.create 1 in
       try ignore (Eio.Flow.single_read flow buffer) with End_of_file -> ());
   let operation () =
-    Pulse.Client.with_client ~net:(Eio.Stdenv.net env)
+    Pulse.Client.with_client ~caps ~net:(Eio.Stdenv.net env)
       ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env) ~socket_path
       ~cookie:(Bytes.make Pulse.Defs.pa_native_cookie_length '\x00')
       (fun _client -> Ok ())
@@ -593,7 +597,7 @@ let test_pulse_client_correlates_concurrent_replies () =
         try ignore (Eio.Flow.single_read flow buffer) with End_of_file -> ())
   in
   let operation () =
-    Pulse.Client.with_client ~net:(Eio.Stdenv.net env)
+    Pulse.Client.with_client ~caps ~net:(Eio.Stdenv.net env)
       ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env) ~socket_path
       ~cookie:(Bytes.make Pulse.Defs.pa_native_cookie_length '\x00')
       (fun client ->
@@ -633,7 +637,7 @@ let test_pulse_client_drops_late_reply_after_timeout () =
         try ignore (Eio.Flow.single_read flow buffer) with End_of_file -> ())
   in
   let operation () =
-    Pulse.Client.with_client ~net:(Eio.Stdenv.net env)
+    Pulse.Client.with_client ~caps ~net:(Eio.Stdenv.net env)
       ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env) ~socket_path
       ~cookie:(Bytes.make Pulse.Defs.pa_native_cookie_length '\x00')
       ~request_timeout:(Ox.Duration.ms 10) (fun client ->
@@ -671,7 +675,7 @@ let test_pulse_client_rejects_malformed_error_payload () =
         try ignore (Eio.Flow.single_read flow buffer) with End_of_file -> ())
   in
   let operation () =
-    Pulse.Client.with_client ~net:(Eio.Stdenv.net env)
+    Pulse.Client.with_client ~caps ~net:(Eio.Stdenv.net env)
       ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env) ~socket_path
       ~cookie:(Bytes.make Pulse.Defs.pa_native_cookie_length '\x00') (fun _ ->
         Ok ())
@@ -698,7 +702,7 @@ let test_pulse_reader_failure_fails_pending_command () =
         Eio.Flow.shutdown flow `All)
   in
   let operation () =
-    Pulse.Client.with_client ~net:(Eio.Stdenv.net env)
+    Pulse.Client.with_client ~caps ~net:(Eio.Stdenv.net env)
       ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env) ~socket_path
       ~cookie:(Bytes.make Pulse.Defs.pa_native_cookie_length '\x00')
       (fun client -> Pulse.Client.get_server_info client)
@@ -728,7 +732,7 @@ let test_pulse_scope_end_disconnects_pending_command () =
         try ignore (Eio.Flow.single_read flow buffer) with End_of_file -> ())
   in
   let operation () =
-    Pulse.Client.with_client ~net:(Eio.Stdenv.net env)
+    Pulse.Client.with_client ~caps ~net:(Eio.Stdenv.net env)
       ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env) ~socket_path
       ~cookie:(Bytes.make Pulse.Defs.pa_native_cookie_length '\x00')
       (fun client ->
@@ -778,7 +782,7 @@ let test_pulse_record_stream_drains_before_reader_failure () =
   in
   let seen = ref [] in
   let operation () =
-    Pulse.Client.with_client ~net:(Eio.Stdenv.net env)
+    Pulse.Client.with_client ~caps ~net:(Eio.Stdenv.net env)
       ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env) ~socket_path
       ~cookie:(Bytes.make Pulse.Defs.pa_native_cookie_length '\x00')
       (fun client ->
@@ -826,7 +830,7 @@ let test_pulse_record_stream_preserves_pcm_chunk_bytes () =
   in
   let received = ref [] in
   let operation () =
-    Pulse.Client.with_client ~net:(Eio.Stdenv.net env)
+    Pulse.Client.with_client ~caps ~net:(Eio.Stdenv.net env)
       ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env) ~socket_path
       ~cookie:(Bytes.make Pulse.Defs.pa_native_cookie_length '\x00')
       (fun client ->
@@ -873,7 +877,7 @@ let test_pulse_record_cleanup_preserves_body_result () =
         try ignore (Eio.Flow.single_read flow buffer) with End_of_file -> ())
   in
   let operation () =
-    Pulse.Client.with_client ~net:(Eio.Stdenv.net env)
+    Pulse.Client.with_client ~caps ~net:(Eio.Stdenv.net env)
       ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env) ~socket_path
       ~cookie:(Bytes.make Pulse.Defs.pa_native_cookie_length '\x00')
       (fun client ->
@@ -932,7 +936,7 @@ let expect_listener_start = function
   | Ok () -> ()
   | Error _ -> Alcotest.fail "daemon listener did not start"
 
-(* A runtime directory left 0755 (by Fs.mkdir_p under the service umask, or by the v1
+(* A runtime directory left 0755 (by Fs.mkdir_p ~caps under the service umask, or by the v1
    daemon) is Pie's own: the server tightens it to 0700 instead of failing with
    "unsafe runtime directory" (found at the eta-next cut-over, 2026-09-28). *)
 let test_daemon_server_tightens_runtime_dir () =
@@ -944,11 +948,11 @@ let test_daemon_server_tightens_runtime_dir () =
   Unix.chmod runtime 0o755;
   let socket_path = Filename.concat runtime "control.sock" in
   let persist_path = Filename.concat runtime "recording.json" in
-  let coordinator = Pie.Recording.Coordinator.create ~persist_path () in
+  let coordinator = Pie.Recording.Coordinator.create ~caps ~persist_path () in
   (try
      Eio.Switch.run @@ fun sw ->
      expect_listener_start
-       (Pie.Assistant_service.Server.start ~sw ~fs:(Eio.Stdenv.fs env)
+       (Pie.Assistant_service.Server.start ~caps ~sw ~fs:(Eio.Stdenv.fs env)
           ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env) ~socket_path
           coordinator);
      Eio.Switch.fail sw Exit
@@ -972,9 +976,9 @@ let test_daemon_server_state () =
   in
   (try Sys.remove socket_path with Sys_error _ -> ());
   (try Sys.remove persist_path with Sys_error _ -> ());
-  let coordinator = Pie.Recording.Coordinator.create ~persist_path () in
+  let coordinator = Pie.Recording.Coordinator.create ~caps ~persist_path () in
   expect_listener_start
-    (Pie.Assistant_service.Server.start ~sw ~fs:(Eio.Stdenv.fs env)
+    (Pie.Assistant_service.Server.start ~caps ~sw ~fs:(Eio.Stdenv.fs env)
        ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env) ~socket_path
        coordinator);
   let send req =
@@ -1025,7 +1029,7 @@ let test_daemon_server_action_handler () =
   in
   (try Sys.remove socket_path with Sys_error _ -> ());
   (try Sys.remove persist_path with Sys_error _ -> ());
-  let coordinator = Pie.Recording.Coordinator.create ~persist_path () in
+  let coordinator = Pie.Recording.Coordinator.create ~caps ~persist_path () in
   let seen = ref [] in
   let action_handler action =
     seen := action :: !seen;
@@ -1047,7 +1051,7 @@ let test_daemon_server_action_handler () =
     }
   in
   expect_listener_start
-    (Pie.Assistant_service.Server.start ~sw ~fs:(Eio.Stdenv.fs env)
+    (Pie.Assistant_service.Server.start ~caps ~sw ~fs:(Eio.Stdenv.fs env)
        ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env) ~socket_path
        ~action_handler coordinator);
   let flow = Eio.Net.connect ~sw (Eio.Stdenv.net env) (`Unix socket_path) in
@@ -1097,12 +1101,12 @@ let test_daemon_server_unknown_meeting_method () =
   in
   (try Sys.remove socket_path with Sys_error _ -> ());
   (try Sys.remove persist_path with Sys_error _ -> ());
-  let coordinator = Pie.Recording.Coordinator.create ~persist_path () in
+  let coordinator = Pie.Recording.Coordinator.create ~caps ~persist_path () in
   ignore
     (Pie.Recording.Coordinator.try_start coordinator
        Pie.Recording.Coordinator.Ptt_transcribe ());
   expect_listener_start
-    (Pie.Assistant_service.Server.start ~sw ~fs:(Eio.Stdenv.fs env)
+    (Pie.Assistant_service.Server.start ~caps ~sw ~fs:(Eio.Stdenv.fs env)
        ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env) ~socket_path
        coordinator);
   let send method_str =
@@ -1138,14 +1142,15 @@ let test_daemon_server_unknown_meeting_method () =
 
 let test_codex_realtime_url_builders () =
   let transcribe_url =
-    Stt.Codex_realtime.build_realtime_url ~base_url:"wss://api.openai.com/"
-      ~mode:Stt.Codex_realtime.Transcription ~model:"gpt-realtime-2.1" ()
+    Stt.Codex_realtime.build_realtime_url ~caps
+      ~base_url:"wss://api.openai.com/" ~mode:Stt.Codex_realtime.Transcription
+      ~model:"gpt-realtime-2.1" ()
   in
   Alcotest.(check string)
     "transcription url"
     "wss://api.openai.com/v1/realtime?model=gpt-realtime-2.1" transcribe_url;
   let translate_url =
-    Stt.Codex_realtime.build_realtime_url ~base_url:"wss://api.openai.com"
+    Stt.Codex_realtime.build_realtime_url ~caps ~base_url:"wss://api.openai.com"
       ~mode:Stt.Codex_realtime.Translation ~model:"gpt-realtime-2.1" ()
   in
   Alcotest.(check string)
@@ -1342,7 +1347,7 @@ let test_speech_operation_deadlines_are_typed () =
   let pcm = Bytes.make 320 '\000' in
   let direct =
     stalled_openrouter_call ~seconds:61 (fun env sw ->
-        Stt.Openrouter.transcribe ~sw ~net:env#net ~clock:env#clock
+        Stt.Openrouter.transcribe ~caps ~sw ~net:env#net ~clock:env#clock
           ~api_key:(Ox_observability.Redact.make "pie-local-deadline-test")
           ~model:"local-test" ~language:"en" pcm)
   in
@@ -1357,8 +1362,8 @@ let test_speech_operation_deadlines_are_typed () =
             ~reporter:(Ox_observability.Logger.Reporter.records (fun _ -> ()))
             ()
         in
-        Stt.Openrouter.transcribe_with_prompt ~sw ~net:env#net ~clock:env#clock
-          ~logger ~model:"local-test" ~language:"en"
+        Stt.Openrouter.transcribe_with_prompt ~caps ~sw ~net:env#net
+          ~clock:env#clock ~logger ~model:"local-test" ~language:"en"
           ~prompt_template:"Transcribe {{language}}" pcm)
   in
   Alcotest.(check (result string string))
@@ -1538,8 +1543,9 @@ let test_codex_realtime_transcribe_uses_conversation_prompt_e2e () =
   in
   let pcm = Bytes.make 3200 '\x00' in
   let operation () =
-    Stt.Codex_realtime.transcribe_with_prompt ~sw ~net:(Eio.Stdenv.net env)
-      ~clock:(Eio.Stdenv.clock env) ~model:"gpt-realtime-2.1" ~language:"pl"
+    Stt.Codex_realtime.transcribe_with_prompt ~caps ~sw
+      ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env)
+      ~model:"gpt-realtime-2.1" ~language:"pl"
       ~prompt_template:"Transcribe in {{language}}." ~sample_rate:16000 pcm
   in
   (match run_boundary operation with Ok _ | Error _ -> ());
@@ -1599,7 +1605,7 @@ let test_codex_realtime_translate_nonconv_drops_prompt_e2e () =
   in
   let pcm = Bytes.make 3200 '\x00' in
   let operation () =
-    Stt.Codex_realtime.translate_with_prompt ~sw ~net:(Eio.Stdenv.net env)
+    Stt.Codex_realtime.translate_with_prompt ~caps ~sw ~net:(Eio.Stdenv.net env)
       ~clock:(Eio.Stdenv.clock env) ~model:"not-the-conversation-model"
       ~source_language:"pl" ~target_language:"en"
       ~prompt_template:
@@ -1672,7 +1678,7 @@ let test_codex_realtime_stream_reports_server_error_e2e () =
   let open Ox.Result.Syntax in
   let prompt = "Translate." in
   let operation () =
-    Stt.Codex_realtime.with_stream_session ~sw ~net:(Eio.Stdenv.net env)
+    Stt.Codex_realtime.with_stream_session ~caps ~sw ~net:(Eio.Stdenv.net env)
       ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env) ~url
       ~access_token:"test-token" ~mode:Stt.Codex_realtime.Conversation
       ~operation:"translate" ~model:"gpt-realtime-2"
@@ -1711,7 +1717,7 @@ let temp_dir prefix =
   path
 
 let require_store dir =
-  match Recording.Retry_store.Active.open_store ~root:dir with
+  match Recording.Retry_store.Active.open_store ~caps ~root:dir with
   | Ok store -> store
   | Error (`Retry_store msg) -> Alcotest.fail msg
 
@@ -1845,7 +1851,7 @@ let test_failed_processing_retains_captured_audio () =
   Eio.Switch.run @@ fun sw ->
   let dir = temp_dir "pie-failed-capture" in
   let persist_path = Filename.concat dir "recording-state.json" in
-  let coordinator = Recording.Coordinator.create ~persist_path () in
+  let coordinator = Recording.Coordinator.create ~caps ~persist_path () in
   let attempt =
     match
       Recording.Coordinator.try_start coordinator
@@ -1894,7 +1900,7 @@ let test_setup_failure_releases_admission_and_preserves_error () =
   Eio.Switch.run @@ fun sw ->
   let dir = temp_dir "pie-setup-failure" in
   let persist_path = Filename.concat dir "recording-state.json" in
-  let coordinator = Recording.Coordinator.create ~persist_path () in
+  let coordinator = Recording.Coordinator.create ~caps ~persist_path () in
   let attempt =
     match
       Recording.Coordinator.try_start coordinator
@@ -1936,7 +1942,7 @@ let test_settle_attempt_construction_does_not_run_duties () =
   Eio.Switch.run @@ fun sw ->
   let dir = temp_dir "pie-settle-blueprint" in
   let persist_path = Filename.concat dir "recording-state.json" in
-  let coordinator = Recording.Coordinator.create ~persist_path () in
+  let coordinator = Recording.Coordinator.create ~caps ~persist_path () in
   let attempt =
     match
       Recording.Coordinator.try_start coordinator
@@ -2002,7 +2008,7 @@ let test_buffered_clip_cancellation_settles_after_offer () =
   let clock = Eio.Stdenv.clock env in
   let dir = temp_dir "pie-clip-cancel" in
   let persist_path = Filename.concat dir "recording-state.json" in
-  let coordinator = Recording.Coordinator.create ~persist_path () in
+  let coordinator = Recording.Coordinator.create ~caps ~persist_path () in
   let observed = ref None in
   let offered, resolve_offered = Eio.Promise.create () in
   let pcm_bytes = Bytes.of_string "captured-audio" in
@@ -2010,8 +2016,8 @@ let test_buffered_clip_cancellation_settles_after_offer () =
     let exit =
       Ox.Scope.run (fun _ ->
           let* press =
-            Assistant.Service.on_press ~sw ~net:(Eio.Stdenv.net env) ~clock
-              ~logger:(test_logger env)
+            Assistant.Service.on_press ~caps ~sw ~net:(Eio.Stdenv.net env)
+              ~clock ~logger:(test_logger env)
               ~stt:(fun _ _ _ -> Ok "synthetic transcript")
               ~deliver:(fun _ _ _ -> Ok ())
               ~coordinator ~retry_dir:dir
@@ -2069,11 +2075,11 @@ let test_buffered_clip_defect_settles_after_offer () =
   Eio.Switch.run @@ fun sw ->
   let dir = temp_dir "pie-clip-defect" in
   let persist_path = Filename.concat dir "recording-state.json" in
-  let coordinator = Recording.Coordinator.create ~persist_path () in
+  let coordinator = Recording.Coordinator.create ~caps ~persist_path () in
   let pcm_bytes = Bytes.of_string "captured-audio" in
   let operation () =
     let* press =
-      Assistant.Service.on_press ~sw ~net:(Eio.Stdenv.net env)
+      Assistant.Service.on_press ~caps ~sw ~net:(Eio.Stdenv.net env)
         ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env)
         ~stt:(fun _ _ _ -> Ok "synthetic transcript")
         ~deliver:(fun _ _ _ -> Ok ())
@@ -2113,12 +2119,12 @@ let test_on_press_construction_does_not_admit () =
   Eio.Switch.run @@ fun sw ->
   let dir = temp_dir "pie-on-press-construct" in
   let persist_path = Filename.concat dir "recording-state.json" in
-  let coordinator = Recording.Coordinator.create ~persist_path () in
+  let coordinator = Recording.Coordinator.create ~caps ~persist_path () in
   Alcotest.(check bool)
     "idle before construction" false
     (Recording.Coordinator.snapshot coordinator).Recording.Coordinator.active;
   let blueprint () =
-    Assistant.Service.on_press ~sw ~net:(Eio.Stdenv.net env)
+    Assistant.Service.on_press ~caps ~sw ~net:(Eio.Stdenv.net env)
       ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env)
       ~stt:(fun _ _ _ -> Ok "synthetic transcript")
       ~deliver:(fun _ _ _ -> Ok ())
@@ -2137,9 +2143,9 @@ let test_on_press_execution_admits () =
   Eio.Switch.run @@ fun sw ->
   let dir = temp_dir "pie-on-press-exec" in
   let persist_path = Filename.concat dir "recording-state.json" in
-  let coordinator = Recording.Coordinator.create ~persist_path () in
+  let coordinator = Recording.Coordinator.create ~caps ~persist_path () in
   let blueprint () =
-    Assistant.Service.on_press ~sw ~net:(Eio.Stdenv.net env)
+    Assistant.Service.on_press ~caps ~sw ~net:(Eio.Stdenv.net env)
       ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env)
       ~stt:(fun _ _ _ -> Ok "synthetic transcript")
       ~deliver:(fun _ _ _ -> Ok ())
@@ -2168,11 +2174,11 @@ let test_on_press_busy_and_disabled_at_execution () =
   Eio.Switch.run @@ fun sw ->
   let dir = temp_dir "pie-on-press-busy" in
   let persist_path = Filename.concat dir "recording-state.json" in
-  let coordinator = Recording.Coordinator.create ~persist_path () in
+  let coordinator = Recording.Coordinator.create ~caps ~persist_path () in
   let net = Eio.Stdenv.net env in
   let clock = Eio.Stdenv.clock env in
   let press () =
-    Assistant.Service.on_press ~sw ~net ~clock ~logger:(test_logger env)
+    Assistant.Service.on_press ~caps ~sw ~net ~clock ~logger:(test_logger env)
       ~stt:(fun _ _ _ -> Ok "synthetic transcript")
       ~deliver:(fun _ _ _ -> Ok ())
       ~coordinator ~retry_dir:dir
@@ -2232,12 +2238,12 @@ let test_on_press_constructor_failure_releases_without_clearing_other_attempt ()
   Eio.Switch.run @@ fun sw ->
   let dir = temp_dir "pie-on-press-ctor" in
   let persist_path = Filename.concat dir "recording-state.json" in
-  let coordinator = Recording.Coordinator.create ~persist_path () in
+  let coordinator = Recording.Coordinator.create ~caps ~persist_path () in
   let config =
     { (openrouter_clip_config ()) with transcription_model = "openrouter/" }
   in
   let blueprint () =
-    Assistant.Service.on_press ~sw ~net:(Eio.Stdenv.net env)
+    Assistant.Service.on_press ~caps ~sw ~net:(Eio.Stdenv.net env)
       ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env)
       ~stt:(fun _ _ _ -> Ok "synthetic transcript")
       ~deliver:(fun _ _ _ -> Ok ())
@@ -2319,7 +2325,7 @@ let test_attempt_handle_finish_holds_until_outer_settle () =
   Eio.Switch.run @@ fun sw ->
   let dir = temp_dir "pie-hold-finish" in
   let persist_path = Filename.concat dir "recording-state.json" in
-  let coordinator = Recording.Coordinator.create ~persist_path () in
+  let coordinator = Recording.Coordinator.create ~caps ~persist_path () in
   let attempt =
     match
       Recording.Coordinator.try_start coordinator
@@ -2381,7 +2387,7 @@ let test_attempt_handle_cancel_holds_until_outer_settle () =
   Eio.Switch.run @@ fun sw ->
   let dir = temp_dir "pie-hold-cancel" in
   let persist_path = Filename.concat dir "recording-state.json" in
-  let coordinator = Recording.Coordinator.create ~persist_path () in
+  let coordinator = Recording.Coordinator.create ~caps ~persist_path () in
   let attempt =
     match
       Recording.Coordinator.try_start coordinator
@@ -2442,7 +2448,7 @@ let test_recording_coordinator_persist_error_swallowed () =
      parent component is a regular file, not a directory), create must fail
      loudly instead of silently swallowing the error and handing back a
      coordinator whose state file was never written. *)
-  match Recording.Coordinator.create ~persist_path () with
+  match Recording.Coordinator.create ~caps ~persist_path () with
   | _coordinator ->
       Alcotest.fail "create should raise when it cannot persist initial state"
   | exception _ -> ()
@@ -2450,7 +2456,7 @@ let test_recording_coordinator_persist_error_swallowed () =
 let test_recording_coordinator_stop_clears_error () =
   run_test @@ fun _ ->
   let path = Filename.temp_file "pie-recording" ".json" in
-  let coordinator = Recording.Coordinator.create ~persist_path:path () in
+  let coordinator = Recording.Coordinator.create ~caps ~persist_path:path () in
   let attempt =
     match
       Recording.Coordinator.try_start coordinator
@@ -2474,9 +2480,9 @@ let test_daemon_server_mkdir_p_silently_accepts_file () =
   (* Bug: Daemon.Server.mkdir_p is a duplicate of the old buggy mkdir_p that
      checks Sys.file_exists without Sys.is_directory. When called on an
      existing regular file it silently returns () instead of raising EEXIST.
-     Fs.mkdir_p was fixed but this copy was missed. *)
+     Fs.mkdir_p ~caps was fixed but this copy was missed. *)
   try
-    Pie.Assistant_service.Server.mkdir_p file_path;
+    Pie.Assistant_service.Server.mkdir_p ~caps file_path;
     Alcotest.fail
       "mkdir_p should raise EEXIST for an existing file, not silently return"
   with
@@ -2570,8 +2576,8 @@ action = "ctrl-j"
      matcher-less rule would match every window (a catch-all), so it must be
      rejected at load time rather than silently accepted. *)
   match
-    Pie.Config.Stt.load ~fs:(Eio.Stdenv.fs env) ~source:(`Explicit config_path)
-      ()
+    Pie.Config.Stt.load ~caps ~fs:(Eio.Stdenv.fs env)
+      ~source:(`Explicit config_path) ()
   with
   | Error _ -> remove_dir dir
   | Ok _ ->
@@ -2627,7 +2633,7 @@ let test_assistant_startup_config_json () =
     }
   in
   let report =
-    Pie.Assistant.Service.startup_config_json ~config_path:"/tmp/stt.toml"
+    Pie.Assistant.Service.startup_config_json ~caps ~config_path:"/tmp/stt.toml"
       ~config ~ptt_transcribe_keysym:65478 ~ptt_translate_keysym:65479
       ~min_duration_ms:120 ()
   in
@@ -2675,8 +2681,8 @@ let test_assistant_startup_config_json () =
 
 let load_stt_config env config_path =
   match
-    Pie.Config.Stt.load ~fs:(Eio.Stdenv.fs env) ~source:(`Explicit config_path)
-      ()
+    Pie.Config.Stt.load ~caps ~fs:(Eio.Stdenv.fs env)
+      ~source:(`Explicit config_path) ()
   with
   | Ok config -> config
   | Error (`Config msg) -> Alcotest.fail msg
@@ -2817,7 +2823,7 @@ let test_assistant_distinguishes_shift_right_control () =
 
 let test_assistant_mod5_chords_latch () =
   run_test @@ fun _ ->
-  let coordinator = Pie.Recording.Coordinator.create () in
+  let coordinator = Pie.Recording.Coordinator.create ~caps () in
   let latch_keycode = ref None in
   let binding keysym shift : Pie.Assistant.Service.ptt_binding =
     { keysym; shift }
@@ -2885,8 +2891,8 @@ title_regex = "("
 action = "ctrl-j"
 |toml};
   match
-    Pie.Config.Stt.load ~fs:(Eio.Stdenv.fs env) ~source:(`Explicit config_path)
-      ()
+    Pie.Config.Stt.load ~caps ~fs:(Eio.Stdenv.fs env)
+      ~source:(`Explicit config_path) ()
   with
   | Ok _ -> Alcotest.fail "expected invalid regex to fail"
   | Error (`Config msg) ->
@@ -2912,8 +2918,8 @@ let test_stt_config_rejects_prompt_with_wrong_placeholder () =
      passes validation but render_template won't substitute it, so the
      language variable is silently omitted from the actual API request. *)
   match
-    Pie.Config.Stt.load ~fs:(Eio.Stdenv.fs env) ~source:(`Explicit config_path)
-      ()
+    Pie.Config.Stt.load ~caps ~fs:(Eio.Stdenv.fs env)
+      ~source:(`Explicit config_path) ()
   with
   | Error (`Config msg) ->
       Alcotest.(check bool)
@@ -3073,7 +3079,9 @@ let test_wayland_clipboard_paste_ignores_previous previous_types () =
   let old_wayland = Sys.getenv_opt "WAYLAND_DISPLAY" in
   let old_desktop = Sys.getenv_opt "XDG_CURRENT_DESKTOP" in
   let old_niri = Sys.getenv_opt "NIRI_SOCKET" in
-  let shell = Option.value ~default:"/bin/sh" (Pie.Sh.find_executable "sh") in
+  let shell =
+    Option.value ~default:"/bin/sh" (Pie.Sh.find_executable ~caps "sh")
+  in
   let script name body =
     let path = Filename.concat base name in
     write_file path ("#!" ^ shell ^ "\nset -eu\n" ^ body);
@@ -3118,7 +3126,7 @@ printf '%s\n' '{"id":1,"title":"t","app_id":"app"}'
       run_test @@ fun env ->
       Eio.Switch.run @@ fun sw ->
       let owner =
-        Pie.Wayland.Clipboard.create ~sw
+        Pie.Wayland.Clipboard.create ~caps ~sw
           ~process_mgr:(Eio.Stdenv.process_mgr env)
           ()
       in
@@ -3132,7 +3140,7 @@ printf '%s\n' '{"id":1,"title":"t","app_id":"app"}'
         ]
       in
       let operation () =
-        Pie.Input.Text_injection.inject ~clipboard_owner:owner
+        Pie.Input.Text_injection.inject ~caps ~clipboard_owner:owner
           ~clock:(Eio.Stdenv.clock env) ~text_entry_rules:paste_rules
           ~process_mgr:(Eio.Stdenv.process_mgr env)
           "first\nsecond"
@@ -3180,7 +3188,9 @@ let test_wayland_clipboard_paste_reports_offer_failure () =
   let old_wayland = Sys.getenv_opt "WAYLAND_DISPLAY" in
   let old_desktop = Sys.getenv_opt "XDG_CURRENT_DESKTOP" in
   let old_niri = Sys.getenv_opt "NIRI_SOCKET" in
-  let shell = Option.value ~default:"/bin/sh" (Pie.Sh.find_executable "sh") in
+  let shell =
+    Option.value ~default:"/bin/sh" (Pie.Sh.find_executable ~caps "sh")
+  in
   let script name body =
     let path = Filename.concat base name in
     write_file path ("#!" ^ shell ^ "\nset -eu\n" ^ body);
@@ -3212,7 +3222,7 @@ printf '%s\n' '{"id":1,"title":"t","app_id":"app"}'
       run_test @@ fun env ->
       Eio.Switch.run @@ fun sw ->
       let owner =
-        Pie.Wayland.Clipboard.create ~sw
+        Pie.Wayland.Clipboard.create ~caps ~sw
           ~process_mgr:(Eio.Stdenv.process_mgr env)
           ~copy_program:(Filename.concat base "missing-wl-copy")
           ()
@@ -3227,7 +3237,7 @@ printf '%s\n' '{"id":1,"title":"t","app_id":"app"}'
         ]
       in
       let operation () =
-        Pie.Input.Text_injection.inject ~clipboard_owner:owner
+        Pie.Input.Text_injection.inject ~caps ~clipboard_owner:owner
           ~clock:(Eio.Stdenv.clock env) ~text_entry_rules:paste_rules
           ~process_mgr:(Eio.Stdenv.process_mgr env)
           "first\nsecond"
@@ -3557,7 +3567,7 @@ let test_ptt_loop_rejects_busy_press_and_accepts_fresh_cycle () =
   let admitted = ref None in
   let dir = temp_dir "pie-ptt-busy-finish" in
   let persist_path = Filename.concat dir "recording-state.json" in
-  let coordinator = Recording.Coordinator.create ~persist_path () in
+  let coordinator = Recording.Coordinator.create ~caps ~persist_path () in
   let keyboard = Pie.Keyboard.Monitor.create () in
   let control = Eio.Stream.create 16 in
   let audio = Eio.Stream.create 16 in
@@ -3735,7 +3745,7 @@ let test_ptt_loop_press_during_gated_on_press_is_not_replayed () =
   let admitted = ref None in
   let dir = temp_dir "pie-gated-on-press" in
   let persist_path = Filename.concat dir "recording-state.json" in
-  let coordinator = Recording.Coordinator.create ~persist_path () in
+  let coordinator = Recording.Coordinator.create ~caps ~persist_path () in
   let keyboard = Pie.Keyboard.Monitor.create () in
   let control = Eio.Stream.create 16 in
   let audio = Eio.Stream.create 16 in
@@ -3848,7 +3858,7 @@ let test_ptt_loop_retry_admission_rejects_busy_control_cycle () =
   let finishes = ref 0 in
   let dir = temp_dir "pie-ptt-retry-control" in
   let persist_path = Filename.concat dir "recording-state.json" in
-  let coordinator = Recording.Coordinator.create ~persist_path () in
+  let coordinator = Recording.Coordinator.create ~caps ~persist_path () in
   let retry =
     match
       Recording.Coordinator.try_start coordinator
@@ -3950,7 +3960,7 @@ let test_ptt_loop_retry_admission_rejects_busy_keyboard_cycle () =
   let finishes = ref 0 in
   let dir = temp_dir "pie-ptt-retry-keyboard" in
   let persist_path = Filename.concat dir "recording-state.json" in
-  let coordinator = Recording.Coordinator.create ~persist_path () in
+  let coordinator = Recording.Coordinator.create ~caps ~persist_path () in
   let retry =
     match
       Recording.Coordinator.try_start coordinator
@@ -4056,7 +4066,7 @@ let test_ptt_loop_failed_on_press_does_not_replay_busy_control_cycle () =
   let finishes = ref 0 in
   let dir = temp_dir "pie-ptt-fail-control" in
   let persist_path = Filename.concat dir "recording-state.json" in
-  let coordinator = Recording.Coordinator.create ~persist_path () in
+  let coordinator = Recording.Coordinator.create ~caps ~persist_path () in
   let keyboard = Pie.Keyboard.Monitor.create () in
   let control = Eio.Stream.create 16 in
   let audio = Eio.Stream.create 16 in
@@ -4175,7 +4185,7 @@ let test_ptt_loop_failed_on_press_does_not_replay_busy_keyboard_cycle () =
   let finishes = ref 0 in
   let dir = temp_dir "pie-ptt-fail-keyboard" in
   let persist_path = Filename.concat dir "recording-state.json" in
-  let coordinator = Recording.Coordinator.create ~persist_path () in
+  let coordinator = Recording.Coordinator.create ~caps ~persist_path () in
   let keyboard = Pie.Keyboard.Monitor.create () in
   let audio = Eio.Stream.create 16 in
   let chunk = Bytes.make 320 (Char.chr 1) in
@@ -4312,7 +4322,7 @@ let test_ptt_loop_processing_keeps_input_live_during_finish () =
   let offered = ref [] in
   let dir = temp_dir "pie-ptt-processing-live" in
   let persist_path = Filename.concat dir "recording-state.json" in
-  let coordinator = Recording.Coordinator.create ~persist_path () in
+  let coordinator = Recording.Coordinator.create ~caps ~persist_path () in
   let keyboard = Pie.Keyboard.Monitor.create () in
   let control = Eio.Stream.create 16 in
   let audio = Eio.Stream.create 2048 in
@@ -4439,7 +4449,7 @@ let test_ptt_loop_processing_preserves_fresh_press_pending () =
   let finishes = ref 0 in
   let dir = temp_dir "pie-ptt-processing-pending" in
   let persist_path = Filename.concat dir "recording-state.json" in
-  let coordinator = Recording.Coordinator.create ~persist_path () in
+  let coordinator = Recording.Coordinator.create ~caps ~persist_path () in
   let admitted = ref None in
   let keyboard = Pie.Keyboard.Monitor.create () in
   let control = Eio.Stream.create 16 in
@@ -4556,7 +4566,7 @@ let test_ptt_loop_processing_join_preserves_finish_failure () =
   let offered = ref [] in
   let dir = temp_dir "pie-ptt-processing-fail" in
   let persist_path = Filename.concat dir "recording-state.json" in
-  let coordinator = Recording.Coordinator.create ~persist_path () in
+  let coordinator = Recording.Coordinator.create ~caps ~persist_path () in
   let keyboard = Pie.Keyboard.Monitor.create () in
   let control = Eio.Stream.create 16 in
   let audio = Eio.Stream.create 2048 in
@@ -5614,7 +5624,7 @@ let () =
               let base = temp_dir "pie-fs-mkdir_p" in
               let nested = Filename.concat base "a/b/c" in
               try
-                Pie.Fs.mkdir_p nested;
+                Pie.Fs.mkdir_p ~caps nested;
                 Alcotest.(check bool)
                   "mkdir_p should create nested directories" true
                   (Sys.file_exists nested && Sys.is_directory nested);
@@ -5625,7 +5635,7 @@ let () =
                 try Unix.rmdir base with _ -> ()
               with
               | Unix.Unix_error (Unix.ENOENT, _, _) ->
-                  (* Bug: Fs.mkdir_p only calls Unix.mkdir once, which fails when
+                  (* Bug: Fs.mkdir_p ~caps only calls Unix.mkdir once, which fails when
                 parent directories do not exist. It should recursively create
                 parents like the mkdir_p in Recording.Coordinator and
                 Daemon.Server do. *)
@@ -5641,8 +5651,8 @@ let () =
               let path = Filename.concat base "existing-file" in
               write_file path "content";
               try
-                Pie.Fs.mkdir_p path;
-                (* Bug: Fs.mkdir_p catches Unix.EEXIST and returns () even when the
+                Pie.Fs.mkdir_p ~caps path;
+                (* Bug: Fs.mkdir_p ~caps catches Unix.EEXIST and returns () even when the
                 path is a regular file, not a directory. The caller then assumes
                 the path is a directory and will fail later when trying to create
                 files inside it. mkdir_p should verify the path is a directory. *)
@@ -5668,7 +5678,7 @@ let () =
               let old_path = Option.value ~default:"" (Sys.getenv_opt "PATH") in
               Unix.putenv "PATH" base;
               try
-                let result = Pie.Sh.find_executable "not-an-executable" in
+                let result = Pie.Sh.find_executable ~caps "not-an-executable" in
                 Unix.putenv "PATH" old_path;
                 (* Bug: find_executable uses Sys.file_exists which returns true for
                 directories. It should check Sys.is_directory = false (and ideally

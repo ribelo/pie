@@ -4,4 +4,8 @@ val notify_send :
   process_mgr:_ Eio.Process.mgr -> string -> string -> (unit, error) result
 
 val notify_warning :
-  process_mgr:_ Eio.Process.mgr -> string -> string -> (unit, error) result
+  caps:< Ox_caps.Cap.stderr ; .. > ->
+  process_mgr:_ Eio.Process.mgr ->
+  string ->
+  string ->
+  (unit, error) result

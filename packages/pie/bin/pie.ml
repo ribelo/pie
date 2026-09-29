@@ -62,7 +62,9 @@ let render_action_result (result : Pie.Assistant_service.Contract.action_result)
   | _ -> "ok"
 
 let json_string json = Yojson.Safe.to_string json
-let print_jsonl json = Printf.printf "%s\n%!" (json_string json)
+
+let print_jsonl ~caps json =
+  Ox_caps.Cap_stdlib.printf ~caps "%s\n%!" (json_string json)
 
 let json_of_daemon_error message =
   `Assoc
@@ -88,12 +90,13 @@ let commands_with_env (env : _ Ox_app.Env.t) door_run_owned =
   let net = Eio.Stdenv.net base in
   let clock = Eio.Stdenv.clock base in
   let logger = env.logger in
+  let caps = env.caps in
   let source =
     command "sources" "List PulseAudio capture sources"
       Term.(
         const (fun () ->
             run_owned (fun sw ->
-                Pie.Commands.Sources.run ~sw ~net ~clock ~logger ()))
+                Pie.Commands.Sources.run ~caps ~sw ~net ~clock ~logger ()))
         $ const ())
   in
   let meter =
@@ -101,7 +104,7 @@ let commands_with_env (env : _ Ox_app.Env.t) door_run_owned =
       Term.(
         const (fun () ->
             run_owned (fun sw ->
-                Pie.Commands.Meter.run ~sw ~net ~clock ~logger ()))
+                Pie.Commands.Meter.run ~caps ~sw ~net ~clock ~logger ()))
         $ const ())
   in
   let record =
@@ -120,8 +123,8 @@ let commands_with_env (env : _ Ox_app.Env.t) door_run_owned =
       Term.(
         const (fun output_path duration_sec ->
             run_owned (fun sw ->
-                Pie.Commands.Record.run ~sw ~net ~clock ~logger ~output_path
-                  ~duration_sec ()))
+                Pie.Commands.Record.run ~caps ~sw ~net ~clock ~logger
+                  ~output_path ~duration_sec ()))
         $ output $ duration)
   in
   let type_text =
@@ -136,11 +139,11 @@ let commands_with_env (env : _ Ox_app.Env.t) door_run_owned =
         const (fun text ->
             run_owned (fun _sw ->
                 let* (result : Pie.Input.Text_injection.result) =
-                  Pie.Input.Text_injection.inject ~clock
+                  Pie.Input.Text_injection.inject ~caps ~clock
                     ~process_mgr:(Eio.Stdenv.process_mgr base)
                     text
                 in
-                Printf.printf "Typed %d chars via %s (%s)\n%!"
+                Ox_caps.Cap_stdlib.printf ~caps "Typed %d chars via %s (%s)\n%!"
                   (String.length result.text)
                   (match result.backend with
                   | Wtype -> "wtype"
@@ -157,14 +160,15 @@ let commands_with_env (env : _ Ox_app.Env.t) door_run_owned =
         const (fun () ->
             run_owned (fun sw ->
                 match
-                  Pie.Assistant_service.Client.status ~net ~clock ~sw ()
+                  Pie.Assistant_service.Client.status ~caps ~net ~clock ~sw ()
                 with
                 | Error `Daemon_off ->
-                    Printf.printf "off\n%!";
+                    Ox_caps.Cap_stdlib.printf ~caps "off\n%!";
                     Ok ()
                 | Error _ as error -> error
                 | Ok snap ->
-                    Printf.printf "%s\n%!" (render_recording_status snap);
+                    Ox_caps.Cap_stdlib.printf ~caps "%s\n%!"
+                      (render_recording_status snap);
                     Ok ()))
         $ const ())
   in
@@ -174,9 +178,10 @@ let commands_with_env (env : _ Ox_app.Env.t) door_run_owned =
         const (fun () ->
             run_owned (fun sw ->
                 let* result =
-                  Pie.Assistant_service.Client.toggle ~net ~clock ~sw ()
+                  Pie.Assistant_service.Client.toggle ~caps ~net ~clock ~sw ()
                 in
-                Printf.printf "%s\n%!" (if result then "armed" else "paused");
+                Ox_caps.Cap_stdlib.printf ~caps "%s\n%!"
+                  (if result then "armed" else "paused");
                 Ok ()))
         $ const ())
   in
@@ -185,7 +190,7 @@ let commands_with_env (env : _ Ox_app.Env.t) door_run_owned =
       Term.(
         const (fun () ->
             run_owned (fun sw ->
-                Pie.Assistant_service.Client.pause ~net ~clock ~sw ()))
+                Pie.Assistant_service.Client.pause ~caps ~net ~clock ~sw ()))
         $ const ())
   in
   let resume =
@@ -193,7 +198,7 @@ let commands_with_env (env : _ Ox_app.Env.t) door_run_owned =
       Term.(
         const (fun () ->
             run_owned (fun sw ->
-                Pie.Assistant_service.Client.resume ~net ~clock ~sw ()))
+                Pie.Assistant_service.Client.resume ~caps ~net ~clock ~sw ()))
         $ const ())
   in
   let retry =
@@ -202,10 +207,11 @@ let commands_with_env (env : _ Ox_app.Env.t) door_run_owned =
         const (fun () ->
             run_owned (fun sw ->
                 let* result =
-                  Pie.Assistant_service.Client.action ~net ~clock ~sw "retry"
+                  Pie.Assistant_service.Client.action ~caps ~net ~clock ~sw
+                    "retry"
                 in
                 if result.Pie.Assistant_service.Contract.accepted then (
-                  Printf.printf "%s\n%!"
+                  Ox_caps.Cap_stdlib.printf ~caps "%s\n%!"
                     (Option.value ~default:"retry queued" result.message);
                   Ok ())
                 else
@@ -227,9 +233,11 @@ let commands_with_env (env : _ Ox_app.Env.t) door_run_owned =
         const (fun action ->
             run_owned (fun sw ->
                 let* result =
-                  Pie.Assistant_service.Client.action ~net ~clock ~sw action
+                  Pie.Assistant_service.Client.action ~caps ~net ~clock ~sw
+                    action
                 in
-                Printf.printf "%s\n%!" (render_action_result result);
+                Ox_caps.Cap_stdlib.printf ~caps "%s\n%!"
+                  (render_action_result result);
                 Ok ()))
         $ name)
   in
@@ -244,12 +252,14 @@ let commands_with_env (env : _ Ox_app.Env.t) door_run_owned =
         const (fun as_json ->
             run_owned (fun sw ->
                 let* snap =
-                  Pie.Assistant_service.Client.status ~net ~clock ~sw ()
+                  Pie.Assistant_service.Client.status ~caps ~net ~clock ~sw ()
                 in
                 if as_json then
-                  print_jsonl
+                  print_jsonl ~caps
                     (Pie.Assistant_service.Contract.json_of_snapshot snap)
-                else Printf.printf "%s\n%!" (render_recording_status snap);
+                else
+                  Ox_caps.Cap_stdlib.printf ~caps "%s\n%!"
+                    (render_recording_status snap);
                 Ok ()))
         $ json)
   in
@@ -271,7 +281,8 @@ let commands_with_env (env : _ Ox_app.Env.t) door_run_owned =
                 let rec loop last_json =
                   let next_json =
                     match
-                      Pie.Assistant_service.Client.status ~net ~clock ~sw ()
+                      Pie.Assistant_service.Client.status ~caps ~net ~clock ~sw
+                        ()
                     with
                     | Ok snap ->
                         json_string
@@ -280,7 +291,7 @@ let commands_with_env (env : _ Ox_app.Env.t) door_run_owned =
                         json_string (json_of_daemon_error (render_error error))
                   in
                   if Some next_json <> last_json then
-                    Printf.printf "%s\n%!" next_json;
+                    Ox_caps.Cap_stdlib.printf ~caps "%s\n%!" next_json;
                   Eio.Time.sleep clock sleep_seconds;
                   loop (Some next_json)
                 in
@@ -318,8 +329,9 @@ let service_args =
     $ transcribe $ translate)
 
 let validate_source env source _config =
+  let caps = env.Ox_app.Env.caps in
   match
-    Pie.Config.Stt.load ~fs:(Eio.Stdenv.fs env.Ox_app.Env.base) ~source ()
+    Pie.Config.Stt.load ~caps ~fs:(Eio.Stdenv.fs env.Ox_app.Env.base) ~source ()
   with
   | Ok _ -> Ok ()
   | Error (`Config message) -> Error [ { Ox_app.Config.pointer = ""; message } ]
@@ -345,8 +357,9 @@ let () =
          let base = env.Ox_app.Env.base in
          Result.map_error
            (fun error -> (error :> cli_error))
-           (Pie.Assistant.Service.run ~sw ~fs:(Eio.Stdenv.fs base)
-              ~net:(Eio.Stdenv.net base) ~clock:(Eio.Stdenv.clock base)
+           (Pie.Assistant.Service.run ~caps:env.caps ~sw
+              ~fs:(Eio.Stdenv.fs base) ~net:(Eio.Stdenv.net base)
+              ~clock:(Eio.Stdenv.clock base)
               ~mono_clock:(Eio.Stdenv.mono_clock base)
               ~logger:env.logger
               ~process_mgr:(Eio.Stdenv.process_mgr base)

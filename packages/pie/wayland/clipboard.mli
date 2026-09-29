@@ -2,6 +2,7 @@ type t
 (** Application-owned clipboard offer. At most one helper process. *)
 
 val create :
+  caps:< Ox_caps.Cap.env ; .. > ->
   sw:Eio.Switch.t ->
   process_mgr:_ Eio.Process.mgr ->
   ?copy_program:string ->

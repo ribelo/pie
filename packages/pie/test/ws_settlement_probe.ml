@@ -1,3 +1,5 @@
+let caps = Ox_test.powerbox () (* ^pcaps-n1rg *)
+
 (* Temporary control: measures descriptor and runtime-worker settlement for
    realtime WebSocket operations against the installed Ox artifact.
    Loopback only; no provider traffic. Not part of the registered suite. *)
@@ -125,7 +127,7 @@ let direct_close ~sw ~net ~clock ~url =
           Result.map_error (fun _ -> ()) (Ox_ai_realtime.Session.close session))
 
 let pie_buffered ~sw ~net ~clock =
-  Stt.Codex_realtime.transcribe_with_prompt ~sw ~net ~clock
+  Stt.Codex_realtime.transcribe_with_prompt ~caps ~sw ~net ~clock
     ~model:"gpt-realtime-2" ~language:"pl"
     ~prompt_template:"Transcribe in {{language}}." ~sample_rate:16000
     (Bytes.make 3200 '\000')

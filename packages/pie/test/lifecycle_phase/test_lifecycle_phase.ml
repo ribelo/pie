@@ -1,3 +1,5 @@
+let caps = Ox_test.powerbox () (* ^pcaps-n1rg *)
+
 module C = Pie.Recording.Coordinator
 module P = Pie.Recording.Phase
 module Contract = Pie.Assistant_service.Contract
@@ -10,7 +12,8 @@ let with_coordinator f =
       Sys.readdir dir
       |> Array.iter (fun name -> Sys.remove (Filename.concat dir name));
       Unix.rmdir dir)
-    (fun () -> f (C.create ~persist_path:(Filename.concat dir "state.json") ()))
+    (fun () ->
+      f (C.create ~caps ~persist_path:(Filename.concat dir "state.json") ()))
 
 let phase t = C.snapshot t |> fun s -> P.to_string s.phase
 let check_phase expected t = Alcotest.(check string) "phase" expected (phase t)

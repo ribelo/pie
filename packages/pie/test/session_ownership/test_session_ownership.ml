@@ -1,3 +1,5 @@
+let caps = Ox_test.powerbox () (* ^pcaps-n1rg *)
+
 (* PIE002 private acceptance. Public Codex buffered/streaming. *)
 
 let ( let* ) = Result.bind
@@ -160,8 +162,8 @@ let response_create =
   Pie.Stt.Codex_realtime.build_conversation_response_create ~prompt:"test"
 
 let run_buffered ~sw ~net ~clock ?ca_file ~url () =
-  Pie.Stt.Codex_realtime.run_realtime_session ~sw ~net ~clock ?ca_file ~url
-    ~access_token:"synthetic-ownership-token"
+  Pie.Stt.Codex_realtime.run_realtime_session ~caps ~sw ~net ~clock ?ca_file
+    ~url ~access_token:"synthetic-ownership-token"
     ~mode:Pie.Stt.Codex_realtime.Conversation ~session_update ~response_create
     ~input_sample_rate:16000 pcm
 
@@ -174,8 +176,8 @@ let run_streaming ~sw ~net ~clock ?ca_file ~url ?on_audio_pull () =
       Option.iter (fun resolve -> resolve ()) on_audio_pull;
       Ok (Some pcm))
   in
-  Pie.Stt.Codex_realtime.run_realtime_stream_session ~sw ~net ~clock ?ca_file
-    ~url ~access_token:"synthetic-ownership-token"
+  Pie.Stt.Codex_realtime.run_realtime_stream_session ~caps ~sw ~net ~clock
+    ?ca_file ~url ~access_token:"synthetic-ownership-token"
     ~mode:Pie.Stt.Codex_realtime.Conversation ~session_update ~response_create
     ~input_sample_rate:16000 audio
 

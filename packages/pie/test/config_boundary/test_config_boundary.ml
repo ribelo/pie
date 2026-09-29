@@ -1,3 +1,5 @@
+let caps = Ox_test.powerbox () (* ^pcaps-n1rg *)
+
 module Config = Pie.Config.Stt
 module Door = Ox_app.Config
 
@@ -23,7 +25,7 @@ let write path body =
     (fun () -> output_string oc body)
 
 let load env path =
-  Config.load ~fs:(Eio.Stdenv.fs env) ~source:(`Explicit path) ()
+  Config.load ~caps ~fs:(Eio.Stdenv.fs env) ~source:(`Explicit path) ()
 
 let expect_ok = function
   | Ok config -> config
@@ -46,7 +48,7 @@ let test_required_source () =
   let path = Filename.concat dir "stt.toml" in
   expect_error ~needle:"no such file" (load env path);
   expect_error ~needle:"no such file"
-    (Config.load ~fs:(Eio.Stdenv.fs env) ~source:(`Default path) ())
+    (Config.load ~caps ~fs:(Eio.Stdenv.fs env) ~source:(`Default path) ())
 
 let test_filename_and_env_path () =
   let path =

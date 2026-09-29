@@ -2,11 +2,15 @@ type error = [ `Stt_error of string ]
 
 val direct_transcription_timeout : Ox.Duration.t
 val response_operation_timeout : Ox.Duration.t
-val resolve_api_key : unit -> Ox_observability.Redact.t option
+
+val resolve_api_key :
+  caps:< Ox_caps.Cap.env ; .. > -> unit -> Ox_observability.Redact.t option
+
 val base64_encode : bytes -> string
 val decode_structured_output : string -> (string, error) result
 
 val transcribe :
+  caps:< Ox_caps.Cap.env ; .. > ->
   sw:Eio.Switch.t ->
   net:_ Eio.Net.t ->
   clock:_ Eio.Time.clock ->
@@ -18,6 +22,7 @@ val transcribe :
   (string, error) result
 
 val transcribe_with_prompt :
+  caps:< Ox_caps.Cap.env ; .. > ->
   sw:Eio.Switch.t ->
   net:_ Eio.Net.t ->
   clock:_ Eio.Time.clock ->
@@ -31,6 +36,7 @@ val transcribe_with_prompt :
   (string, error) result
 
 val translate_with_prompt :
+  caps:< Ox_caps.Cap.env ; .. > ->
   sw:Eio.Switch.t ->
   net:_ Eio.Net.t ->
   clock:_ Eio.Time.clock ->

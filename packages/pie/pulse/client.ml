@@ -121,9 +121,11 @@ type t =
     }
       -> t
 
-let load_cookie () =
+let load_cookie ~caps () =
   try
-    let ic = open_in_bin Defs.pa_default_cookie_path in
+    let ic =
+      Ox_caps.Cap_stdlib.open_in_bin ~caps (Defs.pa_default_cookie_path ~caps)
+    in
     let buf =
       Fun.protect
         ~finally:(fun () -> close_in_noerr ic)
@@ -352,9 +354,9 @@ let await_record_stream (T t as client) packet =
 let parse_reply context parser payload =
   protocol_result context (fun () -> parser payload)
 
-let authenticate (T t as client) ~cookie ~client_name ~protocol_version =
+let authenticate ~caps (T t as client) ~cookie ~client_name ~protocol_version =
   let* cookie =
-    match cookie with Some cookie -> Ok cookie | None -> load_cookie ()
+    match cookie with Some cookie -> Ok cookie | None -> load_cookie ~caps ()
   in
   let* auth_packet =
     Commands.build_auth_command ~cookie ~protocol_version ()
@@ -392,12 +394,14 @@ let connect_socket ~sw ~net socket_path =
         (pulse_error
            (Disconnected ("connect failed: " ^ Printexc.to_string exn)))
 
-let with_client ~net ~clock ~logger ?(socket_path = Defs.pa_default_socket_path)
-    ?cookie ?(client_name = "pie")
-    ?(protocol_version = Defs.pa_native_protocol_version)
+let with_client ~caps ~net ~clock ~logger ?socket_path ?cookie
+    ?(client_name = "pie") ?(protocol_version = Defs.pa_native_protocol_version)
     ?(request_timeout = default_request_timeout)
     (use : t -> ('a, ([> `Pulse_error of error ] as 'err)) result) :
     ('a, 'err) result =
+  let socket_path =
+    Option.value socket_path ~default:(Defs.pa_default_socket_path ~caps)
+  in
   Eio.Switch.run ~name:"pulse.client" @@ fun sw ->
   match connect_socket ~sw ~net socket_path with
   | Error (`Pulse_error error) -> Error (`Pulse_error error)
@@ -429,7 +433,8 @@ let with_client ~net ~clock ~logger ?(socket_path = Defs.pa_default_socket_path)
               (fun () ->
                 `Body
                   (match
-                     authenticate client ~cookie ~client_name ~protocol_version
+                     authenticate ~caps client ~cookie ~client_name
+                       ~protocol_version
                    with
                   | Error (`Pulse_error error) -> Error (`Pulse_error error)
                   | Ok () -> use client))

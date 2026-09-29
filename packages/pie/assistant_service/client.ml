@@ -3,10 +3,12 @@ type error =
 
 let ( let* ) = Result.bind
 
-let send_request ~net ~sw:_ (req : Contract.request) =
+let send_request ~caps ~net ~sw:_ (req : Contract.request) =
   try
     Eio.Switch.run @@ fun sw ->
-    let socket = Eio.Net.connect ~sw net (`Unix Paths.daemon_socket_path) in
+    let socket =
+      Eio.Net.connect ~sw net (`Unix (Paths.daemon_socket_path ~caps))
+    in
     Fun.protect
       ~finally:(fun () -> Eio.Flow.close socket)
       (fun () ->
@@ -33,10 +35,10 @@ let send_request ~net ~sw:_ (req : Contract.request) =
   | Eio.Buf_read.Buffer_limit_exceeded ->
       Error (`Daemon_protocol_error "response-too-large")
 
-let call ~net ~clock ~sw req =
+let call ~caps ~net ~clock ~sw req =
   match
     Ox.Timeout.timeout ~clock (Ox.Duration.seconds 1) (fun () ->
-        (send_request ~net ~sw req
+        (send_request ~caps ~net ~sw req
           : (Contract.response, [> error | `Timeout ]) result))
   with
   | Error `Timeout -> Error (`Daemon_error "daemon RPC timed out")
@@ -47,20 +49,20 @@ let call ~net ~clock ~sw req =
   | Ok (Contract.Error_resp message) -> Error (`Daemon_error message)
   | Ok response -> Ok response
 
-let status ~net ~clock ~sw () =
-  let* response = call ~net ~clock ~sw Contract.Status in
+let status ~caps ~net ~clock ~sw () =
+  let* response = call ~caps ~net ~clock ~sw Contract.Status in
   match response with
   | Contract.Status_resp snapshot -> Ok snapshot
   | _ -> Error (`Daemon_protocol_error Contract.wrong_type)
 
-let toggle ~net ~clock ~sw () =
-  let* response = call ~net ~clock ~sw Contract.Toggle in
+let toggle ~caps ~net ~clock ~sw () =
+  let* response = call ~caps ~net ~clock ~sw Contract.Toggle in
   match response with
   | Contract.Toggle_resp value -> Ok value
   | _ -> Error (`Daemon_protocol_error Contract.wrong_type)
 
-let action ~net ~clock ~sw name =
-  let* response = call ~net ~clock ~sw (Contract.Action name) in
+let action ~caps ~net ~clock ~sw name =
+  let* response = call ~caps ~net ~clock ~sw (Contract.Action name) in
   match response with
   | Contract.Action_resp result when result.accepted -> Ok result
   | Contract.Action_resp result ->
@@ -70,14 +72,14 @@ let action ~net ~clock ~sw name =
               ~default:("action rejected: " ^ result.action)))
   | _ -> Error (`Daemon_protocol_error Contract.wrong_type)
 
-let pause ~net ~clock ~sw () =
-  let* response = call ~net ~clock ~sw Contract.Pause in
+let pause ~caps ~net ~clock ~sw () =
+  let* response = call ~caps ~net ~clock ~sw Contract.Pause in
   match response with
   | Contract.Pause_resp -> Ok ()
   | _ -> Error (`Daemon_protocol_error Contract.wrong_type)
 
-let resume ~net ~clock ~sw () =
-  let* response = call ~net ~clock ~sw Contract.Resume in
+let resume ~caps ~net ~clock ~sw () =
+  let* response = call ~caps ~net ~clock ~sw Contract.Resume in
   match response with
   | Contract.Resume_resp -> Ok ()
   | _ -> Error (`Daemon_protocol_error Contract.wrong_type)

@@ -1,3 +1,5 @@
+let caps = Ox_test.powerbox () (* ^pcaps-n1rg *)
+
 (* PIE023 untrusted local bus boundary. Never the desktop session bus. *)
 
 module Monitor = Pie.Keyboard.Monitor
@@ -118,7 +120,7 @@ let test_address_invalid_percent () =
 
 let test_abstract_sockaddr_leading_nul () =
   Unix.putenv "DBUS_SESSION_BUS_ADDRESS" "unix:abstract=pie-boundary";
-  match Monitor.session_bus_sockaddr () with
+  match Monitor.session_bus_sockaddr ~caps () with
   | `Unix path ->
       Alcotest.(check bool)
         "leading NUL" true
@@ -311,8 +313,8 @@ let test_stalled_setup_times_out () =
       let baseline = fd_count () in
       let result =
         run_direct (fun () ->
-            Monitor.with_monitor_budgets ~budgets:short_budgets ~sw ~net ~clock
-              ~process_mgr (fun _ -> Ok ()))
+            Monitor.with_monitor_budgets ~caps ~budgets:short_budgets ~sw ~net
+              ~clock ~process_mgr (fun _ -> Ok ()))
       in
       (match result with
       | Ox.Exit.Failure cause ->
@@ -343,7 +345,7 @@ let test_unwatch_budget_still_closes () =
       let baseline = fd_count () in
       let result =
         run_direct (fun () ->
-            Monitor.with_monitor_budgets
+            Monitor.with_monitor_budgets ~caps
               ~budgets:
                 {
                   Monitor.acquire = Ox.Duration.seconds 2;
@@ -381,8 +383,8 @@ let test_stop_is_clean_interruption () =
                 Eio.Time.sleep clock 0.2;
                 Eio.Switch.fail scope
                   (Eio.Cancel.Cancelled (Failure "service stop")));
-            Monitor.with_monitor_budgets ~budgets:short_budgets ~sw:scope ~net
-              ~clock ~process_mgr (fun _ -> Eio.Fiber.await_cancel ()))
+            Monitor.with_monitor_budgets ~caps ~budgets:short_budgets ~sw:scope
+              ~net ~clock ~process_mgr (fun _ -> Eio.Fiber.await_cancel ()))
       in
       (match result with
       | Ox.Exit.Success () -> Alcotest.fail "stopped monitor reported success"
@@ -448,7 +450,7 @@ let test_wrong_sender_is_ignored () =
     (fun ~await_conn ->
       let result =
         run_direct (fun () ->
-            Monitor.with_monitor_budgets
+            Monitor.with_monitor_budgets ~caps
               ~budgets:
                 {
                   Monitor.acquire = Ox.Duration.seconds 2;
@@ -483,7 +485,7 @@ let test_expected_sender_is_accepted () =
     (fun ~await_conn ->
       let result =
         run_direct (fun () ->
-            Monitor.with_monitor_budgets
+            Monitor.with_monitor_budgets ~caps
               ~budgets:
                 {
                   Monitor.acquire = Ox.Duration.seconds 2;
@@ -523,7 +525,7 @@ let test_owner_change_is_input_lost () =
     (fun ~await_conn ->
       let result =
         run_direct (fun () ->
-            Monitor.with_monitor_budgets
+            Monitor.with_monitor_budgets ~caps
               ~budgets:
                 {
                   Monitor.acquire = Ox.Duration.seconds 2;
@@ -566,7 +568,7 @@ let test_owner_loss_during_setup () =
     (fun ~await_conn ->
       let result =
         run_direct (fun () ->
-            ignore (Monitor.connect_and_watch ~sw ~net);
+            ignore (Monitor.connect_and_watch ~caps ~sw ~net);
             Ok ())
       in
       await_conn ();
@@ -597,7 +599,7 @@ let test_noc_wrong_sender_ignored () =
     (fun ~await_conn ->
       let result =
         run_direct (fun () ->
-            Monitor.with_monitor_budgets
+            Monitor.with_monitor_budgets ~caps
               ~budgets:
                 {
                   Monitor.acquire = Ox.Duration.seconds 2;
@@ -824,7 +826,7 @@ let test_forged_get_name_owner_sender () =
     (fun ~await_conn ->
       let result =
         run_direct (fun () ->
-            ignore (Monitor.connect_and_watch ~sw ~net);
+            ignore (Monitor.connect_and_watch ~caps ~sw ~net);
             Ok ())
       in
       await_conn ();
@@ -969,7 +971,7 @@ let test_isolated_dbus_daemon_optional () =
                 Eio.Promise.await peer_done)
               (fun () ->
                 run_direct (fun () ->
-                    Monitor.with_monitor_budgets
+                    Monitor.with_monitor_budgets ~caps
                       ~budgets:
                         {
                           Monitor.acquire = Ox.Duration.seconds 2;

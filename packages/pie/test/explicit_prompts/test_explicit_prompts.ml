@@ -1,3 +1,5 @@
+let caps = Ox_test.powerbox () (* ^pcaps-n1rg *)
+
 (* PIE017: configured prompts reach production_stt; ambient sentinels do not. *)
 
 let has_suffix suffix s =
@@ -213,7 +215,7 @@ let run_production ~mode ~cfg ~check_body () =
                   captured := read_http_request flow;
                   write_http_json flow (completed_body "ok")));
           let result =
-            Pie.Assistant.Service.production_stt ~sw ~net ~clock ~logger
+            Pie.Assistant.Service.production_stt ~caps ~sw ~net ~clock ~logger
               ~process_mgr cfg mode pcm
           in
           (match result with

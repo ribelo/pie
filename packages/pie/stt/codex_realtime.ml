@@ -103,8 +103,8 @@ let strip_trailing_slashes s =
   let last = last_non_slash (String.length s - 1) in
   if last < 0 then "" else String.sub s 0 (last + 1)
 
-let resolve_base_url () =
-  match Sys.getenv_opt "CODEX_REALTIME_BASE_URL_OVERRIDE" with
+let resolve_base_url ~caps () =
+  match Ox_caps.Cap_sys.getenv_opt ~caps "CODEX_REALTIME_BASE_URL_OVERRIDE" with
   | Some value when String.trim value <> "" ->
       strip_trailing_slashes (String.trim value)
   | _ -> default_base_url
@@ -126,8 +126,11 @@ let restore_scheme prefix http_url =
   | "ws://" -> "ws://" ^ String.sub http_url 7 (String.length http_url - 7)
   | _ -> http_url
 
-let build_realtime_url ?(base_url = resolve_base_url ()) ~mode ~model () =
-  let base_url = strip_trailing_slashes base_url in
+let build_realtime_url ~caps ?base_url ~mode ~model () =
+  let base_url =
+    strip_trailing_slashes
+      (Option.value base_url ~default:(resolve_base_url ~caps ()))
+  in
   let path =
     if is_conversation_model model then "/v1/realtime" else path_for_mode mode
   in
@@ -382,9 +385,9 @@ let resample_s16le_mono ~from_rate ~to_rate pcm_bytes =
 
 let stt_error message = Error (`Stt_error message)
 
-let make_realtime_session_id () =
+let make_realtime_session_id ~caps () =
   Printf.sprintf "pie-%Lx-%06x"
-    (Int64.of_float (Unix.gettimeofday () *. 1000.))
+    (Int64.of_float (Ox_caps.Cap_unix.gettimeofday ~caps () *. 1000.))
     (Random.bits () land 0xffffff)
 
 let realtime_header_pairs ?session_id access_token =
@@ -406,27 +409,28 @@ let realtime_rest_client ~sw ~net ~clock = Process.make_http ~sw ~net ~clock
 module Codex_auth = struct
   type t = { path : string; access_token : string }
 
-  let codex_home () =
-    match Sys.getenv_opt "CODEX_HOME" with
+  let codex_home ~caps () =
+    match Ox_caps.Cap_sys.getenv_opt ~caps "CODEX_HOME" with
     | Some value when String.trim value <> "" -> String.trim value
     | _ -> (
-        match Sys.getenv_opt "HOME" with
+        match Ox_caps.Cap_sys.getenv_opt ~caps "HOME" with
         | Some home when String.trim home <> "" -> Filename.concat home ".codex"
         | _ -> ".codex")
 
-  let auth_path () = Filename.concat (codex_home ()) "auth.json"
+  let auth_path ~caps () = Filename.concat (codex_home ~caps ()) "auth.json"
 
-  let read_file path =
-    let ic = open_in_bin path in
+  let read_file ~caps path =
+    let ic = Ox_caps.Cap_stdlib.open_in_bin ~caps path in
     Fun.protect
       ~finally:(fun () -> close_in_noerr ic)
       (fun () ->
         let len = in_channel_length ic in
         really_input_string ic len)
 
-  let load ?(path = auth_path ()) () =
+  let load ~caps ?path () =
+    let path = Option.value path ~default:(auth_path ~caps ()) in
     try
-      let raw = read_file path in
+      let raw = read_file ~caps path in
       match Yojson.Safe.from_string raw with
       | `Assoc fields -> (
           match List.assoc_opt "tokens" fields with
@@ -523,9 +527,9 @@ module Codex_auth = struct
     | Some exp ->
         (now /. 1000.) +. float_of_int leeway_seconds >= float_of_int exp
 
-  let access_token () =
-    let* auth = load () in
-    let now = Unix.gettimeofday () *. 1000. in
+  let access_token ~caps () =
+    let* auth = load ~caps () in
+    let now = Ox_caps.Cap_unix.gettimeofday ~caps () *. 1000. in
     if not (is_expired ~now auth.access_token) then Ok auth.access_token
     else
       Error
@@ -535,10 +539,10 @@ module Codex_auth = struct
              refresh it."))
 end
 
-let realtime_access_token ~client:_ () =
-  match Sys.getenv_opt "OPENAI_API_KEY" with
+let realtime_access_token ~caps ~client:_ () =
+  match Ox_caps.Cap_sys.getenv_opt ~caps "OPENAI_API_KEY" with
   | Some value when String.trim value <> "" -> Ok (String.trim value)
-  | _ -> Codex_auth.access_token ()
+  | _ -> Codex_auth.access_token ~caps ()
 
 let websocket_message = function
   | `Url _ -> "invalid URL"
@@ -719,13 +723,13 @@ let send_audio_stream session ~mode ~input_sample_rate audio =
       in
       send ()
 
-let connect ~sw ~net ~clock ?ca_file ~url ~access_token () =
+let connect ~caps ~sw ~net ~clock ?ca_file ~url ~access_token () =
   let ca_file =
     match ca_file with
     | Some _ -> ca_file
-    | None -> Sys.getenv_opt "SSL_CERT_FILE"
+    | None -> Ox_caps.Cap_sys.getenv_opt ~caps "SSL_CERT_FILE"
   in
-  let session_id = make_realtime_session_id () in
+  let session_id = make_realtime_session_id ~caps () in
   let headers =
     realtime_header_pairs ~session_id access_token
     |> List.filter (fun (key, _) -> key <> "Authorization")
@@ -736,7 +740,7 @@ let connect ~sw ~net ~clock ?ca_file ~url ~access_token () =
   |> Result.map_error (fun error ->
       `Stt_error ("Codex realtime " ^ websocket_message error))
 
-let run_realtime_session ~sw ~net ~clock ?ca_file ~url ~access_token ~mode
+let run_realtime_session ~caps ~sw ~net ~clock ?ca_file ~url ~access_token ~mode
     ?session_update ?response_create ?(translation_output_drain_ms = 2_000)
     ~input_sample_rate pcm_bytes =
   if Bytes.length pcm_bytes > Dictation_limits.capture_pcm_bytes then
@@ -751,7 +755,9 @@ let run_realtime_session ~sw ~net ~clock ?ca_file ~url ~access_token ~mode
           `Stt_error ("Codex realtime " ^ message))
     in
     Eio.Switch.run (fun sw ->
-        let* session = connect ~sw ~net ~clock ?ca_file ~url ~access_token () in
+        let* session =
+          connect ~caps ~sw ~net ~clock ?ca_file ~url ~access_token ()
+        in
         let* () =
           match session_update with
           | None -> Ok ()
@@ -835,14 +841,16 @@ let queue_close (queue, mutex, changed, terminal, _) outcome =
       terminal := Some outcome;
       Eio.Condition.broadcast changed)
 
-let run_realtime_stream_session ~sw ~net ~clock ?ca_file ~url ~access_token
-    ~mode ?session_update ?response_create ?on_text
+let run_realtime_stream_session ~caps ~sw ~net ~clock ?ca_file ~url
+    ~access_token ~mode ?session_update ?response_create ?on_text
     ?(translation_output_drain_ms = 2_000) ~input_sample_rate audio =
   if input_sample_rate <= 0 then
     stt_error "Codex realtime input sample rate must be positive"
   else
     Eio.Switch.run (fun sw ->
-        let* session = connect ~sw ~net ~clock ?ca_file ~url ~access_token () in
+        let* session =
+          connect ~caps ~sw ~net ~clock ?ca_file ~url ~access_token ()
+        in
         let* () =
           match session_update with
           | None -> Ok ()
@@ -885,7 +893,7 @@ type stream_handle = {
   cancel_stream : unit -> (unit, error) result;
 }
 
-let with_stream_session ~sw ~net ~clock ~logger ~url ~access_token ~mode
+let with_stream_session ~caps ~sw ~net ~clock ~logger ~url ~access_token ~mode
     ~operation ~model ?session_update ?response_create ?(sample_rate = 16000)
     ~cancel_message use =
   let queue = make_pull_queue () in
@@ -943,7 +951,7 @@ let with_stream_session ~sw ~net ~clock ~logger ~url ~access_token ~mode
   in
   let background () =
     let result =
-      run_realtime_stream_session ~sw ~net ~clock ~url ~access_token ~mode
+      run_realtime_stream_session ~caps ~sw ~net ~clock ~url ~access_token ~mode
         ?session_update ?response_create ~on_text ~input_sample_rate:sample_rate
         pull
     in
@@ -955,27 +963,28 @@ let with_stream_session ~sw ~net ~clock ~logger ~url ~access_token ~mode
   Ox.Concurrent.with_background ~sw background (fun () ->
       use { offer_chunk; finish_stream; cancel_stream })
 
-let with_transcription_stream ~sw ~net ~clock ~logger ~model ~language
+let with_transcription_stream ~caps ~sw ~net ~clock ~logger ~model ~language
     ~prompt_template ?(sample_rate = 16000) use =
-  let* access_token = realtime_access_token ~client:() () in
+  let* access_token = realtime_access_token ~caps ~client:() () in
   let prompt = render_template prompt_template [ ("language", language) ] in
   if is_conversation_model model then
-    with_stream_session ~sw ~net ~clock ~logger
-      ~url:(build_realtime_url ~mode:Conversation ~model ())
+    with_stream_session ~caps ~sw ~net ~clock ~logger
+      ~url:(build_realtime_url ~caps ~mode:Conversation ~model ())
       ~access_token ~mode:Conversation ~operation:"transcribe" ~model
       ~session_update:(build_conversation_session_update ~model ~prompt)
       ~response_create:(build_conversation_response_create ~prompt)
       ~sample_rate ~cancel_message:"Codex realtime transcription cancelled" use
   else
-    with_stream_session ~sw ~net ~clock ~logger
-      ~url:(build_realtime_url ~mode:Transcription ~model ())
+    with_stream_session ~caps ~sw ~net ~clock ~logger
+      ~url:(build_realtime_url ~caps ~mode:Transcription ~model ())
       ~access_token ~mode:Transcription ~operation:"transcribe" ~model
       ~session_update:(build_transcription_session_update ~model ~prompt ())
       ~sample_rate ~cancel_message:"Codex realtime transcription cancelled" use
 
-let with_translation_stream ~sw ~net ~clock ~logger ~model ~source_language
-    ~target_language ~prompt_template ?(sample_rate = 16000) use =
-  let* access_token = realtime_access_token ~client:() () in
+let with_translation_stream ~caps ~sw ~net ~clock ~logger ~model
+    ~source_language ~target_language ~prompt_template ?(sample_rate = 16000)
+    use =
+  let* access_token = realtime_access_token ~caps ~client:() () in
   let prompt =
     render_template prompt_template
       [
@@ -984,41 +993,41 @@ let with_translation_stream ~sw ~net ~clock ~logger ~model ~source_language
       ]
   in
   if is_conversation_model model then
-    with_stream_session ~sw ~net ~clock ~logger
-      ~url:(build_realtime_url ~mode:Conversation ~model ())
+    with_stream_session ~caps ~sw ~net ~clock ~logger
+      ~url:(build_realtime_url ~caps ~mode:Conversation ~model ())
       ~access_token ~mode:Conversation ~operation:"translate" ~model
       ~session_update:(build_conversation_session_update ~model ~prompt)
       ~response_create:(build_conversation_response_create ~prompt)
       ~sample_rate ~cancel_message:"Codex realtime translation cancelled" use
   else
-    with_stream_session ~sw ~net ~clock ~logger
-      ~url:(build_realtime_url ~mode:Translation ~model ())
+    with_stream_session ~caps ~sw ~net ~clock ~logger
+      ~url:(build_realtime_url ~caps ~mode:Translation ~model ())
       ~access_token ~mode:Translation ~operation:"translate" ~model
       ~session_update:
         (build_translation_session_update ~prompt ~target_language ())
       ~sample_rate ~cancel_message:"Codex realtime translation cancelled" use
 
-let transcribe_with_prompt ~sw ~net ~clock ~model ~language ~prompt_template
-    ?(sample_rate = 16000) pcm_bytes =
-  let* access_token = realtime_access_token ~client:() () in
+let transcribe_with_prompt ~caps ~sw ~net ~clock ~model ~language
+    ~prompt_template ?(sample_rate = 16000) pcm_bytes =
+  let* access_token = realtime_access_token ~caps ~client:() () in
   let prompt = render_template prompt_template [ ("language", language) ] in
   if is_conversation_model model then
-    run_realtime_session ~sw ~net ~clock
-      ~url:(build_realtime_url ~mode:Conversation ~model ())
+    run_realtime_session ~caps ~sw ~net ~clock
+      ~url:(build_realtime_url ~caps ~mode:Conversation ~model ())
       ~access_token ~mode:Conversation
       ~session_update:(build_conversation_session_update ~model ~prompt)
       ~response_create:(build_conversation_response_create ~prompt)
       ~input_sample_rate:sample_rate pcm_bytes
   else
-    run_realtime_session ~sw ~net ~clock
-      ~url:(build_realtime_url ~mode:Transcription ~model ())
+    run_realtime_session ~caps ~sw ~net ~clock
+      ~url:(build_realtime_url ~caps ~mode:Transcription ~model ())
       ~access_token ~mode:Transcription
       ~session_update:(build_transcription_session_update ~model ~prompt ())
       ~input_sample_rate:sample_rate pcm_bytes
 
-let translate_with_prompt ~sw ~net ~clock ~model ~source_language
+let translate_with_prompt ~caps ~sw ~net ~clock ~model ~source_language
     ~target_language ~prompt_template ?(sample_rate = 16000) pcm_bytes =
-  let* access_token = realtime_access_token ~client:() () in
+  let* access_token = realtime_access_token ~caps ~client:() () in
   let prompt =
     render_template prompt_template
       [
@@ -1027,15 +1036,15 @@ let translate_with_prompt ~sw ~net ~clock ~model ~source_language
       ]
   in
   if is_conversation_model model then
-    run_realtime_session ~sw ~net ~clock
-      ~url:(build_realtime_url ~mode:Conversation ~model ())
+    run_realtime_session ~caps ~sw ~net ~clock
+      ~url:(build_realtime_url ~caps ~mode:Conversation ~model ())
       ~access_token ~mode:Conversation
       ~session_update:(build_conversation_session_update ~model ~prompt)
       ~response_create:(build_conversation_response_create ~prompt)
       ~input_sample_rate:sample_rate pcm_bytes
   else
-    run_realtime_session ~sw ~net ~clock
-      ~url:(build_realtime_url ~mode:Translation ~model ())
+    run_realtime_session ~caps ~sw ~net ~clock
+      ~url:(build_realtime_url ~caps ~mode:Translation ~model ())
       ~access_token ~mode:Translation
       ~session_update:
         (build_translation_session_update ~prompt ~target_language ())

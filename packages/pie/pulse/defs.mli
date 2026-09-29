@@ -6,8 +6,8 @@ val pa_no_tag : int
 val pa_native_cookie_length : int
 val pa_native_protocol_version : int
 val pa_volume_norm : int
-val pa_default_socket_path : string
-val pa_default_cookie_path : string
+val pa_default_socket_path : caps:< Ox_caps.Cap.env ; .. > -> string
+val pa_default_cookie_path : caps:< Ox_caps.Cap.env ; .. > -> string
 
 type pa_stream_descriptor = {
   length : int;

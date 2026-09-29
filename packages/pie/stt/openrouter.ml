@@ -7,14 +7,14 @@ module Redact = Ox_observability.Redact
 let direct_transcription_timeout = Ox.Duration.seconds 60
 let response_operation_timeout = Ox.Duration.seconds 120
 
-let resolve_api_key () =
-  match Sys.getenv_opt "OPENROUTER_API_KEY" with
+let resolve_api_key ~caps () =
+  match Ox_caps.Cap_sys.getenv_opt ~caps "OPENROUTER_API_KEY" with
   | Some value when String.trim value <> "" ->
       Some (Redact.make (String.trim value))
   | _ -> None
 
-let endpoint path =
-  match Sys.getenv_opt "OPENROUTER_BASE_URL" with
+let endpoint ~caps path =
+  match Ox_caps.Cap_sys.getenv_opt ~caps "OPENROUTER_BASE_URL" with
   | Some base when String.trim base <> "" ->
       let base = String.trim base in
       let rec trim n =
@@ -138,12 +138,12 @@ let outcome_rejection = function
   | `Refusal _ -> "refusal"
   | `Other _ -> "unsupported output"
 
-let run_audio_responses ~sw ~net ~clock ~logger ~model ~prompt ~sample_rate
-    ~task ?thinking_effort pcm_bytes =
+let run_audio_responses ~caps ~sw ~net ~clock ~logger ~model ~prompt
+    ~sample_rate ~task ?thinking_effort pcm_bytes =
   if Bytes.length pcm_bytes > Dictation_limits.capture_pcm_bytes then
     Error (`Stt_error "OpenRouter captured audio budget exceeded")
   else
-    match resolve_api_key () with
+    match resolve_api_key ~caps () with
     | None ->
         Error (`Stt_error "Missing OpenRouter API key. Set OPENROUTER_API_KEY.")
     | Some api_key -> (
@@ -160,7 +160,7 @@ let run_audio_responses ~sw ~net ~clock ~logger ~model ~prompt ~sample_rate
         in
         match
           Responses.create ~http ~clock ~logger ~api_key
-            ?endpoint:(endpoint "/api/v1/responses")
+            ?endpoint:(endpoint ~caps "/api/v1/responses")
             ~deadline:response_operation_timeout request
         with
         | Error error -> Error (stt_error_of_ai error)
@@ -177,8 +177,8 @@ let run_audio_responses ~sw ~net ~clock ~logger ~model ~prompt ~sample_rate
    framing. The extra 8 KiB covers the model/language and transport field names. *)
 let max_audio_request_bytes = Dictation_limits.capture_pcm_bytes + 44 + 8192
 
-let transcribe ~sw ~net ~clock ~api_key ~model ~language ?(sample_rate = 16000)
-    pcm_bytes =
+let transcribe ~caps ~sw ~net ~clock ~api_key ~model ~language
+    ?(sample_rate = 16000) pcm_bytes =
   if Bytes.length pcm_bytes > Dictation_limits.capture_pcm_bytes then
     Error (`Stt_error "OpenRouter captured audio budget exceeded")
   else
@@ -195,7 +195,7 @@ let transcribe ~sw ~net ~clock ~api_key ~model ~language ?(sample_rate = 16000)
     in
     match
       Openrouter_audio.create ~http ~api_key
-        ?endpoint:(endpoint "/api/v1/audio/transcriptions")
+        ?endpoint:(endpoint ~caps "/api/v1/audio/transcriptions")
         ~max_request_bytes:max_audio_request_bytes
         ~deadline:direct_transcription_timeout request
     with
@@ -205,13 +205,13 @@ let transcribe ~sw ~net ~clock ~api_key ~model ~language ?(sample_rate = 16000)
           Error (`Stt_error "OpenRouter result budget exceeded")
         else Ok text
 
-let transcribe_with_prompt ~sw ~net ~clock ~logger ~model ~language
+let transcribe_with_prompt ~caps ~sw ~net ~clock ~logger ~model ~language
     ~prompt_template ?thinking_effort ?(sample_rate = 16000) pcm_bytes =
   let prompt = render_template prompt_template [ ("language", language) ] in
-  run_audio_responses ~sw ~net ~clock ~logger ~model ~prompt ~sample_rate
+  run_audio_responses ~caps ~sw ~net ~clock ~logger ~model ~prompt ~sample_rate
     ~task:"transcription" ?thinking_effort pcm_bytes
 
-let translate_with_prompt ~sw ~net ~clock ~logger ~model ~source_language
+let translate_with_prompt ~caps ~sw ~net ~clock ~logger ~model ~source_language
     ~target_language ~prompt_template ?thinking_effort ?(sample_rate = 16000)
     pcm_bytes =
   let prompt =
@@ -221,5 +221,5 @@ let translate_with_prompt ~sw ~net ~clock ~logger ~model ~source_language
         ("target_language", target_language);
       ]
   in
-  run_audio_responses ~sw ~net ~clock ~logger ~model ~prompt ~sample_rate
+  run_audio_responses ~caps ~sw ~net ~clock ~logger ~model ~prompt ~sample_rate
     ~task:"translation" ?thinking_effort pcm_bytes

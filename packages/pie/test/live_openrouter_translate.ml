@@ -1,3 +1,5 @@
+let caps = Ox_test.powerbox () (* ^pcaps-n1rg *)
+
 let read_file path =
   let input = open_in_bin path in
   Fun.protect
@@ -56,8 +58,8 @@ let () =
   let result =
     try
       Eio.Time.with_timeout_exn clock 90.0 (fun () ->
-          Pie.Stt.Openrouter.translate_with_prompt ~sw ~net:(Eio.Stdenv.net env)
-            ~clock ~logger ~model:resolved_model.model
+          Pie.Stt.Openrouter.translate_with_prompt ~caps ~sw
+            ~net:(Eio.Stdenv.net env) ~clock ~logger ~model:resolved_model.model
             ~source_language:"English" ~target_language:"English"
             ~prompt_template:
               "Translate the spoken audio from {{source_language}} to \

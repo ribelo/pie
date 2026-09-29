@@ -30,11 +30,11 @@ type candidate = {
   rate : int;
 }
 
-let unix_io : file_io =
+let unix_io ~caps : file_io =
   {
     open_excl =
       (fun path ->
-        Unix.openfile path
+        Ox_caps.Cap_unix.openfile ~caps path
           [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL; Unix.O_CLOEXEC ]
           0o600);
     write =
@@ -48,10 +48,11 @@ let unix_io : file_io =
     seek_set = (fun fd off -> ignore (Unix.lseek fd off Unix.SEEK_SET));
     fsync = Unix.fsync;
     close = Unix.close;
-    rename = (fun src dst -> Unix.rename src dst);
+    rename = (fun src dst -> Ox_caps.Cap_unix.rename ~caps src dst);
     unlink =
       (fun path ->
-        try Unix.unlink path with Unix.Unix_error (Unix.ENOENT, _, _) -> ());
+        try Ox_caps.Cap_unix.unlink ~caps path
+        with Unix.Unix_error (Unix.ENOENT, _, _) -> ());
   }
 
 let record_error message = `Stt_error ("record: " ^ message)
@@ -186,17 +187,18 @@ let finalize_header io (state : candidate) =
     let* () = run_io "write header" (fun () -> io.write state.fd header) in
     run_io "flush" (fun () -> io.fsync state.fd)
 
-let default_acquire ~net ~clock ~logger k =
-  Pulse.Client.with_client ~net ~clock ~logger @@ fun client ->
+let default_acquire ~caps ~net ~clock ~logger k =
+  Pulse.Client.with_client ~caps ~net ~clock ~logger @@ fun client ->
   Pulse.Client.with_record_stream client @@ fun info audio ->
   k { format = info.sample_spec; audio }
 
-let run ~sw:_ ~net ~clock ~logger ~output_path ~duration_sec
-    ?(planned_rate = 16000) ?acquire ?(io = unix_io) () =
+let run ~caps ~sw:_ ~net ~clock ~logger ~output_path ~duration_sec
+    ?(planned_rate = 16000) ?acquire ?io () =
+  let io = Option.value io ~default:(unix_io ~caps) in
   let* duration_ms = validate_duration duration_sec in
   let* () = validate_projected ~duration_sec ~rate:planned_rate in
   let acquire =
-    Option.value acquire ~default:(default_acquire ~net ~clock ~logger)
+    Option.value acquire ~default:(default_acquire ~caps ~net ~clock ~logger)
   in
   let owned = ref None in
   let published = Atomic.make false in
@@ -232,8 +234,8 @@ let run ~sw:_ ~net ~clock ~logger ~output_path ~duration_sec
                   io.rename state.path output_path;
                   Atomic.set published true)
             in
-            Printf.printf "Recorded %d bytes → %s\n%!" state.data_length
-              output_path;
+            Ox_caps.Cap_stdlib.printf ~caps "Recorded %d bytes → %s\n%!"
+              state.data_length output_path;
             Ok ()
       in
       let result = work in

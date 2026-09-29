@@ -2,4 +2,4 @@
 
 (test
  (name test_lifecycle_phase)
- (libraries pie alcotest unix))
+ (libraries ox_test pie alcotest unix))

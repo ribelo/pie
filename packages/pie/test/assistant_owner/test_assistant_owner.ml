@@ -1,3 +1,5 @@
+let caps = Ox_test.powerbox () (* ^pcaps-n1rg *)
+
 (* PIE003 owner workflow tests.
    Buffered record-to-delivery uses a fake stt callback on the Openrouter
    clip branch selected from published config. Streaming Codex goes through
@@ -171,7 +173,7 @@ let owner_workflow ~logger ~env ~sw ~net ~process_mgr ~mono_clock ~dir
     { Pie.Assistant.Service.keyboard; audio; source_name = Some "test-source" }
   in
   let workflow () =
-    Pie.Assistant.Service.run_with_inputs ~sw ~net ~fs:(Eio.Stdenv.fs env)
+    Pie.Assistant.Service.run_with_inputs ~caps ~sw ~net ~fs:(Eio.Stdenv.fs env)
       ~clock:(Eio.Stdenv.clock env) ~logger ~process_mgr ~mono_clock ~inputs
       ~config_control ~stt ~deliver ~socket_path ~retry_dir ~min_duration_ms:0
       ()
@@ -744,7 +746,7 @@ let run_stream_child () =
           stamp () )
       in
       let stt config mode bytes =
-        (Pie.Assistant.Service.production_stt ~sw ~net ~clock
+        (Pie.Assistant.Service.production_stt ~caps ~sw ~net ~clock
            ~logger:(test_logger env) ~process_mgr config mode bytes
           :> (string, Pie.Ptt_loop.error) result)
       in
@@ -910,7 +912,7 @@ let test_pause_latch_one_shot_resume_fresh_attempt () =
   with_dir (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let persist_path = Filename.concat dir "recording.json" in
-      let coord = Pie.Recording.Coordinator.create ~persist_path () in
+      let coord = Pie.Recording.Coordinator.create ~caps ~persist_path () in
       let start () =
         match
           Pie.Recording.Coordinator.try_start coord
@@ -1047,7 +1049,7 @@ let test_composite_body_failures_preserved () =
   with_dir (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let coord =
-        Pie.Recording.Coordinator.create
+        Pie.Recording.Coordinator.create ~caps
           ~persist_path:(Filename.concat dir "recording.json")
           ()
       in
@@ -1088,7 +1090,7 @@ let test_owned_pause_plus_cleanup_is_not_ok () =
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
       let coord =
-        Pie.Recording.Coordinator.create
+        Pie.Recording.Coordinator.create ~caps
           ~persist_path:(Filename.concat dir "recording.json")
           ()
       in
@@ -1190,9 +1192,11 @@ let test_service_pre_handle_failure_then_fresh_press () =
       let net = Eio.Stdenv.net env in
 
       let persist_path = Filename.concat dir "recording.json" in
-      let coordinator = Pie.Recording.Coordinator.create ~persist_path () in
+      let coordinator =
+        Pie.Recording.Coordinator.create ~caps ~persist_path ()
+      in
       let bad =
-        Pie.Assistant.Service.on_press ~sw ~clock:(Eio.Stdenv.clock env)
+        Pie.Assistant.Service.on_press ~caps ~sw ~clock:(Eio.Stdenv.clock env)
           ~logger:(test_logger env) ~net ~coordinator ~retry_dir:dir
           ~config:(base_config ~model:"openrouter/" ())
           ~stt:(fun _ _ _ -> Ok "unused")
@@ -1217,7 +1221,7 @@ let test_service_pre_handle_failure_then_fresh_press () =
         Ok ()
       in
       let good =
-        Pie.Assistant.Service.on_press ~sw ~clock:(Eio.Stdenv.clock env)
+        Pie.Assistant.Service.on_press ~caps ~sw ~clock:(Eio.Stdenv.clock env)
           ~logger:(test_logger env) ~net ~coordinator ~retry_dir:dir ~stt
           ~deliver ~config:(base_config ()) "transcribe"
       in
@@ -1252,7 +1256,9 @@ let test_delayed_old_cleanup_preserves_new_same_mode_attempt () =
       let net = Eio.Stdenv.net env in
 
       let persist_path = Filename.concat dir "recording.json" in
-      let coordinator = Pie.Recording.Coordinator.create ~persist_path () in
+      let coordinator =
+        Pie.Recording.Coordinator.create ~caps ~persist_path ()
+      in
       let first =
         match
           Pie.Recording.Coordinator.try_start coordinator
@@ -1262,7 +1268,7 @@ let test_delayed_old_cleanup_preserves_new_same_mode_attempt () =
         | _ -> Alcotest.fail "first start"
       in
       let store =
-        match Pie.Recording.Retry_store.Active.open_store ~root:dir with
+        match Pie.Recording.Retry_store.Active.open_store ~caps ~root:dir with
         | Ok store -> store
         | Error (`Retry_store msg) -> Alcotest.fail msg
       in
@@ -1276,7 +1282,7 @@ let test_delayed_old_cleanup_preserves_new_same_mode_attempt () =
       in
       ignore (Pie.Recording.Coordinator.release coordinator first);
       let second =
-        Pie.Assistant.Service.on_press ~sw ~clock:(Eio.Stdenv.clock env)
+        Pie.Assistant.Service.on_press ~caps ~sw ~clock:(Eio.Stdenv.clock env)
           ~logger:(test_logger env) ~net ~coordinator ~retry_dir:dir
           ~config:(base_config ())
           ~stt:(fun _ _ _ -> Ok "unused")
@@ -1396,8 +1402,8 @@ let test_capture_budget_sets_last_error () =
       (try Unix.mkdir retry_dir 0o700
        with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
       let workflow () =
-        Pie.Assistant.Service.run_with_inputs ~sw ~net ~fs:(Eio.Stdenv.fs env)
-          ~clock ~logger ~process_mgr ~mono_clock
+        Pie.Assistant.Service.run_with_inputs ~caps ~sw ~net
+          ~fs:(Eio.Stdenv.fs env) ~clock ~logger ~process_mgr ~mono_clock
           ~inputs:
             {
               Pie.Assistant.Service.keyboard;
@@ -1431,7 +1437,7 @@ let test_capture_budget_sets_last_error () =
       | Error error -> fail_error error)
 
 let peek_kind retry_dir =
-  match Pie.Recording.Retry_store.Active.open_store ~root:retry_dir with
+  match Pie.Recording.Retry_store.Active.open_store ~caps ~root:retry_dir with
   | Error _ -> None
   | Ok store -> (
       match Pie.Recording.Retry_store.Active.peek store with
@@ -1547,7 +1553,7 @@ let test_delivery_failure_publishes_text_retry_skips_provider () =
 let seed_text retry_dir text =
   (try Unix.mkdir retry_dir 0o700
    with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
-  match Pie.Recording.Retry_store.Active.open_store ~root:retry_dir with
+  match Pie.Recording.Retry_store.Active.open_store ~caps ~root:retry_dir with
   | Error (`Retry_store msg) -> Alcotest.fail msg
   | Ok store -> (
       match
@@ -1559,7 +1565,7 @@ let seed_text retry_dir text =
       | Error (`Retry_store msg) -> Alcotest.fail msg)
 
 let load_text_payload retry_dir =
-  match Pie.Recording.Retry_store.Active.open_store ~root:retry_dir with
+  match Pie.Recording.Retry_store.Active.open_store ~caps ~root:retry_dir with
   | Error (`Retry_store msg) -> Alcotest.fail msg
   | Ok store -> (
       match Pie.Recording.Retry_store.Active.peek store with
@@ -1786,9 +1792,9 @@ let test_nested_missing_parent_is_private () =
       (try Unix.mkdir (Filename.concat dir "recordings") 0o700
        with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
       let workflow () =
-        Pie.Assistant.Service.run_with_inputs ~sw ~net:(Eio.Stdenv.net env)
-          ~fs:(Eio.Stdenv.fs env) ~clock:(Eio.Stdenv.clock env)
-          ~logger:(test_logger env)
+        Pie.Assistant.Service.run_with_inputs ~caps ~sw
+          ~net:(Eio.Stdenv.net env) ~fs:(Eio.Stdenv.fs env)
+          ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env)
           ~process_mgr:(Eio.Stdenv.process_mgr env)
           ~mono_clock:(Eio.Stdenv.mono_clock env)
           ~inputs:
@@ -1820,11 +1826,13 @@ let test_blueprint_on_press_does_not_publish () =
       let retry_dir = Filename.concat dir "recordings" in
       Unix.mkdir retry_dir 0o700;
       let persist_path = Filename.concat dir "recording-state.json" in
-      let coordinator = Pie.Recording.Coordinator.create ~persist_path () in
+      let coordinator =
+        Pie.Recording.Coordinator.create ~caps ~persist_path ()
+      in
       let stt _ _ _ = Ok "x" in
       let deliver _ _ _ = Ok () in
       let _blueprint =
-        Pie.Assistant.Service.on_press ~sw ~clock:(Eio.Stdenv.clock env)
+        Pie.Assistant.Service.on_press ~caps ~sw ~clock:(Eio.Stdenv.clock env)
           ~logger:(test_logger env) ~net:(Eio.Stdenv.net env) ~coordinator
           ~retry_dir ~config:(base_config ()) ~stt ~deliver "transcribe"
       in
@@ -1866,7 +1874,9 @@ let test_success_preserves_older_candidate () =
           Alcotest.(check string)
             "older candidate payload retained" "older-candidate"
             (load_text_payload retry_dir);
-          match Pie.Recording.Retry_store.Active.open_store ~root:retry_dir with
+          match
+            Pie.Recording.Retry_store.Active.open_store ~caps ~root:retry_dir
+          with
           | Error (`Retry_store msg) -> Alcotest.fail msg
           | Ok store -> (
               match Pie.Recording.Retry_store.Active.peek store with
@@ -1944,18 +1954,20 @@ let test_publication_failure_keeps_primary () =
       let retry_dir = Filename.concat dir "recordings" in
       Unix.mkdir retry_dir 0o700;
       let store =
-        match Pie.Recording.Retry_store.Active.open_store ~root:retry_dir with
+        match
+          Pie.Recording.Retry_store.Active.open_store ~caps ~root:retry_dir
+        with
         | Ok store -> store
         | Error (`Retry_store msg) -> Alcotest.fail msg
       in
-      let coordinator = Pie.Recording.Coordinator.create () in
+      let coordinator = Pie.Recording.Coordinator.create ~caps () in
       retry_dir_ref := retry_dir;
       Fun.protect
         ~finally:(fun () -> pub014_restore retry_dir !lock_save)
         (fun () ->
           let press =
-            Pie.Assistant.Service.on_press ~sw ~net:(Eio.Stdenv.net env) ~clock
-              ~logger:(test_logger env) ~coordinator ~store ~retry_dir
+            Pie.Assistant.Service.on_press ~caps ~sw ~net:(Eio.Stdenv.net env)
+              ~clock ~logger:(test_logger env) ~coordinator ~store ~retry_dir
               ~config:(base_config ()) ~stt ~deliver "transcribe"
           in
           let finish handle =
@@ -2064,7 +2076,9 @@ let test_admission_held_until_provider_finalizer () =
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
       let persist_path = Filename.concat dir "recording.json" in
-      let coordinator = Pie.Recording.Coordinator.create ~persist_path () in
+      let coordinator =
+        Pie.Recording.Coordinator.create ~caps ~persist_path ()
+      in
       let attempt =
         match
           Pie.Recording.Coordinator.try_start coordinator
@@ -2074,7 +2088,7 @@ let test_admission_held_until_provider_finalizer () =
         | _ -> Alcotest.fail "expected Started"
       in
       let store =
-        match Pie.Recording.Retry_store.Active.open_store ~root:dir with
+        match Pie.Recording.Retry_store.Active.open_store ~caps ~root:dir with
         | Ok store -> store
         | Error (`Retry_store msg) -> Alcotest.fail msg
       in

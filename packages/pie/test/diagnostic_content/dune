@@ -2,4 +2,4 @@
 
 (test
  (name test_diagnostic_content)
- (libraries pie alcotest eio_main eio ox yojson unix cstruct))
+ (libraries ox_test pie alcotest eio_main eio ox yojson unix cstruct))

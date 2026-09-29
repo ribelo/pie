@@ -9,7 +9,12 @@ module Active = struct
 
   let generation_equal = String.equal
 
-  type store = { root : string; active : string }
+  type store = {
+    root : string;
+    active : string;
+    caps : < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.time >;
+  }
+
   type phase = Draft | Sealed | Published
 
   type writer = {
@@ -52,30 +57,33 @@ module Active = struct
   let inject_fsync = ref false
   let reused_fd : Unix.file_descr option ref = ref None
 
-  let unix_close fd =
+  let unix_close ~caps fd =
     if !inject_close then (
       Unix.close fd;
       (match !reused_fd with
       | Some _ -> ()
       | None ->
           reused_fd :=
-            Some (Unix.openfile "/dev/null" [ Unix.O_RDONLY; Unix.O_CLOEXEC ] 0));
+            Some
+              (Ox_caps.Cap_unix.openfile ~caps "/dev/null"
+                 [ Unix.O_RDONLY; Unix.O_CLOEXEC ]
+                 0));
       raise (Unix.Unix_error (Unix.EIO, "close", "")))
     else Unix.close fd
 
-  let unix_unlink path =
+  let unix_unlink ~caps path =
     if !inject_unlink then raise (Unix.Unix_error (Unix.EIO, "unlink", ""));
-    Unix.unlink path
+    Ox_caps.Cap_unix.unlink ~caps path
 
   let unix_fchmod fd mode =
     if !inject_fchmod then raise (Unix.Unix_error (Unix.EPERM, "fchmod", ""));
     Unix.fchmod fd mode
 
-  let unix_openfile path flags perm =
+  let unix_openfile ~caps path flags perm =
     if !inject_emfile then raise (Unix.Unix_error (Unix.EMFILE, "open", path));
     if !inject_index_open && Filename.basename path = "index.json" then
       raise (Unix.Unix_error (Unix.EMFILE, "open", path));
-    Unix.openfile path flags perm
+    Ox_caps.Cap_unix.openfile ~caps path flags perm
 
   let unix_fsync fd =
     if !inject_fsync then raise (Unix.Unix_error (Unix.EIO, "fsync", ""));
@@ -128,10 +136,10 @@ module Active = struct
                | Exn _ -> None)))
     | Some e -> raise e
 
-  let fresh_generation () =
+  let fresh_generation ~caps () =
     Printf.sprintf "%d-%d-%Ld" (Unix.getpid ())
       (Atomic.fetch_and_add gen_counter 1)
-      (Int64.of_float (Unix.gettimeofday () *. 1_000_000.0))
+      (Int64.of_float (Ox_caps.Cap_unix.gettimeofday ~caps () *. 1_000_000.0))
 
   let safe_generation g =
     let n = String.length g in
@@ -167,20 +175,24 @@ module Active = struct
     if st.Unix.st_kind = Unix.S_LNK || not (owned_dir st) then
       raise (Unix.Unix_error (Unix.EPERM, "mkdir_0700", path))
 
-  let mkdir_0700 path =
+  let mkdir_0700 ~caps path =
     match Unix.lstat path with
     | st -> accept_existing_0700 path st
     | exception Unix.Unix_error (Unix.ENOENT, _, _) -> (
-        match Unix.mkdir path 0o700 with
+        match Ox_caps.Cap_unix.mkdir ~caps path 0o700 with
         | () ->
-            Unix.chmod path 0o700;
+            Ox_caps.Cap_unix.chmod ~caps path 0o700;
             let st = Unix.lstat path in
             if st.st_kind = Unix.S_LNK || not (owned_dir st) then
               raise (Unix.Unix_error (Unix.EPERM, "mkdir_0700", path))
         | exception Unix.Unix_error (Unix.EEXIST, _, _) ->
             accept_existing_0700 path (Unix.lstat path))
 
-  let open_store ~root =
+  let open_store ~caps ~root =
+    let caps =
+      (caps
+        :> < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.time >)
+    in
     match Unix.lstat root with
     | exception Unix.Unix_error (e, _, _) -> err (Unix.error_message e)
     | rst when rst.st_kind <> Unix.S_DIR ->
@@ -191,8 +203,8 @@ module Active = struct
     | _ -> (
         let active = Filename.concat root "active" in
         try
-          mkdir_0700 active;
-          Ok { root; active }
+          mkdir_0700 ~caps active;
+          Ok { root; active; caps }
         with exn -> known_unix exn)
 
   let slot_dir store generation =
@@ -252,15 +264,16 @@ module Active = struct
     lock_token : int;
   }
 
-  let close_owned owned fd =
+  let close_owned ~caps owned fd =
     if !owned then (
       owned := false;
-      unix_close fd)
+      unix_close ~caps fd)
 
   (* Never unlink the lockfile. F_TLOCK is non-blocking. Identity checks are
      not a kernel nofollow guarantee. Cooperating same-UID processes.
      Process-local registry is required because POSIX lockf is per-process. *)
   let acquire_publish_lock store =
+    let caps = store.caps in
     let path = lock_path store in
     let own fd =
       let st = Unix.fstat fd in
@@ -280,18 +293,18 @@ module Active = struct
         || st.st_perm land 0o777 land 0o077 <> 0
         || st.st_nlink <> 1
       then raise (Unix.Unix_error (Unix.EPERM, "lock_identity", path));
-      let fd = unix_openfile path [ Unix.O_RDWR; Unix.O_CLOEXEC ] 0o600 in
+      let fd = unix_openfile ~caps path [ Unix.O_RDWR; Unix.O_CLOEXEC ] 0o600 in
       let owned = ref true in
       try
         let st2 = own fd in
         if st.st_dev <> st2.st_dev || st.st_ino <> st2.st_ino then (
-          close_owned owned fd;
+          close_owned ~caps owned fd;
           raise (Unix.Unix_error (Unix.EPERM, "lock_identity", path)))
         else (
           owned := false;
           fd)
       with exn -> (
-        match close_owned owned fd with
+        match close_owned ~caps owned fd with
         | () -> raise exn
         | exception close_exn -> raise (combine exn close_exn))
     in
@@ -302,7 +315,7 @@ module Active = struct
         | exception Unix.Unix_error (Unix.ENOENT, _, _) -> (
             try
               let fd =
-                unix_openfile path
+                unix_openfile ~caps path
                   [ Unix.O_RDWR; Unix.O_CREAT; Unix.O_EXCL; Unix.O_CLOEXEC ]
                   0o600
               in
@@ -313,7 +326,7 @@ module Active = struct
                 owned := false;
                 fd
               with exn -> (
-                match close_owned owned fd with
+                match close_owned ~caps owned fd with
                 | () -> raise exn
                 | exception close_exn -> raise (combine exn close_exn))
             with Unix.Unix_error (Unix.EEXIST, _, _) ->
@@ -322,7 +335,7 @@ module Active = struct
       let key = lock_key path in
       match claim_local key with
       | Error e -> (
-          match unix_close fd with
+          match unix_close ~caps fd with
           | () -> Error e
           | exception close_exn -> raise close_exn)
       | Ok token -> (
@@ -330,17 +343,18 @@ module Active = struct
           | () -> Ok { lock_fd = fd; lock_key = key; lock_token = token }
           | exception Unix.Unix_error ((Unix.EAGAIN | Unix.EACCES), _, _) -> (
               release_local key token;
-              match unix_close fd with
+              match unix_close ~caps fd with
               | () -> err "busy"
               | exception close_exn -> raise close_exn)
           | exception exn -> (
               release_local key token;
-              match unix_close fd with
+              match unix_close ~caps fd with
               | () -> raise exn
               | exception close_exn -> raise (combine exn close_exn)))
     with exn -> known_unix exn
 
   let with_publish_lock store f =
+    let caps = store.caps in
     match acquire_publish_lock store with
     | Error e -> Error e
     | Ok held -> (
@@ -356,7 +370,7 @@ module Active = struct
           | exception exn -> Error exn
         in
         let close_exn =
-          match close_owned owned held.lock_fd with
+          match close_owned ~caps owned held.lock_fd with
           | () -> None
           | exception exn -> Some exn
         in
@@ -370,9 +384,9 @@ module Active = struct
         | Error exn, None -> raise exn
         | Error primary, Some cleanup -> raise (combine primary cleanup))
 
-  let open_excl_0600 path =
+  let open_excl_0600 ~caps path =
     let fd =
-      unix_openfile path
+      unix_openfile ~caps path
         [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL; Unix.O_CLOEXEC ]
         0o600
     in
@@ -382,7 +396,7 @@ module Active = struct
       owned := false;
       fd
     with exn -> (
-      match close_owned owned fd with
+      match close_owned ~caps owned fd with
       | () -> raise exn
       | exception close_exn -> raise (combine exn close_exn))
 
@@ -395,17 +409,18 @@ module Active = struct
       | v -> v
 
   let open_audio_writer store ~mode =
+    let caps = store.caps in
     try
       collision_retry 32 (fun () ->
-          let generation = fresh_generation () in
+          let generation = fresh_generation ~caps () in
           if not (safe_generation generation) then
             raise (Unix.Unix_error (Unix.EINVAL, "generation", ""));
           let slot = slot_dir store generation in
-          Unix.mkdir slot 0o700;
+          Ox_caps.Cap_unix.mkdir ~caps slot 0o700;
           let draft = Filename.concat slot "draft.pcm" in
           try
-            Unix.chmod slot 0o700;
-            let fd = open_excl_0600 draft in
+            Ox_caps.Cap_unix.chmod ~caps slot 0o700;
+            let fd = open_excl_0600 ~caps draft in
             Ok
               {
                 store;
@@ -418,8 +433,12 @@ module Active = struct
                 phase = Draft;
               }
           with exn -> (
-            let acc = duty [] "unlink-draft" (fun () -> unix_unlink draft) in
-            let acc = duty acc "rmdir" (fun () -> Unix.rmdir slot) in
+            let acc =
+              duty [] "unlink-draft" (fun () -> unix_unlink ~caps draft)
+            in
+            let acc =
+              duty acc "rmdir" (fun () -> Ox_caps.Cap_unix.rmdir ~caps slot)
+            in
             match collected_exn acc with
             | None -> raise exn
             | Some c -> raise (combine exn c)))
@@ -447,6 +466,7 @@ module Active = struct
           with exn -> known_unix exn)
 
   let close_writer (writer : writer) =
+    let caps = writer.store.caps in
     match writer.phase with
     | Published -> err "already published"
     | Sealed -> Ok ()
@@ -459,7 +479,9 @@ module Active = struct
             in
             writer.fd <- None;
             let close_exn =
-              match unix_close fd with () -> None | exception exn -> Some exn
+              match unix_close ~caps fd with
+              | () -> None
+              | exception exn -> Some exn
             in
             match (sync_exn, close_exn) with
             | None, None ->
@@ -470,6 +492,7 @@ module Active = struct
             | Some a, Some b -> raise (combine a b)))
 
   let abort_writer (writer : writer) =
+    let caps = writer.store.caps in
     match writer.phase with
     | Published -> Ok ()
     | Draft | Sealed ->
@@ -479,20 +502,22 @@ module Active = struct
               | None -> ()
               | Some fd ->
                   writer.fd <- None;
-                  unix_close fd)
+                  unix_close ~caps fd)
         in
         let acc =
-          duty acc "unlink-draft" (fun () -> unix_unlink writer.draft)
+          duty acc "unlink-draft" (fun () -> unix_unlink ~caps writer.draft)
         in
         let acc =
           duty acc "unlink-payload" (fun () ->
-              unix_unlink (Filename.concat writer.slot "payload"))
+              unix_unlink ~caps (Filename.concat writer.slot "payload"))
         in
         let acc =
           duty acc "unlink-manifest" (fun () ->
-              unix_unlink (Filename.concat writer.slot "manifest.json"))
+              unix_unlink ~caps (Filename.concat writer.slot "manifest.json"))
         in
-        let acc = duty acc "rmdir" (fun () -> Unix.rmdir writer.slot) in
+        let acc =
+          duty acc "rmdir" (fun () -> Ox_caps.Cap_unix.rmdir ~caps writer.slot)
+        in
         duties_done acc
 
   let write_all fd bytes =
@@ -505,19 +530,20 @@ module Active = struct
     in
     loop 0
 
-  let write_file_0600 path contents =
-    let fd = open_excl_0600 path in
+  let write_file_0600 ~caps path contents =
+    let fd = open_excl_0600 ~caps path in
     let owned = ref true in
     try
       write_all fd (Bytes.of_string contents);
       Unix.fsync fd;
-      close_owned owned fd
+      close_owned ~caps owned fd
     with exn -> (
-      match close_owned owned fd with
+      match close_owned ~caps owned fd with
       | () -> raise exn
       | exception close_exn -> raise (combine exn close_exn))
 
   let atomic_replace_index store json =
+    let caps = store.caps in
     let dest = index_path store in
     let rec cand n =
       if n > 32 then raise (Unix.Unix_error (Unix.EEXIST, "index", dest))
@@ -526,7 +552,7 @@ module Active = struct
           Filename.concat store.active
             (Printf.sprintf ".index-%d-%d.json" (Unix.getpid ()) n)
         in
-        match open_excl_0600 p with
+        match open_excl_0600 ~caps p with
         | fd -> (p, fd)
         | exception Unix.Unix_error (Unix.EEXIST, _, _) -> cand (n + 1)
     in
@@ -536,17 +562,19 @@ module Active = struct
     try
       write_all fd (Bytes.of_string json);
       Unix.fsync fd;
-      close_owned owned fd;
-      Unix.rename tmp dest;
+      close_owned ~caps owned fd;
+      Ox_caps.Cap_unix.rename ~caps tmp dest;
       published := true
     with exn -> (
       let close_exn =
-        match close_owned owned fd with () -> None | exception c -> Some c
+        match close_owned ~caps owned fd with
+        | () -> None
+        | exception c -> Some c
       in
       let unlink_exn =
         if !published then None
         else
-          match unix_unlink tmp with
+          match unix_unlink ~caps tmp with
           | () -> None
           | exception Unix.Unix_error (Unix.ENOENT, _, _) -> None
           | exception u -> Some u
@@ -558,6 +586,7 @@ module Active = struct
       | Some c, Some u -> raise (combine exn (combine c u)))
 
   let read_index store =
+    let caps = store.caps in
     let path = index_path store in
     match Unix.lstat path with
     | exception Unix.Unix_error (Unix.ENOENT, _, _) -> Ok None
@@ -566,7 +595,7 @@ module Active = struct
     | st when not (owned_reg_0600 st) -> Ok None
     | st -> (
         match
-          unix_openfile path
+          unix_openfile ~caps path
             [ Unix.O_RDONLY; Unix.O_NONBLOCK; Unix.O_CLOEXEC ]
             0
         with
@@ -576,10 +605,10 @@ module Active = struct
             try
               let st2 = Unix.fstat fd in
               if st.st_dev <> st2.st_dev || st.st_ino <> st2.st_ino then (
-                close_owned owned fd;
+                close_owned ~caps owned fd;
                 Ok None)
               else if st2.st_size > max_index_bytes || st2.st_size <= 0 then (
-                close_owned owned fd;
+                close_owned ~caps owned fd;
                 Ok None)
               else
                 let buf = Bytes.create st2.st_size in
@@ -590,7 +619,7 @@ module Active = struct
                   else off
                 in
                 let got = loop 0 in
-                close_owned owned fd;
+                close_owned ~caps owned fd;
                 if got <> st2.st_size then Ok None
                 else
                   match Yojson.Safe.from_string (Bytes.to_string buf) with
@@ -606,11 +635,12 @@ module Active = struct
                   | _ -> Ok None
                   | exception Yojson.Json_error _ -> Ok None
             with exn -> (
-              match close_owned owned fd with
+              match close_owned ~caps owned fd with
               | () -> known_unix exn
               | exception close_exn -> raise (combine exn close_exn))))
 
   let retire_slot store generation acc =
+    let caps = store.caps in
     let slot = slot_dir store generation in
     match Unix.lstat slot with
     | exception Unix.Unix_error (Unix.ENOENT, _, _) -> acc
@@ -628,27 +658,27 @@ module Active = struct
                   Unix_named (name, e) :: acc
               | st when st.st_kind = Unix.S_LNK -> acc
               | st when owned_reg_0600 st ->
-                  duty acc name (fun () -> unix_unlink p)
+                  duty acc name (fun () -> unix_unlink ~caps p)
               | _ -> acc)
             acc
             [ "payload"; "manifest.json"; "draft.pcm" ]
         in
-        duty acc "rmdir" (fun () -> Unix.rmdir slot)
+        duty acc "rmdir" (fun () -> Ox_caps.Cap_unix.rmdir ~caps slot)
 
-  let rollback_unpublished_slot slot =
+  let rollback_unpublished_slot ~caps slot =
     let acc =
       duty [] "unlink-payload" (fun () ->
-          unix_unlink (Filename.concat slot "payload"))
+          unix_unlink ~caps (Filename.concat slot "payload"))
     in
     let acc =
       duty acc "unlink-manifest" (fun () ->
-          unix_unlink (Filename.concat slot "manifest.json"))
+          unix_unlink ~caps (Filename.concat slot "manifest.json"))
     in
     let acc =
       duty acc "unlink-draft" (fun () ->
-          unix_unlink (Filename.concat slot "draft.pcm"))
+          unix_unlink ~caps (Filename.concat slot "draft.pcm"))
     in
-    duty acc "rmdir" (fun () -> Unix.rmdir slot)
+    duty acc "rmdir" (fun () -> Ox_caps.Cap_unix.rmdir ~caps slot)
 
   let publish_index store generation ~on_commit =
     match read_index store with
@@ -670,7 +700,7 @@ module Active = struct
           | _ -> Ok ()
         with exn -> known_unix exn)
 
-  let write_manifest slot generation tag mode extra =
+  let write_manifest ~caps slot generation tag mode extra =
     let fields =
       [
         ("version", `Int 1);
@@ -683,9 +713,10 @@ module Active = struct
     let json = Yojson.Safe.to_string (`Assoc fields) in
     if String.length json > max_manifest_bytes then
       raise (Unix.Unix_error (Unix.EFBIG, "manifest", slot));
-    write_file_0600 (Filename.concat slot "manifest.json") json
+    write_file_0600 ~caps (Filename.concat slot "manifest.json") json
 
   let publish_audio store (writer : writer) =
+    let caps = store.caps in
     with_publish_lock store (fun () ->
         if writer.store.active <> store.active then err "writer/store mismatch"
         else if writer.phase <> Sealed || writer.fd <> None then
@@ -695,8 +726,9 @@ module Active = struct
         else
           try
             let payload = Filename.concat writer.slot "payload" in
-            Unix.rename writer.draft payload;
-            write_manifest writer.slot writer.generation "audio" writer.mode
+            Ox_caps.Cap_unix.rename ~caps writer.draft payload;
+            write_manifest ~caps writer.slot writer.generation "audio"
+              writer.mode
               [ ("pcm_bytes", `Int writer.byte_count) ];
             match
               publish_index store writer.generation ~on_commit:(fun () ->
@@ -707,6 +739,7 @@ module Active = struct
           with exn -> known_unix exn)
 
   let publish_text store ~mode ~text ~dispatch_uncertain =
+    let caps = store.caps in
     with_publish_lock store (fun () ->
         let n = String.length text in
         if n > Dictation_limits.result_utf8_bytes then
@@ -714,15 +747,15 @@ module Active = struct
         else if n <= 0 then err "empty text"
         else
           collision_retry 32 (fun () ->
-              let generation = fresh_generation () in
+              let generation = fresh_generation ~caps () in
               let slot = slot_dir store generation in
-              Unix.mkdir slot 0o700;
+              Ox_caps.Cap_unix.mkdir ~caps slot 0o700;
               let committed = ref false in
               try
-                Unix.chmod slot 0o700;
+                Ox_caps.Cap_unix.chmod ~caps slot 0o700;
                 let payload = Filename.concat slot "payload" in
-                write_file_0600 payload text;
-                write_manifest slot generation "text" mode
+                write_file_0600 ~caps payload text;
+                write_manifest ~caps slot generation "text" mode
                   [
                     ("utf8_bytes", `Int n);
                     ("dispatch_uncertain", `Bool dispatch_uncertain);
@@ -735,7 +768,9 @@ module Active = struct
                 | Error e -> (
                     if !committed then Error e
                     else
-                      match duties_done (rollback_unpublished_slot slot) with
+                      match
+                        duties_done (rollback_unpublished_slot ~caps slot)
+                      with
                       | Ok () -> Error e
                       | Error rollback ->
                           let of_err = function
@@ -744,14 +779,16 @@ module Active = struct
                           raise (combine (of_err e) (of_err rollback)))
               with exn ->
                 if not !committed then
-                  match collected_exn (rollback_unpublished_slot slot) with
+                  match
+                    collected_exn (rollback_unpublished_slot ~caps slot)
+                  with
                   | None -> raise exn
                   | Some c -> raise (combine exn c)
                 else raise exn))
 
   type opened = Excluded | Opened of Unix.file_descr * Unix.stats
 
-  let open_owned_regular path max_bytes =
+  let open_owned_regular ~caps path max_bytes =
     match Unix.lstat path with
     | exception Unix.Unix_error (Unix.ENOENT, _, _) -> Ok Excluded
     | exception Unix.Unix_error (e, _, _) -> err (Unix.error_message e)
@@ -760,7 +797,7 @@ module Active = struct
     | st when st.st_size <= 0 || st.st_size > max_bytes -> Ok Excluded
     | st -> (
         let fd =
-          unix_openfile path
+          unix_openfile ~caps path
             [ Unix.O_RDONLY; Unix.O_NONBLOCK; Unix.O_CLOEXEC ]
             0
         in
@@ -768,13 +805,13 @@ module Active = struct
         try
           let st2 = Unix.fstat fd in
           if st.st_dev <> st2.st_dev || st.st_ino <> st2.st_ino then (
-            close_owned owned fd;
+            close_owned ~caps owned fd;
             Ok Excluded)
           else (
             owned := false;
             Ok (Opened (fd, st2)))
         with exn -> (
-          match close_owned owned fd with
+          match close_owned ~caps owned fd with
           | () -> known_unix exn
           | exception close_exn -> raise (combine exn close_exn)))
 
@@ -790,6 +827,7 @@ module Active = struct
     if got <> size then None else Some buf
 
   let peek store =
+    let caps = store.caps in
     match read_index store with
     | Error e -> Error e
     | Ok None -> Ok None
@@ -802,7 +840,7 @@ module Active = struct
         | st when not (owned_dir st) -> Ok None
         | _ -> (
             let man = Filename.concat slot "manifest.json" in
-            match open_owned_regular man max_manifest_bytes with
+            match open_owned_regular ~caps man max_manifest_bytes with
             | Error e -> Error e
             | Ok Excluded -> Ok None
             | Ok (Opened (fd, st)) -> (
@@ -866,14 +904,15 @@ module Active = struct
                         | _ -> Ok None
                         | exception Yojson.Json_error _ -> Ok None)
                   in
-                  close_owned owned fd;
+                  close_owned ~caps owned fd;
                   parsed
                 with exn -> (
-                  match close_owned owned fd with
+                  match close_owned ~caps owned fd with
                   | () -> known_unix exn
                   | exception close_exn -> raise (combine exn close_exn)))))
 
   let load_payload store generation max_bytes =
+    let caps = store.caps in
     match peek store with
     | Error e -> Error e
     | Ok None -> err "no published candidate"
@@ -882,7 +921,7 @@ module Active = struct
         err "generation mismatch"
     | Ok (Some _) -> (
         let path = Filename.concat (slot_dir store generation) "payload" in
-        match open_owned_regular path max_bytes with
+        match open_owned_regular ~caps path max_bytes with
         | Error e -> Error e
         | Ok Excluded -> err "payload rejected"
         | Ok (Opened (fd, st)) -> (
@@ -893,10 +932,10 @@ module Active = struct
                 | None -> err "payload read failed"
                 | Some b -> Ok b
               in
-              close_owned owned fd;
+              close_owned ~caps owned fd;
               body
             with exn -> (
-              match close_owned owned fd with
+              match close_owned ~caps owned fd with
               | () -> known_unix exn
               | exception close_exn -> raise (combine exn close_exn))))
 
@@ -927,12 +966,14 @@ module Active = struct
     | Ok _ -> err "published candidate is not text"
 
   let clear store generation =
+    let caps = store.caps in
     with_publish_lock store (fun () ->
         match read_index store with
         | Error e -> Error e
         | Ok (Some g) when generation_equal g generation ->
             let acc =
-              duty [] "unlink-index" (fun () -> unix_unlink (index_path store))
+              duty [] "unlink-index" (fun () ->
+                  unix_unlink ~caps (index_path store))
             in
             duties_done (retire_slot store generation acc)
         | Ok _ -> Ok ())

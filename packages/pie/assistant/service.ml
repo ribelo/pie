@@ -1,8 +1,11 @@
 let ( let* ) = Result.bind
 let default_min_duration_ms = 120
-let config_path = Paths.stt_config_path
+let config_path ~caps = Paths.stt_config_path ~caps
 
-let watched_paths ?(config_path = config_path) () =
+let watched_paths ~caps ?config_path () =
+  let config_path =
+    Option.value config_path ~default:(Paths.stt_config_path ~caps)
+  in
   let prompts_dir = Filename.concat (Filename.dirname config_path) "prompts" in
   [
     config_path;
@@ -17,16 +20,16 @@ let stamp path =
       (stat.Unix.st_dev, stat.Unix.st_ino, stat.Unix.st_size, stat.Unix.st_mtime)
   with Unix.Unix_error _ -> None
 
-let config_stamp ?(config_path = config_path) () =
-  List.map stamp (watched_paths ~config_path ())
+let config_stamp ~caps ?config_path () =
+  List.map stamp (watched_paths ~caps ?config_path ())
 
-let load_snapshot ~fs ~source attempts =
+let load_snapshot ~caps ~fs ~source attempts =
   let config_path = Config.Stt.source_path source in
-  let stamp () = config_stamp ~config_path () in
+  let stamp () = config_stamp ~caps ~config_path () in
   let rec retry n =
     let before = stamp () in
     let config =
-      match Config.Stt.load ~fs ~source () with
+      match Config.Stt.load ~caps ~fs ~source () with
       | Ok cfg -> cfg
       | Error (`Config msg) -> raise (Config.Stt.Config_error msg)
     in
@@ -300,9 +303,11 @@ let text_entry_rule_json index (rule : Config.Stt.text_entry_rule) =
       ("method", `String (Config.Stt.string_of_entry_method rule.method_));
     ]
 
-let startup_config_json ?(config_path = Paths.stt_config_path)
-    ~(config : Config.Stt.t) ~ptt_transcribe_keysym ~ptt_translate_keysym
-    ~min_duration_ms () =
+let startup_config_json ~caps ?config_path ~(config : Config.Stt.t)
+    ~ptt_transcribe_keysym ~ptt_translate_keysym ~min_duration_ms () =
+  let config_path =
+    Option.value config_path ~default:(Paths.stt_config_path ~caps)
+  in
   `Assoc
     [
       ("config_path", `String config_path);
@@ -325,8 +330,8 @@ let startup_config_json ?(config_path = Paths.stt_config_path)
     ]
   |> Yojson.Safe.pretty_to_string
 
-let run_stt ~sw ~net ~clock ~logger ~process_mgr:_ (config : Config.Stt.t) mode
-    pcm_bytes =
+let run_stt ~caps ~sw ~net ~clock ~logger ~process_mgr:_ (config : Config.Stt.t)
+    mode pcm_bytes =
   let prompt_template =
     match mode with
     | Transcribe -> config.transcription_prompt
@@ -338,11 +343,11 @@ let run_stt ~sw ~net ~clock ~logger ~process_mgr:_ (config : Config.Stt.t) mode
       let pcm_bytes = normalize_for_stt config pcm_bytes in
       match mode with
       | Transcribe ->
-          Stt.Codex_realtime.transcribe_with_prompt ~sw ~net ~clock
+          Stt.Codex_realtime.transcribe_with_prompt ~caps ~sw ~net ~clock
             ~model:resolved_model.model ~language:config.transcription_language
             ~prompt_template pcm_bytes
       | Translate ->
-          Stt.Codex_realtime.translate_with_prompt ~sw ~net ~clock
+          Stt.Codex_realtime.translate_with_prompt ~caps ~sw ~net ~clock
             ~model:resolved_model.model
             ~source_language:config.translation_source_language
             ~target_language:config.translation_target_language ~prompt_template
@@ -351,38 +356,39 @@ let run_stt ~sw ~net ~clock ~logger ~process_mgr:_ (config : Config.Stt.t) mode
       let pcm_bytes = normalize_for_stt config pcm_bytes in
       match mode with
       | Transcribe ->
-          Stt.Openrouter.transcribe_with_prompt ~sw ~net ~clock ~logger
+          Stt.Openrouter.transcribe_with_prompt ~caps ~sw ~net ~clock ~logger
             ~model:resolved_model.model ~language:config.transcription_language
             ~prompt_template ?thinking_effort:config.thinking_effort pcm_bytes
       | Translate ->
-          Stt.Openrouter.translate_with_prompt ~sw ~net ~clock ~logger
+          Stt.Openrouter.translate_with_prompt ~caps ~sw ~net ~clock ~logger
             ~model:resolved_model.model
             ~source_language:config.translation_source_language
             ~target_language:config.translation_target_language ~prompt_template
             ?thinking_effort:config.thinking_effort pcm_bytes)
 
-let inject_and_report ~clock ~process_mgr ?clipboard_owner ~newline_rules
+let inject_and_report ~caps ~clock ~process_mgr ?clipboard_owner ~newline_rules
     ~text_entry_rules _mode text =
   let normalized = Input.Text_injection.normalize_text text in
   if String.length normalized = 0 then (
     ignore
-      (Desktop.Notification.notify_warning ~process_mgr "pie: no transcript"
+      (Desktop.Notification.notify_warning ~caps ~process_mgr
+         "pie: no transcript"
          "Speech-to-text produced no transcript text. Try speaking louder or \
           checking microphone input.");
     Ok ())
   else
     match
-      Input.Text_injection.inject ?clipboard_owner ~newline_rules
+      Input.Text_injection.inject ~caps ?clipboard_owner ~newline_rules
         ~text_entry_rules ~clock ~process_mgr normalized
     with
     | Error error ->
         ignore
-          (Desktop.Notification.notify_warning ~process_mgr
+          (Desktop.Notification.notify_warning ~caps ~process_mgr
              "pie: text entry failed"
              (diagnostic_injection error));
         Error (ptt_of_injection error)
     | Ok result ->
-        Printf.printf "%s %d chars via %s (%s)\n%!"
+        Ox_caps.Cap_stdlib.printf ~caps "%s %d chars via %s (%s)\n%!"
           (match result.outcome with
           | Input.Text_injection.Typed -> "Typed"
           | Input.Text_injection.Clipboard_key_attempted ->
@@ -450,30 +456,30 @@ type attempt_owner = {
 
 (* Create only missing ancestors at 0700. Existing directories are left
    untouched (no chmod), including a historical 0755 parent. *)
-let rec ensure_private_missing path =
+let rec ensure_private_missing ~caps path =
   if path = "" || path = Filename.dirname path then ()
   else
     match Unix.lstat path with
     | { st_kind = Unix.S_DIR; _ } -> ()
     | _ -> raise (Unix.Unix_error (Unix.EEXIST, "mkdir", path))
     | exception Unix.Unix_error (Unix.ENOENT, _, _) -> (
-        ensure_private_missing (Filename.dirname path);
-        try Unix.mkdir path 0o700
+        ensure_private_missing ~caps (Filename.dirname path);
+        try Ox_caps.Cap_unix.mkdir ~caps path 0o700
         with Unix.Unix_error (Unix.EEXIST, _, _) -> (
           match Unix.lstat path with
           | { st_kind = Unix.S_DIR; _ } -> ()
           | _ -> raise (Unix.Unix_error (Unix.EEXIST, "mkdir", path))))
 
-let open_recovery_store ~root =
+let open_recovery_store ~caps ~root =
   match
     try
-      ensure_private_missing root;
+      ensure_private_missing ~caps root;
       Ok ()
     with Unix.Unix_error (err, _, _) ->
       Error (`Retry_store (Unix.error_message err))
   with
   | Error e -> Error e
-  | Ok () -> Active.open_store ~root
+  | Ok () -> Active.open_store ~caps ~root
 
 let create_attempt_owner ~store ~coordinator ~attempt mode =
   match Active.open_audio_writer store ~mode:(retry_mode mode) with
@@ -622,13 +628,14 @@ let attempt_handle owner (handle : Ptt_loop.handle) : Ptt_loop.handle =
 (* Recording is stopped by the attempt settlement, after provider and delivery
    completion, so a press received while the operation still processes is
    rejected instead of admitted as a second attempt. *)
-let production_stt ~sw ~net ~clock ~logger ~process_mgr config mode bytes =
+let production_stt ~caps ~sw ~net ~clock ~logger ~process_mgr config mode bytes
+    =
   Result.map_error ptt_of_stt
-    (run_stt ~sw ~net ~clock ~logger ~process_mgr config mode bytes)
+    (run_stt ~caps ~sw ~net ~clock ~logger ~process_mgr config mode bytes)
 
-let production_deliver ~clock ~process_mgr ?clipboard_owner
+let production_deliver ~caps ~clock ~process_mgr ?clipboard_owner
     (config : Config.Stt.t) mode text =
-  inject_and_report ~clock ~process_mgr ?clipboard_owner
+  inject_and_report ~caps ~clock ~process_mgr ?clipboard_owner
     ~newline_rules:config.newline_rules
     ~text_entry_rules:config.text_entry_rules mode text
 
@@ -644,16 +651,17 @@ let make_clip_handle ~owner ~stt ~deliver ~config mode =
     cancel = (fun () -> Ok ());
   }
 
-let make_streaming_handle ~sw ~net ~clock ~logger ~owner ~config ~deliver mode =
+let make_streaming_handle ~caps ~sw ~net ~clock ~logger ~owner ~config ~deliver
+    mode =
   let model = (resolved_model_for_mode config mode).model in
   let with_stream =
     match mode with
     | Transcribe ->
-        Stt.Codex_realtime.with_transcription_stream ~sw ~net ~clock ~logger
-          ~model ~language:config.transcription_language
+        Stt.Codex_realtime.with_transcription_stream ~caps ~sw ~net ~clock
+          ~logger ~model ~language:config.transcription_language
           ~prompt_template:config.transcription_prompt
     | Translate ->
-        Stt.Codex_realtime.with_translation_stream ~sw ~net ~clock ~logger
+        Stt.Codex_realtime.with_translation_stream ~caps ~sw ~net ~clock ~logger
           ~model ~source_language:config.translation_source_language
           ~target_language:config.translation_target_language
           ~prompt_template:config.translation_prompt
@@ -690,8 +698,8 @@ let make_streaming_handle ~sw ~net ~clock ~logger ~owner ~config ~deliver mode =
       | Some error -> Error error
       | None -> Result.map_error ptt_of_stt stream_result)
 
-let acquire_and_run ~sw ~net ~clock ~logger ~owner ~config ~stt ~deliver mode
-    use =
+let acquire_and_run ~caps ~sw ~net ~clock ~logger ~owner ~config ~stt ~deliver
+    mode use =
   match
     try Ok (resolved_model_for_mode config mode)
     with Config.Stt.Config_error _ -> Error (`Ptt_error "config:model")
@@ -701,7 +709,7 @@ let acquire_and_run ~sw ~net ~clock ~logger ~owner ~config ~stt ~deliver mode
       let handle =
         match resolved.provider with
         | Codex_realtime ->
-            make_streaming_handle ~sw ~net ~clock ~logger ~owner ~config
+            make_streaming_handle ~caps ~sw ~net ~clock ~logger ~owner ~config
               ~deliver mode
         | Openrouter ->
             Ptt_loop.Handle
@@ -756,18 +764,18 @@ let run_acquired_attempt ~sw ~attempt
   | (Error _ as error), Ok () -> error
   | Ok (), result -> result
 
-let on_press ~sw ~net ~clock ~logger ~coordinator ~config ?store ?retry_dir ~stt
-    ~deliver mode_name =
+let on_press ~caps ~sw ~net ~clock ~logger ~coordinator ~config ?store
+    ?retry_dir ~stt ~deliver mode_name =
   let mode = mode_of_name mode_name in
   match
     Recording.Coordinator.try_start coordinator (recording_mode mode) ()
   with
   | Recording.Coordinator.Busy active ->
-      Printf.eprintf "PTT ignored: %s is active\n%!"
+      Ox_caps.Cap_stdlib.eprintf ~caps "PTT ignored: %s is active\n%!"
         (Recording.Coordinator.string_of_mode active);
       Ok Ptt_loop.Skip
   | Recording.Coordinator.Disabled ->
-      Printf.eprintf "PTT ignored: PIE is paused\n%!";
+      Ox_caps.Cap_stdlib.eprintf ~caps "PTT ignored: PIE is paused\n%!";
       Ok Ptt_loop.Skip
   | Recording.Coordinator.Started attempt -> (
       let opened =
@@ -776,7 +784,7 @@ let on_press ~sw ~net ~clock ~logger ~coordinator ~config ?store ?retry_dir ~stt
         | None -> (
             match retry_dir with
             | None -> Error (`Retry_store "no-store")
-            | Some root -> open_recovery_store ~root)
+            | Some root -> open_recovery_store ~caps ~root)
       in
       match opened with
       | Error error ->
@@ -795,8 +803,8 @@ let on_press ~sw ~net ~clock ~logger ~coordinator ~config ?store ?retry_dir ~stt
                      run_acquired_attempt ~sw ~attempt
                        ~on_settle:(fun () -> settle_attempt owner)
                        (fun () ->
-                         acquire_and_run ~sw ~net ~clock ~logger ~owner ~config
-                           ~stt ~deliver mode use)))))
+                         acquire_and_run ~caps ~sw ~net ~clock ~logger ~owner
+                           ~config ~stt ~deliver mode use)))))
 
 (* PIE004: keyboard and RPC presses share one control path. The handler queues
    triggers for the same PTT loop and admission owner the keyboard path uses,
@@ -962,11 +970,14 @@ type 'audio owned_inputs = {
   source_name : string option;
 }
 
-let run_with_inputs ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock ~inputs
-    ~config_control ~stt ~deliver ~socket_path ~retry_dir
-    ?(config_path = config_path) ?initial_config ?ptt_transcribe_keysym
-    ?ptt_translate_keysym ?(min_duration_ms = default_min_duration_ms)
-    ?queue_pcm_bytes ?capture_pcm_bytes ?queue_capacity () =
+let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
+    ~inputs ~config_control ~stt ~deliver ~socket_path ~retry_dir ?config_path
+    ?initial_config ?ptt_transcribe_keysym ?ptt_translate_keysym
+    ?(min_duration_ms = default_min_duration_ms) ?queue_pcm_bytes
+    ?capture_pcm_bytes ?queue_capacity () =
+  let config_path =
+    Option.value config_path ~default:(Paths.stt_config_path ~caps)
+  in
   Eio.Switch.check sw;
   let run_on_switch ~sw =
     let load_initial () =
@@ -988,7 +999,7 @@ let run_with_inputs ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock ~inputs
     let* initial_effective = initial_effective in
     let current = ref initial_effective in
     let last_stamp = ref initial_stamp in
-    let coordinator = Recording.Coordinator.create () in
+    let coordinator = Recording.Coordinator.create ~caps () in
     let control : Ptt_loop.trigger Eio.Stream.t = Eio.Stream.create 1024 in
     let retries : (Active.metadata * Recording.Coordinator.attempt) Eio.Stream.t
         =
@@ -999,7 +1010,7 @@ let run_with_inputs ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock ~inputs
       match !store_cell with
       | Some store -> Ok store
       | None -> (
-          match open_recovery_store ~root:retry_dir with
+          match open_recovery_store ~caps ~root:retry_dir with
           | Error _ as error -> error
           | Ok store ->
               store_cell := Some store;
@@ -1026,15 +1037,15 @@ let run_with_inputs ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock ~inputs
                    | `Lock_identity -> "lock identity"
                    | `Probe_failed -> "stale probe failed"))
                error))
-        (Assistant_service.Server.start ~sw ~net ~fs ~socket_path ~clock
+        (Assistant_service.Server.start ~caps ~sw ~net ~fs ~socket_path ~clock
            ~action_handler:
              (action_handler ~coordinator ~send_control ~retries ~get_store)
            coordinator)
     in
     Ox_observability.Logger.info logger "assistant_service started"
       ~fields:[ ("config.path", Ox_observability.Logger.String config_path) ];
-    Printf.printf "pie config:\n%s\n%!"
-      (startup_config_json ~config:initial_effective
+    Ox_caps.Cap_stdlib.printf ~caps "pie config:\n%s\n%!"
+      (startup_config_json ~caps ~config:initial_effective
          ~ptt_transcribe_keysym:initial_effective.ptt_transcribe_keysym
          ~ptt_translate_keysym:initial_effective.ptt_translate_keysym
          ~min_duration_ms ());
@@ -1111,7 +1122,7 @@ let run_with_inputs ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock ~inputs
           on_ready =
             (fun () ->
               let cfg = !current in
-              Printf.printf
+              Ox_caps.Cap_stdlib.printf ~caps
                 "PTT armed: transcribe=%d%s translate=%d%s source=%s\n%!"
                 cfg.ptt_transcribe_keysym
                 (if cfg.ptt_transcribe_shift then "+shift" else "")
@@ -1121,7 +1132,8 @@ let run_with_inputs ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock ~inputs
               Ok ());
           on_press =
             (fun mode_name ->
-              on_press ~sw ~net ~clock ~logger ~coordinator ~config:!current
+              on_press ~caps ~sw ~net ~clock ~logger ~coordinator
+                ~config:!current
                 ?store:
                   (match get_store () with
                   | Ok store -> Some store
@@ -1145,7 +1157,7 @@ let run_with_inputs ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock ~inputs
             (fun () ->
               Result.map_error
                 (fun _ -> `Ptt_error "notification")
-                (Desktop.Notification.notify_warning ~process_mgr
+                (Desktop.Notification.notify_warning ~caps ~process_mgr
                    "pie: no microphone input"
                    "No input detected during push-to-talk. Your microphone may \
                     be muted."));
@@ -1166,7 +1178,7 @@ let run_with_inputs ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock ~inputs
           ~on_low_input:(fun () ->
             Result.map_error
               (fun _ -> `Ptt_error "notification")
-              (Desktop.Notification.notify_warning ~process_mgr
+              (Desktop.Notification.notify_warning ~caps ~process_mgr
                  "pie: microphone input is very quiet"
                  "Microphone input has stayed very quiet for 3 seconds. \
                   Recording will continue."))
@@ -1293,24 +1305,26 @@ let run_with_inputs ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock ~inputs
         raise (Service_returned (run_on_switch ~sw:service_sw)))
   with Service_returned result -> result
 
-let run ~sw ~fs ~net ~clock ~mono_clock ~logger ~process_mgr ~config ~source
-    ?ptt_transcribe_keysym ?ptt_translate_keysym
+let run ~caps ~sw ~fs ~net ~clock ~mono_clock ~logger ~process_mgr ~config
+    ~source ?ptt_transcribe_keysym ?ptt_translate_keysym
     ?(min_duration_ms = default_min_duration_ms) ?stdin:_ () =
   let config_path = Config.Stt.source_path source in
   let config_control =
     {
-      stamp = (fun () -> config_stamp ~config_path ());
-      load = load_snapshot ~fs ~source;
+      stamp = (fun () -> config_stamp ~caps ~config_path ());
+      load = load_snapshot ~caps ~fs ~source;
     }
   in
-  let stt = production_stt ~sw ~net ~clock ~logger ~process_mgr in
-  Pulse.Client.with_client ~net ~clock ~logger @@ fun client ->
+  let stt = production_stt ~caps ~sw ~net ~clock ~logger ~process_mgr in
+  Pulse.Client.with_client ~caps ~net ~clock ~logger @@ fun client ->
   Pulse.Client.with_record_stream client @@ fun info audio ->
-  Keyboard.Monitor.with_monitor ~sw ~net ~clock ~process_mgr @@ fun keyboard ->
-  let clipboard_owner = Wayland.Clipboard.create ~sw ~process_mgr () in
-  let deliver = production_deliver ~clock ~process_mgr ~clipboard_owner in
-  run_with_inputs ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
+  Keyboard.Monitor.with_monitor ~caps ~sw ~net ~clock ~process_mgr
+  @@ fun keyboard ->
+  let clipboard_owner = Wayland.Clipboard.create ~caps ~sw ~process_mgr () in
+  let deliver = production_deliver ~caps ~clock ~process_mgr ~clipboard_owner in
+  run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
     ~inputs:{ keyboard; audio; source_name = info.Pulse.Defs.source_name }
     ~config_control ~config_path ~initial_config:config ~stt ~deliver
-    ~socket_path:Paths.daemon_socket_path ~retry_dir:Paths.failed_recordings_dir
+    ~socket_path:(Paths.daemon_socket_path ~caps)
+    ~retry_dir:(Paths.failed_recordings_dir ~caps)
     ?ptt_transcribe_keysym ?ptt_translate_keysym ~min_duration_ms ()

@@ -1,3 +1,5 @@
+let caps = Ox_test.powerbox () (* ^pcaps-n1rg *)
+
 (* PIE019: user markers stay out of diagnostics; intended output remains.
    Direct style: the provider call and the helper subprocesses return results,
    stdio stays captured around each call, and every deadline is bounded. *)
@@ -201,7 +203,7 @@ let run_openrouter ~body ~status () =
     Ox.Timeout.timeout ~clock (Ox.Duration.seconds openrouter_deadline_seconds)
       (fun () ->
         match
-          Pie.Stt.Openrouter.transcribe_with_prompt ~sw ~net ~clock
+          Pie.Stt.Openrouter.transcribe_with_prompt ~caps ~sw ~net ~clock
             ~logger:
               (stderr_logger ~clock ~mono_clock:(Eio.Stdenv.mono_clock env))
             ~model:"test-model" ~language:"en" ~prompt_template:"Transcribe."
@@ -300,7 +302,7 @@ let test_helper_nonzero_omits_argv_and_stderr () =
   let result, stdout, stderr =
     with_captured_stdio (fun () ->
         run_helper (fun ~env ~sw:_ ->
-            Pie.Wayland.Wtype.type_text
+            Pie.Wayland.Wtype.type_text ~caps
               ~process_mgr:(Eio.Stdenv.process_mgr env)
               marker))
   in
@@ -361,7 +363,7 @@ let test_auth_load_omits_json_snippet () =
   with_sandbox @@ fun dir ->
   let path = Filename.concat dir "auth.json" in
   write_file path ("{\"tokens\": \"" ^ marker ^ " not-json");
-  match Pie.Stt.Codex_realtime.Codex_auth.load ~path () with
+  match Pie.Stt.Codex_realtime.Codex_auth.load ~caps ~path () with
   | Ok _ -> Alcotest.fail "expected auth load failure"
   | Error (`Stt_error message) -> assert_absent "auth json snippet" message
 
@@ -374,7 +376,7 @@ let test_large_helper_stderr_discarded () =
   let result, stdout, stderr =
     with_captured_stdio (fun () ->
         run_helper (fun ~env ~sw:_ ->
-            Pie.Wayland.Wtype.type_text
+            Pie.Wayland.Wtype.type_text ~caps
               ~process_mgr:(Eio.Stdenv.process_mgr env)
               "ok"))
   in
@@ -417,7 +419,7 @@ let test_helper_success_stdout_discarded_delivery_file () =
   let result, stdout, stderr =
     with_captured_stdio (fun () ->
         run_helper (fun ~env ~sw:_ ->
-            Pie.Wayland.Wtype.type_text
+            Pie.Wayland.Wtype.type_text ~caps
               ~process_mgr:(Eio.Stdenv.process_mgr env)
               intended))
   in

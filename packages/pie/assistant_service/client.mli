@@ -2,6 +2,7 @@ type error =
   [ `Daemon_off | `Daemon_error of string | `Daemon_protocol_error of string ]
 
 val status :
+  caps:< Ox_caps.Cap.env ; .. > ->
   net:_ Eio.Net.t ->
   clock:_ Eio.Time.clock ->
   sw:Eio.Switch.t ->
@@ -9,6 +10,7 @@ val status :
   (Contract.recording_snapshot, error) result
 
 val toggle :
+  caps:< Ox_caps.Cap.env ; .. > ->
   net:_ Eio.Net.t ->
   clock:_ Eio.Time.clock ->
   sw:Eio.Switch.t ->
@@ -16,6 +18,7 @@ val toggle :
   (bool, error) result
 
 val action :
+  caps:< Ox_caps.Cap.env ; .. > ->
   net:_ Eio.Net.t ->
   clock:_ Eio.Time.clock ->
   sw:Eio.Switch.t ->
@@ -23,6 +26,7 @@ val action :
   (Contract.action_result, error) result
 
 val pause :
+  caps:< Ox_caps.Cap.env ; .. > ->
   net:_ Eio.Net.t ->
   clock:_ Eio.Time.clock ->
   sw:Eio.Switch.t ->
@@ -30,6 +34,7 @@ val pause :
   (unit, error) result
 
 val resume :
+  caps:< Ox_caps.Cap.env ; .. > ->
   net:_ Eio.Net.t ->
   clock:_ Eio.Time.clock ->
   sw:Eio.Switch.t ->

@@ -7,13 +7,13 @@ let pa_native_cookie_length = 256
 let pa_native_protocol_version = 32
 let pa_volume_norm = 0x10000
 
-let pa_default_socket_path =
-  match Sys.getenv_opt "XDG_RUNTIME_DIR" with
+let pa_default_socket_path ~caps =
+  match Ox_caps.Cap_sys.getenv_opt ~caps "XDG_RUNTIME_DIR" with
   | Some dir -> Filename.concat dir "pulse/native"
   | None -> "/run/user/1000/pulse/native"
 
-let pa_default_cookie_path =
-  match Sys.getenv_opt "HOME" with
+let pa_default_cookie_path ~caps =
+  match Ox_caps.Cap_sys.getenv_opt ~caps "HOME" with
   | Some home -> Filename.concat home ".config/pulse/cookie"
   | None -> "/tmp/.config/pulse/cookie"
 

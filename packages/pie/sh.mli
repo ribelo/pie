@@ -1,4 +1,4 @@
-val find_executable : string -> string option
+val find_executable : caps:< Ox_caps.Cap.env ; .. > -> string -> string option
 val discarded_stderr : unit -> Eio.Flow.sink_ty Eio.Resource.t
 val failure_message : prog:string -> exn -> string
 

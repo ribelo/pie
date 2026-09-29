@@ -2,5 +2,5 @@
 
 (test
  (name test_removed_wakeword)
- (libraries pie unix alcotest)
+ (libraries ox_test pie unix alcotest)
  (deps ../../bin/pie.exe))

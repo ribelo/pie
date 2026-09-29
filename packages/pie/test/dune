@@ -20,16 +20,16 @@
 
 (executable
  (name live_codex_transcribe)
- (libraries pie eio_main ox))
+ (libraries ox_test pie eio_main ox))
 
 (executable
  (name live_openrouter_transcribe)
- (libraries pie eio_main ox))
+ (libraries ox_test pie eio_main ox))
 
 (executable
  (name live_openrouter_translate)
- (libraries pie eio_main ox))
+ (libraries ox_test pie eio_main ox))
 
 (executable
  (name ws_settlement_probe)
- (libraries pie eio_main ox ox_http))
+ (libraries ox_test pie eio_main ox ox_http))

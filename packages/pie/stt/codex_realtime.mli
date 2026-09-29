@@ -23,22 +23,42 @@ end
 module Codex_auth : sig
   type t = { path : string; access_token : string }
 
-  val auth_path : unit -> string
-  val load : ?path:string -> unit -> (t, error) result
+  val auth_path : caps:< Ox_caps.Cap.env ; .. > -> unit -> string
+
+  val load :
+    caps:< Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; .. > ->
+    ?path:string ->
+    unit ->
+    (t, error) result
+
   val decode_jwt_exp_seconds : string -> int option
   val is_expired : ?leeway_seconds:int -> now:float -> string -> bool
-  val access_token : unit -> (string, error) result
+
+  val access_token :
+    caps:< Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.time ; .. > ->
+    unit ->
+    (string, error) result
 end
 
 val oauth_response_idle_timeout : Ox.Duration.t
 val websocket_establishment_timeout : Ox.Duration.t
-val realtime_access_token : client:'a -> unit -> (string, error) result
+
+val realtime_access_token :
+  caps:< Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.time ; .. > ->
+  client:'a ->
+  unit ->
+  (string, error) result
 
 val realtime_header_pairs :
   ?session_id:string -> string -> (string * string) list
 
 val build_realtime_url :
-  ?base_url:string -> mode:mode -> model:string -> unit -> string
+  caps:< Ox_caps.Cap.env ; .. > ->
+  ?base_url:string ->
+  mode:mode ->
+  model:string ->
+  unit ->
+  string
 
 val build_transcription_session_update :
   ?prompt:string -> model:string -> unit -> Ox_json.t
@@ -56,6 +76,7 @@ val event_should_stop : mode:mode -> event -> bool
 val resample_s16le_mono : from_rate:int -> to_rate:int -> bytes -> bytes
 
 val run_realtime_session :
+  caps:< Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. > ->
   sw:Eio.Switch.t ->
   net:_ Eio.Net.t ->
   clock:_ Eio.Time.clock ->
@@ -71,6 +92,7 @@ val run_realtime_session :
   (string, error) result
 
 val run_realtime_stream_session :
+  caps:< Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. > ->
   sw:Eio.Switch.t ->
   net:_ Eio.Net.t ->
   clock:_ Eio.Time.clock ->
@@ -93,6 +115,7 @@ type stream_handle = {
 }
 
 val with_stream_session :
+  caps:< Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. > ->
   sw:Eio.Switch.t ->
   net:_ Eio.Net.t ->
   clock:_ Eio.Time.clock ->
@@ -110,6 +133,7 @@ val with_stream_session :
   ('a, error) result
 
 val with_transcription_stream :
+  caps:< Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.time ; .. > ->
   sw:Eio.Switch.t ->
   net:_ Eio.Net.t ->
   clock:_ Eio.Time.clock ->
@@ -122,6 +146,7 @@ val with_transcription_stream :
   ('a, error) result
 
 val with_translation_stream :
+  caps:< Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.time ; .. > ->
   sw:Eio.Switch.t ->
   net:_ Eio.Net.t ->
   clock:_ Eio.Time.clock ->
@@ -135,6 +160,7 @@ val with_translation_stream :
   ('a, error) result
 
 val transcribe_with_prompt :
+  caps:< Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.time ; .. > ->
   sw:Eio.Switch.t ->
   net:_ Eio.Net.t ->
   clock:_ Eio.Time.clock ->
@@ -146,6 +172,7 @@ val transcribe_with_prompt :
   (string, error) result
 
 val translate_with_prompt :
+  caps:< Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.time ; .. > ->
   sw:Eio.Switch.t ->
   net:_ Eio.Net.t ->
   clock:_ Eio.Time.clock ->

@@ -152,10 +152,10 @@ let offer_sync t text =
       | None -> raise exn
       | Some cleanup -> raise (combine exn cleanup))
 
-let create ~sw ~process_mgr ?(copy_program = "wl-copy") () =
+let create ~caps ~sw ~process_mgr ?(copy_program = "wl-copy") () =
   let copy_program =
     if Filename.is_relative copy_program then
-      Option.value ~default:copy_program (Sh.find_executable copy_program)
+      Option.value ~default:copy_program (Sh.find_executable ~caps copy_program)
     else copy_program
   in
   let t =

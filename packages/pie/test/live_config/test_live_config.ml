@@ -1,3 +1,5 @@
+let caps = Ox_test.powerbox () (* ^pcaps-n1rg *)
+
 (* PIE006: one published effective config, physical-key ownership, attempt
    thresholds sampled once. Synthetic run_with_inputs only. *)
 
@@ -123,7 +125,7 @@ let run_live ~sw ~fs ~clock ~logger ~net ~process_mgr ~mono_clock ~dir
     { Pie.Assistant.Service.keyboard; audio; source_name = Some "test-source" }
   in
   fun () ->
-    Pie.Assistant.Service.run_with_inputs ~sw ~net ~fs ~clock ~logger
+    Pie.Assistant.Service.run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger
       ~process_mgr ~mono_clock ~inputs ~config_control ~stt ~deliver
       ~socket_path ~retry_dir ~min_duration_ms:0 ?ptt_transcribe_keysym
       ?ptt_translate_keysym ()

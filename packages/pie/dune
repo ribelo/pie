@@ -9,6 +9,7 @@
   ox_ai_openrouter
   ox_ai_realtime
   ox_app
+  ox_caps
   ox_ipc
   ox_json
   ox_http

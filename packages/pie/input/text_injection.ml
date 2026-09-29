@@ -104,64 +104,67 @@ let entry_method_for_window rules focused_window =
 
 let choose_backend = function Wayland -> Wtype | X11 -> Xdotool
 
-let detect_session () =
-  match Sys.getenv_opt "XDG_SESSION_TYPE" with
+let detect_session ~caps () =
+  match Ox_caps.Cap_sys.getenv_opt ~caps "XDG_SESSION_TYPE" with
   | Some "wayland" -> Ok Wayland
   | Some "x11" -> Ok X11
   | _ ->
-      if Sys.getenv_opt "WAYLAND_DISPLAY" <> None then Ok Wayland
-      else if Sys.getenv_opt "DISPLAY" <> None then Ok X11
+      if Ox_caps.Cap_sys.getenv_opt ~caps "WAYLAND_DISPLAY" <> None then
+        Ok Wayland
+      else if Ox_caps.Cap_sys.getenv_opt ~caps "DISPLAY" <> None then Ok X11
       else Error (`Injection_error "could not detect graphical session")
 
 (* Conservative Niri session: Wayland + XDG_CURRENT_DESKTOP colon-token
    "niri" (case-insensitive) + nonempty NIRI_SOCKET. Otherwise fail before
    lookup/emission. No other desktop is treated as a Niri focus source. *)
-let desktop_has_niri_token () =
-  match Sys.getenv_opt "XDG_CURRENT_DESKTOP" with
+let desktop_has_niri_token ~caps () =
+  match Ox_caps.Cap_sys.getenv_opt ~caps "XDG_CURRENT_DESKTOP" with
   | None | Some "" -> false
   | Some value ->
       String.split_on_char ':' value
       |> List.exists (fun token ->
           String.equal (String.lowercase_ascii (String.trim token)) "niri")
 
-let niri_socket_configured () =
-  match Sys.getenv_opt "NIRI_SOCKET" with
+let niri_socket_configured ~caps () =
+  match Ox_caps.Cap_sys.getenv_opt ~caps "NIRI_SOCKET" with
   | Some value when String.trim value <> "" -> true
   | _ -> false
 
-let niri_session_compatible = function
+let niri_session_compatible ~caps = function
   | X11 -> false
-  | Wayland -> desktop_has_niri_token () && niri_socket_configured ()
+  | Wayland ->
+      desktop_has_niri_token ~caps () && niri_socket_configured ~caps ()
 
 let unresolved_focus = `Injection_error "focus information is unavailable"
 
 let incompatible_session =
   `Injection_error "focus rules require a Niri Wayland session"
 
-let press_newline ~process_mgr ~backend action =
+let press_newline ~caps ~process_mgr ~backend action =
   match (backend, action) with
   | _, Collapse_to_space -> Ok ()
   | Wtype, Shift_enter ->
-      Wayland.Wtype.key ~process_mgr ~modifiers:[ "shift" ] "Return"
-  | Wtype, Ctrl_j -> Wayland.Wtype.key ~process_mgr ~modifiers:[ "ctrl" ] "j"
-  | Xdotool, Shift_enter -> X11.Xdotool.key ~process_mgr "shift+Return"
-  | Xdotool, Ctrl_j -> X11.Xdotool.key ~process_mgr "ctrl+j"
+      Wayland.Wtype.key ~caps ~process_mgr ~modifiers:[ "shift" ] "Return"
+  | Wtype, Ctrl_j ->
+      Wayland.Wtype.key ~caps ~process_mgr ~modifiers:[ "ctrl" ] "j"
+  | Xdotool, Shift_enter -> X11.Xdotool.key ~caps ~process_mgr "shift+Return"
+  | Xdotool, Ctrl_j -> X11.Xdotool.key ~caps ~process_mgr "ctrl+j"
 
-let type_segment ~process_mgr ~backend segment =
+let type_segment ~caps ~process_mgr ~backend segment =
   if String.length segment = 0 then Ok ()
   else
     match backend with
-    | Wtype -> Wayland.Wtype.type_text ~process_mgr segment
-    | Xdotool -> X11.Xdotool.type_text ~process_mgr segment
+    | Wtype -> Wayland.Wtype.type_text ~caps ~process_mgr segment
+    | Xdotool -> X11.Xdotool.type_text ~caps ~process_mgr segment
 
-let type_lines ~process_mgr ~backend ~newline_action text =
+let type_lines ~caps ~process_mgr ~backend ~newline_action text =
   let open Result.Syntax in
   let rec loop = function
     | [] -> Ok ()
-    | [ segment ] -> type_segment ~process_mgr ~backend segment
+    | [ segment ] -> type_segment ~caps ~process_mgr ~backend segment
     | segment :: rest ->
-        let* () = type_segment ~process_mgr ~backend segment in
-        let* () = press_newline ~process_mgr ~backend newline_action in
+        let* () = type_segment ~caps ~process_mgr ~backend segment in
+        let* () = press_newline ~caps ~process_mgr ~backend newline_action in
         loop rest
   in
   loop (split_line_breaks text)
@@ -176,7 +179,8 @@ let prepare_text ~method_ ~newline_action text =
   | Type -> normalize_for_action newline_action (normalize_text text)
   | Paste -> normalize_text text
 
-let type_text ?(newline_action = Collapse_to_space) ~process_mgr ~backend text =
+let type_text ~caps ?(newline_action = Collapse_to_space) ~process_mgr ~backend
+    text =
   let normalized = normalize_text text in
   if String.length normalized = 0 then
     Error (`Injection_error "no text to inject after normalization")
@@ -185,13 +189,14 @@ let type_text ?(newline_action = Collapse_to_space) ~process_mgr ~backend text =
     if String.length typed = 0 then
       Error (`Injection_error "no text to inject after normalization")
     else if newline_action = Collapse_to_space then
-      type_segment ~process_mgr ~backend typed
-    else type_lines ~process_mgr ~backend ~newline_action typed
+      type_segment ~caps ~process_mgr ~backend typed
+    else type_lines ~caps ~process_mgr ~backend ~newline_action typed
 
-let focused_window_for_rules ~process_mgr ~session ~newline_rules
+let focused_window_for_rules ~caps ~process_mgr ~session ~newline_rules
     ~text_entry_rules =
   if newline_rules = [] && text_entry_rules = [] then Ok None
-  else if not (niri_session_compatible session) then Error incompatible_session
+  else if not (niri_session_compatible ~caps session) then
+    Error incompatible_session
   else
     match Niri.focused_window ~process_mgr () with
     | Ok (Some window) -> Ok (Some window)
@@ -203,13 +208,13 @@ type injection_error =
   | `Wtype_error of string
   | `Xdotool_error of string ]
 
-let inject ?clipboard_owner ?(newline_rules = []) ?(text_entry_rules = [])
+let inject ~caps ?clipboard_owner ?(newline_rules = []) ?(text_entry_rules = [])
     ~clock ~process_mgr text =
   let open Result.Syntax in
-  let* session = detect_session () in
+  let* session = detect_session ~caps () in
   let backend = choose_backend session in
   let* focused_window =
-    focused_window_for_rules ~process_mgr ~session ~newline_rules
+    focused_window_for_rules ~caps ~process_mgr ~session ~newline_rules
       ~text_entry_rules
   in
   let newline_action = newline_action_for_window newline_rules focused_window in
@@ -221,7 +226,7 @@ let inject ?clipboard_owner ?(newline_rules = []) ?(text_entry_rules = [])
     let* () =
       match (method_, session, clipboard_owner) with
       | Type, _, _ ->
-          (type_text ~newline_action ~process_mgr ~backend prepared
+          (type_text ~caps ~newline_action ~process_mgr ~backend prepared
             :> (unit, injection_error) Stdlib.result)
       | Paste, Wayland, Some owner ->
           let* () =
@@ -232,7 +237,7 @@ let inject ?clipboard_owner ?(newline_rules = []) ?(text_entry_rules = [])
              stdin is not a Wayland publication acknowledgement; this grace
              period mitigates the startup race, not a receipt guarantee. *)
           Eio.Time.sleep clock 0.025;
-          (Wayland.Wtype.key ~process_mgr ~modifiers:[ "ctrl" ] "v"
+          (Wayland.Wtype.key ~caps ~process_mgr ~modifiers:[ "ctrl" ] "v"
             :> (unit, injection_error) Stdlib.result)
       | Paste, Wayland, None ->
           Error (`Injection_error "paste entry requires a clipboard owner")

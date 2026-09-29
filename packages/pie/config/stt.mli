@@ -55,10 +55,14 @@ val entry_method_of_string : string -> entry_method
 val string_of_entry_method : entry_method -> string
 val max_config_file_bytes : int
 val door_spec : t Ox_app.Config.t
-val default_source : unit -> Ox_app.Config.source
+
+val default_source :
+  caps:< Ox_caps.Cap.env ; .. > -> unit -> Ox_app.Config.source
+
 val source_path : Ox_app.Config.source -> string
 
 val load :
+  caps:< Ox_caps.Cap.env ; .. > ->
   fs:_ Eio.Path.t ->
   ?source:Ox_app.Config.source ->
   ?read:(string -> (string, Ox_app.Config.read_error) result) ->

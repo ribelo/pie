@@ -46,10 +46,12 @@ val prepare_text :
 val choose_backend : session_type -> backend
 
 val detect_session :
+  caps:< Ox_caps.Cap.env ; .. > ->
   unit ->
   (session_type, ([> `Injection_error of string ] as 'err)) Stdlib.result
 
 val type_text :
+  caps:< Ox_caps.Cap.env ; .. > ->
   ?newline_action:newline_action ->
   process_mgr:_ Eio.Process.mgr ->
   backend:backend ->
@@ -63,6 +65,7 @@ val type_text :
   Stdlib.result
 
 val inject :
+  caps:< Ox_caps.Cap.env ; .. > ->
   ?clipboard_owner:Wayland.Clipboard.t ->
   ?newline_rules:newline_rule list ->
   ?text_entry_rules:text_entry_rule list ->
