@@ -1,0 +1,11 @@
+(include_subdirs no)
+
+(test
+ (name test_prepared_text)
+ (libraries pie alcotest eio_main ox ox_test unix poll_fix)
+ (link_flags -cclib -Wl,--wrap=caml_iomux_ppoll))
+
+(rule
+ (alias stress)
+ (deps stress.sh)
+ (action (run sh %{dep:stress.sh} %{exe:test_prepared_text.exe} 50)))

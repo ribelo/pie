@@ -1,0 +1,1 @@
+2538926 17:38:07.185935 ppoll([{fd=-1}, {fd=-1}, {fd=-1}, {fd=-1}, {fd=-1}, {fd=-1}, {fd=6, events=POLLIN}], 7, NULL, NULL, 8 <detached ...>

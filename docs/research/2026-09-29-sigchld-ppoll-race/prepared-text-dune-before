@@ -1,0 +1,5 @@
+(include_subdirs no)
+
+(test
+ (name test_prepared_text)
+ (libraries pie alcotest eio_main ox ox_test unix))
