@@ -771,15 +771,17 @@ let run_realtime_session ~sw ~net ~clock ?ca_file ~url ~access_token ~mode
         in
         let receive () = receive_result ~mode session in
         if mode = Translation then
-          Eio.Fiber.first
-            (fun () ->
-              let* result = receive () in
-              finish_result ~mode result)
-            (fun () ->
-              let* () = send_audio_chunks session ~mode pcm in
-              Eio.Time.sleep clock
-                (float_of_int translation_output_drain_ms /. 1000.);
-              stt_error "Codex realtime response incomplete")
+          Eta.Concurrent.race_first ~sw
+            [
+              (fun () ->
+                let* result = receive () in
+                finish_result ~mode result);
+              (fun () ->
+                let* () = send_audio_chunks session ~mode pcm in
+                Eio.Time.sleep clock
+                  (float_of_int translation_output_drain_ms /. 1000.);
+                stt_error "Codex realtime response incomplete");
+            ]
         else
           let* result, () = Eta.Concurrent.par ~sw receive send in
           finish_result ~mode result)
@@ -860,17 +862,19 @@ let run_realtime_stream_session ~sw ~net ~clock ?ca_file ~url ~access_token
         in
         let receive () = receive_result ?on_text ~mode session in
         if mode = Translation then
-          Eio.Fiber.first
-            (fun () ->
-              let* result = receive () in
-              finish_result ~mode result)
-            (fun () ->
-              let* () =
-                send_audio_stream session ~mode ~input_sample_rate audio
-              in
-              Eio.Time.sleep clock
-                (float_of_int translation_output_drain_ms /. 1000.);
-              stt_error "Codex realtime response incomplete")
+          Eta.Concurrent.race_first ~sw
+            [
+              (fun () ->
+                let* result = receive () in
+                finish_result ~mode result);
+              (fun () ->
+                let* () =
+                  send_audio_stream session ~mode ~input_sample_rate audio
+                in
+                Eio.Time.sleep clock
+                  (float_of_int translation_output_drain_ms /. 1000.);
+                stt_error "Codex realtime response incomplete");
+            ]
         else
           let* result, () = Eta.Concurrent.par ~sw receive send in
           finish_result ~mode result)
