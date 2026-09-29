@@ -40,14 +40,14 @@ dune build --build-dir .scratch/example-build/dune --only-packages pie
 
 This does not install or restart anything.
 
-## Test against current local eta-next
+## Test against current local Eta master
 
 ```bash
 scripts/test-local-eta.sh
 ```
 
-The script enters `nix develop ../ocaml/eta-next` for native libraries, mirrors the
-clean checked-out Eta `eta-next` into ignored `_dev/eta-source`, builds and
+The script enters `nix develop ../ocaml/Eta` for native libraries, mirrors the
+clean checked-out Eta `master` into ignored `_dev/eta-source`, builds and
 installs only the needed Eta packages into ignored `_dev/eta-install`, then
 puts that local prefix ahead of the shared switch via `OCAMLPATH` and
 `CAML_LD_LIBRARY_PATH`. It builds Pie and runs **every registered test**
@@ -55,7 +55,7 @@ puts that local prefix ahead of the shared switch via `OCAMLPATH` and
 helpers. It never installs into the shared opam switch. Inspect
 `_dev/test-run/summary.tsv` for per-suite pass counts and
 `_dev/test-run/logs/` for test diagnostics. Set `ETA_PATH` to use a different
-local Eta checkout. The script refuses a dirty or non-eta-next Eta checkout.
+local Eta checkout. The script refuses a dirty or non-master Eta checkout.
 
 ## Provenance record
 

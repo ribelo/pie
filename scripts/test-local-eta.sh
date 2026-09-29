@@ -4,7 +4,7 @@
 set -euo pipefail
 
 pie_root="$(cd "$(dirname "$0")/.." && pwd -P)"
-eta_root="$(cd "${ETA_PATH:-$pie_root/../ocaml/eta-next}" && pwd -P)"
+eta_root="$(cd "${ETA_PATH:-$pie_root/../ocaml/Eta}" && pwd -P)"
 if [[ "${1:-}" != --in-shell ]]; then
   exec nix develop "$eta_root" -c bash "$0" --in-shell
 fi
@@ -16,9 +16,9 @@ pkg-config --exists openssl sqlite3 || {
   echo 'The Eta Nix shell must provide OpenSSL and SQLite native libraries.' >&2
   exit 1
 }
-if [[ "$(git -C "$eta_root" rev-parse HEAD)" != "$(git -C "$eta_root" rev-parse eta-next)" ]] ||
+if [[ "$(git -C "$eta_root" rev-parse HEAD)" != "$(git -C "$eta_root" rev-parse master)" ]] ||
    [[ -n "$(git -C "$eta_root" status --porcelain --untracked-files=no -- lib dune-project)" ]]; then
-  echo 'Eta must be checked out at its clean local eta-next branch for this test.' >&2
+  echo 'Eta must be checked out at its clean local master branch for this test.' >&2
   exit 1
 fi
 
@@ -43,7 +43,7 @@ if [[ "$(ocamlfind query eta_http)" != "$prefix/lib/eta_http" ]]; then
   echo 'Local Eta installation did not take precedence over the shared switch.' >&2
   exit 1
 fi
-printf 'Eta eta-next: %s\n' "$(git -C "$eta_root" rev-parse --short HEAD)"
+printf 'Eta master: %s\n' "$(git -C "$eta_root" rev-parse --short HEAD)"
 dune build --root "$pie_root" --build-dir "$build" --only-packages pie @all
 
 # Fail closed rather than accidentally using a real desktop/audio/session. Do
