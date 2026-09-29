@@ -208,7 +208,7 @@ let press_cycle ~clock ~keyboard ~audio_q ~retry_dir ~delivered =
   wait_until ~clock (fun () -> Atomic.get delivered <> [])
 
 let test_record_to_delivery_last_good_then_reload () =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   with_dir (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
@@ -274,7 +274,7 @@ let assert_input_diagnostic memory expected =
     "sanitized lastError logged before teardown" true (records <> [])
 
 let test_required_input_failure_sets_last_error () =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   with_dir (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
@@ -318,7 +318,7 @@ let test_required_input_failure_sets_last_error () =
       | Error error -> fail_error error)
 
 let test_recording_overload_cancels_attempt () =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   with_dir (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
@@ -370,7 +370,7 @@ let test_recording_overload_cancels_attempt () =
       | Error error -> fail_error error)
 
 let test_cancel_waits_for_blocked_loader () =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   let clock = Eio.Stdenv.clock env in
   let mono_clock = Eio.Stdenv.mono_clock env in
   let net = Eio.Stdenv.net env in
@@ -433,7 +433,7 @@ let test_cancel_waits_for_blocked_loader () =
         "loader returned before service switch finished" true (Atomic.get left))
 
 let test_cancelled_attempt_releases_recording_fd () =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   with_dir (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
@@ -730,7 +730,7 @@ let run_stream_child () =
     | _ -> "no");
   mark_text "codex_home"
     (Option.value (Sys.getenv_opt "CODEX_HOME") ~default:"unset");
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   with_dir (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
@@ -807,7 +807,7 @@ let spawn_stream_child ~port ~codex_home ~niri_dir ~stage_dir =
   snd (Unix.waitpid [] pid)
 
 let test_streaming_codex_private_child () =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   with_dir (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
@@ -851,7 +851,7 @@ let test_streaming_codex_private_child () =
       | Unix.WSTOPPED s -> Alcotest.failf "stream child stopped %d" s)
 
 let test_keyboard_input_lost_cancels_attempt () =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   with_dir (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
@@ -908,7 +908,7 @@ let rpc ~net ~sw socket_path method_ =
       ignore (Eio.Buf_read.of_flow ~max_size:65536 socket |> Eio.Buf_read.line))
 
 let test_pause_latch_one_shot_resume_fresh_attempt () =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   with_dir (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let persist_path = Filename.concat dir "recording.json" in
@@ -951,7 +951,7 @@ let test_pause_latch_one_shot_resume_fresh_attempt () =
 (* A quick physical tap can arrive before the recording slot is ready. With no
    audio, that first attempt must settle rather than retaining admission. *)
 let test_fast_tap_settles_then_next_press_delivers () =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   with_dir (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
@@ -992,7 +992,7 @@ let test_fast_tap_settles_then_next_press_delivers () =
             (Atomic.get delivered)))
 
 let test_pause_resume_fresh_attempt_delivers () =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   with_dir (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
@@ -1045,7 +1045,7 @@ let start_attempt coord =
   | _ -> Alcotest.fail "expected Started"
 
 let test_composite_body_failures_preserved () =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   with_dir (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let coord =
@@ -1085,7 +1085,7 @@ let test_composite_body_failures_preserved () =
         "wrapper preserves body's typed Fail set" direct actual)
 
 let test_owned_pause_plus_cleanup_is_not_ok () =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   with_dir (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
@@ -1111,7 +1111,7 @@ let test_owned_pause_plus_cleanup_is_not_ok () =
       | Error _ -> Alcotest.fail "lost cleanup failure")
 
 let test_pulse_overload_and_cleanup_failures_preserved () =
-  Eio_main.run @@ fun _env ->
+  Pie_test_runtime.run @@ fun _env ->
   match
     Ox.Scope.run (fun sw ->
         Eio.Switch.on_release sw (fun () ->
@@ -1141,7 +1141,7 @@ let test_pulse_overload_and_cleanup_failures_preserved () =
             (Ox.Cause.pp pp_run_error) cause)
 
 let test_status_observer_defect_composes_with_pulse () =
-  Eio_main.run @@ fun _env ->
+  Pie_test_runtime.run @@ fun _env ->
   match
     Ox.Scope.run (fun sw ->
         Eio.Switch.on_release sw (fun () -> failwith "set_error persist");
@@ -1186,7 +1186,7 @@ let rpc_line ~net ~sw socket_path body =
       Eio.Buf_read.of_flow ~max_size:65536 socket |> Eio.Buf_read.line)
 
 let test_service_pre_handle_failure_then_fresh_press () =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   with_dir (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let net = Eio.Stdenv.net env in
@@ -1250,7 +1250,7 @@ let test_service_pre_handle_failure_then_fresh_press () =
         (Atomic.get delivered))
 
 let test_delayed_old_cleanup_preserves_new_same_mode_attempt () =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   with_dir (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let net = Eio.Stdenv.net env in
@@ -1313,7 +1313,7 @@ let test_delayed_old_cleanup_preserves_new_same_mode_attempt () =
       | None -> Alcotest.fail "second attempt cleared by stale settle")
 
 let test_busy_keyboard_and_rpc_then_fresh_cycle () =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   with_dir (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
@@ -1360,7 +1360,7 @@ let test_busy_keyboard_and_rpc_then_fresh_cycle () =
             (Atomic.get delivered)))
 
 let test_cleanup_cancel_and_defect_both_visible () =
-  Eio_main.run @@ fun _env ->
+  Pie_test_runtime.run @@ fun _env ->
   match
     Ox.Scope.run (fun sw ->
         Eio.Switch.on_release sw (fun () ->
@@ -1377,7 +1377,7 @@ let test_cleanup_cancel_and_defect_both_visible () =
       | _ -> Alcotest.fail "defect replaced the composite")
 
 let test_capture_budget_sets_last_error () =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   with_dir (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
@@ -1458,7 +1458,7 @@ let rpc ~net ~sw socket_path body =
       Eio.Buf_read.of_flow ~max_size:65536 socket |> Eio.Buf_read.line)
 
 let test_provider_failure_publishes_audio_then_retries_provider () =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   with_dir (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
@@ -1499,7 +1499,7 @@ let test_provider_failure_publishes_audio_then_retries_provider () =
           Alcotest.(check int) "still no delivery" 0 (Atomic.get deliver_n)))
 
 let test_delivery_failure_publishes_text_retry_skips_provider () =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   with_dir (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
@@ -1578,7 +1578,7 @@ let load_text_payload retry_dir =
       | Error (`Retry_store msg) -> Alcotest.fail msg)
 
 let test_blank_transcript_publishes_audio_without_inject () =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   with_dir (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
@@ -1613,7 +1613,7 @@ let test_blank_transcript_publishes_audio_without_inject () =
           wait_until ~clock (fun () -> peek_kind retry_dir = Some "audio")))
 
 let test_abort_does_not_publish () =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   with_dir (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
@@ -1642,7 +1642,7 @@ let test_abort_does_not_publish () =
             "abort publishes nothing" None (peek_kind retry_dir)))
 
 let test_startup_text_retry_skips_provider () =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   with_dir (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
@@ -1684,7 +1684,7 @@ let test_startup_text_retry_skips_provider () =
             "successful text retry clears candidate" None (peek_kind retry_dir)))
 
 let test_successive_failures_keep_latest_only () =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   with_dir (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
@@ -1730,7 +1730,7 @@ let test_successive_failures_keep_latest_only () =
             (load_text_payload retry_dir)))
 
 let test_busy_and_disabled_retry_does_not_load_payload () =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   with_dir (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
@@ -1773,7 +1773,7 @@ let test_busy_and_disabled_retry_does_not_load_payload () =
 let dir_mode path = Unix.stat path |> fun st -> st.Unix.st_perm land 0o777
 
 let test_nested_missing_parent_is_private () =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   with_dir (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
@@ -1820,7 +1820,7 @@ let test_nested_missing_parent_is_private () =
             "created retry root is 0700" 0o700 (dir_mode retry_dir)))
 
 let test_blueprint_on_press_does_not_publish () =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   with_dir (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let retry_dir = Filename.concat dir "recordings" in
@@ -1840,7 +1840,7 @@ let test_blueprint_on_press_does_not_publish () =
         "constructing on_press publishes nothing" None (peek_kind retry_dir))
 
 let test_success_preserves_older_candidate () =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   with_dir (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
@@ -1889,7 +1889,7 @@ let test_success_preserves_older_candidate () =
               | _ -> Alcotest.fail "older generation changed after success")))
 
 let test_publication_failure_keeps_primary () =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   with_dir (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
@@ -1999,7 +1999,7 @@ let test_publication_failure_keeps_primary () =
               Alcotest.failf "missing publication compound: %s" msg))
 
 let test_owned_cancel_cleanup_defect_preserves_older () =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   with_dir (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
@@ -2071,7 +2071,7 @@ let test_owned_cancel_cleanup_defect_preserves_older () =
       | Ox.Exit.Success _ -> Alcotest.fail "cleanup defect must not disappear")
 
 let test_admission_held_until_provider_finalizer () =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   with_dir (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
@@ -2169,7 +2169,7 @@ let recover_single_failure on_error exit =
   | Error cause -> Error cause
 
 let test_recover_single_intended_fail () =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let recovered = Atomic.make false in
   let eff =
@@ -2186,7 +2186,7 @@ let test_recover_single_intended_fail () =
   Alcotest.(check bool) "handler ran" true (Atomic.get recovered)
 
 let test_recover_concurrent_ordinary_and_budget () =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let ran = Atomic.make false in
   let cause =
@@ -2222,7 +2222,7 @@ let test_recover_concurrent_ordinary_and_budget () =
       Alcotest.(check bool) "budget retained" true (has "pcm:capture_budget")
 
 let test_recover_concurrent_pause_and_body () =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let ran = Atomic.make false in
   let cause =
@@ -2245,7 +2245,7 @@ let test_recover_concurrent_pause_and_body () =
   | Error _ -> Alcotest.(check bool) "handler not run" false (Atomic.get ran)
 
 let test_recover_sequential_typed_pair () =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let ran = Atomic.make false in
   let cause =

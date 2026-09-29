@@ -2,4 +2,10 @@
 
 (test
  (name test_prepared_text)
- (libraries pie alcotest eio_main ox ox_test unix))
+ (libraries pie alcotest pie_test_runtime ox ox_test unix))
+
+(rule
+ (alias stress)
+ (deps stress.sh)
+ (action
+  (run sh %{dep:stress.sh} %{exe:test_prepared_text.exe} 50)))

@@ -304,7 +304,7 @@ let expect_input_lost ~label result =
 
 let test_stalled_setup_times_out () =
   with_sandbox @@ fun dir ->
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
@@ -332,7 +332,7 @@ let test_stalled_setup_times_out () =
 
 let test_unwatch_budget_still_closes () =
   with_sandbox @@ fun dir ->
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
@@ -367,7 +367,7 @@ let test_unwatch_budget_still_closes () =
    eta-next cut-over, 2026-09-28). *)
 let test_stop_is_clean_interruption () =
   with_sandbox @@ fun dir ->
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
@@ -434,7 +434,7 @@ let noc_body ~name ~old_owner ~new_owner =
 
 let test_wrong_sender_is_ignored () =
   with_sandbox @@ fun dir ->
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
@@ -469,7 +469,7 @@ let test_wrong_sender_is_ignored () =
 
 let test_expected_sender_is_accepted () =
   with_sandbox @@ fun dir ->
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
@@ -506,7 +506,7 @@ let test_expected_sender_is_accepted () =
 
 let test_owner_change_is_input_lost () =
   with_sandbox @@ fun dir ->
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
@@ -540,7 +540,7 @@ let test_owner_change_is_input_lost () =
 
 let test_owner_loss_during_setup () =
   with_sandbox @@ fun dir ->
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
@@ -576,7 +576,7 @@ let test_owner_loss_during_setup () =
 
 let test_noc_wrong_sender_ignored () =
   with_sandbox @@ fun dir ->
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
@@ -628,7 +628,7 @@ let test_production_budget_is_ten_seconds () =
     (Ox.Duration.to_ms Monitor.production_budgets.unwatch)
 
 let test_auth_line_limits () =
-  Eio_main.run @@ fun _env ->
+  Pie_test_runtime.run @@ fun _env ->
   let try_line n =
     let src = Eio.Flow.string_source (String.make n 'A' ^ "\r\n") in
     String.length (Monitor.read_crlf_line src)
@@ -795,7 +795,7 @@ let test_path_requires_object_signature () =
 
 let test_forged_get_name_owner_sender () =
   with_sandbox @@ fun dir ->
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
@@ -893,7 +893,7 @@ let test_isolated_dbus_daemon_optional () =
         (fun () ->
           wait_exists path 40;
           Unix.putenv "DBUS_SESSION_BUS_ADDRESS" addr;
-          Eio_main.run @@ fun env ->
+          Pie_test_runtime.run @@ fun env ->
           Eio.Switch.run @@ fun sw ->
           let net = Eio.Stdenv.net env in
           let clock = Eio.Stdenv.clock env in

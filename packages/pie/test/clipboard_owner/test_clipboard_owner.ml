@@ -75,7 +75,7 @@ let test_no_inspection_exact_stdin previous =
     write_exec dir "wl-copy"
       ("cat > \"" ^ stdin_path ^ "\"\nwhile :; do sleep 0.05; done\n")
   in
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let owner =
     Pie.Wayland.Clipboard.create ~caps ~sw
@@ -98,7 +98,7 @@ let test_no_inspection_exact_stdin previous =
 let test_known_spawn_failure_hides_secret () =
   with_temp_dir @@ fun dir ->
   let secret = Filename.concat dir "secret-argv-token-wl-copy" in
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let owner =
     Pie.Wayland.Clipboard.create ~caps ~sw
@@ -118,7 +118,7 @@ let test_known_spawn_failure_hides_secret () =
 let test_copy_early_failure () =
   with_temp_dir @@ fun dir ->
   let copy = Filename.concat dir "missing-wl-copy" in
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let owner =
     Pie.Wayland.Clipboard.create ~caps ~sw
@@ -132,7 +132,7 @@ let test_copy_early_failure () =
 let test_cancellation_at_acquisition () =
   with_temp_dir @@ fun dir ->
   let copy = write_exec dir "wl-copy" "sleep 30\n" in
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   Eio.Switch.run @@ fun owner_sw ->
   let owner =
     Pie.Wayland.Clipboard.create ~caps ~sw:owner_sw
@@ -164,7 +164,7 @@ let test_slow_consumer_still_alive () =
     write_exec dir "wl-copy"
       ("cat > /dev/null\ntouch \"" ^ alive ^ "\"\nsleep 2\n")
   in
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let owner =
     Pie.Wayland.Clipboard.create ~caps ~sw
@@ -183,7 +183,7 @@ let test_repeated_offers_bounded () =
   let copy =
     write_exec dir "wl-copy" "cat > /dev/null\nwhile :; do sleep 0.05; done\n"
   in
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let owner =
     Pie.Wayland.Clipboard.create ~caps ~sw
@@ -210,7 +210,7 @@ let test_shutdown_settles () =
   let copy =
     write_exec dir "wl-copy" "cat > /dev/null\nwhile :; do sleep 0.05; done\n"
   in
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   ( Eio.Switch.run @@ fun sw ->
     let owner =
       Pie.Wayland.Clipboard.create ~caps ~sw
@@ -225,7 +225,7 @@ let test_settled_before_replacement () =
   let copy =
     write_exec dir "wl-copy" "cat > /dev/null\nwhile :; do sleep 0.05; done\n"
   in
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let owner =
     Pie.Wayland.Clipboard.create ~caps ~sw
@@ -244,7 +244,7 @@ let test_settled_before_replacement () =
 let test_natural_exit_releases_pipes () =
   with_temp_dir @@ fun dir ->
   let copy = write_exec dir "wl-copy" "cat > /dev/null\nexit 0\n" in
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let owner =
     Pie.Wayland.Clipboard.create ~caps ~sw
@@ -266,7 +266,7 @@ let test_large_stdout_discarded () =
        cat > /dev/null\n\
        while :; do sleep 0.05; done\n"
   in
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let owner =
     Pie.Wayland.Clipboard.create ~caps ~sw
@@ -344,7 +344,7 @@ let test_inject_paste_key_success previous =
       ("NIRI_SOCKET", Filename.concat dir "niri.sock");
     ]
   @@ fun () ->
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   match run_configured_inject ~dir ~copy env sw "offered-text" with
   | Error _ -> Alcotest.fail "configured paste inject failed"
@@ -379,7 +379,7 @@ let test_inject_paste_key_fail_retains_helper () =
       ("NIRI_SOCKET", Filename.concat dir "niri.sock");
     ]
   @@ fun () ->
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let kids_before = child_count () in
   match run_configured_inject ~dir ~copy env sw "payload" with
@@ -411,7 +411,7 @@ let test_cli_type_stays_type () =
       ("WAYLAND_DISPLAY", "pie-fake");
     ]
   @@ fun () ->
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   match
     Pie.Input.Text_injection.inject ~caps ~clock:(Eio.Stdenv.clock env)
@@ -449,7 +449,7 @@ let test_paste_handoff_delay ~cancel () =
       ("NIRI_SOCKET", Filename.concat dir "niri.sock");
     ]
   @@ fun () ->
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let owner =

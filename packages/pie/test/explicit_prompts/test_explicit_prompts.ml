@@ -186,7 +186,7 @@ let run_production ~mode ~cfg ~check_body () =
           Sys.chdir old_cwd;
           Unix.putenv "PATH" old_path)
         (fun () ->
-          Eio_main.run @@ fun env ->
+          Pie_test_runtime.run @@ fun env ->
           Eio.Switch.run @@ fun sw ->
           let net = Eio.Stdenv.net env in
           let process_mgr = Eio.Stdenv.process_mgr env in

@@ -2,4 +2,4 @@
 
 (test
  (name test_live_config)
- (libraries pie alcotest eio_main ox ox_test eio unix threads yojson))
+ (libraries pie alcotest pie_test_runtime ox ox_test eio unix threads yojson))

@@ -5,7 +5,7 @@
  (libraries
   pie
   alcotest
-  eio_main
+  pie_test_runtime
   ox
   ox_ai
   ox_ai_openrouter

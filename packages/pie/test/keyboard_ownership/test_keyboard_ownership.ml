@@ -366,7 +366,7 @@ let expect_input_lost ~label result =
 
 let test_rejected_auth_fd_flat () =
   with_sandbox @@ fun dir ->
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
@@ -391,7 +391,7 @@ let test_rejected_auth_fd_flat () =
 
 let test_failed_hello_closes () =
   with_sandbox @@ fun dir ->
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
@@ -408,7 +408,7 @@ let test_failed_hello_closes () =
 
 let test_failed_watch_closes () =
   with_sandbox @@ fun dir ->
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
@@ -453,7 +453,7 @@ let close_then_raise flow =
 
 let test_auth_reject_combines_close_failure () =
   with_sandbox @@ fun dir ->
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
@@ -475,7 +475,7 @@ let test_auth_reject_combines_close_failure () =
 
 let test_auth_cancel_combines_close_failure () =
   with_sandbox @@ fun dir ->
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
@@ -504,7 +504,7 @@ let test_auth_cancel_combines_close_failure () =
 
 let test_unwatch_cancel_combines_close_failure () =
   with_sandbox @@ fun dir ->
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
@@ -528,7 +528,7 @@ let test_unwatch_cancel_combines_close_failure () =
 
 let cancel_at_stage stage () =
   with_sandbox @@ fun dir ->
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
@@ -565,7 +565,7 @@ let cancel_at_stage stage () =
 
 let test_failed_unwatch_write_still_closes () =
   with_sandbox @@ fun dir ->
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
@@ -591,7 +591,7 @@ let test_failed_unwatch_write_still_closes () =
 
 let test_unexpected_eof_fails_consumer () =
   with_sandbox @@ fun dir ->
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
@@ -622,7 +622,7 @@ let test_unexpected_eof_fails_consumer () =
 
 let test_malformed_packet_fails_consumer () =
   with_sandbox @@ fun dir ->
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
@@ -654,7 +654,7 @@ let test_malformed_packet_fails_consumer () =
 
 let test_normal_disconnect_closes () =
   with_sandbox @@ fun dir ->
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in

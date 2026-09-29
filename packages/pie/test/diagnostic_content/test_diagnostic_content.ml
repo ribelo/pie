@@ -176,7 +176,7 @@ let openrouter_deadline_seconds = 30
 let helper_deadline_seconds = 10.0
 
 let run_openrouter ~body ~status () =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let net = Eio.Stdenv.net env in
   let clock = Eio.Stdenv.clock env in
@@ -217,7 +217,7 @@ let run_openrouter ~body ~status () =
   | Error `Timeout -> Error (`Stt_error "openrouter-deadline")
 
 let run_helper f =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   try

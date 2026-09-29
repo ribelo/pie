@@ -139,7 +139,7 @@ let cycle ~clock ~keyboard ~audio_q ~delivered ?state ?keysym ?keycode () =
   wait_until ~clock (fun () -> Atomic.get delivered <> [])
 
 let test_cli_override_before_and_after_reload () =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   with_dir (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
@@ -190,7 +190,7 @@ let test_cli_override_before_and_after_reload () =
             "file keysym is not the published binding" [] (Atomic.get delivered)))
 
 let test_physical_release_after_binding_reload () =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   with_dir (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
@@ -231,7 +231,7 @@ let test_physical_release_after_binding_reload () =
             (Atomic.get delivered)))
 
 let test_modifier_reload_while_held () =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   with_dir (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
@@ -272,7 +272,7 @@ let test_modifier_reload_while_held () =
             (Atomic.get delivered)))
 
 let test_mod5_latch_survives_key_release () =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   with_dir (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
@@ -331,7 +331,7 @@ let test_mod5_latch_survives_key_release () =
             (Atomic.get delivered)))
 
 let test_invalid_reload_keeps_last_good () =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   with_dir (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
@@ -369,7 +369,7 @@ let test_invalid_reload_keeps_last_good () =
             (Atomic.get delivered)))
 
 let test_threshold_reload_does_not_change_active_attempt () =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   with_dir (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
@@ -433,7 +433,7 @@ let test_held_key_survives_binding_reload_unit () =
     (third = Some (Pie.Ptt_loop.Release "transcribe"))
 
 let test_failed_on_press_different_key_not_stuck () =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   with_dir (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
@@ -500,7 +500,7 @@ let test_failed_on_press_different_key_not_stuck () =
             (Atomic.get delivered)))
 
 let test_autorepeat_press_does_not_restart_capture () =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   with_dir (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
@@ -532,7 +532,7 @@ let test_autorepeat_press_does_not_restart_capture () =
             "autorepeat is one capture" [ "once" ] (Atomic.get delivered)))
 
 let test_busy_second_key_repeat_ignored_until_keyup () =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   with_dir (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
@@ -582,7 +582,7 @@ let test_busy_second_key_repeat_ignored_until_keyup () =
             "fresh B after keyup is accepted" [ "ok" ] (Atomic.get delivered)))
 
 let test_mod5_autorepeat_does_not_toggle_latch () =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   with_dir (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
@@ -630,7 +630,7 @@ let test_mod5_autorepeat_does_not_toggle_latch () =
             (Atomic.get delivered)))
 
 let test_service_cancellation_closes_listener () =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   with_dir (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in

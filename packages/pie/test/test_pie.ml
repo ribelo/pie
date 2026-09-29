@@ -4,7 +4,7 @@ open Pie
 open Ox.Result.Syntax
 
 let run_test f =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   Eio.Time.with_timeout_exn (Eio.Stdenv.clock env) 15. (fun () -> f env)
 
 let sync f = Ok (f ())

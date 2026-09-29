@@ -2,4 +2,4 @@
 
 (test
  (name test_end_to_end_budgets)
- (libraries pie alcotest eio_main ox ox_test eio unix yojson))
+ (libraries pie alcotest pie_test_runtime ox ox_test eio unix yojson))

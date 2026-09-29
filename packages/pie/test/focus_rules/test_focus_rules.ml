@@ -151,7 +151,7 @@ let run_inject ~newline_rules ~text_entry_rules text ~clock process_mgr =
   Text.inject ~caps ~newline_rules ~text_entry_rules ~clock ~process_mgr text
 
 let run_once operation =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   operation ~clock:(Eio.Stdenv.clock env) (Eio.Stdenv.process_mgr env)
 
 let injection_msg = function

@@ -281,7 +281,7 @@ let press_release ~keyboard ~audio_q =
   Pie.Keyboard.Monitor.emit keyboard (key ~released:true)
 
 let test_100_settled_attempts () =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   let clock = Eio.Stdenv.clock env in
   with_dir (fun dir ->
       let completed = Atomic.make 0 in
@@ -532,7 +532,7 @@ let restore_lock retry_dir save =
    stays live on the scope's switch. Bounded, so a regression that never settles
    fails on the deadline instead of hanging the suite. *)
 let run_e2e ~dir ~stt ~deliver assertions =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   let clock = Eio.Stdenv.clock env in
   match
     Ox.Timeout.timeout ~clock (Ox.Duration.seconds 60) (fun () ->
@@ -702,7 +702,7 @@ let test_audio_retry_delivery_and_text_publish_both_causes () =
       Fun.protect
         ~finally:(fun () -> restore_lock retry_dir !lock_save)
         (fun () ->
-          Eio_main.run @@ fun env ->
+          Pie_test_runtime.run @@ fun env ->
           let clock = Eio.Stdenv.clock env in
           (* The workflow must report the compound failure: in v1 only an exact single
              [`Ptt_error] was a recoverable retry failure, while a [`Ptt_cause] had to

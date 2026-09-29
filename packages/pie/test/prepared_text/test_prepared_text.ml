@@ -188,7 +188,7 @@ let pp_xdotool_error ppf = function
   | `Xdotool_error message -> Format.pp_print_string ppf message
 
 let run_ok ~pp_error operation =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   match
     operation ~clock:(Eio.Stdenv.clock env) (Eio.Stdenv.process_mgr env)
   with
@@ -196,7 +196,7 @@ let run_ok ~pp_error operation =
   | Error error -> Alcotest.failf "operation failed: %a" pp_error error
 
 let run_error ~pp_error operation =
-  Eio_main.run @@ fun env ->
+  Pie_test_runtime.run @@ fun env ->
   match
     operation ~clock:(Eio.Stdenv.clock env) (Eio.Stdenv.process_mgr env)
   with
