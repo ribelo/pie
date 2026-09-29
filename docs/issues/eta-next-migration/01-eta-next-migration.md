@@ -258,39 +258,9 @@ U1 + U2 + U3 + U4 + closed gaps ----------------------------+--> U5 final gates
 ## Preparation Verification and Step-2 Gates
 
 U5 integration acceptance is evidence-based, not a deployment. The final pass
-requires a forbidden-v1-symbol census in application/test sources and package
-metadata, whole-tree `dune fmt`, private `@install` build, every registered
-`dune test` suite, `@fmt`, and the `.#pie` flake artifact. Record any failing
-suite with its root repair; do not exclude or silence it. Remove `_build_u5`
-afterward. The live microphone/key check is **prepared, not executed**:
-[scripts/live-ptt-check-eta-next](</home/ribelo/projects/ribelo/pie/scripts/live-ptt-check-eta-next>)
-prints the operator-only stop/check/restart sequence, requires explicit
-provider-call approval, refuses an active production service/socket, and logs
-results privately in `/tmp`. `bash -n` and `--dry-run` pass; active-service
-refusal was observed. The real check remains for the operator after separate
-approval and can never be inferred from automated fixture success.
 
-Current U5 provenance fixture gate: `nix develop -c env DUNE_BUILD_DIR=_build_u5
-dune test packages/pie/test/build_record` passes all 10 cases after archive
-names move from v1 TLS transport to consolidated `eta_http`. Complete build,
-test, formatter and flake results are recorded below when integration settles.
+## Master rebuild swap (2026-09-29)
 
-## Behaviour Changes Accepted During Step 2
-
-- **Interrupt exit.** The Door classifies a stop it requested itself (its own SIGINT/SIGTERM identity) as a clean **exit 0**, and any other interruption as **2**. The v1 `Pie.Process.run` mapped an interrupt-only cause to **130**, so `pie` under SIGINT/SIGTERM now exits 0 instead of 130. The local-diagnostics suite asserts the Door's classification; the mapping itself belongs to the Door / [bin/pie.ml](</home/ribelo/projects/ribelo/pie/packages/pie/bin/pie.ml>) (U4), not to the test. ^pienext-ipne
-- **OTLP enablement and the local channel.** [process.ml](</home/ribelo/projects/ribelo/pie/packages/pie/process.ml>) reads only `PIE_OTLP`; `OTEL_SDK_DISABLED` is no longer consulted. The local channel is eta-next's structured JSON journal record (with `Redact.t` fields rendering as `"<redacted>"`), not the v1 logfmt line, and a failing exporter leaves that channel intact while its own failure is reported on stderr. ^pienext-gaq3
-
-
-## Cut-over (2026-09-28)
-
-- **Live PTT check** passed on the migrated build (source 65574af; /tmp/pie-eta-next-live.9WMNK06q/result.txt): PTT armed, capture, Codex Realtime first token, paste via wtype, eta-next journal format.
-- **Installed** by Pie's own route (opam pin of committed `master` + `opam reinstall pie` in the shared switch). The unit wrapper still execs `~/.cache/opam/5.4.0+ox/bin/pie`; no NixOS rebuild.
-  - Old: v1 binary, 16448112 bytes, Sep 26 16:44, kept as `~/.cache/opam/5.4.0+ox/bin/pie.v1-20260926` for rollback (copy it back over `bin/pie` and restart).
-  - New: eta-next binary from master 80ac0bd, 12632608 bytes, Sep 28 20:54.
-  - An in-place install over the running binary fails with "Text file busy" and leaves `bin/pie` removed; rename the running binary aside first.
-- **Two defects found at the cut-over, fixed and tested before the final install:**
-  - "unsafe runtime directory": eta_ipc binds only in a private directory; `/run/user/1000/pie` was 0755 (made by v1, and by `Fs.mkdir_p` under the service umask). `Server.start` now creates it 0700 or tightens our own non-writable directory; a writable, foreign or symlinked one is still refused (b3832d0).
-  - Every stop exited 2: the keyboard monitor's release (a D-Bus unwatch) observed the stop's cancellation and raised out of its finalizer, which the Door reports as a defect. Release now runs uncancelled, bounded by its unwatch budget (80ac0bd; regression "stop is a clean interruption").
-- **Stop semantics:** v1 exited 130 on SIGTERM and the unit has no `SuccessExitStatus`, so every clean stop showed as `failed`. The migrated Pie exits 0 on a requested stop: `systemctl --user restart pie.service` at 20:54:31 logged "Stopped" with no failure, `Result=success`.
-- **Through the service:** after the final restart a real 110 s translate PTT capture ran end to end (capture stopped, Codex Realtime first token, delivered).
-- **AGS bar:** the bar spawns `pie msg subscribe` once and never respawns it; the v1 subscriber exited during the cut-over restarts and froze the bar on "daemon is not running". The migrated subscriber survives daemon restarts (verified across two restarts); `ags.service` was restarted once to spawn it.
+- `~/.cache/opam/5.4.0+ox/bin/pie` is now the rebuild against Eta master 64db430e (sha256 4c8e28e2…, from `pie.eta-64db430e`), swapped in with one `systemctl --user restart pie.service` at 10:32.
+- The previous binary (the 2026-09-28 cut-over build from 80ac0bd, sha256 d53d1b23…) is kept as `~/.cache/opam/5.4.0+ox/bin/pie.v1-20260928`; roll back by copying it over `bin/pie` and restarting.
+- Verified: active, NRestarts 0, Result=success, control socket present, `pie msg status` armed; the restart logged Stopped/Started with no failure (the v1 exit-130 quirk is gone); the AGS bar's `pie msg subscribe` survived the restart.
