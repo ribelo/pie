@@ -2,4 +2,4 @@
 
 (test
  (name test_control_socket_ownership)
- (libraries pie alcotest eio_main unix threads eta eta_test))
+ (libraries pie alcotest eio_main unix threads ox ox_test))

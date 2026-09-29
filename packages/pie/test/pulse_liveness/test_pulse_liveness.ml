@@ -1,10 +1,10 @@
 let ( let* ) = Result.bind
 
 let logger env =
-  Eta_observability.Logger.create ~service:"pie-test"
+  Ox_observability.Logger.create ~service:"pie-test"
     ~clock:(Eio.Stdenv.clock env)
     ~mono_clock:(Eio.Stdenv.mono_clock env)
-    ~reporter:(Eta_observability.Logger.Reporter.records (fun _ -> ()))
+    ~reporter:(Ox_observability.Logger.Reporter.records (fun _ -> ()))
     ()
 
 let consume_stream stream =
@@ -28,7 +28,7 @@ let rec count_stream stream n =
 let pp_cause fmt (`Pulse_error e) = Pie.Pulse.Client.pp_error fmt e
 let cause_has pred cause = pred cause
 let zero_cookie = Bytes.make Pie.Pulse.Defs.pa_native_cookie_length '\000'
-let request_timeout = Eta.Duration.ms 250
+let request_timeout = Ox.Duration.ms 250
 
 let pulse_read_exact flow len =
   let buffer = Cstruct.create len in

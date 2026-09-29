@@ -1,10 +1,10 @@
 let ( let* ) = Result.bind
 
 let logger env =
-  Eta_observability.Logger.create ~service:"pie-test"
+  Ox_observability.Logger.create ~service:"pie-test"
     ~clock:(Eio.Stdenv.clock env)
     ~mono_clock:(Eio.Stdenv.mono_clock env)
-    ~reporter:(Eta_observability.Logger.Reporter.records (fun _ -> ()))
+    ~reporter:(Ox_observability.Logger.Reporter.records (fun _ -> ()))
     ()
 
 let finite_pull chunks =

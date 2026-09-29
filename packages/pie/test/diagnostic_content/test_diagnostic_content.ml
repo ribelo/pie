@@ -165,9 +165,9 @@ let pcm = Bytes.make 320 '\001'
    captured stderr, so a diagnostic that leaks the marker is seen where the old
    logfmt tee wrote it. *)
 let stderr_logger ~clock ~mono_clock =
-  Eta_observability.Logger.create ~service:"pie" ~clock ~mono_clock
+  Ox_observability.Logger.create ~service:"pie" ~clock ~mono_clock
     ~reporter:
-      (Eta_observability.Logger.Reporter.writer (fun line -> prerr_string line))
+      (Ox_observability.Logger.Reporter.writer (fun line -> prerr_string line))
     ()
 
 let openrouter_deadline_seconds = 30
@@ -198,8 +198,8 @@ let run_openrouter ~body ~status () =
           write_http flow ~status body);
       `Stop_daemon);
   match
-    Eta.Timeout.timeout ~clock
-      (Eta.Duration.seconds openrouter_deadline_seconds) (fun () ->
+    Ox.Timeout.timeout ~clock (Ox.Duration.seconds openrouter_deadline_seconds)
+      (fun () ->
         match
           Pie.Stt.Openrouter.transcribe_with_prompt ~sw ~net ~clock
             ~logger:

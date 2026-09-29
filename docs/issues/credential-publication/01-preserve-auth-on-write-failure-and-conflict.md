@@ -37,6 +37,6 @@ Do not add generic credential storage or fallback machinery. Retain only what th
 
 Use temporary synthetic auth files: write/flush/close/replace failure; cancellation; stale snapshot; simultaneous PIE refreshes and a separate credential writer; preserved unrelated fields; final permissions; temporary-file cleanup. Assert actual persisted bytes and previous-file survival, not merely an Ok effect. Test rotation conflicts through a fake local auth owner, not real token refreshes.
 
-## Eta prerequisites
+## Ox prerequisites
 
-No new Eta auth store is required. Use settled failure/finalizer contracts. The shared-writer protocol is a PIE/Codex integration prerequisite and is not supplied by incoming Eta fixes.
+No new Ox auth store is required. Use settled failure/finalizer contracts. The shared-writer protocol is a PIE/Codex integration prerequisite and is not supplied by incoming Ox fixes.

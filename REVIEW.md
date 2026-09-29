@@ -1,14 +1,14 @@
-# Eta vs Eio Usage Review — Round 3 (post-second-implementation)
+# Ox vs Eio Usage Review — Round 3 (post-second-implementation)
 
 ## Summary
 
 The agent fixed the round-2 catastrophes. Real wins everywhere:
 
 - **N1, N2 fixed** — `with_client` / `with_record_stream` no longer create
-  nested Eta runtimes. `acquire_release` over the parent runtime, single
+  nested Ox runtimes. `acquire_release` over the parent runtime, single
   `Eio.Stream.t`, no translator fiber, recv exposed as a closure.
 - **N3 fixed** — `Obj.t` is gone. `process_mgr` is threaded explicitly.
-- **N4 fixed** — `Sh.run` / `Sh.run_capture` are real Eta effects with
+- **N4 fixed** — `Sh.run` / `Sh.run_capture` are real Ox effects with
   `[> `Subprocess_error of string]`.
 - **N5 fixed** — `openrouter.ml` no longer puts `Eio.Process` inside
   `Effect.Blocking.submit`.
@@ -19,7 +19,7 @@ The agent fixed the round-2 catastrophes. Real wins everywhere:
   `Eio.Buf_read.line`. Typed errors. No more `Effect.Blocking.submit`.
 - **N10 fixed** — `read_line ()` replaced with `Eio.Buf_read.parse_exn ~max_size:4096
   Eio.Buf_read.line stdin` in all three command files.
-- **N11 fixed** — `Eta.Mutable_ref` replaced with plain `ref` in command files.
+- **N11 fixed** — `Ox.Mutable_ref` replaced with plain `ref` in command files.
 - **N13 fixed** — `let*` operator everywhere, control flow reads
   top-to-bottom, helpers extracted.
 - **B5 fixed** — `Camelpie.Fs.mkdir_p` extracted.
@@ -44,11 +44,11 @@ nicks crept in. Not blockers individually but worth one more cleanup pass.
 ### R1. Typed-error rows still fictional in 4 places (was N12, partially open)
 **Severity:** Public-contract lie
 
-The agent claimed: *"Typed error rows are real — Eta.Effect.fail used
+The agent claimed: *"Typed error rows are real — Ox.Effect.fail used
 throughout; catch at call sites"*. Mostly true. **Four exceptions remain.**
 
-Recall the rule: `Eta.Effect.catch` catches only `Cause.Fail`, never
-`Cause.Die`. Anything raised inside `Eta.Effect.sync` becomes `Cause.Die`.
+Recall the rule: `Ox.Effect.catch` catches only `Cause.Fail`, never
+`Cause.Die`. Anything raised inside `Ox.Effect.sync` becomes `Cause.Die`.
 So whenever an `Effect.sync` callback ends up calling `failwith` /
 `raise Foo`, the typed error row in the corresponding `.mli` is unreachable.
 
@@ -57,25 +57,25 @@ So whenever an `Effect.sync` callback ends up calling `failwith` /
 
 ```ocaml
 let get_server_info client =
-  Eta.Effect.sync (fun () ->
+  Ox.Effect.sync (fun () ->
     match get_server_info_impl client with
     | Ok info -> info
     | Error (`Pulse_error msg) -> failwith msg)
-  |> Eta.Effect.catch (fun (`Pulse_error msg) -> Eta.Effect.fail (`Pulse_error msg))
+  |> Ox.Effect.catch (fun (`Pulse_error msg) -> Ox.Effect.fail (`Pulse_error msg))
 ```
 
-The `failwith msg` is interpreted as `Cause.Die`. `Eta.Effect.catch` only
+The `failwith msg` is interpreted as `Cause.Die`. `Ox.Effect.catch` only
 fires on `Cause.Fail`. **The `catch` is dead code.** When the impl returns
 `Error _`, the user sees a runtime defect, not a typed `Pulse_error`.
 
 **Fix:**
 ```ocaml
 let get_server_info client =
-  Eta.Effect.bind
+  Ox.Effect.bind
     (function
-      | Ok info -> Eta.Effect.pure info
-      | Error e -> Eta.Effect.fail e)
-    (Eta.Effect.sync (fun () -> get_server_info_impl client))
+      | Ok info -> Ox.Effect.pure info
+      | Error e -> Ox.Effect.fail e)
+    (Ox.Effect.sync (fun () -> get_server_info_impl client))
 ```
 
 Same shape for `list_sources`.
@@ -85,8 +85,8 @@ Same shape for `list_sources`.
 
 ```ocaml
 let with_client ~sw ~net ~clock … f =
-  Eta.Effect.acquire_release
-    ~acquire:(Eta.Effect.sync (fun () ->
+  Ox.Effect.acquire_release
+    ~acquire:(Ox.Effect.sync (fun () ->
       connect ~net ~clock ~sw …))
     …
 ```
@@ -111,8 +111,8 @@ let detect_session () =
   | _ -> … failwith "could not detect graphical session"
 
 let inject ~process_mgr text =
-  Eta.Effect.sync (fun () -> detect_session ())
-  |> Eta.Effect.bind (fun session -> …)
+  Ox.Effect.sync (fun () -> detect_session ())
+  |> Ox.Effect.bind (fun session -> …)
 ```
 
 `failwith` inside `Effect.sync` → `Cause.Die`. The `.mli`'s
@@ -123,12 +123,12 @@ no-graphical-session case.
 ```ocaml
 let detect_session_eff =
   match Sys.getenv_opt "XDG_SESSION_TYPE" with
-  | Some "wayland" -> Eta.Effect.pure Wayland
-  | Some "x11" -> Eta.Effect.pure X11
+  | Some "wayland" -> Ox.Effect.pure Wayland
+  | Some "x11" -> Ox.Effect.pure X11
   | _ ->
-    if Sys.getenv_opt "WAYLAND_DISPLAY" <> None then Eta.Effect.pure Wayland
-    else if Sys.getenv_opt "DISPLAY" <> None then Eta.Effect.pure X11
-    else Eta.Effect.fail (`Injection_error "could not detect graphical session")
+    if Sys.getenv_opt "WAYLAND_DISPLAY" <> None then Ox.Effect.pure Wayland
+    else if Sys.getenv_opt "DISPLAY" <> None then Ox.Effect.pure X11
+    else Ox.Effect.fail (`Injection_error "could not detect graphical session")
 ```
 
 …and replace the `Effect.sync (fun () -> detect_session ())` call with
@@ -158,7 +158,7 @@ val transcribe :
   process_mgr:_ Eio.Process.mgr ->
   ?model:string -> ?language:string ->
   bytes ->
-  (string, [> `Stt_error of string ]) Eta.Effect.t
+  (string, [> `Stt_error of string ]) Ox.Effect.t
 (* implementation reads OPENROUTER_API_KEY internally and returns
    `Stt_error "OPENROUTER_API_KEY not set"` if missing *)
 ```
@@ -224,10 +224,10 @@ let run_cmd mk_eff =
     process_mgr = Eio.Stdenv.process_mgr env;
     stdin = Eio.Stdenv.stdin env;
   } in
-  let rt = Eta.Runtime.create ~sw ~clock:caps.clock ~capture_backtrace:true () in
-  match Eta.Runtime.run rt (mk_eff caps) with
+  let rt = Ox.Runtime.create ~sw ~clock:caps.clock ~capture_backtrace:true () in
+  match Ox.Runtime.run rt (mk_eff caps) with
   | Ok () -> ()
-  | Error c when Eta.Cause.is_interrupt_only c -> exit 130
+  | Error c when Ox.Cause.is_interrupt_only c -> exit 130
   | Error _ -> exit 1
 ```
 
@@ -266,18 +266,18 @@ After this pass `bin/pie.ml` should land near 200 lines, not 359.
 
 ```ocaml
 let read_stdin_line ~stdin =
-  Eta.Effect.sync (fun () ->
+  Ox.Effect.sync (fun () ->
     Eio.Buf_read.parse_exn ~max_size:4096 Eio.Buf_read.line stdin)
 
 let drain_until_interrupt ~stdin recv =
   let chunks_ref = ref [] in
   let rec recv_loop () =
     let* chunk = recv () in
-    let* () = Eta.Effect.sync (fun () -> chunks_ref := chunk :: !chunks_ref) in
+    let* () = Ox.Effect.sync (fun () -> chunks_ref := chunk :: !chunks_ref) in
     recv_loop ()
   in
-  let* () = Eta.Effect.race [ Eta.Effect.map (fun _ -> ()) (read_stdin_line ~stdin); recv_loop () ] in
-  Eta.Effect.sync (fun () ->
+  let* () = Ox.Effect.race [ Ox.Effect.map (fun _ -> ()) (read_stdin_line ~stdin); recv_loop () ] in
+  Ox.Effect.sync (fun () ->
     let data = List.rev !chunks_ref in
     let data_len = List.fold_left (fun acc b -> acc + Bytes.length b) 0 data in
     Printf.printf "Captured %d bytes in %d chunks\n%!" data_len (List.length data);
@@ -301,12 +301,12 @@ post-processing on the shared helper.
 ```ocaml
 val read_stdin_line :
   stdin:_ Eio.Flow.source ->
-  (string, 'err) Eta.Effect.t
+  (string, 'err) Ox.Effect.t
 
 val capture_until_enter :
   stdin:_ Eio.Flow.source ->
-  recv:(unit -> (bytes, [> `Closed ]) Eta.Effect.t) ->
-  (bytes, [> `Closed ]) Eta.Effect.t
+  recv:(unit -> (bytes, [> `Closed ]) Ox.Effect.t) ->
+  (bytes, [> `Closed ]) Ox.Effect.t
 (** Concatenated raw PCM, may be empty. Caller decides what to do
     with the empty case. *)
 ```
@@ -343,7 +343,7 @@ even the internal `Client_error` exception can be deleted.
 **File:** `packages/camelpie/pulse/client.ml:177-184` (release branch of `with_client`)
 
 ```ocaml
-~release:(fun (T t) -> Eta.Effect.sync (fun () ->
+~release:(fun (T t) -> Ox.Effect.sync (fun () ->
   Hashtbl.iter (fun _ resolver ->
     Eio.Promise.resolve_error resolver (error "client released" ())
   ) t.pending;
@@ -377,14 +377,14 @@ correctness today but defensive.
 ```ocaml
 let busctl ~process_mgr args =
   Sh.run_capture ~process_mgr ~prog:"busctl" ~args:("--user" :: args)
-  |> Eta.Effect.map (fun out -> (0, out))
-  |> Eta.Effect.catch (fun (`Subprocess_error msg) ->
-    Eta.Effect.pure (1, msg))
+  |> Ox.Effect.map (fun out -> (0, out))
+  |> Ox.Effect.catch (fun (`Subprocess_error msg) ->
+    Ox.Effect.pure (1, msg))
 
 let create_session ~process_mgr () =
   let* (_status, out) = busctl ~process_mgr […] in
   if String.length out = 0 then
-    Eta.Effect.fail (`Portal_error "CreateSession failed — is xdg-desktop-portal running?")
+    Ox.Effect.fail (`Portal_error "CreateSession failed — is xdg-desktop-portal running?")
   else
     match String.split_on_char '"' out with …
 ```
@@ -400,7 +400,7 @@ busctl output: …" error.
 ```ocaml
 let* (status, out) = busctl ~process_mgr […] in
 if status <> 0 || String.length out = 0 then
-  Eta.Effect.fail (`Portal_error ("CreateSession failed: " ^ out))
+  Ox.Effect.fail (`Portal_error ("CreateSession failed: " ^ out))
 else …
 ```
 
@@ -411,13 +411,13 @@ when the real failure was, e.g., process spawn error. Cleaner: drop the
 ```ocaml
 let busctl ~process_mgr args =
   Sh.run_capture ~process_mgr ~prog:"busctl" ~args:("--user" :: args)
-  |> Eta.Effect.catch (fun (`Subprocess_error msg) ->
-    Eta.Effect.fail (`Portal_error ("busctl failed: " ^ msg)))
+  |> Ox.Effect.catch (fun (`Subprocess_error msg) ->
+    Ox.Effect.fail (`Portal_error ("busctl failed: " ^ msg)))
 
 let create_session ~process_mgr () =
   let* out = busctl ~process_mgr […] in
   if String.length out = 0 then
-    Eta.Effect.fail (`Portal_error "CreateSession returned no path")
+    Ox.Effect.fail (`Portal_error "CreateSession returned no path")
   else …
 ```
 
@@ -430,7 +430,7 @@ let create_session ~process_mgr () =
 
 ```ocaml
 let read_stdin_line ~stdin =
-  Eta.Effect.sync (fun () ->
+  Ox.Effect.sync (fun () ->
     Eio.Buf_read.parse_exn ~max_size:4096 Eio.Buf_read.line stdin)
 ```
 
@@ -505,7 +505,7 @@ PATH lookup. But the callers do:
 
 ```ocaml
 match Sh.find_executable "wtype" with
-| None -> Eta.Effect.fail (`Wtype_error "wtype not found in PATH")
+| None -> Ox.Effect.fail (`Wtype_error "wtype not found in PATH")
 | Some wtype -> …
 ```
 
@@ -516,14 +516,14 @@ talks to a background service, the synchronous shape here will become a
 problem.
 
 **Fix (low priority):** make `find_executable` an effect:
-`val find_executable : string -> (string option, 'err) Eta.Effect.t`,
+`val find_executable : string -> (string option, 'err) Ox.Effect.t`,
 or — simpler — convert the existing `match` into an effect-shaped helper:
 
 ```ocaml
 let resolve_exe name err_tag =
   match Sh.find_executable name with
-  | Some p -> Eta.Effect.pure p
-  | None -> Eta.Effect.fail (err_tag (name ^ " not found in PATH"))
+  | Some p -> Ox.Effect.pure p
+  | None -> Ox.Effect.fail (err_tag (name ^ " not found in PATH"))
 ```
 
 …shared by `wtype.ml`, `xdotool.ml`, `niri.ml`.
@@ -534,7 +534,7 @@ let resolve_exe name err_tag =
 
 This is genuinely clean work. Highlights worth keeping:
 
-- **No more nested Eta runtimes anywhere.** Round 2's two worst sins
+- **No more nested Ox runtimes anywhere.** Round 2's two worst sins
   (N1, N2) are gone. `acquire_release` is used correctly with caller-provided
   `~sw`.
 - **`Sh` is a typed effect.** `Obj.t` ambient capability deleted.

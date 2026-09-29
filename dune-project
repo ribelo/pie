@@ -13,18 +13,18 @@
    (>= 5.4.0))
   (dune
    (>= 3.0))
-  (eta
+  (ox
    (>= 0.1.0))
-  eta_ai
-  eta_ai_openrouter
-  eta_ai_realtime
-  eta_app
-  eta_http
-  eta_ipc
-  eta_json
-  eta_observability
-  eta_otel
-  (eta_test :with-test)
+  ox_ai
+  ox_ai_openrouter
+  ox_ai_realtime
+  ox_app
+  ox_http
+  ox_ipc
+  ox_json
+  ox_observability
+  ox_otel
+  (ox_test :with-test)
   (eio
    (>= 1.0))
   (yojson

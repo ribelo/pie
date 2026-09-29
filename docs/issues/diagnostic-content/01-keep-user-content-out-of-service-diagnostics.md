@@ -36,6 +36,6 @@ Use metadata-only subprocess failure projection and avoid content in argv where 
 
 Synthetic unique markers through successful delivery, provider error, malformed response, helper nonzero exit and notification failure. Capture stdout/stderr/structured diagnostic attributes and assert markers absent, while intended delivery/output remains correct. Test debug environment unset,0,false and1 after removing the content-dump path. Do not inspect real journals or credentials for this regression suite.
 
-## Eta prerequisites
+## Ox prerequisites
 
-Keep useful Eta observability metadata. PIE owns data classification and safe error projection; incoming runtime fixes do not remove application prints or raw body strings.
+Keep useful Ox observability metadata. PIE owns data classification and safe error projection; incoming runtime fixes do not remove application prints or raw body strings.

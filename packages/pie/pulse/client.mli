@@ -2,7 +2,7 @@ type error =
   | Protocol_error of string
   | Authentication_error of string
   | Server_error of { message : string; code : int option }
-  | Timeout of { operation : string; duration : Eta.Duration.t }
+  | Timeout of { operation : string; duration : Ox.Duration.t }
   | Disconnected of string
   | Malformed_packet of string
   | Recording_overload of { stream_index : int; capacity : int }
@@ -11,7 +11,7 @@ type error =
 
 val error_message : error -> string
 val pp_error : Format.formatter -> error -> unit
-val default_request_timeout : Eta.Duration.t
+val default_request_timeout : Ox.Duration.t
 
 val record_stream_capacity : int
 (** Bounded item count (64) for a recording stream queue. Independent of the
@@ -26,12 +26,12 @@ type t
 val with_client :
   net:[> `Generic ] Eio.Net.ty Eio.Resource.t ->
   clock:_ Eio.Time.clock ->
-  logger:Eta_observability.Logger.t ->
+  logger:Ox_observability.Logger.t ->
   ?socket_path:string ->
   ?cookie:bytes ->
   ?client_name:string ->
   ?protocol_version:int ->
-  ?request_timeout:Eta.Duration.t ->
+  ?request_timeout:Ox.Duration.t ->
   (t -> ('a, ([> `Pulse_error of error ] as 'err)) result) ->
   ('a, 'err) result
 

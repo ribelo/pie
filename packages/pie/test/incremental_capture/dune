@@ -2,4 +2,4 @@
 
 (test
  (name test_incremental_capture)
- (libraries pie alcotest eio_main eta eta_test eio unix threads))
+ (libraries pie alcotest eio_main ox ox_test eio unix threads))

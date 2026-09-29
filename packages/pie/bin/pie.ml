@@ -4,7 +4,7 @@ let ( let* ) = Result.bind
 
 type cli_error =
   [ `Pulse_error of Pie.Pulse.Client.error
-  | `Ptt_cause of [ `Ptt_error of string ] Eta.Cause.t
+  | `Ptt_cause of [ `Ptt_error of string ] Ox.Cause.t
   | `Ptt_error of string
   | `Stt_error of string
   | `Subprocess_error of string
@@ -25,7 +25,7 @@ let render_error = function
   | `Pulse_error error -> Pie.Pulse.Client.error_message error
   | `Ptt_cause cause ->
       Format.asprintf "%a"
-        (Eta.Cause.pp_compact (fun fmt (`Ptt_error message) ->
+        (Ox.Cause.pp_compact (fun fmt (`Ptt_error message) ->
              Format.pp_print_string fmt message))
         cause
   | `Ptt_error msg
@@ -79,7 +79,7 @@ let json_of_daemon_error message =
 
 let command name doc term = Cmd.v (Cmd.info name ~doc) term
 
-let commands_with_env (env : _ Eta_app.Env.t) door_run_owned =
+let commands_with_env (env : _ Ox_app.Env.t) door_run_owned =
   let run_owned operation () =
     door_run_owned (fun sw ->
         Result.map_error (fun error -> (error :> cli_error)) (operation sw))
@@ -319,19 +319,18 @@ let service_args =
 
 let validate_source env source _config =
   match
-    Pie.Config.Stt.load ~fs:(Eio.Stdenv.fs env.Eta_app.Env.base) ~source ()
+    Pie.Config.Stt.load ~fs:(Eio.Stdenv.fs env.Ox_app.Env.base) ~source ()
   with
   | Ok _ -> Ok ()
-  | Error (`Config message) ->
-      Error [ { Eta_app.Config.pointer = ""; message } ]
+  | Error (`Config message) -> Error [ { Ox_app.Config.pointer = ""; message } ]
 
 let () =
   exit
-    (Eta_app.run_with_args ~name:"pie" ~service_command:"assistant"
+    (Ox_app.run_with_args ~name:"pie" ~service_command:"assistant"
        ~config_file:"stt.toml" ~missing:`Required
        ~config:Pie.Config.Stt.door_spec ~service_args
        ~read_file:(fun env path ->
-         Eta_app.Config.read_regular
+         Ox_app.Config.read_regular
            ~max_bytes:Pie.Config.Stt.max_config_file_bytes
            Eio.Path.(Eio.Stdenv.fs env / path))
        ~validate_source
@@ -343,7 +342,7 @@ let () =
             (ptt_transcribe_keysym, ptt_translate_keysym)
             sw
           ->
-         let base = env.Eta_app.Env.base in
+         let base = env.Ox_app.Env.base in
          Result.map_error
            (fun error -> (error :> cli_error))
            (Pie.Assistant.Service.run ~sw ~fs:(Eio.Stdenv.fs base)

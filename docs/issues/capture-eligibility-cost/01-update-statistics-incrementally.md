@@ -34,6 +34,6 @@ Keep bytes needed for recovery/initial streaming handoff under an explicit owner
 
 Drive the actual PTT loop with quiet nonzero audio, silence, threshold crossings, post-roll continuation and cancellation. Compare decisions with a whole-clip reference. Demonstrate linear eligibility work/copy growth as input doubles, and ensure streaming finish does not force an unused complete clip allocation. Use synthetic PCM only.
 
-## Eta prerequisites
+## Ox prerequisites
 
-None beyond the existing effect/stream lifecycle contracts. Eligibility statistics are application-owned state, not a new Eta package.
+None beyond the existing effect/stream lifecycle contracts. Eligibility statistics are application-owned state, not a new Ox package.

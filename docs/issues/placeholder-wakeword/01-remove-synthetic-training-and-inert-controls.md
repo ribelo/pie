@@ -32,6 +32,6 @@ No new model training or wakeword engine is authorized by this cleanup. Existing
 
 No command claims model training or hands-free activation; unsupported removed commands fail before microphone or file writes. Ordinary PTT transcribe/translate remains functional. Source/caller census contains no orphan wakeword configuration/modes/exports. No deletion of user assets.
 
-## Eta prerequisites
+## Ox prerequisites
 
-None. There is no actual wakeword effect lifecycle to preserve beyond removing the already-inert graph. Do not add Eta components to implement an unrequested feature.
+None. There is no actual wakeword effect lifecycle to preserve beyond removing the already-inert graph. Do not add Ox components to implement an unrequested feature.

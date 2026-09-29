@@ -3,7 +3,7 @@ kind: issue
 status: ready-for-agent
 ---
 
-# Adopt the Eta component runtime in the assistant service
+# Adopt the Ox component runtime in the assistant service
 
 ## Problem Statement
 
@@ -13,7 +13,7 @@ switch unwind order. Runtime reconfiguration is limited to swapping
 configuration refs: a changed prompt file takes effect on the next key press,
 but nothing can restart one subsystem, swap one backend with rollback, or report
 which subsystem is unhealthy. The `wakeword_enabled` configuration field is
-loaded and never used. Meanwhile Eta's new `eta_component` runtime has no real
+loaded and never used. Meanwhile Ox's new `ox_component` runtime has no real
 adopter, and Pie is its proving ground.
 
 ## Solution
@@ -32,9 +32,9 @@ wakeword becomes a real, config-gated participant in the tree.
 
 ### Package and build
 
-- The Pie opam package dependencies shall include `eta_component`. ^piecomp-5v7r
-- The Pie development installer package list shall include `eta_component`. ^piecomp-7ywj
-- When a developer builds Pie through the Nix package or the development shell, the build shall resolve an Eta source that contains the `eta_component` package. ^piecomp-haad
+- The Pie opam package dependencies shall include `ox_component`. ^piecomp-5v7r
+- The Pie development installer package list shall include `ox_component`. ^piecomp-7ywj
+- When a developer builds Pie through the Nix package or the development shell, the build shall resolve an Ox source that contains the `ox_component` package. ^piecomp-haad
 
 ### Component tree
 
@@ -128,9 +128,9 @@ wakeword becomes a real, config-gated participant in the tree.
 Good tests verify external behavior at a seam, never implementation details.
 Two seams:
 
-1. **The Eta effect seam.** The component tree, watcher router, and
-   supervision loop are one Eta effect, interpreted deterministically by
-   `eta_test`. Tests use fake component declarations with the same tree shape
+1. **The Ox effect seam.** The component tree, watcher router, and
+   supervision loop are one Ox effect, interpreted deterministically by
+   `ox_test`. Tests use fake component declarations with the same tree shape
    and coeffect contracts. Gates: admission rejects a duplicate provider,
    admission rejects a dependency cycle, an accepted reconcile settles
    quiescent with every enabled entry active, a failed `stt-backend` candidate
@@ -138,7 +138,7 @@ Two seams:
    config-disabled wakeword leaves `ptt-loop` active with an inert
    `wake_events`, an infrastructure activation failure triggers retry with the
    specified backoff, and a config slice change restarts only the affected
-   entries. Each gate cites its requirement ID. Prior art: Eta's own component
+   entries. Each gate cites its requirement ID. Prior art: Ox's own component
    gates under `test/component/`.
 2. **The RPC wire seam.** Codec-level tests over the JSON-lines contract: a
    `Status` response carries the `components` field, and a client that ignores
@@ -150,8 +150,8 @@ dogfooding, not by live integration tests.
 
 ## Out of Scope
 
-- The generic `eta_component_loader` and native HMR loader packages, which are
-  specification-only in Eta. Pie watches its own configuration files and calls
+- The generic `ox_component_loader` and native HMR loader packages, which are
+  specification-only in Ox. Pie watches its own configuration files and calls
   reconcile or replace directly.
 - Voice activity detection or capture-until-silence.
 - A meeting transcription pipeline. The meeting mode remains a flag on the
@@ -166,5 +166,5 @@ dogfooding, not by live integration tests.
 - The meeting-mode flag rides inside `recording_state` unchanged.
 - `REVIEW.md` is stale in places (it predates current switch and fiber usage).
   Reconciling it is not part of this spec.
-- The Eta pin moves to master commit `06edeafb`, the first commit containing
+- The Ox pin moves to master commit `06edeafb`, the first commit containing
   the component runtime and the fallible-codec gates.

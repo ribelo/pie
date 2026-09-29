@@ -32,6 +32,6 @@ Check admission before loading an entire recording. Keep filenames and recovery 
 
 Promote synthetic controls for permissive umask, open writer, completed writer, symlink, unrelated regular file, concurrent publication and replacement, Busy/Disabled admission, and failed creation/close. Observe candidate publication and payload reads rather than only filename parsing. Check successful recovery deletion and failed recovery preservation separately. Use temporary directories, never the real failed_recordings_dir.
 
-## Eta prerequisites
+## Ox prerequisites
 
-No new Eta filesystem package is needed. Use ordinary explicit filesystem ownership and PIE004 all-exit writer settlement. Resource finalization must not depend on garbage collection.
+No new Ox filesystem package is needed. Use ordinary explicit filesystem ownership and PIE004 all-exit writer settlement. Resource finalization must not depend on garbage collection.

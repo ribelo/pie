@@ -1,6 +1,6 @@
-# Adopt the Eta component runtime for the assistant service
+# Adopt the Ox component runtime for the assistant service
 
-The assistant service ran as one nested-callback pyramid: resources were acquired in `with_*` scopes, nothing had an explicit stop, and teardown depended on Eio switch unwind order. We decided to rebuild the service lifecycle on the `eta_component` runtime. All subsystems become entries in one desired-state tree, submitted to one component context. The component runtime is new, and Pie develops Eta, so Pie also serves as its proving ground.
+The assistant service ran as one nested-callback pyramid: resources were acquired in `with_*` scopes, nothing had an explicit stop, and teardown depended on Eio switch unwind order. We decided to rebuild the service lifecycle on the `ox_component` runtime. All subsystems become entries in one desired-state tree, submitted to one component context. The component runtime is new, and Pie develops Ox, so Pie also serves as its proving ground.
 
 ## Considered Options
 
@@ -10,9 +10,9 @@ The assistant service ran as one nested-callback pyramid: resources were acquire
 
 ## Consequences
 
-- The Eta opam pin moves to a master commit that contains `eta_component`, and `eta_component` joins the pinned package list.
+- The Ox opam pin moves to a master commit that contains `ox_component`, and `ox_component` joins the pinned package list.
 - `Daemon.*` modules are renamed to `Assistant_service.*`. The RPC wire format stays compatible; the `Status` response gains an additive `components` field.
 - Feature toggles for providers use dormant providers, not entry-level `enabled` flags. A disabled entry publishes no provisions, so its consumers would wait forever.
 - The STT backend provides a factory coeffect. Per-press sessions stay as they are. A provider-field change in the configuration makes the watcher submit a replacement batch, so a failed candidate rolls back to the working backend.
-- OTLP observability stays outside the component tree so it can report context shutdown. That means `Eta_otel_eio.with_otlp` at the process door, not a second event loop.
-- The generic loader and native HMR packages remain spec-only in Eta. Pie watches its own configuration files and calls `reconcile` or `replace` directly.
+- OTLP observability stays outside the component tree so it can report context shutdown. That means `Ox_otel_eio.with_otlp` at the process door, not a second event loop.
+- The generic loader and native HMR packages remain spec-only in Ox. Pie watches its own configuration files and calls `reconcile` or `replace` directly.

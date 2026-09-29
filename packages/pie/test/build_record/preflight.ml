@@ -10,8 +10,8 @@ let () =
     else Sys.argv.(1)
   in
   Printf.printf "source_fingerprint %s\n%!" (Provenance.source_fingerprint root);
-  let cmxa = Provenance.find_eta_cmxa_env () in
-  Printf.printf "visible_eta_cmxa %d\n%!" (List.length cmxa);
+  let cmxa = Provenance.find_ox_cmxa_env () in
+  Printf.printf "visible_ox_cmxa %d\n%!" (List.length cmxa);
   List.iter
     (fun p -> Printf.printf "cmxa %s %s\n%!" (Provenance.sha256_file p) p)
     cmxa;

@@ -31,13 +31,13 @@ Codex with_stream_session1080 uses Queue.unbounded; offer_chunk1106 ignores send
 
 Keep a bounded producer/consumer path and explicit overload/cancel/closed outcomes. Do not block the only keyboard/control reader indefinitely behind provider backpressure (see PIE009’s equivalent Pulse failure). Do not silently drop PCM, spawn per-chunk workers or replace one unbounded queue with another.
 
-Allocate attempt queue/promise/state inside its execution owner. Replace Async_completion1013–1069 with the existing Eta promise where its real duties fit; preserve queue/worker cancellation in the owning scope, not a custom register/resume state machine. Guard duplicate operation finish at the attempt boundary if needed, not through a second generic promise implementation.
+Allocate attempt queue/promise/state inside its execution owner. Replace Async_completion1013–1069 with the existing Ox promise where its real duties fit; preserve queue/worker cancellation in the owning scope, not a custom register/resume state machine. Guard duplicate operation finish at the attempt boundary if needed, not through a second generic promise implementation.
 
 ## Acceptance
 
 Use synthetic stalled and failed providers, variable-size chunks, boundary byte counts and cancellation while full. Assert retained bytes/worker count plateau and rejected offers remain visible. Exercise large retained-file selection before loading payload, base64 expansion and output deltas/final replacement without double accounting. Verify no rejected/partial recording reaches successful delivery.
 
-## Eta prerequisites
+## Ox prerequisites
 
 Use settled Queue admission/closure, Promise completion and structured cancellation, plus PIE002 physical retirement. Existing primitives suffice; no new buffering or completion package is needed.
 

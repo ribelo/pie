@@ -26,12 +26,12 @@ This probe executes the public decoder and PIE helpers, not the whole HTTP opera
 
 Check the typed terminal outcome before discarding the response envelope. Reject incomplete, cancelled, missing or unrecognized outcomes and unexpected tool continuation. Do not infer completion from valid JSON alone. Preserve errors for stage-aware recovery under PIE008.
 
-Keep protocol decoding in Eta. This application check does not require a new generic result framework or copying the provider decoder.
+Keep protocol decoding in Ox. This application check does not require a new generic result framework or copying the provider decoder.
 
 ## Acceptance
 
 Use a private HTTP provider fixture to exercise the public transcription and translation paths. Completed valid text succeeds; incomplete/cancelled text, absent markers, malformed content and failed responses must not reach delivery. Preserve typed provider failures.
 
-## Eta prerequisites
+## Ox prerequisites
 
-The selected Eta artifact must preserve terminal outcome distinctions. Installed d06548b already preserves the demonstrated markers. Verify the same consumer contract after incoming dependency changes.
+The selected Ox artifact must preserve terminal outcome distinctions. Installed d06548b already preserves the demonstrated markers. Verify the same consumer contract after incoming dependency changes.

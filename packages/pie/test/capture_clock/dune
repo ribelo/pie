@@ -3,9 +3,9 @@
 (test
  (name test_mono_race)
  (modules test_mono_race)
- (libraries alcotest eio_main eio.mock eta eta_test unix))
+ (libraries alcotest eio_main eio.mock ox ox_test unix))
 
 (test
  (name test_capture_clock)
  (modules test_capture_clock)
- (libraries pie alcotest eio_main eio.mock eta eta_test eio unix))
+ (libraries pie alcotest eio_main eio.mock ox ox_test eio unix))

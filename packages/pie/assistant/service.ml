@@ -205,7 +205,7 @@ let rec ptt_status_of_failures = function
   | _ :: rest -> ptt_status_of_failures rest
 
 let status_of_cause cause =
-  let failures = Eta.Cause.failures cause in
+  let failures = Ox.Cause.failures cause in
   let rec pulse acc = function
     | [] -> acc
     | `Pulse_error (Pulse.Client.Recording_overload _ as err) :: _ -> Some err
@@ -220,7 +220,7 @@ let status_of_cause cause =
         (List.concat_map
            (function
              | `Ptt_error _ as error -> [ error ]
-             | `Ptt_cause cause -> Eta.Cause.failures cause
+             | `Ptt_cause cause -> Ox.Cause.failures cause
              | `Pulse_error _ -> [])
            failures)
 
@@ -550,14 +550,14 @@ let with_publication primary publication =
   match publication with
   | Ok () -> Error primary
   | Error finalizer ->
-      let cause : [ `Ptt_error of string ] Eta.Cause.t -> _ = fun c -> c in
+      let cause : [ `Ptt_error of string ] Ox.Cause.t -> _ = fun c -> c in
       let as_cause = function
-        | `Ptt_error _ as e -> Eta.Cause.Fail e
+        | `Ptt_error _ as e -> Ox.Cause.Fail e
         | `Ptt_cause c -> cause c
       in
       Error
         (`Ptt_cause
-           (Eta.Cause.Suppressed
+           (Ox.Cause.Suppressed
               { primary = as_cause primary; finalizer = as_cause finalizer }))
 
 let recognize_then_deliver ~recognize ~deliver ~on_provider_failure ~on_blank
@@ -715,9 +715,9 @@ let acquire_and_run ~sw ~net ~clock ~logger ~owner ~config ~stt ~deliver mode
 
 (* The pause fiber cancels the body; settlement runs after its child scope has
    unwound, including provider cleanup, whether it won or failed. *)
-let cause_of_ptt_error : Ptt_loop.error -> [ `Ptt_error of string ] Eta.Cause.t
-    = function
-  | `Ptt_error _ as error -> Eta.Cause.Fail error
+let cause_of_ptt_error : Ptt_loop.error -> [ `Ptt_error of string ] Ox.Cause.t =
+  function
+  | `Ptt_error _ as error -> Ox.Cause.Fail error
   | `Ptt_cause cause -> cause
 
 let run_acquired_attempt ~sw ~attempt
@@ -732,7 +732,7 @@ let run_acquired_attempt ~sw ~attempt
   in
   let result =
     Fun.protect ~finally:settle (fun () ->
-        Eta.Concurrent.with_background ~sw
+        Ox.Concurrent.with_background ~sw
           (fun () ->
             Recording.Coordinator.await_cancel attempt;
             Error `Owned_pause)
@@ -748,7 +748,7 @@ let run_acquired_attempt ~sw ~attempt
   | Error primary, Error finalizer ->
       Error
         (`Ptt_cause
-           (Eta.Cause.Suppressed
+           (Ox.Cause.Suppressed
               {
                 primary = cause_of_ptt_error primary;
                 finalizer = cause_of_ptt_error finalizer;
@@ -1031,8 +1031,8 @@ let run_with_inputs ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock ~inputs
              (action_handler ~coordinator ~send_control ~retries ~get_store)
            coordinator)
     in
-    Eta_observability.Logger.info logger "assistant_service started"
-      ~fields:[ ("config.path", Eta_observability.Logger.String config_path) ];
+    Ox_observability.Logger.info logger "assistant_service started"
+      ~fields:[ ("config.path", Ox_observability.Logger.String config_path) ];
     Printf.printf "pie config:\n%s\n%!"
       (startup_config_json ~config:initial_effective
          ~ptt_transcribe_keysym:initial_effective.ptt_transcribe_keysym
@@ -1053,10 +1053,10 @@ let run_with_inputs ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock ~inputs
         (match result with
         | `Unchanged -> ()
         | `Failed ->
-            Eta_observability.Logger.error logger
+            Ox_observability.Logger.error logger
               "Pie config reload failed; keeping previous config"
               ~fields:
-                [ ("config.path", Eta_observability.Logger.String config_path) ]
+                [ ("config.path", Ox_observability.Logger.String config_path) ]
         | `Loaded (new_config, loaded_stamp) -> (
             match
               try
@@ -1066,21 +1066,19 @@ let run_with_inputs ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock ~inputs
               with Config.Stt.Config_error _ -> Error ()
             with
             | Error () ->
-                Eta_observability.Logger.error logger
+                Ox_observability.Logger.error logger
                   "Pie config reload failed; keeping previous config"
                   ~fields:
                     [
-                      ( "config.path",
-                        Eta_observability.Logger.String config_path );
+                      ("config.path", Ox_observability.Logger.String config_path);
                     ]
             | Ok config ->
                 current := config;
                 last_stamp := loaded_stamp;
-                Eta_observability.Logger.info logger "Pie config reloaded"
+                Ox_observability.Logger.info logger "Pie config reloaded"
                   ~fields:
                     [
-                      ( "config.path",
-                        Eta_observability.Logger.String config_path );
+                      ("config.path", Ox_observability.Logger.String config_path);
                     ]));
         loop ()
       in
@@ -1176,11 +1174,11 @@ let run_with_inputs ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock ~inputs
       in
       (match result with
       | Error error ->
-          let status = status_of_cause (Eta.Cause.Fail error) in
+          let status = status_of_cause (Ox.Cause.Fail error) in
           Recording.Coordinator.set_error coordinator status;
-          Eta_observability.Logger.error logger "assistant input failed"
+          Ox_observability.Logger.error logger "assistant input failed"
             ~fields:
-              [ ("assistant.error", Eta_observability.Logger.String status) ]
+              [ ("assistant.error", Ox_observability.Logger.String status) ]
       | Ok () -> ());
       result
     in
@@ -1212,7 +1210,7 @@ let run_with_inputs ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock ~inputs
           | Ok () -> Ok ()
           | Error _ as error ->
               Recording.Coordinator.set_error coordinator "recovery:cleanup";
-              Eta_observability.Logger.error logger
+              Ox_observability.Logger.error logger
                 "retained recording retry cleanup failed";
               error
         in
@@ -1237,10 +1235,10 @@ let run_with_inputs ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock ~inputs
                   text
           in
           let* () = clear_selected store in
-          Eta_observability.Logger.info logger
+          Ox_observability.Logger.info logger
             "retained recording retry succeeded"
             ~fields:
-              [ ("recording.stage", Eta_observability.Logger.String "cleared") ];
+              [ ("recording.stage", Ox_observability.Logger.String "cleared") ];
           Ok ()
         in
         let result =
@@ -1256,12 +1254,11 @@ let run_with_inputs ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock ~inputs
         | Error error ->
             Recording.Coordinator.set_error coordinator
               (ptt_status_of_failures [ error ]);
-            Eta_observability.Logger.error logger
+            Ox_observability.Logger.error logger
               "retained recording retry failed"
               ~fields:
                 [
-                  ( "recording.error",
-                    Eta_observability.Logger.String "stt:retry" );
+                  ("recording.error", Ox_observability.Logger.String "stt:retry");
                 ]
         | Ok () -> ());
         match result with
@@ -1276,9 +1273,9 @@ let run_with_inputs ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock ~inputs
       in
       loop ()
     in
-    Eta.Concurrent.par ~sw watcher (fun () ->
+    Ox.Concurrent.par ~sw watcher (fun () ->
         let* (), () =
-          Eta.Concurrent.par ~sw ptt_loop (fun () ->
+          Ox.Concurrent.par ~sw ptt_loop (fun () ->
               Result.map_error
                 (fun error -> (error :> Ptt_loop.run_error))
                 (retry_loop ()))

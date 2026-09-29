@@ -2,14 +2,4 @@
 
 (test
  (name test_provider_budgets)
- (libraries
-  pie
-  alcotest
-  eio_main
-  eta
-  eta_test
-  eta_http
-  eio
-  unix
-  cstruct
-  yojson))
+ (libraries pie alcotest eio_main ox ox_test ox_http eio unix cstruct yojson))

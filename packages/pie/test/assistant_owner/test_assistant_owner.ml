@@ -58,20 +58,20 @@ let pp_run_error fmt = function
       Format.pp_print_string fmt (Pie.Pulse.Client.error_message error)
   | `Ptt_error msg -> Format.pp_print_string fmt msg
   | `Ptt_cause cause ->
-      Eta.Cause.pp
+      Ox.Cause.pp
         (fun fmt (`Ptt_error msg) -> Format.pp_print_string fmt msg)
         fmt cause
 
 let fail_cause cause =
-  Alcotest.failf "workflow failed: %a" (Eta.Cause.pp pp_run_error) cause
+  Alcotest.failf "workflow failed: %a" (Ox.Cause.pp pp_run_error) cause
 
 let fail_error error = Alcotest.failf "workflow failed: %a" pp_run_error error
 
 let test_logger env =
-  Eta_observability.Logger.create ~service:"pie-owner-test"
+  Ox_observability.Logger.create ~service:"pie-owner-test"
     ~clock:(Eio.Stdenv.clock env)
     ~mono_clock:(Eio.Stdenv.mono_clock env)
-    ~reporter:(Eta_observability.Logger.Reporter.writer ignore)
+    ~reporter:(Ox_observability.Logger.Reporter.writer ignore)
     ()
 
 let rec rm_rf path =
@@ -262,7 +262,7 @@ let test_record_to_delivery_last_good_then_reload () =
             (Atomic.get delivered)))
 
 let assert_input_diagnostic memory expected =
-  let module Logger = Eta_observability.Logger in
+  let module Logger = Ox_observability.Logger in
   let records =
     Logger.Memory.find ~level:Logger.Error
       ~field:("assistant.error", expected)
@@ -289,11 +289,11 @@ let test_required_input_failure_sets_last_error () =
         Atomic.set delivered (text :: Atomic.get delivered);
         Ok ()
       in
-      let memory = Eta_observability.Logger.Memory.create () in
+      let memory = Ox_observability.Logger.Memory.create () in
       let logger =
-        Eta_observability.Logger.create ~service:"assistant-owner-test" ~clock
+        Ox_observability.Logger.create ~service:"assistant-owner-test" ~clock
           ~mono_clock
-          ~reporter:(Eta_observability.Logger.Memory.reporter memory)
+          ~reporter:(Ox_observability.Logger.Memory.reporter memory)
           ()
       in
       let _socket_path, retry_dir, workflow =
@@ -333,11 +333,11 @@ let test_recording_overload_cancels_attempt () =
         Atomic.set delivered (text :: Atomic.get delivered);
         Ok ()
       in
-      let memory = Eta_observability.Logger.Memory.create () in
+      let memory = Ox_observability.Logger.Memory.create () in
       let logger =
-        Eta_observability.Logger.create ~service:"assistant-owner-test" ~clock
+        Ox_observability.Logger.create ~service:"assistant-owner-test" ~clock
           ~mono_clock
-          ~reporter:(Eta_observability.Logger.Memory.reporter memory)
+          ~reporter:(Ox_observability.Logger.Memory.reporter memory)
           ()
       in
       let _socket_path, retry_dir, workflow =
@@ -500,7 +500,7 @@ let header_value name raw =
       | _ -> None)
 
 let write_ws_text flow payload =
-  Eta_http.Ws_codec.encode
+  Ox_http.Ws_codec.encode
     { fin = true; opcode = Text; payload = Bytes.of_string payload }
   |> Bytes.to_string
   |> fun encoded -> Eio.Flow.copy_string encoded flow
@@ -509,7 +509,7 @@ let write_ws_close flow =
   let payload = Bytes.create 2 in
   Bytes.set payload 0 (Char.chr 3);
   Bytes.set payload 1 (Char.chr 232);
-  Eta_http.Ws_codec.encode { fin = true; opcode = Close; payload }
+  Ox_http.Ws_codec.encode { fin = true; opcode = Close; payload }
   |> Bytes.to_string
   |> fun encoded -> Eio.Flow.copy_string encoded flow
 
@@ -519,7 +519,7 @@ let write_ws_switching_response flow key =
      Upgrade: websocket\r\n\
      Connection: keep-alive, Upgrade\r\n\
      Sec-WebSocket-Accept: "
-    ^ Eta_http.Ws_codec.accept_key ~sha1:Eta_http.Eta_http_tls_openssl.sha1 key
+    ^ Ox_http.Ws_codec.accept_key ~sha1:Ox_http.Ox_http_tls_openssl.sha1 key
     ^ "\r\n\r\n"
   in
   Eio.Flow.copy_string response flow
@@ -876,17 +876,17 @@ let test_keyboard_input_lost_cancels_attempt () =
           Pie.Keyboard.Monitor.emit keyboard (key ~released:false);
           offer_pcm audio_q);
       let outcome =
-        Eta.Scope.run (fun child_sw ->
-            Eta.Concurrent.with_background ~sw:child_sw
+        Ox.Scope.run (fun child_sw ->
+            Ox.Concurrent.with_background ~sw:child_sw
               (fun () ->
                 Eio.Time.sleep clock 0.45;
                 raise Pie.Keyboard.Monitor.Input_lost)
               workflow)
       in
       match outcome with
-      | Eta.Exit.Success () ->
+      | Ox.Exit.Success () ->
           Alcotest.fail "Input_lost must fail the owner workflow"
-      | Eta.Exit.Failure _ -> (
+      | Ox.Exit.Failure _ -> (
           Alcotest.(check (list string))
             "no delivery after keyboard Input_lost" [] (Atomic.get delivered);
           match pcm_files retry_dir with
@@ -1032,7 +1032,7 @@ let test_pause_resume_fresh_attempt_delivers () =
             (Atomic.get delivered)))
 
 let ptt_messages cause =
-  Eta.Cause.failures cause |> List.map (function `Ptt_error msg -> msg)
+  Ox.Cause.failures cause |> List.map (function `Ptt_error msg -> msg)
 
 let start_attempt coord =
   match
@@ -1053,7 +1053,7 @@ let test_composite_body_failures_preserved () =
       in
       let attempt = start_attempt coord in
       let body () =
-        Eta.Concurrent.race ~sw
+        Ox.Concurrent.race ~sw
           [
             (fun () -> Error (`Ptt_error "one"));
             (fun () -> Error (`Ptt_error "two"));
@@ -1111,7 +1111,7 @@ let test_owned_pause_plus_cleanup_is_not_ok () =
 let test_pulse_overload_and_cleanup_failures_preserved () =
   Eio_main.run @@ fun _env ->
   match
-    Eta.Scope.run (fun sw ->
+    Ox.Scope.run (fun sw ->
         Eio.Switch.on_release sw (fun () ->
             failwith "recording:close retained recording");
         Error
@@ -1119,40 +1119,39 @@ let test_pulse_overload_and_cleanup_failures_preserved () =
              (Pie.Pulse.Client.Recording_overload
                 { stream_index = 1; capacity = 64 })))
   with
-  | Eta.Exit.Success _ ->
+  | Ox.Exit.Success _ ->
       Alcotest.fail "composite Pulse and cleanup must stay failed"
   | Failure cause -> (
       let overload =
-        Eta.Cause.failures cause
+        Ox.Cause.failures cause
         |> List.exists (function
           | `Pulse_error (Pie.Pulse.Client.Recording_overload _) -> true
           | _ -> false)
       in
       Alcotest.(check bool) "Pulse Recording_overload remains" true overload;
       match cause with
-      | Eta.Cause.Suppressed { finalizer; _ } ->
+      | Ox.Cause.Suppressed { finalizer; _ } ->
           Alcotest.(check bool)
             "cleanup failure remains as finalizer" true
-            (not (Eta.Cause.is_interrupt_only finalizer))
+            (not (Ox.Cause.is_interrupt_only finalizer))
       | _ ->
           Alcotest.failf "expected Suppressed cleanup, got %a"
-            (Eta.Cause.pp pp_run_error)
-            cause)
+            (Ox.Cause.pp pp_run_error) cause)
 
 let test_status_observer_defect_composes_with_pulse () =
   Eio_main.run @@ fun _env ->
   match
-    Eta.Scope.run (fun sw ->
+    Ox.Scope.run (fun sw ->
         Eio.Switch.on_release sw (fun () -> failwith "set_error persist");
         Error
           (`Pulse_error
              (Pie.Pulse.Client.Recording_overload
                 { stream_index = 1; capacity = 64 })))
   with
-  | Eta.Exit.Success _ -> Alcotest.fail "observer defect must not succeed"
+  | Ox.Exit.Success _ -> Alcotest.fail "observer defect must not succeed"
   | Failure cause -> (
       let overload =
-        Eta.Cause.failures cause
+        Ox.Cause.failures cause
         |> List.exists (function
           | `Pulse_error (Pie.Pulse.Client.Recording_overload _) -> true
           | _ -> false)
@@ -1160,14 +1159,13 @@ let test_status_observer_defect_composes_with_pulse () =
       Alcotest.(check bool)
         "original Pulse Recording_overload remains" true overload;
       match cause with
-      | Eta.Cause.Suppressed { finalizer; _ } ->
+      | Ox.Cause.Suppressed { finalizer; _ } ->
           Alcotest.(check bool)
             "observer defect composed as finalizer" true
-            (not (Eta.Cause.is_interrupt_only finalizer))
+            (not (Ox.Cause.is_interrupt_only finalizer))
       | _ ->
           Alcotest.failf "observer defect replaced Pulse: %a"
-            (Eta.Cause.pp pp_run_error)
-            cause)
+            (Ox.Cause.pp pp_run_error) cause)
 
 let json_accepted line =
   match Yojson.Safe.from_string line with
@@ -1358,18 +1356,18 @@ let test_busy_keyboard_and_rpc_then_fresh_cycle () =
 let test_cleanup_cancel_and_defect_both_visible () =
   Eio_main.run @@ fun _env ->
   match
-    Eta.Scope.run (fun sw ->
+    Ox.Scope.run (fun sw ->
         Eio.Switch.on_release sw (fun () ->
             raise (Unix.Unix_error (Unix.EIO, "close", "")));
         failwith "cleanup-defect")
   with
-  | Eta.Exit.Success _ -> Alcotest.fail "defect and cleanup must stay failed"
-  | Eta.Exit.Failure cause -> (
+  | Ox.Exit.Success _ -> Alcotest.fail "defect and cleanup must stay failed"
+  | Ox.Exit.Failure cause -> (
       match cause with
-      | Eta.Cause.Suppressed { primary = Eta.Cause.Die _; finalizer } ->
+      | Ox.Cause.Suppressed { primary = Ox.Cause.Die _; finalizer } ->
           Alcotest.(check bool)
             "composed cleanup remains" true
-            (not (Eta.Cause.is_interrupt_only finalizer))
+            (not (Ox.Cause.is_interrupt_only finalizer))
       | _ -> Alcotest.fail "defect replaced the composite")
 
 let test_capture_budget_sets_last_error () =
@@ -1386,11 +1384,11 @@ let test_capture_budget_sets_last_error () =
       let load _ = (base_config (), stamp ()) in
       let stt _ _ _ = Ok "should-not-deliver" in
       let deliver _ _ _ = Ok () in
-      let memory = Eta_observability.Logger.Memory.create () in
+      let memory = Ox_observability.Logger.Memory.create () in
       let logger =
-        Eta_observability.Logger.create ~service:"assistant-owner-test" ~clock
+        Ox_observability.Logger.create ~service:"assistant-owner-test" ~clock
           ~mono_clock
-          ~reporter:(Eta_observability.Logger.Memory.reporter memory)
+          ~reporter:(Ox_observability.Logger.Memory.reporter memory)
           ()
       in
       let socket_path = Filename.concat dir "control.sock" in
@@ -1419,7 +1417,7 @@ let test_capture_budget_sets_last_error () =
         | Ok () -> Ok ()
         | Error e -> Error (e :> [ Pie.Ptt_loop.run_error | `Timeout ])
       in
-      match Eta.Timeout.timeout ~clock (Eta.Duration.seconds 6) timed with
+      match Ox.Timeout.timeout ~clock (Ox.Duration.seconds 6) timed with
       | Ok () -> Alcotest.fail "capture budget must fail the workflow"
       | Error `Timeout -> Alcotest.fail "deadline"
       | Error (`Ptt_error "pcm:capture_budget") ->
@@ -1428,7 +1426,7 @@ let test_capture_budget_sets_last_error () =
           Alcotest.(check bool)
             "typed capture budget retained" true
             (List.mem (`Ptt_error "pcm:capture_budget")
-               (Eta.Cause.failures cause));
+               (Ox.Cause.failures cause));
           assert_input_diagnostic memory "ptt:capture_budget"
       | Error error -> fail_error error)
 
@@ -1914,9 +1912,9 @@ let test_publication_failure_keeps_primary () =
         | `Replaced saved -> (
             try Unix.rename saved path with Unix.Unix_error _ -> ())
       in
-      let rec pub014_has_stt : [ `Ptt_error of string ] Eta.Cause.t -> bool =
+      let rec pub014_has_stt : [ `Ptt_error of string ] Ox.Cause.t -> bool =
         function
-        | Eta.Cause.Fail (`Ptt_error "stt:unavailable") -> true
+        | Ox.Cause.Fail (`Ptt_error "stt:unavailable") -> true
         | Concurrent xs -> List.exists pub014_has_stt xs
         | Suppressed { primary; finalizer } ->
             pub014_has_stt primary || pub014_has_stt finalizer
@@ -1924,7 +1922,7 @@ let test_publication_failure_keeps_primary () =
         | Fail _ | Die _ | Interrupt _ -> false
       in
       let rec pub014_has_pub_fail = function
-        | Eta.Cause.Finalizer (Eta.Cause.Fail (`Ptt_error msg)) ->
+        | Ox.Cause.Finalizer (Ox.Cause.Fail (`Ptt_error msg)) ->
             msg <> "stt:unavailable"
         | Concurrent xs -> List.exists pub014_has_pub_fail xs
         | Suppressed { primary; finalizer = Fail (`Ptt_error msg) } ->
@@ -2011,7 +2009,7 @@ let test_owned_cancel_cleanup_defect_preserves_older () =
       let outcome, resolve_outcome = Eio.Promise.create () in
       Eio.Fiber.fork ~sw (fun () ->
           let exit =
-            Eta.Scope.run (fun owner_sw ->
+            Ox.Scope.run (fun owner_sw ->
                 let _, _, workflow =
                   owner_workflow ~logger:(test_logger env) ~env ~sw:owner_sw
                     ~net:(Eio.Stdenv.net env)
@@ -2046,19 +2044,19 @@ let test_owned_cancel_cleanup_defect_preserves_older () =
         "did not publish new audio" true
         (peek_kind retry_dir <> Some "audio");
       let rec has_defect = function
-        | Eta.Cause.Die (Failure msg, _) when msg = "provider-cleanup-defect" ->
+        | Ox.Cause.Die (Failure msg, _) when msg = "provider-cleanup-defect" ->
             true
-        | Eta.Cause.Finalizer cause -> has_defect cause
-        | Eta.Cause.Concurrent causes -> List.exists has_defect causes
-        | Eta.Cause.Suppressed { primary; finalizer } ->
+        | Ox.Cause.Finalizer cause -> has_defect cause
+        | Ox.Cause.Concurrent causes -> List.exists has_defect causes
+        | Ox.Cause.Suppressed { primary; finalizer } ->
             has_defect primary || has_defect finalizer
         | _ -> false
       in
       match Eio.Promise.await outcome with
-      | Eta.Exit.Failure cause ->
+      | Ox.Exit.Failure cause ->
           Alcotest.(check bool)
             "cleanup defect classified" true (has_defect cause)
-      | Eta.Exit.Success _ -> Alcotest.fail "cleanup defect must not disappear")
+      | Ox.Exit.Success _ -> Alcotest.fail "cleanup defect must not disappear")
 
 let test_admission_held_until_provider_finalizer () =
   Eio_main.run @@ fun env ->
@@ -2144,16 +2142,16 @@ let test_admission_held_until_provider_finalizer () =
       | Pie.Recording.Coordinator.Started _ -> ()
       | _ -> Alcotest.fail "admission still held after provider finalizer")
 
-let inject_cause cause = Eta.Exit.Failure cause
+let inject_cause cause = Ox.Exit.Failure cause
 
 let recover_single_failure on_error exit =
-  match Eta.Exit.to_result exit with
+  match Ox.Exit.to_result exit with
   | Ok (Ok value) -> Ok value
   | Ok (Error error) -> (
       match on_error error with
       | Some result ->
-          Result.map_error (fun error -> Eta.Cause.Fail error) result
-      | None -> Error (Eta.Cause.Fail error))
+          Result.map_error (fun error -> Ox.Cause.Fail error) result
+      | None -> Error (Ox.Cause.Fail error))
   | Error cause -> Error cause
 
 let test_recover_single_intended_fail () =
@@ -2161,7 +2159,7 @@ let test_recover_single_intended_fail () =
   Eio.Switch.run @@ fun sw ->
   let recovered = Atomic.make false in
   let eff =
-    inject_cause (Eta.Cause.Fail (`Ptt_error "stt:unavailable"))
+    inject_cause (Ox.Cause.Fail (`Ptt_error "stt:unavailable"))
     |> recover_single_failure (function
       | `Ptt_error "stt:unavailable" ->
           Atomic.set recovered true;
@@ -2178,10 +2176,10 @@ let test_recover_concurrent_ordinary_and_budget () =
   Eio.Switch.run @@ fun sw ->
   let ran = Atomic.make false in
   let cause =
-    Eta.Cause.Concurrent
+    Ox.Cause.Concurrent
       [
-        Eta.Cause.Fail (`Ptt_error "stt:unavailable");
-        Eta.Cause.Fail (`Ptt_error "pcm:capture_budget");
+        Ox.Cause.Fail (`Ptt_error "stt:unavailable");
+        Ox.Cause.Fail (`Ptt_error "pcm:capture_budget");
       ]
   in
   let eff =
@@ -2196,7 +2194,7 @@ let test_recover_concurrent_ordinary_and_budget () =
       Alcotest.(check bool) "handler not run" false (Atomic.get ran);
       let rendered =
         Format.asprintf "%a"
-          (Eta.Cause.pp (fun fmt (`Ptt_error m) -> Format.pp_print_string fmt m))
+          (Ox.Cause.pp (fun fmt (`Ptt_error m) -> Format.pp_print_string fmt m))
           err
       in
       let has s =
@@ -2214,10 +2212,10 @@ let test_recover_concurrent_pause_and_body () =
   Eio.Switch.run @@ fun sw ->
   let ran = Atomic.make false in
   let cause =
-    Eta.Cause.Concurrent
+    Ox.Cause.Concurrent
       [
-        Eta.Cause.Fail `Owned_pause;
-        Eta.Cause.Fail (`Body_error (`Ptt_error "inject:failed"));
+        Ox.Cause.Fail `Owned_pause;
+        Ox.Cause.Fail (`Body_error (`Ptt_error "inject:failed"));
       ]
   in
   let eff =
@@ -2237,11 +2235,11 @@ let test_recover_sequential_typed_pair () =
   Eio.Switch.run @@ fun sw ->
   let ran = Atomic.make false in
   let cause =
-    Eta.Cause.Suppressed
+    Ox.Cause.Suppressed
       {
-        primary = Eta.Cause.Fail (`Ptt_error "stt:unavailable");
+        primary = Ox.Cause.Fail (`Ptt_error "stt:unavailable");
         finalizer =
-          Eta.Cause.Finalizer (Eta.Cause.Fail (`Ptt_error "inject:failed"));
+          Ox.Cause.Finalizer (Ox.Cause.Fail (`Ptt_error "inject:failed"));
       }
   in
   let eff =
@@ -2256,7 +2254,7 @@ let test_recover_sequential_typed_pair () =
       Alcotest.(check bool) "handler not run" false (Atomic.get ran);
       let rendered =
         Format.asprintf "%a"
-          (Eta.Cause.pp (fun fmt (`Ptt_error m) -> Format.pp_print_string fmt m))
+          (Ox.Cause.pp (fun fmt (`Ptt_error m) -> Format.pp_print_string fmt m))
           err
       in
       let has s =

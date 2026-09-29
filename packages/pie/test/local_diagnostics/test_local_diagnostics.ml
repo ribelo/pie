@@ -81,7 +81,7 @@ type settings = unit
 let settings_of_yojson (_ : Yojson.Safe.t) : (settings, string) result = Ok ()
 let yojson_of_settings () : Yojson.Safe.t = `Assoc []
 
-let door_config : settings Eta_app.Config.t =
+let door_config : settings Ox_app.Config.t =
   {
     of_yojson = settings_of_yojson;
     yojson_of_t = yojson_of_settings;
@@ -95,15 +95,15 @@ let pp_err formatter = function
    and the caller's stderr buffer, which is where production writes it. *)
 let run_door ~env ?on_switch ?telemetry program =
   let errors = Buffer.create 256 in
-  let memory = Eta_observability.Logger.Memory.create () in
+  let memory = Ox_observability.Logger.Memory.create () in
   let code =
-    Eta_app.run_for_test ?on_switch ?telemetry ~env ~name:"pie"
+    Ox_app.run_for_test ?on_switch ?telemetry ~env ~name:"pie"
       ~config:door_config ~pp_err
       ~journal:
-        (Eta_observability.Logger.Reporter.tee
+        (Ox_observability.Logger.Reporter.tee
            [
-             Eta_observability.Logger.Memory.reporter memory;
-             Eta_observability.Logger.Reporter.writer (fun line ->
+             Ox_observability.Logger.Memory.reporter memory;
+             Ox_observability.Logger.Reporter.writer (fun line ->
                  Buffer.add_string errors line);
            ])
       ~getenv:(fun _ -> None)
@@ -111,7 +111,7 @@ let run_door ~env ?on_switch ?telemetry program =
       ~stderr:(fun text -> Buffer.add_string errors text)
       ~stdout:ignore ~argv:[| "pie" |] program
   in
-  (code, Buffer.contents errors, Eta_observability.Logger.Memory.records memory)
+  (code, Buffer.contents errors, Ox_observability.Logger.Memory.records memory)
 
 let read_http_body flow =
   let reader = Eio.Buf_read.of_flow ~max_size:4_000_000 flow in
@@ -177,7 +177,7 @@ let with_collector f =
   f ~env ~port ~bodies
 
 let log_info env message =
-  Eta_observability.Logger.info env.Eta_app.Env.logger message
+  Ox_observability.Logger.info env.Ox_app.Env.logger message
 
 let test_success_exit () =
   with_private_runtime @@ fun _ ->
@@ -201,13 +201,13 @@ let test_typed_failure_exit () =
 let test_requested_stop_exit () =
   with_private_runtime @@ fun _ ->
   Eio_main.run @@ fun env ->
-  let id = Eta.Interrupt_id.create () in
+  let id = Ox.Interrupt_id.create () in
   let released = ref false in
   let code, _, _ =
     run_door ~env
       ~on_switch:(fun sw ->
         Eio.Switch.on_release sw (fun () -> released := true);
-        Eta_app.request_stop ~sw id)
+        Ox_app.request_stop ~sw id)
       (fun _env _settings _sw -> Eio.Fiber.await_cancel ())
   in
   Alcotest.(check int) "requested stop is a clean stop" 0 code;
@@ -215,7 +215,7 @@ let test_requested_stop_exit () =
 
 (* An interruption the Door did not request is not a clean stop and not a typed
    failure: it is classified as its own nonzero exit. (The pre-migration Pie
-   runner mapped an interrupt to 130; eta_app's Door owns this mapping.)
+   runner mapped an interrupt to 130; ox_app's Door owns this mapping.)
    ^napp-f7d6 *)
 let test_anonymous_interruption_exit () =
   with_private_runtime @@ fun _ ->
@@ -254,7 +254,7 @@ let test_default_export_off_stderr_once () =
       Alcotest.(check string) "record message" "process door ready" record.msg;
       Alcotest.(check bool)
         "record level" true
-        (record.level = Eta_observability.Logger.Info)
+        (record.level = Ox_observability.Logger.Info)
   | _ -> Alcotest.fail "expected exactly one record");
   Alcotest.(check int) "no exporter contact" 0 (List.length !bodies)
 
@@ -263,7 +263,7 @@ let test_filtering_retained () =
   Eio_main.run @@ fun env ->
   let code, stderr, records =
     run_door ~env (fun env _settings _sw ->
-        Eta_observability.Logger.debug env.Eta_app.Env.logger
+        Ox_observability.Logger.debug env.Ox_app.Env.logger
           "filtered-debug-line";
         log_info env "visible-info-line";
         Ok ())
@@ -281,14 +281,14 @@ let test_redacted_field_stays_out_of_stderr () =
   let secret = "local-diagnostics-secret" in
   let code, stderr, records =
     run_door ~env (fun env _settings _sw ->
-        Eta_observability.Logger.info
+        Ox_observability.Logger.info
           ~fields:
             [
               ( "credential",
-                Eta_observability.Logger.Redacted
-                  (Eta_observability.Redact.make secret) );
+                Ox_observability.Logger.Redacted
+                  (Ox_observability.Redact.make secret) );
             ]
-          env.Eta_app.Env.logger "redaction-line";
+          env.Ox_app.Env.logger "redaction-line";
         Ok ())
   in
   Alcotest.(check int) "success" 0 code;
@@ -301,7 +301,7 @@ let test_redacted_field_stays_out_of_stderr () =
       | Some value ->
           Alcotest.(check string)
             "redacted field rendering" "<redacted>"
-            (Format.asprintf "%a" Eta_observability.Logger.pp_value value)
+            (Format.asprintf "%a" Ox_observability.Logger.pp_value value)
       | None -> Alcotest.fail "credential field missing from the record")
   | _ -> Alcotest.fail "expected exactly one record"
 
@@ -318,9 +318,9 @@ let test_enabled_export_private_collector () =
     run_door ~env
       ~telemetry:(fun ~sw env _settings -> Pie.Process.telemetry ~sw env ())
       (fun env _settings _sw ->
-        Eta_observability.Logger.info
-          ~fields:[ ("diag", Eta_observability.Logger.String "meta") ]
-          env.Eta_app.Env.logger "export-local-once";
+        Ox_observability.Logger.info
+          ~fields:[ ("diag", Ox_observability.Logger.String "meta") ]
+          env.Ox_app.Env.logger "export-local-once";
         Ok ())
   in
   Alcotest.(check int) "success" 0 code;

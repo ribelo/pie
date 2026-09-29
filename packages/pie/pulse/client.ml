@@ -2,12 +2,12 @@ type error =
   | Protocol_error of string
   | Authentication_error of string
   | Server_error of { message : string; code : int option }
-  | Timeout of { operation : string; duration : Eta.Duration.t }
+  | Timeout of { operation : string; duration : Ox.Duration.t }
   | Disconnected of string
   | Malformed_packet of string
   | Recording_overload of { stream_index : int; capacity : int }
 
-let default_request_timeout = Eta.Duration.seconds 3
+let default_request_timeout = Ox.Duration.seconds 3
 let record_stream_capacity = 64
 let ( let* ) = Result.bind
 
@@ -21,7 +21,7 @@ let error_message = function
       Printf.sprintf "PulseAudio server error %d: %s" code message
   | Timeout { operation; duration } ->
       Printf.sprintf "PulseAudio %s timed out after %s" operation
-        (Eta.Duration.humanize duration)
+        (Ox.Duration.humanize duration)
   | Disconnected message -> "PulseAudio disconnected: " ^ message
   | Malformed_packet message -> "PulseAudio malformed packet: " ^ message
   | Recording_overload { stream_index; capacity } ->
@@ -114,9 +114,9 @@ type t =
       record_queues : (int, record_queue) Hashtbl.t;
       mutable remainder : bytes;
       mutable protocol_version : int;
-      request_timeout : Eta.Duration.t;
+      request_timeout : Ox.Duration.t;
       clock : 'b Eio.Time.clock;
-      logger : Eta_observability.Logger.t;
+      logger : Ox_observability.Logger.t;
       write_lock : Eio.Mutex.t;
     }
       -> t
@@ -150,8 +150,8 @@ let take_pending (T t) tag =
 let process_command (T t as client) envelope =
   match take_pending client envelope.Commands.tag with
   | None ->
-      Eta_observability.Logger.debug t.logger
-        ~fields:[ ("pulse.tag", Eta_observability.Logger.Int envelope.tag) ]
+      Ox_observability.Logger.debug t.logger
+        ~fields:[ ("pulse.tag", Ox_observability.Logger.Int envelope.tag) ]
         "PulseAudio late reply dropped";
       Ok ()
   | Some pending when envelope.packet_type = Defs.Pa_command.reply ->
@@ -178,8 +178,8 @@ let process_command (T t as client) envelope =
 let process_record_chunk (T t) channel payload =
   match Hashtbl.find_opt t.record_queues channel with
   | None ->
-      Eta_observability.Logger.debug t.logger
-        ~fields:[ ("pulse.channel", Eta_observability.Logger.Int channel) ]
+      Ox_observability.Logger.debug t.logger
+        ~fields:[ ("pulse.channel", Ox_observability.Logger.Int channel) ]
         "PulseAudio chunk for inactive record stream dropped";
       Ok ()
   | Some rq ->
@@ -304,7 +304,7 @@ let await_command (T t as client) (packet : Commands.command_packet) pending
         await ()
       in
       match
-        Eta.Timeout.timeout ~clock:t.clock t.request_timeout (fun () ->
+        Ox.Timeout.timeout ~clock:t.clock t.request_timeout (fun () ->
             Result.map_error (fun e -> `Operation e) (operation ()))
       with
       | Ok v -> Ok v
@@ -478,13 +478,13 @@ let with_record_stream (T t as client) ?options
           with
           | Ok _ -> ()
           | Error (`Pulse_error error) ->
-              Eta_observability.Logger.warn t.logger
+              Ox_observability.Logger.warn t.logger
                 ~fields:
                   [
                     ( "pulse.stream_index",
-                      Eta_observability.Logger.Int info.stream_index );
+                      Ox_observability.Logger.Int info.stream_index );
                     ( "pulse.error",
-                      Eta_observability.Logger.String (error_message error) );
+                      Ox_observability.Logger.String (error_message error) );
                   ]
                 "PulseAudio record stream cleanup failed")
         (fun () -> use info (pull_record_queue rq))

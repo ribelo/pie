@@ -46,6 +46,6 @@ Use fake helpers to test lookup failure, null focus, matching rules and known no
 
 Check that delivery without rules performs no focus lookup. Check that incompatible sessions fail before emission. Preserve first-match ordering and explicit newline actions.
 
-## Eta prerequisites
+## Ox prerequisites
 
 Existing typed failure handling is sufficient. No new desktop framework or fallback backend is needed.

@@ -13,7 +13,7 @@ There is no `.#oxcaml` development shell and no `camelpie` package.
 
 `nix develop` is the flake **default** shell. It loads the **mutable shared**
 opam switch `5.4.0+ox` under `$HOME/.cache/opam`. It does **not** install the
-flake’s locked Eta source. Do not treat this shell as a hermetic package build.
+flake’s locked Ox source. Do not treat this shell as a hermetic package build.
 
 The locked flake package is `pie`:
 
@@ -24,38 +24,38 @@ nix build --impure .#pie
 That package uses flake inputs. It is a different artifact path from the
 shared switch.
 
-Reviewed Eta stages used in audit builds are passed as a directory parameter
-(`ETA_STAGE`). A historical archive hash in old notes is not a guarantee of
+Reviewed Ox stages used in audit builds are passed as a directory parameter
+(`OX_STAGE`). A historical archive hash in old notes is not a guarantee of
 the current linker input.
 
 ## Build (does not install)
 
 ```bash
 eval "$(opam env --switch=5.4.0+ox --set-switch)"
-export OCAMLPATH="$ETA_STAGE${OCAMLPATH:+:$OCAMLPATH}"
-export CAML_LD_LIBRARY_PATH="$ETA_STAGE/stublibs${CAML_LD_LIBRARY_PATH:+:$CAML_LD_LIBRARY_PATH}"
+export OCAMLPATH="$OX_STAGE${OCAMLPATH:+:$OCAMLPATH}"
+export CAML_LD_LIBRARY_PATH="$OX_STAGE/stublibs${CAML_LD_LIBRARY_PATH:+:$CAML_LD_LIBRARY_PATH}"
 export DUNE_CACHE=disabled
 dune build --build-dir .scratch/example-build/dune --only-packages pie
 ```
 
 This does not install or restart anything.
 
-## Test against current local Eta master
+## Test against current local Ox master
 
 ```bash
-scripts/test-local-eta.sh
+scripts/test-local-ox.sh
 ```
 
-The script enters `nix develop ../ocaml/Eta` for native libraries, mirrors the
-clean checked-out Eta `master` into ignored `_dev/eta-source`, builds and
-installs only the needed Eta packages into ignored `_dev/eta-install`, then
+The script enters `nix develop ../ocaml/ox` for native libraries, mirrors the
+clean checked-out Ox `master` into ignored `_dev/ox-source`, builds and
+installs only the needed Ox packages into ignored `_dev/ox-install`, then
 puts that local prefix ahead of the shared switch via `OCAMLPATH` and
 `CAML_LD_LIBRARY_PATH`. It builds Pie and runs **every registered test**
 (including long end-to-end cases) with a private HOME and fail-closed desktop
 helpers. It never installs into the shared opam switch. Inspect
 `_dev/test-run/summary.tsv` for per-suite pass counts and
-`_dev/test-run/logs/` for test diagnostics. Set `ETA_PATH` to use a different
-local Eta checkout. The script refuses a dirty or non-master Eta checkout.
+`_dev/test-run/logs/` for test diagnostics. Set `OX_PATH` to use a different
+local Ox checkout. The script refuses a dirty or non-master Ox checkout.
 
 ## Provenance record
 
@@ -67,7 +67,7 @@ binary **directly**. Do not `dune exec` the helper against the same
 The helper then:
 
 1. Snapshots `packages/pie` plus `dune-project` / `dune-workspace` /
-   package dune files (relative-path manifest) and Eta `*.cmxa` plus the
+   package dune files (relative-path manifest) and Ox `*.cmxa` plus the
    TLS stub.
 2. Runs `DUNE_CACHE=disabled dune build --build-dir <fresh> packages/pie/bin/pie.exe`.
 3. Parses **only** the `ocamlopt -o pie.exe` line (rejects unsupported

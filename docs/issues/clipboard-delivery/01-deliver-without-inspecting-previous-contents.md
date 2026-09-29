@@ -35,6 +35,6 @@ Historical (rejected): a 50 ms helper-alive window was treated as compositor rea
 
 Promote a regression through the public paste/injection path: start with image-only, text, empty and arbitrary MIME offers; all admit the same requested text without calling wl-paste. Assert one copy and one intended key dispatch when applicable. Inject copy failure, helper early exit, key-dispatch failure, cancellation and slow consumers; distinguish request submission from confirmed consumption. Repeated operations must leave bounded owned processes/descriptors after settlement. Remove obsolete preservation assertions and register the new behavior with named tests.
 
-## Eta prerequisites
+## Ox prerequisites
 
-No image-format capability is needed from Eta. Use the settled deferred-execution and cancellation/finalizer contracts for helper ownership; validate against the actual deployed Eta version. Incoming fixes do not replace the PIE consumer migration. Do not wait for a new clipboard abstraction in Eta.
+No image-format capability is needed from Ox. Use the settled deferred-execution and cancellation/finalizer contracts for helper ownership; validate against the actual deployed Ox version. Incoming fixes do not replace the PIE consumer migration. Do not wait for a new clipboard abstraction in Ox.

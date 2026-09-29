@@ -1,54 +1,54 @@
 #!/usr/bin/env bash
-# Build and run every registered Pie test against local Eta master, without
+# Build and run every registered Pie test against local Ox master, without
 # installing into or changing the shared opam switch.
 set -euo pipefail
 
 pie_root="$(cd "$(dirname "$0")/.." && pwd -P)"
-eta_root="$(cd "${ETA_PATH:-$pie_root/../ocaml/Eta}" && pwd -P)"
+ox_root="$(cd "${OX_PATH:-$pie_root/../ocaml/ox}" && pwd -P)"
 if [[ "${1:-}" != --in-shell ]]; then
-  exec nix develop "$eta_root" -c bash "$0" --in-shell
+  exec nix develop "$ox_root" -c bash "$0" --in-shell
 fi
 
 export OPAMROOT="$HOME/.cache/opam"
 eval "$(opam env --switch 5.4.0+ox --set-switch)"
 export DUNE_CACHE=disabled
 pkg-config --exists openssl sqlite3 || {
-  echo 'The Eta Nix shell must provide OpenSSL and SQLite native libraries.' >&2
+  echo 'The Ox Nix shell must provide OpenSSL and SQLite native libraries.' >&2
   exit 1
 }
-if [[ "$(git -C "$eta_root" rev-parse HEAD)" != "$(git -C "$eta_root" rev-parse master)" ]] ||
-   [[ -n "$(git -C "$eta_root" status --porcelain --untracked-files=no -- lib dune-project)" ]]; then
-  echo 'Eta must be checked out at its clean local master branch for this test.' >&2
+if [[ "$(git -C "$ox_root" rev-parse HEAD)" != "$(git -C "$ox_root" rev-parse master)" ]] ||
+   [[ -n "$(git -C "$ox_root" status --porcelain --untracked-files=no -- lib dune-project)" ]]; then
+  echo 'Ox must be checked out at its clean local master branch for this test.' >&2
   exit 1
 fi
 
-mirror="$pie_root/_dev/eta-source"
-prefix="$pie_root/_dev/eta-install"
+mirror="$pie_root/_dev/ox-source"
+prefix="$pie_root/_dev/ox-install"
 build="$pie_root/_dev/pie-build"
 run="$pie_root/_dev/test-run"
 mkdir -p "$pie_root/_dev"
 rm -rf "$mirror" "$prefix" "$run"
 mkdir -p "$mirror" "$run/logs" "$run/alcotest"
 # Dune does not traverse directory symlinks. Mirror real directories and
-# symlink each source file; Eta's build products stay in this ignored tree.
-cp -rs "$eta_root/lib" "$mirror/lib"
-ln -s "$eta_root/dune-project" "$mirror/dune-project"
+# symlink each source file; Ox's build products stay in this ignored tree.
+cp -rs "$ox_root/lib" "$mirror/lib"
+ln -s "$ox_root/dune-project" "$mirror/dune-project"
 
-packages=eta,eta_ai,eta_ai_openrouter,eta_ai_realtime,eta_app,eta_blocking,eta_http,eta_ipc,eta_json,eta_observability,eta_otel,eta_process,eta_rpc,eta_test
+packages=ox,ox_ai,ox_ai_openrouter,ox_ai_realtime,ox_app,ox_blocking,ox_http,ox_ipc,ox_json,ox_observability,ox_otel,ox_process,ox_rpc,ox_test
 dune build --root "$mirror" --only-packages "$packages" @install
 dune install --root "$mirror" --only-packages "$packages" --prefix "$prefix"
 export OCAMLPATH="$prefix/lib${OCAMLPATH:+:$OCAMLPATH}"
 export CAML_LD_LIBRARY_PATH="$prefix/lib/stublibs${CAML_LD_LIBRARY_PATH:+:$CAML_LD_LIBRARY_PATH}"
-if [[ "$(ocamlfind query eta_http)" != "$prefix/lib/eta_http" ]]; then
-  echo 'Local Eta installation did not take precedence over the shared switch.' >&2
+if [[ "$(ocamlfind query ox_http)" != "$prefix/lib/ox_http" ]]; then
+  echo 'Local Ox installation did not take precedence over the shared switch.' >&2
   exit 1
 fi
-printf 'Eta master: %s\n' "$(git -C "$eta_root" rev-parse --short HEAD)"
+printf 'Ox master: %s\n' "$(git -C "$ox_root" rev-parse --short HEAD)"
 dune build --root "$pie_root" --build-dir "$build" --only-packages pie @all
 
 # Fail closed rather than accidentally using a real desktop/audio/session. Do
 # not read or copy the user's auth; fixtures run with an empty private HOME.
-tmp="$(mktemp -d /tmp/pie-local-eta.XXXXXXXX)"
+tmp="$(mktemp -d /tmp/pie-local-ox.XXXXXXXX)"
 trap 'chmod -R u+rwx -- "$tmp"; rm -rf -- "$tmp"' EXIT
 chmod 0700 "$tmp"
 export HOME="$tmp/home" XDG_CONFIG_HOME="$tmp/config" XDG_CACHE_HOME="$tmp/cache"

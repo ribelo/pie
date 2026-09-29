@@ -1,40 +1,5 @@
 {
   "nodes": {
-    "eta": {
-      "inputs": {
-        "nixpkgs": [
-          "nixpkgs"
-        ],
-        "opam-nix": [
-          "opam-nix"
-        ],
-        "opam-repository": [
-          "opam-repository"
-        ],
-        "oxcaml": [
-          "oxcaml"
-        ],
-        "oxcaml-lsp": "oxcaml-lsp",
-        "oxcaml-merlin-src": "oxcaml-merlin-src",
-        "oxcaml-opam-repository": [
-          "oxcaml-opam-repository"
-        ]
-      },
-      "locked": {
-        "lastModified": 1790673096,
-        "narHash": "sha256-euBu1J+p0gfSnAo32yQtDjZTP+FI6pviwkxLrWRSK1c=",
-        "ref": "master",
-        "rev": "e62a9d022e547265e9d16061662e925b05c6f696",
-        "revCount": 3080,
-        "type": "git",
-        "url": "file:///home/ribelo/projects/ribelo/ocaml/Eta"
-      },
-      "original": {
-        "ref": "master",
-        "type": "git",
-        "url": "file:///home/ribelo/projects/ribelo/ocaml/Eta"
-      }
-    },
     "flake-compat": {
       "flake": false,
       "locked": {
@@ -249,6 +214,41 @@
         "type": "github"
       }
     },
+    "ox": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ],
+        "opam-nix": [
+          "opam-nix"
+        ],
+        "opam-repository": [
+          "opam-repository"
+        ],
+        "oxcaml": [
+          "oxcaml"
+        ],
+        "oxcaml-lsp": "oxcaml-lsp",
+        "oxcaml-merlin-src": "oxcaml-merlin-src",
+        "oxcaml-opam-repository": [
+          "oxcaml-opam-repository"
+        ]
+      },
+      "locked": {
+        "lastModified": 1790675785,
+        "narHash": "sha256-aMC9pOoSukRYSdnv5pCRtXCO62VztK8LLg6Nh9/u594=",
+        "ref": "master",
+        "rev": "43f7697b96d590957cdcdc335f01666d204ec3f5",
+        "revCount": 106,
+        "type": "git",
+        "url": "file:///home/ribelo/projects/ribelo/ocaml/ox"
+      },
+      "original": {
+        "ref": "master",
+        "type": "git",
+        "url": "file:///home/ribelo/projects/ribelo/ocaml/ox"
+      }
+    },
     "oxcaml": {
       "flake": false,
       "locked": {
@@ -319,10 +319,10 @@
     },
     "root": {
       "inputs": {
-        "eta": "eta",
         "nixpkgs": "nixpkgs",
         "opam-nix": "opam-nix",
         "opam-repository": "opam-repository_2",
+        "ox": "ox",
         "oxcaml": "oxcaml",
         "oxcaml-opam-repository": "oxcaml-opam-repository"
       }

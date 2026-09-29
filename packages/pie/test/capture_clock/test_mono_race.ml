@@ -37,7 +37,7 @@ let test_race_sleep_vs_empty_take_wakes () =
     ignore (Eio.Stream.take q);
     Ok `Item
   in
-  let operation () = Eta.Concurrent.race ~sw [ timeout; take ] in
+  let operation () = Ox.Concurrent.race ~sw [ timeout; take ] in
   let result =
     try Eio.Time.with_timeout_exn real 7.0 (fun () -> operation ())
     with Eio.Time.Timeout -> Alcotest.fail ("7s real timeout: " ^ dump ())
@@ -76,7 +76,7 @@ let test_canceled_sleeper_unregisters () =
     note "take-won";
     Ok `Item
   in
-  let operation () = Eta.Concurrent.race ~sw [ timeout; take ] in
+  let operation () = Ox.Concurrent.race ~sw [ timeout; take ] in
   let result =
     try Eio.Time.with_timeout_exn real 7.0 (fun () -> operation ())
     with Eio.Time.Timeout -> Alcotest.fail ("7s real timeout: " ^ dump ())
@@ -98,7 +98,7 @@ let test_par_finite_body_with_blocked_take () =
     try
       Eio.Switch.run @@ fun inner ->
       Eio.Time.with_timeout_exn real 7.0 (fun () ->
-          Eta.Concurrent.par ~sw:inner
+          Ox.Concurrent.par ~sw:inner
             (fun () ->
               ignore (Eio.Stream.take q);
               Ok ())

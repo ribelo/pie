@@ -38,6 +38,6 @@ Remove unused duplicated Commands.Assistant logic after checking consumers; tran
 
 Exercise the real command-to-service wiring with synthetic events and config: override before/after reload; press old key then reload then release; modifier changes while held; Mod5 latch; invalid reload; config change during threshold evaluation. Assert effective reporting matches actual recognition. Ensure a failed reload leaves the last valid published state.
 
-## Eta prerequisites
+## Ox prerequisites
 
-No new Eta configuration abstraction or component replacement contract is needed. This is application-owned state; ordinary scoped lifecycle from PIE004 remains applicable.
+No new Ox configuration abstraction or component replacement contract is needed. This is application-owned state; ordinary scoped lifecycle from PIE004 remains applicable.

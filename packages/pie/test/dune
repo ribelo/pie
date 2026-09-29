@@ -6,30 +6,30 @@
   pie
   alcotest
   eio_main
-  eta
-  eta_ai
-  eta_ai_openrouter
-  eta_app
+  ox
+  ox_ai
+  ox_ai_openrouter
+  ox_app
   cmdliner
-  eta_test
-  eta_http
-  eta_observability
+  ox_test
+  ox_http
+  ox_observability
   eio)
  (deps
   (source_tree ../)))
 
 (executable
  (name live_codex_transcribe)
- (libraries pie eio_main eta))
+ (libraries pie eio_main ox))
 
 (executable
  (name live_openrouter_transcribe)
- (libraries pie eio_main eta))
+ (libraries pie eio_main ox))
 
 (executable
  (name live_openrouter_translate)
- (libraries pie eio_main eta))
+ (libraries pie eio_main ox))
 
 (executable
  (name ws_settlement_probe)
- (libraries pie eio_main eta eta_http))
+ (libraries pie eio_main ox ox_http))

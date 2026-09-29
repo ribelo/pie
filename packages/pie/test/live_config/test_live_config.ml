@@ -56,12 +56,12 @@ let pp_run_error fmt = function
       Format.pp_print_string fmt (Pie.Pulse.Client.error_message error)
   | `Ptt_error msg -> Format.pp_print_string fmt msg
   | `Ptt_cause cause ->
-      Eta.Cause.pp
+      Ox.Cause.pp
         (fun fmt (`Ptt_error msg) -> Format.pp_print_string fmt msg)
         fmt cause
 
 let fail_cause cause =
-  Alcotest.failf "workflow failed: %a" (Eta.Cause.pp pp_run_error) cause
+  Alcotest.failf "workflow failed: %a" (Ox.Cause.pp pp_run_error) cause
 
 let rec rm_rf path =
   match Unix.lstat path with
@@ -97,20 +97,20 @@ let make_audio ?(takes = Atomic.make 0) () =
 let offer_pcm cmd = Eio.Stream.add cmd (Chunk loud_pcm)
 
 let test_logger env =
-  Eta_observability.Logger.create ~service:"pie-live-config-test"
+  Ox_observability.Logger.create ~service:"pie-live-config-test"
     ~clock:(Eio.Stdenv.clock env)
     ~mono_clock:(Eio.Stdenv.mono_clock env)
-    ~reporter:(Eta_observability.Logger.Reporter.records (fun _ -> ()))
+    ~reporter:(Ox_observability.Logger.Reporter.records (fun _ -> ()))
     ()
 
 let with_workflow_background ~sw ~clock:_ workflow assertions =
   match
-    Eta.Concurrent.with_background ~sw workflow (fun () ->
+    Ox.Concurrent.with_background ~sw workflow (fun () ->
         assertions ();
         Ok ())
   with
   | Ok () -> ()
-  | Error error -> fail_cause (Eta.Cause.Fail error)
+  | Error error -> fail_cause (Ox.Cause.Fail error)
 
 let run_live ~sw ~fs ~clock ~logger ~net ~process_mgr ~mono_clock ~dir
     ~config_control ~stt ~deliver ~keyboard ~audio ?ptt_transcribe_keysym

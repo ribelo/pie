@@ -32,6 +32,6 @@ Keep the native keyboard-monitor seam for the presently implemented service inpu
 
 Command tree/help/bindings no longer advertise removed entrypoints; unknown command errors occur before microphone or provider access. Service transcribe/translate retains configured model/language and real press/release behavior. Remove dead exports/imports and tests protecting only removed prototypes. No portal permission prompt or real dictation is necessary for these checks.
 
-## Eta prerequisites
+## Ox prerequisites
 
-None for deletion. Actual service ownership uses the existing effect/resource contracts; do not invent an Eta application framework to rescue prototypes.
+None for deletion. Actual service ownership uses the existing effect/resource contracts; do not invent an Ox application framework to rescue prototypes.

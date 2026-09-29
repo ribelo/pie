@@ -10,7 +10,7 @@ Control requests and status use the canonical contract.
 
 Parent-reviewed. Implementation complete on packages/pie. Integrated suite pending. Does not claim the whole audit. PIE014.
 
-Canonical control surface is `Pie.Assistant_service`. The public `Pie.Daemon` alias and unused `daemon/{client,contract,server}.ml` were removed intentionally. CLI and tests retarget to Assistant_service. `response_of_json` returns `(response, protocol_error) result`; Action replies must echo the requested action string or fail with `action-mismatch`. Focused gates: control_protocol 22 and cli_status 9 green. Eta staged provenance unchanged.
+Canonical control surface is `Pie.Assistant_service`. The public `Pie.Daemon` alias and unused `daemon/{client,contract,server}.ml` were removed intentionally. CLI and tests retarget to Assistant_service. `response_of_json` returns `(response, protocol_error) result`; Action replies must echo the requested action string or fail with `action-mismatch`. Focused gates: control_protocol 22 and cli_status 9 green. Ox staged provenance unchanged.
 
 ## Requirements
 
@@ -32,6 +32,6 @@ Use strict decoding for required fields and tagged outcomes. Preserve explicit s
 
 For every operation: valid reply; explicit server error; non-object JSON; missing required field; wrong field type; unknown outcome tag. Verify client-visible typed protocol failure and no fabricated successful state. Include actual local round-trip tests after consolidation. No live service socket is required.
 
-## Eta prerequisites
+## Ox prerequisites
 
 No RPC framework or generic schema machinery is needed. Keep the existing newline/size/timeout guards and use settled cancellation ownership.

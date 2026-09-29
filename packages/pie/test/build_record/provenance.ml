@@ -124,7 +124,7 @@ let caml_ld_dirs () =
   | None | Some "" -> []
   | Some p -> String.split_on_char ':' p |> List.filter (( <> ) "")
 
-let find_eta_cmxa_env () =
+let find_ox_cmxa_env () =
   ocamlpath_dirs ()
   |> List.concat_map (fun dir ->
       match Sys.readdir dir with
@@ -133,7 +133,7 @@ let find_eta_cmxa_env () =
           Array.to_list names
           |> List.filter_map (fun name ->
               let lower = String.lowercase_ascii name in
-              if String.length lower < 3 || String.sub lower 0 3 <> "eta" then
+              if String.length lower < 2 || String.sub lower 0 2 <> "ox" then
                 None
               else
                 let p =
@@ -144,7 +144,7 @@ let find_eta_cmxa_env () =
 let find_tls_stub () =
   caml_ld_dirs ()
   |> List.find_map (fun dir ->
-      let stub = Filename.concat dir "dlleta_http_stubs.so" in
+      let stub = Filename.concat dir "dllox_http_stubs.so" in
       if Sys.file_exists stub then Some stub else None)
 
 let hash_map paths =
@@ -221,11 +221,11 @@ let parse_pie_link_cmxa ~expected_output ~root ~build_dir log_text =
   | [ argv ] -> List.filter (fun tok -> Filename.check_suffix tok ".cmxa") argv
   | _ -> failwith "multiple ocamlopt link lines for the expected pie.exe output"
 
-let eta_linked paths =
+let ox_linked paths =
   List.filter
     (fun p ->
       let base = String.lowercase_ascii (Filename.basename p) in
-      String.length base >= 3 && String.sub base 0 3 = "eta")
+      String.length base >= 2 && String.sub base 0 2 = "ox")
     paths
 
 let companion_archive cmxa =
@@ -262,8 +262,8 @@ let package_native_inputs cmxa =
 let visible_native_inputs cmxa_paths =
   List.concat_map (fun cmxa -> cmxa :: package_native_inputs cmxa) cmxa_paths
 
-let known_tls_cmxa_name = "eta_http.cmxa"
-let known_tls_stub_name = "libeta_http_stubs.a"
+let known_tls_cmxa_name = "ox_http.cmxa"
+let known_tls_stub_name = "libox_http_stubs.a"
 
 let linked_tls_stub_archive cmxa_paths =
   let tls_cmxas =
@@ -280,7 +280,7 @@ let linked_tls_stub_archive cmxa_paths =
       else Some stub
   | many ->
       failwith
-        ("duplicate linked eta_http.cmxa versions: " ^ String.concat ", " many)
+        ("duplicate linked ox_http.cmxa versions: " ^ String.concat ", " many)
 
 type file_id = { name : string; path : string; sha256 : string }
 
@@ -356,8 +356,8 @@ let default_dune_build ~root ~build_dir ~target ~verbose_log () =
 
 let write_record ~root ~build_dir ~target ~output ?run_build () =
   let source_before = source_fingerprint root in
-  let eta_cmxa_env = find_eta_cmxa_env () in
-  let eta_env_before = hash_map (visible_native_inputs eta_cmxa_env) in
+  let ox_cmxa_env = find_ox_cmxa_env () in
+  let ox_env_before = hash_map (visible_native_inputs ox_cmxa_env) in
   let stub_before =
     match find_tls_stub () with
     | None -> None
@@ -390,10 +390,10 @@ let write_record ~root ~build_dir ~target ~output ?run_build () =
   let linked_paths =
     parse_pie_link_cmxa ~expected_output:binary_path ~root ~build_dir log_text
     |> List.map (resolve_path ~cwd:root)
-    |> eta_linked
+    |> ox_linked
   in
   if linked_paths = [] then
-    failwith "no eta native archives on the pie.exe ocamlopt link line";
+    failwith "no ox native archives on the pie.exe ocamlopt link line";
   List.iter
     (fun p ->
       if not (Sys.file_exists p) then failwith ("linked archive missing: " ^ p))
@@ -406,9 +406,9 @@ let write_record ~root ~build_dir ~target ~output ?run_build () =
   let source_after = source_fingerprint root in
   if not (String.equal source_before source_after) then
     failwith "source bytes changed during build; provenance record refused";
-  let eta_env_after = hash_map (visible_native_inputs (find_eta_cmxa_env ())) in
-  if eta_env_before <> eta_env_after then
-    failwith "Eta archives changed during build; provenance record refused";
+  let ox_env_after = hash_map (visible_native_inputs (find_ox_cmxa_env ())) in
+  if ox_env_before <> ox_env_after then
+    failwith "Ox archives changed during build; provenance record refused";
   (match (stub_before, find_tls_stub ()) with
   | Some (p, h), Some p2 when p = p2 && sha256_file p2 <> h ->
       failwith "TLS stub changed during build; provenance record refused"
@@ -418,10 +418,10 @@ let write_record ~root ~build_dir ~target ~output ?run_build () =
   | _ -> ());
   List.iter
     (fun p ->
-      match List.assoc_opt p eta_env_before with
+      match List.assoc_opt p ox_env_before with
       | Some h when h = sha256_file p -> ()
-      | Some _ -> failwith ("linked Eta archive changed during build: " ^ p)
-      | None -> failwith ("linked Eta archive had no pre-build hash: " ^ p))
+      | Some _ -> failwith ("linked Ox archive changed during build: " ^ p)
+      | None -> failwith ("linked Ox archive had no pre-build hash: " ^ p))
     linked_native;
   let linked = List.map id_of_path linked_paths in
   let companions =

@@ -12,18 +12,18 @@ Parent-reviewed implementation complete (PIE028). Helper fixtures 5/5 plus owned
 
 ## Requirements
 
-- When PIE produces a deployment artifact, its build record shall identify the compiler, PIE source and resolved Eta inputs. ^piebuild-py7n
+- When PIE produces a deployment artifact, its build record shall identify the compiler, PIE source and resolved Ox inputs. ^piebuild-py7n
 - PIE build instructions shall name existing shell targets and packages and distinguish mutable development dependencies from locked package inputs. ^piebuild-un48
 
 ## Evidence
 
-The default Nix development shell imports the shared opam switch. It does not install the flake’s locked Eta source.
+The default Nix development shell imports the shared opam switch. It does not install the flake’s locked Ox source.
 
-Round39 observed compiler5.4.0+ox, Dune3.22.2 and installed Eta META version d06548b. The flake locks Eta09dab48f9b320e17e34c5ccc7a42d10230f7f437. Current Eta checkout HEAD is a05377162350aaecc82f901dfacd79134bc72dc3, with separate accepted uncommitted work.
+Round39 observed compiler5.4.0+ox, Dune3.22.2 and installed Ox META version d06548b. The flake locks Eta09dab48f9b320e17e34c5ccc7a42d10230f7f437. Current Ox checkout HEAD is a05377162350aaecc82f901dfacd79134bc72dc3, with separate accepted uncommitted work.
 
 README18 names the absent .#oxcaml shell and camelpie package. The flake exports the default shell, and Dune declares package pie.
 
-The install helper pins committed master for PIE and installs committed Eta through another helper. It does not deploy uncommitted audit decisions.
+The install helper pins committed master for PIE and installs committed Ox through another helper. It does not deploy uncommitted audit decisions.
 
 The running binary matches the installed opam binary. It differs from tracked bin/pie. Installed library META does not establish the dependencies embedded in that executable.
 
@@ -43,6 +43,6 @@ Check documented commands against declared targets without installing during tes
 
 Identify the selected artifact before activation. Its build record must distinguish committed, modified and installed inputs.
 
-## Eta prerequisites
+## Ox prerequisites
 
-Accepted Eta changes remain incoming until PIE builds and tests against their actual artifact. A lock entry, checkout HEAD or current META file alone is insufficient.
+Accepted Ox changes remain incoming until PIE builds and tests against their actual artifact. A lock entry, checkout HEAD or current META file alone is insufficient.

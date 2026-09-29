@@ -1,5 +1,5 @@
 open Pie
-open Eta.Result.Syntax
+open Ox.Result.Syntax
 
 let run_test f =
   Eio_main.run @@ fun env ->
@@ -24,22 +24,22 @@ let par ~sw left right =
   (first, second)
 
 let run_boundary f =
-  match Eta.Scope.run (fun _ -> f ()) with
-  | Eta.Exit.Success value -> Ok value
-  | Eta.Exit.Failure cause -> Error cause
+  match Ox.Scope.run (fun _ -> f ()) with
+  | Ox.Exit.Success value -> Ok value
+  | Ox.Exit.Failure cause -> Error cause
 
 let run_ptt_boundary ~clock operation =
   run_boundary (fun () ->
-      Eta.Timeout.timeout ~clock (Eta.Duration.seconds 8) (fun () ->
+      Ox.Timeout.timeout ~clock (Ox.Duration.seconds 8) (fun () ->
           Result.map_error
             (fun error -> (error :> [ Pie.Ptt_loop.run_error | `Timeout ]))
             (operation ())))
 
 let test_logger env =
-  Eta_observability.Logger.create ~service:"pie-test"
+  Ox_observability.Logger.create ~service:"pie-test"
     ~clock:(Eio.Stdenv.clock env)
     ~mono_clock:(Eio.Stdenv.mono_clock env)
-    ~reporter:(Eta_observability.Logger.Reporter.records (fun _ -> ()))
+    ~reporter:(Ox_observability.Logger.Reporter.records (fun _ -> ()))
     ()
 
 let test_pcm_rms () =
@@ -545,11 +545,11 @@ let test_pulse_client_set_client_name_error_is_typed () =
              | `Pulse_error (Pulse.Client.Server_error { code = Some 1; _ }) ->
                  true
              | _ -> false)
-           (Eta.Cause.failures cause) ->
+           (Ox.Cause.failures cause) ->
       ()
   | Error cause ->
       Alcotest.failf "expected typed SET_CLIENT_NAME server error, got %a"
-        (Eta.Cause.pp (fun formatter (`Pulse_error error) ->
+        (Ox.Cause.pp (fun formatter (`Pulse_error error) ->
              Pulse.Client.pp_error formatter error))
         cause
   | Ok () -> Alcotest.fail "expected SET_CLIENT_NAME rejection"
@@ -558,7 +558,7 @@ let test_pulse_client_set_client_name_error_is_typed () =
 let test_pulse_default_request_timeout () =
   Alcotest.(check int)
     "default request timeout" 3_000
-    (Eta.Duration.to_ms Pulse.Client.default_request_timeout);
+    (Ox.Duration.to_ms Pulse.Client.default_request_timeout);
   Alcotest.(check int)
     "record stream capacity" 64 Pulse.Client.record_stream_capacity
 
@@ -611,7 +611,7 @@ let test_pulse_client_correlates_concurrent_replies () =
       Alcotest.(check int) "sources" 0 (List.length sources)
   | Error cause ->
       Alcotest.failf "concurrent PulseAudio commands failed: %a"
-        (Eta.Cause.pp (fun formatter (`Pulse_error error) ->
+        (Ox.Cause.pp (fun formatter (`Pulse_error error) ->
              Pulse.Client.pp_error formatter error))
         cause
 
@@ -636,7 +636,7 @@ let test_pulse_client_drops_late_reply_after_timeout () =
     Pulse.Client.with_client ~net:(Eio.Stdenv.net env)
       ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env) ~socket_path
       ~cookie:(Bytes.make Pulse.Defs.pa_native_cookie_length '\x00')
-      ~request_timeout:(Eta.Duration.ms 10) (fun client ->
+      ~request_timeout:(Ox.Duration.ms 10) (fun client ->
         let timed_out = Pulse.Client.get_server_info client in
         match timed_out with
         | Error (`Pulse_error (Pulse.Client.Timeout _)) ->
@@ -651,7 +651,7 @@ let test_pulse_client_drops_late_reply_after_timeout () =
   | Ok _ -> Alcotest.fail "expected empty source list"
   | Error cause ->
       Alcotest.failf "late reply corrupted the next command: %a"
-        (Eta.Cause.pp (fun formatter (`Pulse_error error) ->
+        (Ox.Cause.pp (fun formatter (`Pulse_error error) ->
              Pulse.Client.pp_error formatter error))
         cause
 
@@ -681,7 +681,7 @@ let test_pulse_client_rejects_malformed_error_payload () =
     when List.exists
            (function
              | `Pulse_error (Pulse.Client.Protocol_error _) -> true | _ -> false)
-           (Eta.Cause.failures cause) ->
+           (Ox.Cause.failures cause) ->
       ()
   | Error _ -> Alcotest.fail "expected typed protocol error"
   | Ok () -> Alcotest.fail "malformed command error was accepted"
@@ -708,7 +708,7 @@ let test_pulse_reader_failure_fails_pending_command () =
     when List.exists
            (function
              | `Pulse_error (Pulse.Client.Disconnected _) -> true | _ -> false)
-           (Eta.Cause.failures cause) ->
+           (Ox.Cause.failures cause) ->
       ()
   | Error _ -> Alcotest.fail "expected typed reader disconnection"
   | Ok _ -> Alcotest.fail "pending command survived reader failure"
@@ -748,7 +748,7 @@ let test_pulse_scope_end_disconnects_pending_command () =
     when List.exists
            (function
              | `Pulse_error (Pulse.Client.Disconnected _) -> true | _ -> false)
-           (Eta.Cause.failures cause) ->
+           (Ox.Cause.failures cause) ->
       ()
   | Error _ -> Alcotest.fail "expected typed scope-end disconnection"
   | Ok _ -> Alcotest.fail "pending command survived client scope release"
@@ -792,11 +792,11 @@ let test_pulse_record_stream_drains_before_reader_failure () =
     when List.exists
            (function
              | `Pulse_error (Pulse.Client.Disconnected _) -> true | _ -> false)
-           (Eta.Cause.failures cause) ->
+           (Ox.Cause.failures cause) ->
       ()
   | Error cause ->
       Alcotest.failf "expected typed disconnection, got %a"
-        (Eta.Cause.pp (fun formatter (`Pulse_error error) ->
+        (Ox.Cause.pp (fun formatter (`Pulse_error error) ->
              Pulse.Client.pp_error formatter error))
         cause
   | Ok () -> Alcotest.fail "reader failure unexpectedly succeeded");
@@ -838,11 +838,11 @@ let test_pulse_record_stream_preserves_pcm_chunk_bytes () =
     when List.exists
            (function
              | `Pulse_error (Pulse.Client.Disconnected _) -> true | _ -> false)
-           (Eta.Cause.failures cause) ->
+           (Ox.Cause.failures cause) ->
       ()
   | Error cause ->
       Alcotest.failf "expected typed disconnection, got %a"
-        (Eta.Cause.pp (fun formatter (`Pulse_error error) ->
+        (Ox.Cause.pp (fun formatter (`Pulse_error error) ->
              Pulse.Client.pp_error formatter error))
         cause
   | Ok () -> Alcotest.fail "reader failure unexpectedly succeeded");
@@ -883,7 +883,7 @@ let test_pulse_record_cleanup_preserves_body_result () =
   | Ok value -> Alcotest.(check string) "body result" "body" value
   | Error cause ->
       Alcotest.failf "DELETE_RECORD_STREAM failure replaced body result: %a"
-        (Eta.Cause.pp (fun formatter (`Pulse_error error) ->
+        (Ox.Cause.pp (fun formatter (`Pulse_error error) ->
              Pulse.Client.pp_error formatter error))
         cause
 
@@ -923,7 +923,7 @@ let test_daemon_contract_response () =
   | Ok (Pie.Assistant_service.Contract.Toggle_resp true) -> ()
   | _ -> Alcotest.fail "expected toggle bool response"
 
-(* eta_ipc refuses a socket whose directory other users can write (e.g. /tmp), so each
+(* ox_ipc refuses a socket whose directory other users can write (e.g. /tmp), so each
    daemon test binds inside a private 0700 directory. *)
 let private_socket_dir =
   lazy (Filename.temp_dir ~perms:0o700 "pie-daemon-test" "")
@@ -1288,21 +1288,21 @@ let test_codex_realtime_resample () =
 let test_speech_operation_deadline_policy () =
   Alcotest.(check int)
     "OAuth response idle timeout" 30_000
-    (Eta.Duration.to_ms Stt.Codex_realtime.oauth_response_idle_timeout);
+    (Ox.Duration.to_ms Stt.Codex_realtime.oauth_response_idle_timeout);
   Alcotest.(check int)
     "WebSocket establishment timeout" 10_000
-    (Eta.Duration.to_ms Stt.Codex_realtime.websocket_establishment_timeout);
+    (Ox.Duration.to_ms Stt.Codex_realtime.websocket_establishment_timeout);
   Alcotest.(check int)
     "direct transcription timeout" 60_000
-    (Eta.Duration.to_ms Stt.Openrouter.direct_transcription_timeout);
+    (Ox.Duration.to_ms Stt.Openrouter.direct_transcription_timeout);
   Alcotest.(check int)
     "response operation timeout" 120_000
-    (Eta.Duration.to_ms Stt.Openrouter.response_operation_timeout)
+    (Ox.Duration.to_ms Stt.Openrouter.response_operation_timeout)
 
 (* Both calls enter the real provider boundary. The server accepts a local socket
-   but sends no response, while Eta_test advances the clock used by Eta_http. *)
+   but sends no response, while Ox_test advances the clock used by Ox_http. *)
 let stalled_openrouter_call ~seconds call =
-  Eta_test.run (fun env sw ->
+  Ox_test.run (fun env sw ->
       let socket =
         Eio.Net.listen ~sw ~reuse_addr:true ~backlog:1 env#net
           (`Tcp (Eio.Net.Ipaddr.V4.loopback, 0))
@@ -1335,7 +1335,7 @@ let stalled_openrouter_call ~seconds call =
               Eio.Promise.resolve resolve_completed (call env sw));
           Eio.Promise.await accepted;
           Eio.Fiber.yield ();
-          Eta_test.advance env#clock (Eta.Duration.seconds seconds);
+          Ox_test.advance env#clock (Ox.Duration.seconds seconds);
           Eio.Promise.await completed))
 
 let test_speech_operation_deadlines_are_typed () =
@@ -1343,7 +1343,7 @@ let test_speech_operation_deadlines_are_typed () =
   let direct =
     stalled_openrouter_call ~seconds:61 (fun env sw ->
         Stt.Openrouter.transcribe ~sw ~net:env#net ~clock:env#clock
-          ~api_key:(Eta_observability.Redact.make "pie-local-deadline-test")
+          ~api_key:(Ox_observability.Redact.make "pie-local-deadline-test")
           ~model:"local-test" ~language:"en" pcm)
   in
   Alcotest.(check (result string string))
@@ -1352,9 +1352,9 @@ let test_speech_operation_deadlines_are_typed () =
   let response =
     stalled_openrouter_call ~seconds:121 (fun env sw ->
         let logger =
-          Eta_observability.Logger.create ~service:"pie-deadline-test"
+          Ox_observability.Logger.create ~service:"pie-deadline-test"
             ~clock:env#clock ~mono_clock:env#mono_clock
-            ~reporter:(Eta_observability.Logger.Reporter.records (fun _ -> ()))
+            ~reporter:(Ox_observability.Logger.Reporter.records (fun _ -> ()))
             ()
         in
         Stt.Openrouter.transcribe_with_prompt ~sw ~net:env#net ~clock:env#clock
@@ -1418,7 +1418,7 @@ let read_http_head flow =
   loop ()
 
 let write_ws_text flow payload =
-  Eta_http.Ws_codec.encode
+  Ox_http.Ws_codec.encode
     { fin = true; opcode = Text; payload = Bytes.of_string payload }
   |> Bytes.to_string
   |> fun encoded -> Eio.Flow.copy_string encoded flow
@@ -1474,7 +1474,7 @@ let close_payload code reason =
   payload
 
 let write_ws_close flow =
-  Eta_http.Ws_codec.encode
+  Ox_http.Ws_codec.encode
     { fin = true; opcode = Close; payload = close_payload 1000 "" }
   |> Bytes.to_string
   |> fun encoded -> Eio.Flow.copy_string encoded flow
@@ -1493,7 +1493,7 @@ let write_ws_switching_response flow key =
   let response =
     "HTTP/1.1 101 Switching Protocols\r\n" ^ "Upgrade: websocket\r\n"
     ^ "Connection: keep-alive, Upgrade\r\n" ^ "Sec-WebSocket-Accept: "
-    ^ Eta_http.Ws_codec.accept_key ~sha1:Eta_http.Eta_http_tls_openssl.sha1 key
+    ^ Ox_http.Ws_codec.accept_key ~sha1:Ox_http.Ox_http_tls_openssl.sha1 key
     ^ "\r\n\r\n"
   in
   Eio.Flow.copy_string response flow
@@ -1669,7 +1669,7 @@ let test_codex_realtime_stream_reports_server_error_e2e () =
   let url =
     Printf.sprintf "ws://127.0.0.1:%d/v1/realtime?model=gpt-realtime-2" port
   in
-  let open Eta.Result.Syntax in
+  let open Ox.Result.Syntax in
   let prompt = "Translate." in
   let operation () =
     Stt.Codex_realtime.with_stream_session ~sw ~net:(Eio.Stdenv.net env)
@@ -1690,13 +1690,12 @@ let test_codex_realtime_stream_reports_server_error_e2e () =
     | `Stt_error message -> Format.pp_print_string fmt message
   in
   match run_boundary operation with
-  | Error (Eta.Cause.Fail (`Stt_error message)) ->
+  | Error (Ox.Cause.Fail (`Stt_error message)) ->
       Alcotest.(check string)
         "server error" "Codex realtime server error" message
   | Error cause ->
       Alcotest.failf "expected server error, got cause: %a"
-        (Eta.Cause.pp pp_stt_error)
-        cause
+        (Ox.Cause.pp pp_stt_error) cause
   | Ok text -> Alcotest.failf "expected server error, got success: %s" text
 
 let write_file path contents =
@@ -1786,7 +1785,7 @@ let test_retry_store_retains_and_discards_recordings () =
 
 let pp_ptt_error formatter = function
   | `Ptt_cause cause ->
-      Eta.Cause.pp
+      Ox.Cause.pp
         (fun formatter (`Ptt_error message) ->
           Format.pp_print_string formatter message)
         formatter cause
@@ -1796,7 +1795,7 @@ let pp_ptt_error formatter = function
   | `Timeout -> Format.pp_print_string formatter "timeout"
 
 let cause_contains cause needle =
-  let rendered = Format.asprintf "%a" (Eta.Cause.pp pp_ptt_error) cause in
+  let rendered = Format.asprintf "%a" (Ox.Cause.pp pp_ptt_error) cause in
   let rec loop i =
     i <= String.length rendered - String.length needle
     && (String.sub rendered i (String.length needle) = needle || loop (i + 1))
@@ -1962,7 +1961,7 @@ let test_settle_attempt_construction_does_not_run_duties () =
   (match run_boundary (fun () -> handle.offer pcm_bytes) with
   | Ok () -> ()
   | Error cause ->
-      Alcotest.failf "offer failed: %a" (Eta.Cause.pp pp_ptt_error) cause);
+      Alcotest.failf "offer failed: %a" (Ox.Cause.pp pp_ptt_error) cause);
   Alcotest.(check bool)
     "unpublished draft is not a recovery candidate" true (peek_none store);
   Alcotest.(check bool)
@@ -1978,8 +1977,7 @@ let test_settle_attempt_construction_does_not_run_duties () =
   (match run_boundary (fun () -> Assistant.Service.settle_attempt owner) with
   | Ok () -> ()
   | Error cause ->
-      Alcotest.failf "executed cleanup failed: %a"
-        (Eta.Cause.pp pp_ptt_error)
+      Alcotest.failf "executed cleanup failed: %a" (Ox.Cause.pp pp_ptt_error)
         cause);
   Alcotest.(check bool)
     "executed cleanup releases admission" false
@@ -1989,8 +1987,7 @@ let test_settle_attempt_construction_does_not_run_duties () =
   (match run_boundary (fun () -> Assistant.Service.settle_attempt owner) with
   | Ok () -> ()
   | Error cause ->
-      Alcotest.failf "repeated cleanup failed: %a"
-        (Eta.Cause.pp pp_ptt_error)
+      Alcotest.failf "repeated cleanup failed: %a" (Ox.Cause.pp pp_ptt_error)
         cause);
   Alcotest.(check bool)
     "repeated cleanup stays idle" false
@@ -2011,7 +2008,7 @@ let test_buffered_clip_cancellation_settles_after_offer () =
   let pcm_bytes = Bytes.of_string "captured-audio" in
   let waiting () =
     let exit =
-      Eta.Scope.run (fun _ ->
+      Ox.Scope.run (fun _ ->
           let* press =
             Assistant.Service.on_press ~sw ~net:(Eio.Stdenv.net env) ~clock
               ~logger:(test_logger env)
@@ -2036,8 +2033,8 @@ let test_buffered_clip_cancellation_settles_after_offer () =
     in
     observed := Some exit;
     match exit with
-    | Eta.Exit.Success () -> Ok `Body
-    | Eta.Exit.Failure _ -> Error (`Ptt_error "waiting body failed")
+    | Ox.Exit.Success () -> Ok `Body
+    | Ox.Exit.Failure _ -> Error (`Ptt_error "waiting body failed")
   in
   let operation () =
     Eio.Fiber.first waiting (fun () ->
@@ -2048,18 +2045,17 @@ let test_buffered_clip_cancellation_settles_after_offer () =
   | Error cause when cause_contains cause "harness timeout" ->
       Alcotest.fail "cancellation did not complete before harness timeout"
   | Error cause ->
-      Alcotest.failf "cancellation race failed: %a"
-        (Eta.Cause.pp pp_ptt_error)
+      Alcotest.failf "cancellation race failed: %a" (Ox.Cause.pp pp_ptt_error)
         cause
   | Ok `Body -> Alcotest.fail "waiting body completed before cancellation"
   | Ok `Stop -> ());
   (match !observed with
   | None -> Alcotest.fail "cancelled body did not run on_exit"
-  | Some (Eta.Exit.Success _) -> Alcotest.fail "cancelled body succeeded"
-  | Some (Eta.Exit.Failure cause) ->
+  | Some (Ox.Exit.Success _) -> Alcotest.fail "cancelled body succeeded"
+  | Some (Ox.Exit.Failure cause) ->
       Alcotest.(check bool)
         "cancellation stays interruption" true
-        (Eta.Cause.is_interrupt_only cause));
+        (Ox.Cause.is_interrupt_only cause));
   Alcotest.(check bool)
     "cancellation releases admission" false
     (Recording.Coordinator.snapshot coordinator).Recording.Coordinator.active;
@@ -2100,7 +2096,7 @@ let test_buffered_clip_defect_settles_after_offer () =
   | Error cause ->
       Alcotest.(check bool)
         "defect is not interruption" false
-        (Eta.Cause.is_interrupt_only cause);
+        (Ox.Cause.is_interrupt_only cause);
       Alcotest.(check bool)
         "preserves synthetic defect" true
         (cause_contains cause "synthetic defect"));
@@ -2156,8 +2152,7 @@ let test_on_press_execution_admits () =
     (Recording.Coordinator.snapshot coordinator).Recording.Coordinator.active;
   (match run_boundary blueprint with
   | Error cause ->
-      Alcotest.failf "on_press execution failed: %a"
-        (Eta.Cause.pp pp_ptt_error)
+      Alcotest.failf "on_press execution failed: %a" (Ox.Cause.pp pp_ptt_error)
         cause
   | Ok Ptt_loop.Skip -> Alcotest.fail "expected admission"
   | Ok (Ptt_loop.Handle _) ->
@@ -2193,15 +2188,13 @@ let test_on_press_busy_and_disabled_at_execution () =
   | Ok (Ptt_loop.Scoped _) -> ()
   | Ok _ -> Alcotest.fail "first execution should admit a Scoped handle"
   | Error cause ->
-      Alcotest.failf "first execution failed: %a"
-        (Eta.Cause.pp pp_ptt_error)
+      Alcotest.failf "first execution failed: %a" (Ox.Cause.pp pp_ptt_error)
         cause);
   (match run_boundary second with
   | Ok Ptt_loop.Skip -> ()
   | Ok _ -> Alcotest.fail "second execution should see busy admission"
   | Error cause ->
-      Alcotest.failf "busy check became an error: %a"
-        (Eta.Cause.pp pp_ptt_error)
+      Alcotest.failf "busy check became an error: %a" (Ox.Cause.pp pp_ptt_error)
         cause);
   Alcotest.(check bool)
     "first attempt still owns admission" true
@@ -2213,8 +2206,7 @@ let test_on_press_busy_and_disabled_at_execution () =
   | Ok _ -> Alcotest.fail "disabled execution should skip"
   | Error cause ->
       Alcotest.failf "disabled check became an error: %a"
-        (Eta.Cause.pp pp_ptt_error)
-        cause);
+        (Ox.Cause.pp pp_ptt_error) cause);
   Recording.Coordinator.set_enabled coordinator false;
   let constructed_while_disabled = press in
   Recording.Coordinator.set_enabled coordinator true;
@@ -2227,8 +2219,7 @@ let test_on_press_busy_and_disabled_at_execution () =
       Alcotest.fail "disabled snapshot must be read at execution"
   | Ok _ -> Alcotest.fail "expected Scoped after enabling"
   | Error cause ->
-      Alcotest.failf "enabled execution failed: %a"
-        (Eta.Cause.pp pp_ptt_error)
+      Alcotest.failf "enabled execution failed: %a" (Ox.Cause.pp pp_ptt_error)
         cause);
   Alcotest.(check bool)
     "execution after enable admits" true
@@ -2266,25 +2257,23 @@ let test_on_press_constructor_failure_releases_without_clearing_other_attempt ()
       match run_boundary (fun () -> with_handle (fun _ -> Ok ())) with
       | Ok _ -> Alcotest.fail "empty model should fail handle construction"
       | Error cause -> (
-          match Eta.Cause.failures cause with
+          match Ox.Cause.failures cause with
           | [ `Ptt_error "config:model" ] ->
               Alcotest.(check bool)
                 "constructor failure is not interruption" false
-                (Eta.Cause.is_interrupt_only cause)
+                (Ox.Cause.is_interrupt_only cause)
           | _ ->
               Alcotest.failf "expected exact Fail config:model, got %a"
-                (Eta.Cause.pp pp_ptt_error)
-                cause))
+                (Ox.Cause.pp pp_ptt_error) cause))
   | Error cause -> (
-      match Eta.Cause.failures cause with
+      match Ox.Cause.failures cause with
       | [ `Ptt_error "config:model" ] ->
           Alcotest.(check bool)
             "constructor failure is not interruption" false
-            (Eta.Cause.is_interrupt_only cause)
+            (Ox.Cause.is_interrupt_only cause)
       | _ ->
           Alcotest.failf "expected exact Fail config:model, got %a"
-            (Eta.Cause.pp pp_ptt_error)
-            cause));
+            (Ox.Cause.pp pp_ptt_error) cause));
   Alcotest.(check bool)
     "constructor failure releases reservation" false
     (Recording.Coordinator.snapshot coordinator).Recording.Coordinator.active;
@@ -2374,8 +2363,7 @@ let test_attempt_handle_finish_holds_until_outer_settle () =
   (match run_boundary operation with
   | Ok _ -> ()
   | Error cause ->
-      Alcotest.failf "outer finish hold failed: %a"
-        (Eta.Cause.pp pp_ptt_error)
+      Alcotest.failf "outer finish hold failed: %a" (Ox.Cause.pp pp_ptt_error)
         cause);
   (match
      Recording.Coordinator.try_start coordinator
@@ -2432,8 +2420,7 @@ let test_attempt_handle_cancel_holds_until_outer_settle () =
   (match run_boundary operation with
   | Ok _ -> ()
   | Error cause ->
-      Alcotest.failf "outer cancel hold failed: %a"
-        (Eta.Cause.pp pp_ptt_error)
+      Alcotest.failf "outer cancel hold failed: %a" (Ox.Cause.pp pp_ptt_error)
         cause);
   (match
      Recording.Coordinator.try_start coordinator
@@ -2965,7 +2952,7 @@ let test_stt_config_resolves_provider_qualified_model () =
 
 let test_openrouter_responses_request_uses_text_and_audio () =
   let wav = Bytes.of_string "RIFF\000\000\000\000WAVE" in
-  let request : Eta_ai_openrouter.Responses.request =
+  let request : Ox_ai_openrouter.Responses.request =
     {
       model = "xiaomi/mimo-v2.5";
       prompt = "Use Pie context.";
@@ -2975,7 +2962,7 @@ let test_openrouter_responses_request_uses_text_and_audio () =
       reasoning_effort = None;
     }
   in
-  let encoded = Eta_ai_openrouter.Responses.encode request in
+  let encoded = Ox_ai_openrouter.Responses.encode request in
   Alcotest.(check string)
     "model id" "xiaomi/mimo-v2.5"
     (json_string "model" encoded);
@@ -3024,7 +3011,7 @@ let test_text_injection_newline_rule_regex () =
   let window : Pie.Niri.window_info =
     {
       id = 384;
-      title = Some "Eta | codex | 019e6df3-3186-7a51-ba29-34d742378792";
+      title = Some "Ox | codex | 019e6df3-3186-7a51-ba29-34d742378792";
       app_id = Some "Alacritty";
       pid = None;
       workspace_id = Some 3;
@@ -3183,7 +3170,7 @@ printf '%s\n' '{"id":1,"title":"t","app_id":"app"}'
                 Format.pp_print_string ppf message
             | _ -> Format.pp_print_string ppf "error"
           in
-          Alcotest.failf "clipboard paste failed: %a" (Eta.Cause.pp pp_error)
+          Alcotest.failf "clipboard paste failed: %a" (Ox.Cause.pp pp_error)
             cause)
 
 let test_wayland_clipboard_paste_reports_offer_failure () =
@@ -4674,38 +4661,38 @@ let test_ptt_loop_processing_join_preserves_finish_failure () =
 
 let dump_exit = function
   | None -> "None"
-  | Some (Eta.Exit.Success _) -> "Ok"
-  | Some (Eta.Exit.Failure cause) ->
+  | Some (Ox.Exit.Success _) -> "Ok"
+  | Some (Ox.Exit.Failure cause) ->
       Printf.sprintf "Error(interrupt_only=%b cause=%s)"
-        (Eta.Cause.is_interrupt_only cause)
-        (Format.asprintf "%a" (Eta.Cause.pp pp_ptt_error) cause)
+        (Ox.Cause.is_interrupt_only cause)
+        (Format.asprintf "%a" (Ox.Cause.pp pp_ptt_error) cause)
 
 let assert_with_background_clean_cancel ~label result body_exit bg_exit =
   let mismatch () =
     Alcotest.failf "%s markers body=%s bg=%s result=%s" label
       (dump_exit body_exit) (dump_exit bg_exit) (dump_exit (Some result))
   in
-  (match body_exit with Some (Eta.Exit.Success _) -> () | _ -> mismatch ());
+  (match body_exit with Some (Ox.Exit.Success _) -> () | _ -> mismatch ());
   (match result with
-  | Eta.Exit.Success () -> ()
-  | Eta.Exit.Failure _ -> mismatch ());
+  | Ox.Exit.Success () -> ()
+  | Ox.Exit.Failure _ -> mismatch ());
   match bg_exit with
-  | Some (Eta.Exit.Failure cause) when Eta.Cause.is_interrupt_only cause -> ()
+  | Some (Ox.Exit.Failure cause) when Ox.Cause.is_interrupt_only cause -> ()
   | _ -> mismatch ()
 
 let run_background_cancel ~bg_exit ~body_exit ~background ~body =
   let record marker action =
     let exit =
-      Eta.Scope.run (fun _ ->
+      Ox.Scope.run (fun _ ->
           action ();
           Ok ())
     in
     marker := Some exit;
     match exit with
-    | Eta.Exit.Success () -> Ok ()
-    | Eta.Exit.Failure _ -> Error (`Ptt_error "operation interrupted")
+    | Ox.Exit.Success () -> Ok ()
+    | Ox.Exit.Failure _ -> Error (`Ptt_error "operation interrupted")
   in
-  Eta.Scope.run (fun _ ->
+  Ox.Scope.run (fun _ ->
       Eio.Fiber.first
         (fun () ->
           match record bg_exit background with
@@ -5127,10 +5114,10 @@ let process_pp_err formatter = function
   | _ -> Format.pp_print_string formatter "error"
 
 let run_process_door ?on_switch program =
-  Eta_test.run (fun env _ ->
+  Ox_test.run (fun env _ ->
       let errors = Buffer.create 80 in
-      let journal = Eta_observability.Logger.Memory.create () in
-      let config : unit Eta_app.Config.t =
+      let journal = Ox_observability.Logger.Memory.create () in
+      let config : unit Ox_app.Config.t =
         {
           of_yojson = (fun _ -> Ok ());
           yojson_of_t = (fun () -> `Assoc []);
@@ -5138,9 +5125,9 @@ let run_process_door ?on_switch program =
         }
       in
       let code =
-        Eta_app.run_for_test_with_args ?on_switch
+        Ox_app.run_for_test_with_args ?on_switch
           ~service_args:(Cmdliner.Term.const ()) ~env
-          ~journal:(Eta_observability.Logger.Memory.reporter journal)
+          ~journal:(Ox_observability.Logger.Memory.reporter journal)
           ~name:"pie" ~config ~pp_err:process_pp_err
           ~getenv:(fun _ -> None)
           ~read:(fun _ -> Ok "")
@@ -5151,8 +5138,8 @@ let run_process_door ?on_switch program =
       in
       ( code,
         Buffer.contents errors,
-        Eta_observability.Logger.Memory.records journal
-        |> List.map Eta_observability.Logger.to_string
+        Ox_observability.Logger.Memory.records journal
+        |> List.map Ox_observability.Logger.to_string
         |> String.concat "\n" ))
 
 let test_process_success_exit () =
@@ -5177,23 +5164,22 @@ let test_process_typed_failure_exit () =
     contains 0)
 
 let test_process_interrupt_exit () =
-  let id = Eta.Interrupt_id.create () in
+  let id = Ox.Interrupt_id.create () in
   let code, _, _ =
     run_process_door
       ~on_switch:(fun sw ->
         Eio.Fiber.fork_daemon ~sw (fun () ->
             Eio.Fiber.yield ();
-            Eta_app.request_stop ~sw id;
+            Ox_app.request_stop ~sw id;
             `Stop_daemon))
-      (fun _ sw -> Eta_app.serve ~sw ())
+      (fun _ sw -> Ox_app.serve ~sw ())
   in
   Alcotest.(check int) "owned signal stop exits cleanly" 0 code
 
 let test_process_logfmt_stderr () =
   let code, _, journal =
     run_process_door (fun env _ ->
-        Eta_observability.Logger.info env.Eta_app.Env.logger
-          "process door ready";
+        Ox_observability.Logger.info env.Ox_app.Env.logger "process door ready";
         Ok ())
   in
   Alcotest.(check int) "log emitted by successful Door" 0 code;

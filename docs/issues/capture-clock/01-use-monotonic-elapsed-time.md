@@ -10,7 +10,7 @@ Capture timing uses monotonic time.
 
 Parent-reviewed implementation complete. PIE026. Integrated full-suite still pending; this is not whole-audit acceptance.
 
-Standalone fixture `packages/pie/test/capture_clock` (own dune stanza) plus 21 existing `ptt_capture` cases in `test_pie` (clock argument only). Built with `--build-dir` `/home/ribelo/projects/ribelo/pie/.scratch/capture-clock-build/eta-current`, `DUNE_CACHE=disabled`, staged Eta `OCAMLPATH` `/home/ribelo/projects/ribelo/ocaml/Eta/.scratch/pie-audit-current-build/install/default/lib` plus matching stublibs first. No shared install. Alcotest `-o` logs under `.scratch/capture-clock-build/alcotest`.
+Standalone fixture `packages/pie/test/capture_clock` (own dune stanza) plus 21 existing `ptt_capture` cases in `test_pie` (clock argument only). Built with `--build-dir` `/home/ribelo/projects/ribelo/pie/.scratch/capture-clock-build/ox-current`, `DUNE_CACHE=disabled`, staged Ox `OCAMLPATH` `/home/ribelo/projects/ribelo/ocaml/ox/.scratch/pie-audit-current-build/install/default/lib` plus matching stublibs first. No shared install. Alcotest `-o` logs under `.scratch/capture-clock-build/alcotest`.
 
 Parent accepted unmasked 6/6 in 3.082s, run `4I0CL74T`, after 21/21 `ptt_capture` in 106.013s. Hold/post-roll elapsed and post-roll sleep use required `~mono_clock:Eio.Time.Mono.t`. `timestamp()` remains `Unix.gettimeofday` wall time. Tests never change the host clock: Eio mock Mono vs independent fake wall ±60s; ineligible wall jump does not finish. Explicit `with_background` terminal watcher + private `capture_clock.stop` `catch_some`; 7s real deadline always fails; other errors fail. Mock pump/ticker live on the outer switch and join in `finally`. `ptt_loop` source ownership handed to bc9 for the typed Pulse_error union; no further clock edits from this slice.
 
@@ -26,7 +26,7 @@ No system clock was changed; no historical clock jump or resulting live failure 
 
 ## Implementation direction
 
-Pass a monotonic time source into the real input loop and use one time domain for elapsed calculations and remaining-duration scheduling. Preserve the existing two-second post-roll behavior and minimum-hold policy. Installed Eio.Time.Mono.now provides Mtime.t; no new Eta clock package is necessary.
+Pass a monotonic time source into the real input loop and use one time domain for elapsed calculations and remaining-duration scheduling. Preserve the existing two-second post-roll behavior and minimum-hold policy. Installed Eio.Time.Mono.now provides Mtime.t; no new Ox clock package is necessary.
 
 Keep wall time for human timestamps, coordinator status dates and absolute credential-expiry comparisons. Do not globally replace every Unix.gettimeofday call. Remove duplicate timestamp formatting only where it has no remaining consumer after the other deletions.
 
@@ -34,6 +34,6 @@ Keep wall time for human timestamps, coordinator status dates and absolute crede
 
 Synthetic monotonic time controls hold/post-roll tests. Independently move a fake wall clock forward/backward and verify unchanged eligibility, post-roll duration and nonnegative elapsed capture time. Cover release/repress during post-roll. Never change the host clock for tests.
 
-## Eta prerequisites
+## Ox prerequisites
 
 Use existing Eio monotonic time and relative delays, verifying their selected bridge during implementation. This does not add total deadlines to established realtime streams.

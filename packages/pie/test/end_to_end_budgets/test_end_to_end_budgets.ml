@@ -2,8 +2,8 @@
    private socket, retry store and synthetic audio; no provider, no keyboard, no
    microphone, no live control socket.
    Capture overflow accepted in assistant_owner test_capture_budget_sets_last_error.
-   Direct style: [Eta.Scope.run] owns the boundary, the workflow is the background
-   of [Eta.Concurrent.with_background], the audio fixture is a private
+   Direct style: [Ox.Scope.run] owns the boundary, the workflow is the background
+   of [Ox.Concurrent.with_background], the audio fixture is a private
    [Eio.Stream] behind the service's pull, and every wait is bounded.
    ^pienext-4ps6 ^pienext-bee9 ^pienext-b3x8 *)
 
@@ -56,20 +56,20 @@ let pp_run_error fmt : Pie.Ptt_loop.run_error -> unit = function
       Format.pp_print_string fmt (Pie.Pulse.Client.error_message error)
   | `Ptt_error msg -> Format.pp_print_string fmt msg
   | `Ptt_cause cause ->
-      Eta.Cause.pp
+      Ox.Cause.pp
         (fun fmt (`Ptt_error msg) -> Format.pp_print_string fmt msg)
         fmt cause
 
 let fail_cause cause =
-  Alcotest.failf "workflow failed: %a" (Eta.Cause.pp pp_run_error) cause
+  Alcotest.failf "workflow failed: %a" (Ox.Cause.pp pp_run_error) cause
 
 let fail_error error = Alcotest.failf "workflow failed: %a" pp_run_error error
 
 let test_logger env =
-  Eta_observability.Logger.create ~service:"pie-e2e-test"
+  Ox_observability.Logger.create ~service:"pie-e2e-test"
     ~clock:(Eio.Stdenv.clock env)
     ~mono_clock:(Eio.Stdenv.mono_clock env)
-    ~reporter:(Eta_observability.Logger.Reporter.records (fun _ -> ()))
+    ~reporter:(Ox_observability.Logger.Reporter.records (fun _ -> ()))
     ()
 
 let rec rm_rf path =
@@ -192,7 +192,7 @@ let owner_workflow ~logger ~env ~sw ~net ~process_mgr ~mono_clock ~dir
   in
   (socket_path, retry_dir, workflow)
 
-exception Workflow_failed of Pie.Ptt_loop.run_error Eta.Cause.t
+exception Workflow_failed of Pie.Ptt_loop.run_error Ox.Cause.t
 
 let register_printer = Printexc.register_printer [@alert "-unsafe_multidomain"]
 
@@ -200,22 +200,21 @@ let () =
   register_printer (function
     | Workflow_failed cause ->
         Some
-          (Format.asprintf "Workflow_failed: %a"
-             (Eta.Cause.pp pp_run_error)
+          (Format.asprintf "Workflow_failed: %a" (Ox.Cause.pp pp_run_error)
              cause)
     | _ -> None)
 
 (* The scope boundary: an interrupt-only or otherwise failed scope is not success. *)
-let require_success (exit : (unit, Pie.Ptt_loop.run_error) Eta.Exit.t) =
+let require_success (exit : (unit, Pie.Ptt_loop.run_error) Ox.Exit.t) =
   match exit with
-  | Eta.Exit.Success () -> ()
-  | Eta.Exit.Failure cause -> raise (Workflow_failed cause)
+  | Ox.Exit.Success () -> ()
+  | Ox.Exit.Failure cause -> raise (Workflow_failed cause)
 
-(* [Eta.Concurrent.with_background]: the long-lived workflow is the background, the
+(* [Ox.Concurrent.with_background]: the long-lived workflow is the background, the
    assertions are the body, and the first side to finish stops the other. *)
 let with_workflow_background ~sw workflow assertions =
   match
-    Eta.Concurrent.with_background ~sw workflow (fun () ->
+    Ox.Concurrent.with_background ~sw workflow (fun () ->
         assertions ();
         Ok ())
   with
@@ -228,31 +227,29 @@ let assert_attempts_complete ~completed ~finished =
   if n <> 100 || not done_ then
     raise
       (Workflow_failed
-         (Eta.Cause.Fail
+         (Ox.Cause.Fail
             (`Ptt_error
                (Printf.sprintf "incomplete attempts completed=%d finished=%b" n
                   done_))))
 
 let test_interrupt_only_rejected_by_require_success () =
-  match require_success (Eta.Exit.Failure (Eta.Cause.Interrupt None)) with
+  match require_success (Ox.Exit.Failure (Ox.Cause.Interrupt None)) with
   | () -> Alcotest.fail "require_success accepted interrupt-only"
   | exception Workflow_failed cause ->
-      if not (Eta.Cause.is_interrupt_only cause) then
+      if not (Ox.Cause.is_interrupt_only cause) then
         Alcotest.failf "expected interrupt-only cause, got %a"
-          (Eta.Cause.pp pp_run_error)
-          cause
+          (Ox.Cause.pp pp_run_error) cause
 
 let test_ok_with_completed_lt_100_fails () =
   let completed = Atomic.make 0 in
   let finished = Atomic.make false in
-  require_success (Eta.Exit.Success ());
+  require_success (Ox.Exit.Success ());
   match assert_attempts_complete ~completed ~finished with
   | () -> Alcotest.fail "Ok with completed<100 was accepted"
-  | exception Workflow_failed (Eta.Cause.Fail (`Ptt_error _)) -> ()
+  | exception Workflow_failed (Ox.Cause.Fail (`Ptt_error _)) -> ()
   | exception Workflow_failed cause ->
       Alcotest.failf "expected Fail incomplete attempts, got %a"
-        (Eta.Cause.pp pp_run_error)
-        cause
+        (Ox.Cause.pp pp_run_error) cause
 
 type stt_mode = Stt_ok | Stt_fail
 type deliver_mode = Deliver_ok | Deliver_fail
@@ -289,9 +286,9 @@ let test_100_settled_attempts () =
       let finished = Atomic.make false in
       require_success
         (match
-           Eta.Timeout.timeout ~clock (Eta.Duration.seconds 600) (fun () ->
+           Ox.Timeout.timeout ~clock (Ox.Duration.seconds 600) (fun () ->
                Ok
-                 (Eta.Scope.run (fun sw ->
+                 (Ox.Scope.run (fun sw ->
                       let mono_clock = Eio.Stdenv.mono_clock env in
                       let net = Eio.Stdenv.net env in
                       let process_mgr = Eio.Stdenv.process_mgr env in
@@ -536,9 +533,9 @@ let run_e2e ~dir ~stt ~deliver assertions =
   Eio_main.run @@ fun env ->
   let clock = Eio.Stdenv.clock env in
   match
-    Eta.Timeout.timeout ~clock (Eta.Duration.seconds 60) (fun () ->
+    Ox.Timeout.timeout ~clock (Ox.Duration.seconds 60) (fun () ->
         Ok
-          (Eta.Scope.run (fun sw ->
+          (Ox.Scope.run (fun sw ->
                let mono_clock = Eio.Stdenv.mono_clock env in
                let net = Eio.Stdenv.net env in
                let process_mgr = Eio.Stdenv.process_mgr env in
@@ -672,17 +669,17 @@ let test_text_retry_held_delivery_cleanup_stt_zero () =
 (* Both failures must survive: the delivery failure stays primary and the failed
    publication stays retained as the finalizer, neither replacing the other. *)
 let rec suppressed_inject_and_publish
-    (cause : [ `Ptt_error of string ] Eta.Cause.t) =
+    (cause : [ `Ptt_error of string ] Ox.Cause.t) =
   match cause with
-  | Eta.Cause.Suppressed
-      { primary = Eta.Cause.Fail (`Ptt_error "inject:failed"); finalizer } ->
-      Eta.Cause.failures finalizer <> []
-  | Eta.Cause.Suppressed { primary; finalizer } ->
+  | Ox.Cause.Suppressed
+      { primary = Ox.Cause.Fail (`Ptt_error "inject:failed"); finalizer } ->
+      Ox.Cause.failures finalizer <> []
+  | Ox.Cause.Suppressed { primary; finalizer } ->
       suppressed_inject_and_publish primary
       || suppressed_inject_and_publish finalizer
-  | Eta.Cause.Concurrent xs -> List.exists suppressed_inject_and_publish xs
-  | Eta.Cause.Finalizer cause -> suppressed_inject_and_publish cause
-  | Eta.Cause.Fail _ | Eta.Cause.Die _ | Eta.Cause.Interrupt _ -> false
+  | Ox.Cause.Concurrent xs -> List.exists suppressed_inject_and_publish xs
+  | Ox.Cause.Finalizer cause -> suppressed_inject_and_publish cause
+  | Ox.Cause.Fail _ | Ox.Cause.Die _ | Ox.Cause.Interrupt _ -> false
 
 let test_audio_retry_delivery_and_text_publish_both_causes () =
   with_dir (fun dir ->
@@ -713,9 +710,9 @@ let test_audio_retry_delivery_and_text_publish_both_causes () =
           let observed = ref "<no status>" in
           let exit =
             match
-              Eta.Timeout.timeout ~clock (Eta.Duration.seconds 30) (fun () ->
+              Ox.Timeout.timeout ~clock (Ox.Duration.seconds 30) (fun () ->
                   Ok
-                    (Eta.Scope.run (fun sw ->
+                    (Ox.Scope.run (fun sw ->
                          let mono_clock = Eio.Stdenv.mono_clock env in
                          let net = Eio.Stdenv.net env in
                          let process_mgr = Eio.Stdenv.process_mgr env in
@@ -724,13 +721,13 @@ let test_audio_retry_delivery_and_text_publish_both_causes () =
                          let stamp () = [ Some (1, 1, 0, 0.) ] in
                          let load _ = (base_config (), stamp ()) in
                          let memory =
-                           Eta_observability.Logger.Memory.create ()
+                           Ox_observability.Logger.Memory.create ()
                          in
                          let logger =
-                           Eta_observability.Logger.create
+                           Ox_observability.Logger.create
                              ~service:"pie-e2e-test" ~clock ~mono_clock
                              ~reporter:
-                               (Eta_observability.Logger.Memory.reporter memory)
+                               (Ox_observability.Logger.Memory.reporter memory)
                              ()
                          in
                          let socket_path, retry_dir, workflow =
@@ -756,9 +753,9 @@ let test_audio_retry_delivery_and_text_publish_both_causes () =
                              observed :=
                                String.concat "; "
                                  (List.map
-                                    (fun (r : Eta_observability.Logger.record)
-                                       -> r.msg)
-                                    (Eta_observability.Logger.Memory.records
+                                    (fun (r : Ox_observability.Logger.record) ->
+                                      r.msg)
+                                    (Ox_observability.Logger.Memory.records
                                        memory));
                              Eio.Cancel.protect (fun () ->
                                  Eio.Switch.fail sw Exit))

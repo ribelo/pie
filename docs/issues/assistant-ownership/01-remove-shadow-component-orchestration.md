@@ -10,7 +10,7 @@ One canonical assistant workflow replaces the shadow component graph.
 
 Parent-reviewed implementation complete and integrated. PIE003. Whole-suite pending. Not deployed; no historical crash causality claimed.
 
-Shadow graph deleted (12 assistant modules, Commands.Assistant, assistant_shim). `eta_component` dropped from packages/pie/dune. Single owner: Pulse.with_client → with_record_stream → Keyboard.with_monitor → Clipboard.create → `run_with_inputs` (PTT + retry + 500ms stamp watcher). Watcher publishes Config.Stt.t+stamp only after systhread load succeeds; failures log and keep last-good. Required audio failure sets coordinator lastError (typed category) and fails the par. Components fields removed from assistant_service contract/server/client. bin/pie assistant retargeted to Service.run.
+Shadow graph deleted (12 assistant modules, Commands.Assistant, assistant_shim). `ox_component` dropped from packages/pie/dune. Single owner: Pulse.with_client → with_record_stream → Keyboard.with_monitor → Clipboard.create → `run_with_inputs` (PTT + retry + 500ms stamp watcher). Watcher publishes Config.Stt.t+stamp only after systhread load succeeds; failures log and keep last-good. Required audio failure sets coordinator lastError (typed category) and fails the par. Components fields removed from assistant_service contract/server/client. bin/pie assistant retargeted to Service.run.
 
 Focused assistant_owner: last-good then successful reload, required input lastError, Recording_overload, keyboard Input_lost, cancel waits, Pause FD release, production Codex streaming via private-child WS fixture. Fake STT covers Openrouter clip only; Codex uses production_stt. PIE006 effective-binding/physical-key design is next and is not started.
 
@@ -21,7 +21,7 @@ Focused assistant_owner: last-good then successful reload, required input lastEr
 
 ## Decision
 
-Delete the assistant component graph rather than completing its placeholders. Keep one explicit application owner for real input, recording/session state, provider operations, delivery and necessary command/config control. Pass typed resources directly; use existing Eta/Eio resource and worker scopes where they actually provide lifecycle guarantees. Do not replace Eta_component with a homegrown generic component framework.
+Delete the assistant component graph rather than completing its placeholders. Keep one explicit application owner for real input, recording/session state, provider operations, delivery and necessary command/config control. Pass typed resources directly; use existing Ox/Eio resource and worker scopes where they actually provide lifecycle guarantees. Do not replace Ox_component with a homegrown generic component framework.
 
 ## Evidence
 
@@ -37,12 +37,12 @@ Update Assistant_service.Contract components_field/Status_with_components codecs
 
 Remove Commands.Assistant (583 lines) and Assistant_shim (1 line): the only production command entrypoint forwards to Assistant.Service, already exported as Pie.Assistant.Service. Retarget that caller directly. Preserve necessary corrected recognition behavior under PIE006 in the real input seam, and retarget helper tests; do not keep a duplicate implementation merely because tests call it. The other helper bodies have no in-repository production caller.
 
-Remove eta_component dependency only after a repository-wide consumer census confirms all remaining consumers are gone. Remove tests that merely assert placeholder activation; replace them with behavior tests of real workflow ownership. No implementation during this audit.
+Remove ox_component dependency only after a repository-wide consumer census confirms all remaining consumers are gone. Remove tests that merely assert placeholder activation; replace them with behavior tests of real workflow ownership. No implementation during this audit.
 
 ## Acceptance
 
 With synthetic input/provider/delivery adapters, prove record-to-delivery uses the configured provider result; required input failure is visible; cancellation settles actual workers; failed reload preserves the last valid config; successful reload affects subsequent operations without corrupting an in-flight operation. Status must follow actual worker failure, not graph activation. Exercise CLI/RPC users of removed status fields. No Obj-based resource globals or inert fallback streams remain in assistant wiring.
 
-## Eta prerequisites
+## Ox prerequisites
 
-No Eta_component reconciliation/replacement fixes are prerequisites for the deleted graph. Keep the PIE002 physical session retirement dependency and only the ordinary scopes/typed-error/cancellation contracts the real workflow uses. Do not expand application architecture to exercise optional Eta features.
+No Ox_component reconciliation/replacement fixes are prerequisites for the deleted graph. Keep the PIE002 physical session retirement dependency and only the ordinary scopes/typed-error/cancellation contracts the real workflow uses. Do not expand application architecture to exercise optional Ox features.

@@ -14,7 +14,7 @@ Parent-reviewed implementation complete (PIE025). Integrated suite pending.
 
 - Local file IO faults in the capture write path are deliberately `Cause.Die` via `Recording_io`, not invented `Pulse.Protocol_error` values. Typed Pulse failures stay Pulse; STT/record validation stays `Stt_error`.
 - Capture audio remains a Pulse-error stream (`Pulse_error` only). There is no `%identity` / unsafe Stream error-row cast.
-- Eta `Stream.map_error` is absent from `eta_stream.mli`. That is not a blocker after this composition (write defects + outer Pulse `map_error` + `catch_some` Timer_elapsed). Do not claim an upstream Stream API was added.
+- Ox `Stream.map_error` is absent from `ox_stream.mli`. That is not a blocker after this composition (write defects + outer Pulse `map_error` + `catch_some` Timer_elapsed). Do not claim an upstream Stream API was added.
 
 ## Requirements
 
@@ -39,6 +39,6 @@ Validate duration/range before microphone acquisition or output mutation. An exp
 
 Synthetic PCM partitions produce identical raw WAV data; actual length/rate/header agree. Long streams keep resident buffering flat. Invalid/nonfinite/overflow duration fails before capture. Simulate provider-independent read/write/close failures and cancellation, asserting previous-output preservation and no FD/temp-file leak. Positive completion produces one valid WAV.
 
-## Eta prerequisites
+## Ox prerequisites
 
-Use settled stream cancellation/finalizer contracts and real Pulse ownership. File publication and sample fidelity are PIE duties; no new Eta audio layer is needed.
+Use settled stream cancellation/finalizer contracts and real Pulse ownership. File publication and sample fidelity are PIE duties; no new Ox audio layer is needed.

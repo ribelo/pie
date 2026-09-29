@@ -2,8 +2,8 @@
   description = "Pie OCaml development environment";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-  inputs.eta = {
-    url = "git+file:///home/ribelo/projects/ribelo/ocaml/Eta?ref=master";
+  inputs.ox = {
+    url = "git+file:///home/ribelo/projects/ribelo/ocaml/ox?ref=master";
     inputs.nixpkgs.follows = "nixpkgs";
     inputs.opam-nix.follows = "opam-nix";
     inputs.opam-repository.follows = "opam-repository";
@@ -31,7 +31,7 @@
     {
       self,
       nixpkgs,
-      eta,
+      ox,
       opam-nix,
       opam-repository,
       oxcaml,
@@ -79,9 +79,9 @@
                 );
             };
           pieSrc = cleanLocalSource ./.;
-          etaSrc = cleanLocalSource eta;
+          oxSrc = cleanLocalSource ox;
           opamLib = opam-nix.lib.${system};
-          etaRepo = opamLib.makeOpamRepo etaSrc;
+          oxRepo = opamLib.makeOpamRepo oxSrc;
           patchedOxcaml = pkgs.runCommand "oxcaml-source-patched" { } ''
             cp -R ${oxcaml} "$out"
             chmod -R u+w "$out"
@@ -158,7 +158,7 @@
               inherit pkgs;
               overlays = [ oxcamlSystemOverlay ];
               repos = [
-                etaRepo
+                oxRepo
                 oxcaml-opam-repository
                 opam-repository
               ];
@@ -218,15 +218,15 @@
               export OPAMSWITCH="$switch_name"
               eval "$(opam env --switch "$switch_name" --set-switch)"
 
-              # etabuild-e0gr: install committed Eta master for development.
-              eta_path="''${ETA_PATH:-$repo_root/../ocaml/Eta}"
-              export ETA_OPAM_PACKAGES="''${ETA_OPAM_PACKAGES:-eta eta_ai eta_ai_openrouter eta_ai_realtime eta_app eta_blocking eta_http eta_ipc eta_json eta_observability eta_otel eta_process eta_rpc eta_test}"
-              if command -v eta-opam-install-ox >/dev/null 2>&1; then
-                ETA_REPO_ROOT="$eta_path" eta-opam-install-ox
-              elif [ -d "$eta_path" ]; then
-                ETA_REPO_ROOT="$eta_path" nix develop "$eta_path" -c eta-opam-install-ox
+              # etabuild-e0gr: install committed Ox master for development.
+              ox_path="''${OX_PATH:-$repo_root/../ocaml/ox}"
+              export OX_OPAM_PACKAGES="''${OX_OPAM_PACKAGES:-ox ox_ai ox_ai_openrouter ox_ai_realtime ox_app ox_blocking ox_http ox_ipc ox_json ox_observability ox_otel ox_process ox_rpc ox_test}"
+              if command -v ox-opam-install >/dev/null 2>&1; then
+                OX_REPO_ROOT="$ox_path" ox-opam-install
+              elif [ -d "$ox_path" ]; then
+                OX_REPO_ROOT="$ox_path" nix develop "$ox_path" -c ox-opam-install
               else
-                echo "Missing Eta checkout at $eta_path" >&2
+                echo "Missing Ox checkout at $ox_path" >&2
                 exit 1
               fi
 

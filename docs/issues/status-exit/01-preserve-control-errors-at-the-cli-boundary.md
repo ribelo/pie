@@ -32,6 +32,6 @@ Preserve Daemon_error through Process.run. Keep stdout for successful status dat
 
 Exercise the real executable against private successful, explicit-error, malformed and absent-server fixtures. Assert exit code and output channel, not only message text. Retain the successful action-rejection controls.
 
-## Eta prerequisites
+## Ox prerequisites
 
 No new abstraction. Existing typed failure and process exit handling suffice.

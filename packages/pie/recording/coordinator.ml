@@ -59,7 +59,7 @@ type state = {
 
 type t = {
   persist_path : string;
-  logger : Eta_observability.Logger.t option;
+  logger : Ox_observability.Logger.t option;
   state : state ref;
   mutex : Eio.Mutex.t;
 }
@@ -156,7 +156,7 @@ let persist t =
   with exn -> (
     match t.logger with
     | Some logger ->
-        Eta_observability.Logger.error logger
+        Ox_observability.Logger.error logger
           ~fields:
             [
               ("path", String t.persist_path);

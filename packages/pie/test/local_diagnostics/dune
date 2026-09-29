@@ -2,4 +2,4 @@
 
 (test
  (name test_local_diagnostics)
- (libraries pie alcotest eio_main eio unix eta eta_app eta_observability))
+ (libraries pie alcotest eio_main eio unix ox ox_app ox_observability))

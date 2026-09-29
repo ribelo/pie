@@ -10,7 +10,7 @@ Native keyboard monitoring has explicit ownership and lifecycle handling.
 
 Parent-reviewed. Implementation complete on packages/pie. Integrated suite pending. No deployment. Does not claim the whole audit. PIE021.
 
-`connect_and_watch` owns the flow immediately and closes on every AUTH/Hello/AddMatch/Watch failure or cancellation, combining primary+cleanup via `Eio.Exn.combine` (Cancelled kept observable). Unwatch write is advisory (ordinary I/O only); physical close is unconditional, with a 250ms production write budget then close. Unexpected reader EOF is `Input_lost` (`Cause.Die`); cancellation stays interruption. Focused gates: keyboard_ownership 14 green (`29G3S3YR`) on pie-audit-current Eta. bc9 service input-loss/Pause integration quick tests 10 green on the same stage. `with_monitor ~sw ~net ~process_mgr` unchanged.
+`connect_and_watch` owns the flow immediately and closes on every AUTH/Hello/AddMatch/Watch failure or cancellation, combining primary+cleanup via `Eio.Exn.combine` (Cancelled kept observable). Unwatch write is advisory (ordinary I/O only); physical close is unconditional, with a 250ms production write budget then close. Unexpected reader EOF is `Input_lost` (`Cause.Die`); cancellation stays interruption. Focused gates: keyboard_ownership 14 green (`29G3S3YR`) on pie-audit-current Ox. bc9 service input-loss/Pause integration quick tests 10 green on the same stage. `with_monitor ~sw ~net ~process_mgr` unchanged.
 
 ## Requirements
 
@@ -35,6 +35,6 @@ Keep the fixed-size event queue and explicit single-consumer semantics where app
 
 Fake bus: rejected auth, failed Hello/WatchKeyboard, cancellation during each stage, failed unwatch write, normal disconnect, unexpected reader EOF and malformed packet. Repeated setup/release must keep descriptors flat within a long-lived parent scope. Active attempts must settle without fabricated key releases or silent continuation.
 
-## Eta prerequisites
+## Ox prerequisites
 
 Use settled scope/typed failure/cancellation ownership and the existing queue. A background worker returning unit is not a capability-loss signal; PIE must express that outcome. Do not change generic with_background semantics to compensate.

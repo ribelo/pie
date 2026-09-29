@@ -45,7 +45,7 @@ val config_stamp : ?config_path:string -> unit -> config_stamp
 
 val load_snapshot :
   fs:_ Eio.Path.t ->
-  source:Eta_app.Config.source ->
+  source:Ox_app.Config.source ->
   int ->
   Config.Stt.t * config_stamp
 
@@ -98,7 +98,7 @@ val production_stt :
   sw:Eio.Switch.t ->
   net:[> `Generic ] Eio.Net.ty Eio.Resource.t ->
   clock:_ Eio.Time.clock ->
-  logger:Eta_observability.Logger.t ->
+  logger:Ox_observability.Logger.t ->
   process_mgr:_ Eio.Process.mgr ->
   Config.Stt.t ->
   ptt_mode ->
@@ -109,7 +109,7 @@ val on_press :
   sw:Eio.Switch.t ->
   net:[> `Generic ] Eio.Net.ty Eio.Resource.t ->
   clock:_ Eio.Time.clock ->
-  logger:Eta_observability.Logger.t ->
+  logger:Ox_observability.Logger.t ->
   coordinator:Recording.Coordinator.t ->
   config:Config.Stt.t ->
   ?store:Recording.Retry_store.Active.store ->
@@ -124,7 +124,7 @@ val run_with_inputs :
   net:[> `Generic ] Eio.Net.ty Eio.Resource.t ->
   fs:_ Eio.Path.t ->
   clock:_ Eio.Time.clock ->
-  logger:Eta_observability.Logger.t ->
+  logger:Ox_observability.Logger.t ->
   process_mgr:_ Eio.Process.mgr ->
   mono_clock:_ Eio.Time.Mono.t ->
   inputs:
@@ -152,10 +152,10 @@ val run :
   net:[> `Generic ] Eio.Net.ty Eio.Resource.t ->
   clock:_ Eio.Time.clock ->
   mono_clock:_ Eio.Time.Mono.t ->
-  logger:Eta_observability.Logger.t ->
+  logger:Ox_observability.Logger.t ->
   process_mgr:_ Eio.Process.mgr ->
   config:Config.Stt.t ->
-  source:Eta_app.Config.source ->
+  source:Ox_app.Config.source ->
   ?ptt_transcribe_keysym:int ->
   ?ptt_translate_keysym:int ->
   ?min_duration_ms:int ->

@@ -32,6 +32,6 @@ Do not implement a meeting recorder as part of this cleanup, keep a success-shap
 
 Removed methods/actions are rejected through the normal unknown-operation path without state changes. CLI help/bindings no longer advertise them. Normal dictation remains admissible; no dead meeting mode or unused meetings_dir remains in authoritative code.
 
-## Eta prerequisites
+## Ox prerequisites
 
 None. Removing nonexistent application work does not require a framework feature.

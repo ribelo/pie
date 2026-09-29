@@ -47,10 +47,10 @@ let () =
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let logger =
-    Eta_observability.Logger.create ~service:"pie-live-test" ~clock
+    Ox_observability.Logger.create ~service:"pie-live-test" ~clock
       ~mono_clock:(Eio.Stdenv.mono_clock env)
       ~reporter:
-        (Eta_observability.Logger.Reporter.journal (Eio.Stdenv.stderr env))
+        (Ox_observability.Logger.Reporter.journal (Eio.Stdenv.stderr env))
       ()
   in
   let result =

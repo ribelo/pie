@@ -19,8 +19,8 @@ let plant_tree sandbox =
   write_file (Filename.concat pkg "dummy.ml") "let () = ()\n";
   write_file (Filename.concat pkg "dune") "(library (name pie))\n"
 
-let plant_eta_lib sandbox name cmxa_body a_body =
-  let dir = Filename.concat (Filename.concat sandbox "eta") name in
+let plant_ox_lib sandbox name cmxa_body a_body =
+  let dir = Filename.concat (Filename.concat sandbox "ox") name in
   mkdir_p dir;
   let cmxa = Filename.concat dir (name ^ ".cmxa") in
   let archive = Filename.concat dir (name ^ ".a") in
@@ -32,9 +32,9 @@ let test_parse_selects_pie_exe () =
   let log =
     String.concat "\n"
       [
-        "/usr/bin/ocamlopt.opt /tmp/stage/eta/eta.cmxa -o other.exe";
-        "/usr/bin/ocamlopt.opt /tmp/stage/eta/eta.cmxa          \
-         /tmp/stage/eta_http/eta_http.cmxa -o          \
+        "/usr/bin/ocamlopt.opt /tmp/stage/ox/ox.cmxa -o other.exe";
+        "/usr/bin/ocamlopt.opt /tmp/stage/ox/ox.cmxa          \
+         /tmp/stage/ox_http/ox_http.cmxa -o          \
          /tmp/build/default/packages/pie/bin/pie.exe";
       ]
   in
@@ -45,7 +45,7 @@ let test_parse_selects_pie_exe () =
   in
   Alcotest.(check (list string))
     "only pie.exe cmxa"
-    [ "/tmp/stage/eta/eta.cmxa"; "/tmp/stage/eta_http/eta_http.cmxa" ]
+    [ "/tmp/stage/ox/ox.cmxa"; "/tmp/stage/ox_http/ox_http.cmxa" ]
     paths
 
 let test_reject_backslash_quoting () =
@@ -69,8 +69,8 @@ let test_mutate_during_build_refuses () =
   Sys.remove sandbox;
   mkdir_p sandbox;
   plant_tree sandbox;
-  let cmxa, _archive = plant_eta_lib sandbox "eta" "FAKE-CMXA\n" "FAKE-A\n" in
-  Unix.putenv "OCAMLPATH" (Filename.concat sandbox "eta");
+  let cmxa, _archive = plant_ox_lib sandbox "ox" "FAKE-CMXA\n" "FAKE-A\n" in
+  Unix.putenv "OCAMLPATH" (Filename.concat sandbox "ox");
   let build_dir = Filename.concat sandbox "build" in
   mkdir_p (Filename.concat build_dir "default/packages/pie/bin");
   let output = Filename.concat sandbox "out.json" in
@@ -103,11 +103,11 @@ let test_record_from_planted_build () =
   Sys.remove sandbox;
   mkdir_p sandbox;
   plant_tree sandbox;
-  let cmxa, archive = plant_eta_lib sandbox "eta" "FAKE-CMXA\n" "FAKE-A\n" in
+  let cmxa, archive = plant_ox_lib sandbox "ox" "FAKE-CMXA\n" "FAKE-A\n" in
   let stubs = Filename.concat sandbox "stublibs" in
   mkdir_p stubs;
-  write_file (Filename.concat stubs "dlleta_http_stubs.so") "FAKE-STUB\n";
-  Unix.putenv "OCAMLPATH" (Filename.concat sandbox "eta");
+  write_file (Filename.concat stubs "dllox_http_stubs.so") "FAKE-STUB\n";
+  Unix.putenv "OCAMLPATH" (Filename.concat sandbox "ox");
   Unix.putenv "CAML_LD_LIBRARY_PATH" stubs;
   let build_dir = Filename.concat sandbox "build" in
   let bin_dir = Filename.concat build_dir "default/packages/pie/bin" in
@@ -131,10 +131,10 @@ let test_record_from_planted_build () =
       ~finally:(fun () -> close_in_noerr ic)
       (fun () -> really_input_string ic (in_channel_length ic))
   in
-  let eta_hash = Provenance.sha256_file cmxa in
+  let ox_hash = Provenance.sha256_file cmxa in
   let companion_hash = Provenance.sha256_file archive in
   let bin_hash = Provenance.sha256_file binary in
-  Alcotest.(check bool) "eta hash" true (Provenance.contains eta_hash json);
+  Alcotest.(check bool) "ox hash" true (Provenance.contains ox_hash json);
   Alcotest.(check bool)
     "companion .a hash" true
     (Provenance.contains companion_hash json);
@@ -154,8 +154,8 @@ let test_companion_a_change_refuses () =
   Sys.remove sandbox;
   mkdir_p sandbox;
   plant_tree sandbox;
-  let cmxa, archive = plant_eta_lib sandbox "eta" "FAKE-CMXA\n" "FAKE-A\n" in
-  Unix.putenv "OCAMLPATH" (Filename.concat sandbox "eta");
+  let cmxa, archive = plant_ox_lib sandbox "ox" "FAKE-CMXA\n" "FAKE-A\n" in
+  Unix.putenv "OCAMLPATH" (Filename.concat sandbox "ox");
   let build_dir = Filename.concat sandbox "build" in
   mkdir_p (Filename.concat build_dir "default/packages/pie/bin");
   let output = Filename.concat sandbox "out.json" in
@@ -186,15 +186,15 @@ let test_tls_static_archive_change_refuses () =
   Sys.remove sandbox;
   mkdir_p sandbox;
   plant_tree sandbox;
-  let cmxa, _ = plant_eta_lib sandbox "eta" "FAKE-CMXA\n" "FAKE-A\n" in
-  let tls_cmxa, _ = plant_eta_lib sandbox "eta_http" "TLS-CMXA\n" "TLS-A\n" in
-  let tls_dir = Filename.concat (Filename.concat sandbox "eta") "eta_http" in
-  let stubs_a = Filename.concat tls_dir "libeta_http_stubs.a" in
+  let cmxa, _ = plant_ox_lib sandbox "ox" "FAKE-CMXA\n" "FAKE-A\n" in
+  let tls_cmxa, _ = plant_ox_lib sandbox "ox_http" "TLS-CMXA\n" "TLS-A\n" in
+  let tls_dir = Filename.concat (Filename.concat sandbox "ox") "ox_http" in
+  let stubs_a = Filename.concat tls_dir "libox_http_stubs.a" in
   write_file stubs_a "TLS-STUBS-A\n";
   let stubs = Filename.concat sandbox "stublibs" in
   mkdir_p stubs;
-  write_file (Filename.concat stubs "dlleta_http_stubs.so") "FAKE-STUB-SO\n";
-  Unix.putenv "OCAMLPATH" (Filename.concat sandbox "eta");
+  write_file (Filename.concat stubs "dllox_http_stubs.so") "FAKE-STUB-SO\n";
+  Unix.putenv "OCAMLPATH" (Filename.concat sandbox "ox");
   Unix.putenv "CAML_LD_LIBRARY_PATH" stubs;
   let build_dir = Filename.concat sandbox "build" in
   mkdir_p (Filename.concat build_dir "default/packages/pie/bin");
@@ -228,19 +228,19 @@ let test_two_visible_tls_roots_records_linked_winner () =
   plant_tree sandbox;
   let r1 = Filename.concat sandbox "r1" in
   let r2 = Filename.concat sandbox "r2" in
-  let eta_cmxa, _ = plant_eta_lib r1 "eta" "ETA-CMXA\n" "ETA-A\n" in
-  (* plant_eta_lib nests under <sandbox>/eta/<name>; use r1/r2 as those roots. *)
-  let tls1_cmxa, _ = plant_eta_lib r1 "eta_http" "TLS1-CMXA\n" "TLS1-A\n" in
-  let tls1_dir = Filename.concat (Filename.concat r1 "eta") "eta_http" in
-  let stubs1 = Filename.concat tls1_dir "libeta_http_stubs.a" in
+  let ox_cmxa, _ = plant_ox_lib r1 "ox" "OX-CMXA\n" "OX-A\n" in
+  (* plant_ox_lib nests under <sandbox>/ox/<name>; use r1/r2 as those roots. *)
+  let tls1_cmxa, _ = plant_ox_lib r1 "ox_http" "TLS1-CMXA\n" "TLS1-A\n" in
+  let tls1_dir = Filename.concat (Filename.concat r1 "ox") "ox_http" in
+  let stubs1 = Filename.concat tls1_dir "libox_http_stubs.a" in
   write_file stubs1 "STUBS-ROOT1\n";
-  let tls2_cmxa, _ = plant_eta_lib r2 "eta_http" "TLS2-CMXA\n" "TLS2-A\n" in
-  let tls2_dir = Filename.concat (Filename.concat r2 "eta") "eta_http" in
-  let stubs2 = Filename.concat tls2_dir "libeta_http_stubs.a" in
+  let tls2_cmxa, _ = plant_ox_lib r2 "ox_http" "TLS2-CMXA\n" "TLS2-A\n" in
+  let tls2_dir = Filename.concat (Filename.concat r2 "ox") "ox_http" in
+  let stubs2 = Filename.concat tls2_dir "libox_http_stubs.a" in
   write_file stubs2 "STUBS-ROOT2\n";
   let _ = tls2_cmxa in
   Unix.putenv "OCAMLPATH"
-    (Filename.concat r1 "eta" ^ ":" ^ Filename.concat r2 "eta");
+    (Filename.concat r1 "ox" ^ ":" ^ Filename.concat r2 "ox");
   Unix.putenv "CAML_LD_LIBRARY_PATH" "";
   let build_dir = Filename.concat sandbox "build" in
   mkdir_p (Filename.concat build_dir "default/packages/pie/bin");
@@ -253,7 +253,7 @@ let test_two_visible_tls_roots_records_linked_winner () =
          write_file binary "BIN\n";
          write_file
            (Filename.concat build_dir "log")
-           (Printf.sprintf "/usr/bin/ocamlopt.opt %s %s -o %s\n" eta_cmxa
+           (Printf.sprintf "/usr/bin/ocamlopt.opt %s %s -o %s\n" ox_cmxa
               tls1_cmxa binary))
        ());
   let ic = open_in_bin output in
@@ -278,15 +278,15 @@ let test_known_tls_missing_stub_refuses_even_if_other_root_has_it () =
   plant_tree sandbox;
   let r1 = Filename.concat sandbox "r1" in
   let r2 = Filename.concat sandbox "r2" in
-  let eta_cmxa, _ = plant_eta_lib r1 "eta" "ETA-CMXA\n" "ETA-A\n" in
-  let tls1_cmxa, _ = plant_eta_lib r1 "eta_http" "TLS1-CMXA\n" "TLS1-A\n" in
-  let _tls2_cmxa, _ = plant_eta_lib r2 "eta_http" "TLS2-CMXA\n" "TLS2-A\n" in
-  let tls2_dir = Filename.concat (Filename.concat r2 "eta") "eta_http" in
+  let ox_cmxa, _ = plant_ox_lib r1 "ox" "OX-CMXA\n" "OX-A\n" in
+  let tls1_cmxa, _ = plant_ox_lib r1 "ox_http" "TLS1-CMXA\n" "TLS1-A\n" in
+  let _tls2_cmxa, _ = plant_ox_lib r2 "ox_http" "TLS2-CMXA\n" "TLS2-A\n" in
+  let tls2_dir = Filename.concat (Filename.concat r2 "ox") "ox_http" in
   write_file
-    (Filename.concat tls2_dir "libeta_http_stubs.a")
+    (Filename.concat tls2_dir "libox_http_stubs.a")
     "OTHER-ROOT-STUBS\n";
   Unix.putenv "OCAMLPATH"
-    (Filename.concat r1 "eta" ^ ":" ^ Filename.concat r2 "eta");
+    (Filename.concat r1 "ox" ^ ":" ^ Filename.concat r2 "ox");
   let build_dir = Filename.concat sandbox "build" in
   mkdir_p (Filename.concat build_dir "default/packages/pie/bin");
   let output = Filename.concat sandbox "out.json" in
@@ -301,7 +301,7 @@ let test_known_tls_missing_stub_refuses_even_if_other_root_has_it () =
           (Filename.concat build_dir "log")
           (Printf.sprintf
              "/usr/bin/ocamlopt.opt %s %s -o %s/default/packages/pie/bin/pie.exe\n"
-             eta_cmxa tls1_cmxa build_dir))
+             ox_cmxa tls1_cmxa build_dir))
       ()
   with
   | exception Failure msg ->
@@ -316,11 +316,11 @@ let test_unrelated_stub_is_not_tls_identity () =
   Sys.remove sandbox;
   mkdir_p sandbox;
   plant_tree sandbox;
-  let cmxa, _ = plant_eta_lib sandbox "eta" "FAKE-CMXA\n" "FAKE-A\n" in
-  let eta_dir = Filename.concat (Filename.concat sandbox "eta") "eta" in
-  let unrelated = Filename.concat eta_dir "libeta_turso_stubs.a" in
+  let cmxa, _ = plant_ox_lib sandbox "ox" "FAKE-CMXA\n" "FAKE-A\n" in
+  let ox_dir = Filename.concat (Filename.concat sandbox "ox") "ox" in
+  let unrelated = Filename.concat ox_dir "libox_turso_stubs.a" in
   write_file unrelated "NOT-TLS\n";
-  Unix.putenv "OCAMLPATH" (Filename.concat sandbox "eta");
+  Unix.putenv "OCAMLPATH" (Filename.concat sandbox "ox");
   Unix.putenv "CAML_LD_LIBRARY_PATH" "";
   let build_dir = Filename.concat sandbox "build" in
   mkdir_p (Filename.concat build_dir "default/packages/pie/bin");
@@ -343,7 +343,7 @@ let test_unrelated_stub_is_not_tls_identity () =
   in
   Alcotest.(check bool)
     "turso stub is not TLS identity" true
-    (not (Provenance.contains "libeta_turso_stubs.a" json));
+    (not (Provenance.contains "libox_turso_stubs.a" json));
   Alcotest.(check bool)
     "tls identity is null" true
     (Provenance.contains "tls_native_stub_archive" json

@@ -2,7 +2,7 @@ type trigger = Press of string | Release of string
 type captured_clip = { duration_ms : int; pcm_bytes : bytes }
 
 type error =
-  [ `Ptt_error of string | `Ptt_cause of [ `Ptt_error of string ] Eta.Cause.t ]
+  [ `Ptt_error of string | `Ptt_cause of [ `Ptt_error of string ] Ox.Cause.t ]
 
 type run_error = [ error | `Pulse_error of Pulse.Client.error ]
 
@@ -133,7 +133,7 @@ let queue_take q =
   take ()
 
 let ptt_fields ?duration_ms ?held_duration_ms ?bytes ?rms ?peak config mode =
-  let open Eta_observability.Logger in
+  let open Ox_observability.Logger in
   let base =
     [
       ("ptt.mode", String mode);
@@ -194,7 +194,7 @@ let run ?control ?(on_capture_resumed = fun () -> Ok ())
         | _ -> consume_processing_input ())
   in
   let finish_with_processing f =
-    Eta.Concurrent.with_background ~sw consume_processing_input f
+    Ox.Concurrent.with_background ~sw consume_processing_input f
   in
   let rec keyboard_loop () =
     let* () = push_input (Event (Eio.Stream.take keyboard_queue)) in
@@ -214,24 +214,24 @@ let run ?control ?(on_capture_resumed = fun () -> Ok ())
   in
   let input_loop () =
     let keyboard_and_audio () =
-      let* _ = Eta.Concurrent.par ~sw keyboard_loop recv_loop in
+      let* _ = Ox.Concurrent.par ~sw keyboard_loop recv_loop in
       Ok ()
     in
     match control with
     | None -> keyboard_and_audio ()
     | Some control ->
         let* _ =
-          Eta.Concurrent.par ~sw keyboard_and_audio (fun () ->
+          Ox.Concurrent.par ~sw keyboard_and_audio (fun () ->
               control_loop control)
         in
         Ok ()
   in
   let state_loop () =
     let log_info ?(fields = []) msg =
-      Eta_observability.Logger.info logger ~fields msg
+      Ox_observability.Logger.info logger ~fields msg
     in
     let log_error ?(fields = []) msg =
-      Eta_observability.Logger.error logger ~fields msg
+      Ox_observability.Logger.error logger ~fields msg
     in
     let offer_chunks handle chunks =
       let rec offer = function
@@ -298,7 +298,7 @@ let run ?control ?(on_capture_resumed = fun () -> Ok ())
                 (* Neither branch returns an [Error]: the first to settle is the value. A
                    defect in either is raised as it is, not mapped to a typed error. *)
                 let* next =
-                  Eta.Concurrent.race_first ~sw
+                  Ox.Concurrent.race_first ~sw
                     [
                       (fun () ->
                         Eio.Time.Mono.sleep mono_clock (remaining /. 1000.0);
@@ -412,7 +412,7 @@ let run ?control ?(on_capture_resumed = fun () -> Ok ())
       let report_failure kind mode message =
         log_error
           ~fields:
-            (("ptt.error", Eta_observability.Logger.String message)
+            (("ptt.error", Ox_observability.Logger.String message)
             :: ptt_fields config mode)
           kind
       in
@@ -436,13 +436,13 @@ let run ?control ?(on_capture_resumed = fun () -> Ok ())
                  cleanup. Both are kept: a raising cancel must not drop the primary
                  (the v1 interpreter composed them; direct style composes here). *)
               let to_cause = function
-                | `Ptt_error _ as e -> Eta.Cause.Fail e
+                | `Ptt_error _ as e -> Ox.Cause.Fail e
                 | `Ptt_cause c -> c
               in
               let with_cleanup finalizer =
                 Error
                   (`Ptt_cause
-                     (Eta.Cause.Suppressed
+                     (Ox.Cause.Suppressed
                         { primary = to_cause error; finalizer }))
               in
               match handle.cancel () with
@@ -452,7 +452,7 @@ let run ?control ?(on_capture_resumed = fun () -> Ok ())
                   raise cancelled
               | exception exn ->
                   with_cleanup
-                    (Eta.Cause.Die (exn, Printexc.get_raw_backtrace ())))
+                    (Ox.Cause.Die (exn, Printexc.get_raw_backtrace ())))
         in
         recover_operation mode "PTT capture failed" result
       in
@@ -510,5 +510,5 @@ let run ?control ?(on_capture_resumed = fun () -> Ok ())
   let state_loop () =
     Result.map_error (fun e -> (e :> run_error)) (state_loop ())
   in
-  let* _ = Eta.Concurrent.par ~sw input_loop state_loop in
+  let* _ = Ox.Concurrent.par ~sw input_loop state_loop in
   Ok ()

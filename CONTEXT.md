@@ -17,7 +17,7 @@ _Avoid_: context (unqualified)
 ### Component runtime
 
 **Component context**:
-The single lifecycle authority that admits desired state, activates component instances, and settles all lifecycle work. Supplied by `eta_component`.
+The single lifecycle authority that admits desired state, activates component instances, and settles all lifecycle work. Supplied by `ox_component`.
 _Avoid_: context (unqualified), service registry, container
 
 **Component**:

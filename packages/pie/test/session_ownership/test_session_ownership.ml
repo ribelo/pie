@@ -72,14 +72,14 @@ let header_value name raw =
       | _ -> None)
 
 let write_ws_text flow payload =
-  Eta_http.Ws_codec.encode
+  Ox_http.Ws_codec.encode
     { fin = true; opcode = Text; payload = Bytes.of_string payload }
   |> Bytes.to_string
   |> fun encoded -> Eio.Flow.copy_string encoded flow
 
 let write_ws_switching_response flow key =
   let accept =
-    Eta_http.Ws_codec.accept_key ~sha1:Eta_http.Eta_http_tls_openssl.sha1 key
+    Ox_http.Ws_codec.accept_key ~sha1:Ox_http.Ox_http_tls_openssl.sha1 key
   in
   let response =
     String.concat ""
@@ -492,9 +492,9 @@ let serve_tls ctx ~clock ~job scenario raw =
     (raw :> [ Eio.Flow.two_way_ty | Eio.Resource.close_ty ] Eio.Resource.t)
   in
   let tls =
-    Eta_http.Tls_flow.create
+    Ox_http.Tls_flow.create
       ~raw:(raw_flow :> Eio.Flow.two_way_ty Eio.Resource.t)
-      ~ssl:(Eta_http.Eta_http_tls_openssl.create_server_ssl ctx)
+      ~ssl:(Ox_http.Ox_http_tls_openssl.create_server_ssl ctx)
   in
   Fun.protect
     ~finally:(fun () -> try Eio.Flow.close raw with _ -> ())
@@ -507,7 +507,7 @@ let serve_tls ctx ~clock ~job scenario raw =
 
 let repeat_wss_in_process ~cert ~key ~rounds =
   let ctx =
-    Eta_http.Eta_http_tls_openssl.create_server_ctx ~certificate_chain_file:cert
+    Ox_http.Ox_http_tls_openssl.create_server_ctx ~certificate_chain_file:cert
       ~private_key_file:key ~alpn_protocols:[ "http/1.1" ] ()
   in
   Eio_main.run @@ fun env ->

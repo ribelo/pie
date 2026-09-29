@@ -4,16 +4,16 @@
  (name pie)
  (public_name pie)
  (libraries
-  eta
-  eta_ai
-  eta_ai_openrouter
-  eta_ai_realtime
-  eta_app
-  eta_ipc
-  eta_json
-  eta_http
-  eta_observability
-  eta_otel
+  ox
+  ox_ai
+  ox_ai_openrouter
+  ox_ai_realtime
+  ox_app
+  ox_ipc
+  ox_json
+  ox_http
+  ox_observability
+  ox_otel
   eio
   eio_main
   yojson

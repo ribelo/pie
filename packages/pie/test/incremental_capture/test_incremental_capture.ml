@@ -109,9 +109,9 @@ let run_loop ~env ~sw ~clock ~handle ~min_duration_ms ~rms ~peak ~audio_fn
     }
   in
   let logger =
-    Eta_observability.Logger.create ~service:"pie-test" ~clock
+    Ox_observability.Logger.create ~service:"pie-test" ~clock
       ~mono_clock:(Eio.Stdenv.mono_clock env)
-      ~reporter:(Eta_observability.Logger.Reporter.writer ignore)
+      ~reporter:(Ox_observability.Logger.Reporter.writer ignore)
       ()
   in
   try

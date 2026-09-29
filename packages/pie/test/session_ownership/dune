@@ -6,9 +6,9 @@
   pie
   alcotest
   eio_main
-  eta
-  eta_test
-  eta_http
+  ox
+  ox_test
+  ox_http
   eio
   eio.unix
   unix

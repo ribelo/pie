@@ -67,24 +67,24 @@ let with_sandbox f =
 
 let show_cause cause =
   Format.asprintf "%a"
-    (Eta.Cause.pp (fun ppf _ -> Format.pp_print_string ppf "<err>"))
+    (Ox.Cause.pp (fun ppf _ -> Format.pp_print_string ppf "<err>"))
     cause
 
 let rec defects = function
-  | Eta.Cause.Die (exn, _) -> [ exn ]
-  | Eta.Cause.Finalizer cause -> defects cause
-  | Eta.Cause.Suppressed { primary; finalizer } ->
+  | Ox.Cause.Die (exn, _) -> [ exn ]
+  | Ox.Cause.Finalizer cause -> defects cause
+  | Ox.Cause.Suppressed { primary; finalizer } ->
       defects primary @ defects finalizer
-  | Eta.Cause.Concurrent causes -> List.concat_map defects causes
-  | Eta.Cause.Fail _ | Eta.Cause.Interrupt _ -> []
+  | Ox.Cause.Concurrent causes -> List.concat_map defects causes
+  | Ox.Cause.Fail _ | Ox.Cause.Interrupt _ -> []
 
 let rec failures = function
-  | Eta.Cause.Fail error -> [ error ]
-  | Eta.Cause.Finalizer cause -> failures cause
-  | Eta.Cause.Suppressed { primary; finalizer } ->
+  | Ox.Cause.Fail error -> [ error ]
+  | Ox.Cause.Finalizer cause -> failures cause
+  | Ox.Cause.Suppressed { primary; finalizer } ->
       failures primary @ failures finalizer
-  | Eta.Cause.Concurrent causes -> List.concat_map failures causes
-  | Eta.Cause.Die _ | Eta.Cause.Interrupt _ -> []
+  | Ox.Cause.Concurrent causes -> List.concat_map failures causes
+  | Ox.Cause.Die _ | Ox.Cause.Interrupt _ -> []
 
 let drain_until_eof flow =
   let buf = Cstruct.create 256 in
@@ -319,13 +319,12 @@ let with_fake_bus ~sw ~net ~clock ~dir ~count script ?on_stage f =
           "server connection scope did not close (client likely leaked the \
            flow)")
 
-let run_direct operation = Eta.Scope.run (fun _ -> operation ())
+let run_direct operation = Ox.Scope.run (fun _ -> operation ())
 
 let expect_die ~label ~needle result =
   match result with
-  | Eta.Exit.Success _ ->
-      Alcotest.fail (label ^ ": expected defect, got success")
-  | Eta.Exit.Failure cause ->
+  | Ox.Exit.Success _ -> Alcotest.fail (label ^ ": expected defect, got success")
+  | Ox.Exit.Failure cause ->
       let dies = defects cause in
       if dies = [] then
         Alcotest.failf "%s: expected defect, got %s" label (show_cause cause);
@@ -337,15 +336,15 @@ let expect_die ~label ~needle result =
 
 let expect_input_lost ~label result =
   match result with
-  | Eta.Exit.Success _ ->
+  | Ox.Exit.Success _ ->
       Alcotest.fail (label ^ ": consumer succeeded after input loss")
-  | Eta.Exit.Failure cause -> (
+  | Ox.Exit.Failure cause -> (
       match failures cause with
       | [ `Harness_timeout ] ->
           Alcotest.fail
             (label ^ ": consumer hung; background treated EOF as success")
       | _ ->
-          if Eta.Cause.is_interrupt_only cause then
+          if Ox.Cause.is_interrupt_only cause then
             Alcotest.fail (label ^ ": input loss became interruption");
           let dies = defects cause in
           let hit =
@@ -435,8 +434,8 @@ let cause_texts cause =
 
 let expect_combined ~label ~needles result =
   match result with
-  | Eta.Exit.Success _ -> Alcotest.fail (label ^ ": expected combined failure")
-  | Eta.Exit.Failure cause ->
+  | Ox.Exit.Success _ -> Alcotest.fail (label ^ ": expected combined failure")
+  | Ox.Exit.Failure cause ->
       let text = cause_texts cause ^ "\n" ^ show_cause cause in
       List.iter
         (fun needle ->
@@ -536,7 +535,7 @@ let cancel_at_stage stage () =
     (fun ~await_conn ->
       let baseline = fd_count () in
       let operation () =
-        Eta.Concurrent.race ~sw
+        Ox.Concurrent.race ~sw
           [
             (fun () ->
               ignore (Monitor.connect_and_watch ~sw ~net);
@@ -547,14 +546,14 @@ let cancel_at_stage stage () =
           ]
       in
       (match run_direct operation with
-      | Eta.Exit.Success `Cancelled_at_stage -> ()
-      | Eta.Exit.Success `Setup_finished ->
+      | Ox.Exit.Success `Cancelled_at_stage -> ()
+      | Ox.Exit.Success `Setup_finished ->
           Alcotest.fail "setup completed before tagged cancellation"
-      | Eta.Exit.Failure cause when Eta.Cause.is_interrupt_only cause ->
+      | Ox.Exit.Failure cause when Ox.Cause.is_interrupt_only cause ->
           Alcotest.fail
-            "Eta.race used a failed/interrupt branch as cancellation; \
+            "Ox.race used a failed/interrupt branch as cancellation; \
              the              tagged success branch must win"
-      | Eta.Exit.Failure cause ->
+      | Ox.Exit.Failure cause ->
           Alcotest.failf "unexpected race failure: %s" (show_cause cause));
       await_conn ();
       Alcotest.(check int)
@@ -582,8 +581,8 @@ let test_failed_unwatch_write_still_closes () =
             Ok ())
       in
       match result with
-      | Eta.Exit.Success () -> ()
-      | Eta.Exit.Failure cause ->
+      | Ox.Exit.Success () -> ()
+      | Ox.Exit.Failure cause ->
           Alcotest.failf "unwatch/close raised %s" (show_cause cause))
 
 let test_unexpected_eof_fails_consumer () =
@@ -596,7 +595,7 @@ let test_unexpected_eof_fails_consumer () =
   with_fake_bus ~sw ~net ~clock ~dir ~count:1 (Watch_then `Eof)
     (fun ~await_conn ->
       let operation () =
-        Eta.Timeout.timeout ~clock (Eta.Duration.seconds 2) (fun () ->
+        Ox.Timeout.timeout ~clock (Ox.Duration.seconds 2) (fun () ->
             Monitor.with_monitor ~sw ~net ~clock ~process_mgr (fun _keyboard ->
                 Eio.Fiber.await_cancel ()))
         |> Result.map_error (function
@@ -607,7 +606,7 @@ let test_unexpected_eof_fails_consumer () =
       await_conn ();
       expect_input_lost ~label:"unexpected EOF" result;
       match result with
-      | Eta.Exit.Failure cause ->
+      | Ox.Exit.Failure cause ->
           let hit =
             List.exists
               (fun die ->
@@ -615,7 +614,7 @@ let test_unexpected_eof_fails_consumer () =
               (defects cause)
           in
           Alcotest.(check bool) "EOF is named Input_lost" true hit
-      | Eta.Exit.Success _ -> ())
+      | Ox.Exit.Success _ -> ())
 
 let test_malformed_packet_fails_consumer () =
   with_sandbox @@ fun dir ->
@@ -627,7 +626,7 @@ let test_malformed_packet_fails_consumer () =
   with_fake_bus ~sw ~net ~clock ~dir ~count:1 (Watch_then `Malformed)
     (fun ~await_conn ->
       let operation () =
-        Eta.Timeout.timeout ~clock (Eta.Duration.seconds 2) (fun () ->
+        Ox.Timeout.timeout ~clock (Ox.Duration.seconds 2) (fun () ->
             Monitor.with_monitor ~sw ~net ~clock ~process_mgr (fun _keyboard ->
                 Eio.Fiber.await_cancel ()))
         |> Result.map_error (function
@@ -637,9 +636,9 @@ let test_malformed_packet_fails_consumer () =
       let result = run_direct operation in
       await_conn ();
       match result with
-      | Eta.Exit.Success _ ->
+      | Ox.Exit.Success _ ->
           Alcotest.fail "malformed packet: consumer succeeded"
-      | Eta.Exit.Failure cause -> (
+      | Ox.Exit.Failure cause -> (
           match failures cause with
           | [ `Harness_timeout ] ->
               Alcotest.fail "malformed packet swallowed; consumer hung"
@@ -665,8 +664,8 @@ let test_normal_disconnect_closes () =
                 Ok ()))
       in
       (match result with
-      | Eta.Exit.Success () -> ()
-      | Eta.Exit.Failure cause ->
+      | Ox.Exit.Success () -> ()
+      | Ox.Exit.Failure cause ->
           Alcotest.failf "normal disconnect failed: %s" (show_cause cause));
       await_conn ();
       Alcotest.(check int)

@@ -36,6 +36,6 @@ Keep Niri functionality actually required for text delivery/focus ownership. Rem
 
 Synthetic window titles/manifests/context files never enter provider prompts automatically. Configured instructions and operation parameters still reach the selected backend. No process-tree scan or manifest read occurs on record/finish. Existing delivery focus behavior remains unchanged. Run caller/reference census and affected prompt/request tests after deleting the modules.
 
-## Eta prerequisites
+## Ox prerequisites
 
 None. Implicit application data collection is not an effect-runtime capability to wrap.

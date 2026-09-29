@@ -54,13 +54,13 @@ val string_of_newline_action : newline_action -> string
 val entry_method_of_string : string -> entry_method
 val string_of_entry_method : entry_method -> string
 val max_config_file_bytes : int
-val door_spec : t Eta_app.Config.t
-val default_source : unit -> Eta_app.Config.source
-val source_path : Eta_app.Config.source -> string
+val door_spec : t Ox_app.Config.t
+val default_source : unit -> Ox_app.Config.source
+val source_path : Ox_app.Config.source -> string
 
 val load :
   fs:_ Eio.Path.t ->
-  ?source:Eta_app.Config.source ->
-  ?read:(string -> (string, Eta_app.Config.read_error) result) ->
+  ?source:Ox_app.Config.source ->
+  ?read:(string -> (string, Ox_app.Config.read_error) result) ->
   unit ->
-  (t, Eta_app.Config.error) result
+  (t, Ox_app.Config.error) result

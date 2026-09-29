@@ -1,5 +1,5 @@
 (* Temporary control: measures descriptor and runtime-worker settlement for
-   realtime WebSocket operations against the installed Eta artifact.
+   realtime WebSocket operations against the installed Ox artifact.
    Loopback only; no provider traffic. Not part of the registered suite. *)
 
 open Pie
@@ -46,7 +46,7 @@ let read_http_head flow =
   loop ()
 
 let write_ws_text flow payload =
-  Eta_http.Ws_codec.encode
+  Ox_http.Ws_codec.encode
     { fin = true; opcode = Text; payload = Bytes.of_string payload }
   |> Bytes.to_string
   |> fun encoded -> Eio.Flow.copy_string encoded flow
@@ -55,7 +55,7 @@ let write_ws_switching_response flow key =
   let response =
     "HTTP/1.1 101 Switching Protocols\r\n" ^ "Upgrade: websocket\r\n"
     ^ "Connection: keep-alive, Upgrade\r\n" ^ "Sec-WebSocket-Accept: "
-    ^ Eta_http.Ws_codec.accept_key ~sha1:Eta_http.Eta_http_tls_openssl.sha1 key
+    ^ Ox_http.Ws_codec.accept_key ~sha1:Ox_http.Ox_http_tls_openssl.sha1 key
     ^ "\r\n\r\n"
   in
   Eio.Flow.copy_string response flow
@@ -116,13 +116,13 @@ let set_url port =
 let direct_close ~sw ~net ~clock ~url =
   Eio.Switch.run (fun sw ->
       match
-        Eta_ai_realtime.Session.connect ~sw ~net ~clock
-          ~api_key:(Eta_observability.Redact.make "test-token")
+        Ox_ai_realtime.Session.connect ~sw ~net ~clock
+          ~api_key:(Ox_observability.Redact.make "test-token")
           url
       with
       | Error _ -> Error ()
       | Ok session ->
-          Result.map_error (fun _ -> ()) (Eta_ai_realtime.Session.close session))
+          Result.map_error (fun _ -> ()) (Ox_ai_realtime.Session.close session))
 
 let pie_buffered ~sw ~net ~clock =
   Stt.Codex_realtime.transcribe_with_prompt ~sw ~net ~clock

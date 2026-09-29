@@ -41,6 +41,6 @@ Use the existing streaming scope and PIE002 ownership correction. Do not add a g
 
 Local scripted peer: created without updated; configuration rejected; valid update acknowledgement; successful terminal response; failed/cancelled/incomplete terminal status after partial output; malformed terminal payload. Assert audio is not sent before acknowledgement and partial failed output is not reported as successful delivery. Cover relevant transcription/translation/conversation modes without assuming all aliases have identical semantics.
 
-## Eta prerequisites
+## Ox prerequisites
 
-No new Eta event abstraction is needed. Use settled typed causes, stream termination and PIE002 physical cleanup. This is provider-protocol interpretation owned by PIE.
+No new Ox event abstraction is needed. Use settled typed causes, stream termination and PIE002 physical cleanup. This is provider-protocol interpretation owned by PIE.

@@ -10,7 +10,7 @@ Text injection preserves verbatim text.
 
 Parent-reviewed implementation complete. PIE020. Final cross-slice suite still pending service refactor; this is not whole-audit acceptance.
 
-Standalone fixture `packages/pie/test/prepared_text` (own dune stanza, `test_pie` untouched) built with `--build-dir` `/home/ribelo/projects/ribelo/pie/.scratch/prepared-text-build/dune` and staged Eta `OCAMLPATH` `/home/ribelo/projects/ribelo/ocaml/Eta/.scratch/ws-reader-settle-build/install/default/lib` plus matching stublibs. No shared install. Alcotest `-o` logs under `.scratch/prepared-text-build/alcotest`.
+Standalone fixture `packages/pie/test/prepared_text` (own dune stanza, `test_pie` untouched) built with `--build-dir` `/home/ribelo/projects/ribelo/pie/.scratch/prepared-text-build/dune` and staged Ox `OCAMLPATH` `/home/ribelo/projects/ribelo/ocaml/ox/.scratch/ws-reader-settle-build/install/default/lib` plus matching stublibs. No shared install. Alcotest `-o` logs under `.scratch/prepared-text-build/alcotest`.
 
 Parent reviewed leaf changes, Niri.type_text removal, and fake emitted argv/prepared-result/failure assertions. Green: 21/21 in 0.058s, run `4IOPSP8Q`. Red first: 14/21, `top\n  indented` emitted as `indented` on wtype and xdotool for Shift_enter and Ctrl_j including inject. Collapse-to-space unchanged. Later helper failure remains Error with the earlier segment captured and no replay.
 
@@ -36,6 +36,6 @@ Capture fake wtype and xdotool argv for both Shift_enter and Ctrl_j: indentation
 
 Delivery is not a transaction: a later helper can fail after an earlier segment was typed. Keep that failure visible and do not automatically replay the entire result as if nothing was emitted (PIE008). Do not promise atomic target focus or rollback from these helpers.
 
-## Eta prerequisites
+## Ox prerequisites
 
 None beyond existing sequential failure/cancellation semantics. Text normalization is application policy, not another framework seam.

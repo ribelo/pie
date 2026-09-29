@@ -6,7 +6,7 @@ type budget = { peer_timeout_s : float }
 
 let default_budget = { peer_timeout_s = 1.0 }
 
-type error = Eta_ipc.Listener.error
+type error = Ox_ipc.Listener.error
 
 let err_endpoint_conflict = "endpoint-conflict"
 let err_unsafe_runtime_dir = "unsafe-runtime-dir"
@@ -56,12 +56,12 @@ let handle_request ?action_handler coordinator = function
       | None ->
           rejected_action coordinator action "daemon actions are unavailable")
 
-(* eta_ipc binds only in a private directory (no group/other bits). Pie's runtime
+(* ox_ipc binds only in a private directory (no group/other bits). Pie's runtime
    directory is also where Coordinator persists recording.json, and [Fs.mkdir_p] (or an
    older Pie, which created it 0755) may already have made it under the service umask.
    Pie owns this directory: create it 0700, or tighten our own real directory that
    nobody else can write (0755, 0750) to 0700. A group/other-writable directory, a
-   symlink, or one owned by someone else is left alone, and eta_ipc refuses it (as v1
+   symlink, or one owned by someone else is left alone, and ox_ipc refuses it (as v1
    refused a writable one). *)
 let secure_socket_dir dir =
   match Unix.lstat dir with
@@ -80,18 +80,18 @@ let start ~sw ~fs ~net ~clock ?(socket_path = Paths.daemon_socket_path)
     ?(budget = default_budget) ?action_handler coordinator =
   let policy =
     {
-      Eta_ipc.Listener.default_policy with
+      Ox_ipc.Listener.default_policy with
       peers = max_handlers;
       backlog = listen_backlog;
-      ingress = Eta.Duration.ms (int_of_float (budget.peer_timeout_s *. 300.));
-      egress = Eta.Duration.ms (int_of_float (budget.peer_timeout_s *. 300.));
+      ingress = Ox.Duration.ms (int_of_float (budget.peer_timeout_s *. 300.));
+      egress = Ox.Duration.ms (int_of_float (budget.peer_timeout_s *. 300.));
     }
   in
   secure_socket_dir (Filename.dirname socket_path);
-  Eta_ipc.Listener.run ~sw ~fs ~net ~clock ~path:socket_path ~policy
+  Ox_ipc.Listener.run ~sw ~fs ~net ~clock ~path:socket_path ~policy
     ~decode:Contract.decode_line ~encode:Contract.encode_response
     ~budget:(fun _ ->
-      Some (Eta.Duration.ms (int_of_float (budget.peer_timeout_s *. 400.))))
+      Some (Ox.Duration.ms (int_of_float (budget.peer_timeout_s *. 400.))))
     ~handler:(fun request ->
       Ok (handle_request ?action_handler coordinator request))
     ~error_response:(function

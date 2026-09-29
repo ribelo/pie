@@ -41,11 +41,11 @@ let with_listening f =
   in
   let port = tcp_port (Eio.Net.listening_addr socket) in
   let url = Printf.sprintf "ws://127.0.0.1:%d" port in
-  let memory = Eta_observability.Logger.Memory.create () in
+  let memory = Ox_observability.Logger.Memory.create () in
   let logger =
-    Eta_observability.Logger.create ~service:"pie-budget-test" ~clock
+    Ox_observability.Logger.create ~service:"pie-budget-test" ~clock
       ~mono_clock:(Eio.Stdenv.mono_clock env)
-      ~reporter:(Eta_observability.Logger.Memory.reporter memory)
+      ~reporter:(Ox_observability.Logger.Memory.reporter memory)
       ()
   in
   f ~sw ~net ~clock ~logger ~url ~socket
@@ -142,7 +142,7 @@ let test_openrouter_capture_plus_one () =
   let operation =
     Pie.Stt.Openrouter.transcribe ~sw ~net:(Eio.Stdenv.net env)
       ~clock:(Eio.Stdenv.clock env)
-      ~api_key:(Eta_observability.Redact.make "synthetic")
+      ~api_key:(Ox_observability.Redact.make "synthetic")
       ~model:"m" ~language:"en" pcm_bytes
   in
   expect_budget operation
@@ -224,7 +224,7 @@ let read_http_head flow =
   loop ()
 
 let write_ws_text flow payload =
-  Eta_http.Ws_codec.encode
+  Ox_http.Ws_codec.encode
     { fin = true; opcode = Text; payload = Bytes.of_string payload }
   |> Bytes.to_string
   |> fun encoded -> Eio.Flow.copy_string encoded flow
@@ -233,7 +233,7 @@ let write_ws_close flow =
   let payload = Bytes.create 2 in
   Bytes.set payload 0 (Char.chr 3);
   Bytes.set payload 1 (Char.chr 232);
-  Eta_http.Ws_codec.encode { fin = true; opcode = Close; payload }
+  Ox_http.Ws_codec.encode { fin = true; opcode = Close; payload }
   |> Bytes.to_string
   |> fun encoded -> Eio.Flow.copy_string encoded flow
 
@@ -241,7 +241,7 @@ let write_ws_switching_response flow key =
   let response =
     "HTTP/1.1 101 Switching Protocols\r\n" ^ "Upgrade: websocket\r\n"
     ^ "Connection: keep-alive, Upgrade\r\n" ^ "Sec-WebSocket-Accept: "
-    ^ Eta_http.Ws_codec.accept_key ~sha1:Eta_http.Eta_http_tls_openssl.sha1 key
+    ^ Ox_http.Ws_codec.accept_key ~sha1:Ox_http.Ox_http_tls_openssl.sha1 key
     ^ "\r\n\r\n"
   in
   Eio.Flow.copy_string response flow

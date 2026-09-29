@@ -151,7 +151,7 @@ let test_truncated_string () =
     "truncated"
 
 let short_budgets =
-  { Monitor.acquire = Eta.Duration.ms 50; unwatch = Eta.Duration.ms 20 }
+  { Monitor.acquire = Ox.Duration.ms 50; unwatch = Ox.Duration.ms 20 }
 
 let drain_until_eof flow =
   let buf = Cstruct.create 256 in
@@ -263,24 +263,24 @@ let complete_watch flow =
   in
   loop 1
 
-let run_direct operation = Eta.Scope.run (fun _ -> operation ())
+let run_direct operation = Ox.Scope.run (fun _ -> operation ())
 
 let show_cause cause =
   Format.asprintf "%a"
-    (Eta.Cause.pp (fun ppf _ -> Format.pp_print_string ppf "<err>"))
+    (Ox.Cause.pp (fun ppf _ -> Format.pp_print_string ppf "<err>"))
     cause
 
 let rec defects = function
-  | Eta.Cause.Die (exn, _) -> [ exn ]
-  | Eta.Cause.Finalizer cause -> defects cause
-  | Eta.Cause.Suppressed { primary; finalizer } ->
+  | Ox.Cause.Die (exn, _) -> [ exn ]
+  | Ox.Cause.Finalizer cause -> defects cause
+  | Ox.Cause.Suppressed { primary; finalizer } ->
       defects primary @ defects finalizer
-  | Eta.Cause.Concurrent causes -> List.concat_map defects causes
-  | Eta.Cause.Fail _ | Eta.Cause.Interrupt _ -> []
+  | Ox.Cause.Concurrent causes -> List.concat_map defects causes
+  | Ox.Cause.Fail _ | Ox.Cause.Interrupt _ -> []
 
 let take_event ~clock ~within keyboard =
   match
-    Eta.Timeout.timeout ~clock within (fun () ->
+    Ox.Timeout.timeout ~clock within (fun () ->
         Ok (Eio.Stream.take (Monitor.subscribe keyboard)))
   with
   | Ok event -> Ok (Some event)
@@ -288,9 +288,9 @@ let take_event ~clock ~within keyboard =
 
 let expect_input_lost ~label result =
   match result with
-  | Eta.Exit.Success _ ->
+  | Ox.Exit.Success _ ->
       Alcotest.failf "%s: consumer succeeded after input loss" label
-  | Eta.Exit.Failure cause ->
+  | Ox.Exit.Failure cause ->
       let hit =
         List.exists
           (fun exn -> match exn with Monitor.Input_lost -> true | _ -> false)
@@ -315,7 +315,7 @@ let test_stalled_setup_times_out () =
               ~process_mgr (fun _ -> Ok ()))
       in
       (match result with
-      | Eta.Exit.Failure cause ->
+      | Ox.Exit.Failure cause ->
           let hit =
             List.exists
               (fun exn ->
@@ -324,7 +324,7 @@ let test_stalled_setup_times_out () =
           in
           if not hit then
             Alcotest.failf "expected Setup_timeout, got %s" (show_cause cause)
-      | Eta.Exit.Success _ -> Alcotest.fail "stalled setup succeeded");
+      | Ox.Exit.Success _ -> Alcotest.fail "stalled setup succeeded");
       await_conn ();
       Alcotest.(check int) "timeout closed the flow" baseline (fd_count ()))
 
@@ -346,15 +346,15 @@ let test_unwatch_budget_still_closes () =
             Monitor.with_monitor_budgets
               ~budgets:
                 {
-                  Monitor.acquire = Eta.Duration.seconds 2;
-                  unwatch = Eta.Duration.ms 0;
+                  Monitor.acquire = Ox.Duration.seconds 2;
+                  unwatch = Ox.Duration.ms 0;
                 }
               ~sw ~net ~clock ~process_mgr
               (fun _ -> Ok ()))
       in
       (match result with
-      | Eta.Exit.Success () -> ()
-      | Eta.Exit.Failure cause ->
+      | Ox.Exit.Success () -> ()
+      | Ox.Exit.Failure cause ->
           Alcotest.failf "unwatch budget failed consumer %s" (show_cause cause));
       await_conn ();
       Alcotest.(check int) "unwatch budget closed" baseline (fd_count ()))
@@ -376,7 +376,7 @@ let test_stop_is_clean_interruption () =
       drain_until_eof flow)
     (fun ~await_conn ->
       let result =
-        Eta.Scope.run (fun scope ->
+        Ox.Scope.run (fun scope ->
             Eio.Fiber.fork ~sw:scope (fun () ->
                 Eio.Time.sleep clock 0.2;
                 Eio.Switch.fail scope
@@ -385,8 +385,8 @@ let test_stop_is_clean_interruption () =
               ~clock ~process_mgr (fun _ -> Eio.Fiber.await_cancel ()))
       in
       (match result with
-      | Eta.Exit.Success () -> Alcotest.fail "stopped monitor reported success"
-      | Eta.Exit.Failure cause ->
+      | Ox.Exit.Success () -> Alcotest.fail "stopped monitor reported success"
+      | Ox.Exit.Failure cause ->
           if defects cause <> [] then
             Alcotest.failf "stop raised a defect: %s" (show_cause cause));
       await_conn ())
@@ -451,18 +451,18 @@ let test_wrong_sender_is_ignored () =
             Monitor.with_monitor_budgets
               ~budgets:
                 {
-                  Monitor.acquire = Eta.Duration.seconds 2;
-                  unwatch = Eta.Duration.ms 50;
+                  Monitor.acquire = Ox.Duration.seconds 2;
+                  unwatch = Ox.Duration.ms 50;
                 }
               ~sw ~net ~clock ~process_mgr
               (fun keyboard ->
-                take_event ~clock ~within:(Eta.Duration.ms 100) keyboard))
+                take_event ~clock ~within:(Ox.Duration.ms 100) keyboard))
       in
       await_conn ();
       match result with
-      | Eta.Exit.Success None -> ()
-      | Eta.Exit.Success (Some _) -> Alcotest.fail "wrong sender was accepted"
-      | Eta.Exit.Failure cause ->
+      | Ox.Exit.Success None -> ()
+      | Ox.Exit.Success (Some _) -> Alcotest.fail "wrong sender was accepted"
+      | Ox.Exit.Failure cause ->
           Alcotest.failf "wrong sender test failed %s" (show_cause cause))
 
 let test_expected_sender_is_accepted () =
@@ -486,20 +486,20 @@ let test_expected_sender_is_accepted () =
             Monitor.with_monitor_budgets
               ~budgets:
                 {
-                  Monitor.acquire = Eta.Duration.seconds 2;
-                  unwatch = Eta.Duration.ms 50;
+                  Monitor.acquire = Ox.Duration.seconds 2;
+                  unwatch = Ox.Duration.ms 50;
                 }
               ~sw ~net ~clock ~process_mgr
               (fun keyboard ->
-                take_event ~clock ~within:(Eta.Duration.seconds 2) keyboard))
+                take_event ~clock ~within:(Ox.Duration.seconds 2) keyboard))
       in
       await_conn ();
       match result with
-      | Eta.Exit.Success (Some event) ->
+      | Ox.Exit.Success (Some event) ->
           Alcotest.(check int) "keysym" 65470 event.Monitor.keysym
-      | Eta.Exit.Success None ->
+      | Ox.Exit.Success None ->
           Alcotest.fail "expected sender: no key event before the deadline"
-      | Eta.Exit.Failure cause ->
+      | Ox.Exit.Failure cause ->
           Alcotest.failf "expected sender failed %s" (show_cause cause))
 
 let test_owner_change_is_input_lost () =
@@ -526,12 +526,12 @@ let test_owner_change_is_input_lost () =
             Monitor.with_monitor_budgets
               ~budgets:
                 {
-                  Monitor.acquire = Eta.Duration.seconds 2;
-                  unwatch = Eta.Duration.ms 50;
+                  Monitor.acquire = Ox.Duration.seconds 2;
+                  unwatch = Ox.Duration.ms 50;
                 }
               ~sw ~net ~clock ~process_mgr
               (fun keyboard ->
-                take_event ~clock ~within:(Eta.Duration.seconds 2) keyboard))
+                take_event ~clock ~within:(Ox.Duration.seconds 2) keyboard))
       in
       await_conn ();
       expect_input_lost ~label:"owner change" result)
@@ -600,30 +600,30 @@ let test_noc_wrong_sender_ignored () =
             Monitor.with_monitor_budgets
               ~budgets:
                 {
-                  Monitor.acquire = Eta.Duration.seconds 2;
-                  unwatch = Eta.Duration.ms 50;
+                  Monitor.acquire = Ox.Duration.seconds 2;
+                  unwatch = Ox.Duration.ms 50;
                 }
               ~sw ~net ~clock ~process_mgr
               (fun keyboard ->
-                take_event ~clock ~within:(Eta.Duration.seconds 2) keyboard))
+                take_event ~clock ~within:(Ox.Duration.seconds 2) keyboard))
       in
       await_conn ();
       match result with
-      | Eta.Exit.Success (Some _) -> ()
-      | Eta.Exit.Success None ->
+      | Ox.Exit.Success (Some _) -> ()
+      | Ox.Exit.Success None ->
           Alcotest.fail
             "spoofed NameOwnerChanged: no key event before the deadline"
-      | Eta.Exit.Failure cause ->
+      | Ox.Exit.Failure cause ->
           Alcotest.failf "spoofed NameOwnerChanged took down watch %s"
             (show_cause cause))
 
 let test_production_budget_is_ten_seconds () =
   Alcotest.(check int)
     "acquire ms" 10_000
-    (Eta.Duration.to_ms Monitor.production_budgets.acquire);
+    (Ox.Duration.to_ms Monitor.production_budgets.acquire);
   Alcotest.(check int)
     "unwatch ms" 250
-    (Eta.Duration.to_ms Monitor.production_budgets.unwatch)
+    (Ox.Duration.to_ms Monitor.production_budgets.unwatch)
 
 let test_auth_line_limits () =
   Eio_main.run @@ fun _env ->
@@ -829,7 +829,7 @@ let test_forged_get_name_owner_sender () =
       in
       await_conn ();
       match result with
-      | Eta.Exit.Failure cause ->
+      | Ox.Exit.Failure cause ->
           let text =
             match
               List.find_map
@@ -847,7 +847,7 @@ let test_forged_get_name_owner_sender () =
               if not (contains ~needle text) then
                 Alcotest.failf "expected %S in %s" needle text)
             needles
-      | Eta.Exit.Success _ ->
+      | Ox.Exit.Success _ ->
           Alcotest.fail "forged GetNameOwner sender was accepted")
 
 let wait_exists path n =
@@ -972,22 +972,22 @@ let test_isolated_dbus_daemon_optional () =
                     Monitor.with_monitor_budgets
                       ~budgets:
                         {
-                          Monitor.acquire = Eta.Duration.seconds 2;
-                          unwatch = Eta.Duration.ms 50;
+                          Monitor.acquire = Ox.Duration.seconds 2;
+                          unwatch = Ox.Duration.ms 50;
                         }
                       ~sw ~net ~clock ~process_mgr
                       (fun keyboard ->
-                        take_event ~clock ~within:(Eta.Duration.seconds 2)
+                        take_event ~clock ~within:(Ox.Duration.seconds 2)
                           keyboard)))
           in
           match result with
-          | Eta.Exit.Success (Some event) ->
+          | Ox.Exit.Success (Some event) ->
               Alcotest.(check bool) "unique name" true (unique.[0] = ':');
               Alcotest.(check int) "keysym" 65470 event.Monitor.keysym
-          | Eta.Exit.Success None ->
+          | Ox.Exit.Success None ->
               Alcotest.fail
                 "private dbus-daemon: no key event before the deadline"
-          | Eta.Exit.Failure cause ->
+          | Ox.Exit.Failure cause ->
               Alcotest.failf "private dbus-daemon handshake failed %s"
                 (show_cause cause))
   | _ -> ()

@@ -2,7 +2,7 @@ type trigger = Press of string | Release of string
 type captured_clip = { duration_ms : int; pcm_bytes : bytes }
 
 type error =
-  [ `Ptt_error of string | `Ptt_cause of [ `Ptt_error of string ] Eta.Cause.t ]
+  [ `Ptt_error of string | `Ptt_cause of [ `Ptt_error of string ] Ox.Cause.t ]
 
 type run_error = [ error | `Pulse_error of Pulse.Client.error ]
 
@@ -41,7 +41,7 @@ val run :
   ?on_low_input:(unit -> (unit, error) result) ->
   sw:Eio.Switch.t ->
   mono_clock:_ Eio.Time.Mono.t ->
-  logger:Eta_observability.Logger.t ->
+  logger:Ox_observability.Logger.t ->
   keyboard:Keyboard.Monitor.t ->
   audio:(unit -> (bytes option, [ `Pulse_error of Pulse.Client.error ]) result) ->
   ?queue_pcm_bytes:int ->

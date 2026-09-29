@@ -1,11 +1,11 @@
 type error = [ `Stt_error of string ]
 
-module Responses = Eta_ai_openrouter.Responses
-module Openrouter_audio = Eta_ai_openrouter.Audio
-module Redact = Eta_observability.Redact
+module Responses = Ox_ai_openrouter.Responses
+module Openrouter_audio = Ox_ai_openrouter.Audio
+module Redact = Ox_observability.Redact
 
-let direct_transcription_timeout = Eta.Duration.seconds 60
-let response_operation_timeout = Eta.Duration.seconds 120
+let direct_transcription_timeout = Ox.Duration.seconds 60
+let response_operation_timeout = Ox.Duration.seconds 120
 
 let resolve_api_key () =
   match Sys.getenv_opt "OPENROUTER_API_KEY" with
@@ -25,7 +25,7 @@ let endpoint path =
 
 (* Never render provider-owned text: Invalid_response.got and refusal text can
    contain credentials, prompts or transcripts. *)
-let ai_error_message : Eta_ai.Error.t -> string = function
+let ai_error_message : Ox_ai.Error.t -> string = function
   | `Unavailable _ -> "unavailable"
   | `Timeout -> "timeout"
   | `Authentication _ -> "authentication"

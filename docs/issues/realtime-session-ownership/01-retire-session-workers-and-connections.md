@@ -8,7 +8,7 @@ Owned realtime sessions settle connections and workers; descriptor-identity and 
 
 ## Earlier implementation checkpoints (superseded)
 
-Parent-reviewed complete for the workspace owned-operation implementation: 12 held-peer identity gates plus 216 WS and 216 verified WSS on current production Codex entrypoints against reviewed Eta pie-audit-current hashes. Whole-suite / final artifact record pending. Not deployed. Not a proof of historical crash causality. Decision PIE002.
+Parent-reviewed complete for the workspace owned-operation implementation: 12 held-peer identity gates plus 216 WS and 216 verified WSS on current production Codex entrypoints against reviewed Ox pie-audit-current hashes. Whole-suite / final artifact record pending. Not deployed. Not a proof of historical crash causality. Decision PIE002.
 
 ## Requirements
 
@@ -22,19 +22,19 @@ The assistant passes its long-lived switch into buffered STT and streaming handl
 
 Streaming with_stream_session1077–1120 owns a background session with Effect.with_background, but continues to pass the externally supplied switch to the transport. A consumer/background scope does not automatically prove that transport reader daemons share its lifetime. Audit all actual ownership edges, not names.
 
-Paired loopback controls in .scratch/research/core-audit/ws-retention-control-r08.md observed adjusted descriptor counts11..22 over12 sessions both for explicit direct WebSocket close and for PIE pre-ready errors. Per-session runtime plus connection scope retirement made both sequences flat10; see ws-scope-counterfactual-r08.md. Thus a missing close alone is an insufficient fix. These probes use current workspace PIE and installed Eta, not the unidentified dependency image embedded in the live binary.
+Paired loopback controls in .scratch/research/core-audit/ws-retention-control-r08.md observed adjusted descriptor counts11..22 over12 sessions both for explicit direct WebSocket close and for PIE pre-ready errors. Per-session runtime plus connection scope retirement made both sequences flat10; see ws-scope-counterfactual-r08.md. Thus a missing close alone is an insufficient fix. These probes use current workspace PIE and installed Ox, not the unidentified dependency image embedded in the live binary.
 
 ## Implementation direction
 
 Give each realtime operation one owner for acquisition, readiness, send/receive, cancellation and final settlement. Install cleanup immediately after acquisition, not after readiness. A typed result, closed incoming queue, scheduled close frame or logical Eio close is not proof that a pending transport read has retired. Preserve original failure information while settling cleanup.
 
-Do not turn the counterfactual into nested production runtimes. Select the smallest resource/worker scope supported by the settled Eta contract. Remove redundant completion/close bookkeeping only after its duties are demonstrably owned there. Do not raise descriptor limits as the correction, add periodic restarts, or add an arbitrary deadline to established streams. Existing speech-operation-deadlines policy intentionally leaves established streams without a total-session deadline.
+Do not turn the counterfactual into nested production runtimes. Select the smallest resource/worker scope supported by the settled Ox contract. Remove redundant completion/close bookkeeping only after its duties are demonstrably owned there. Do not raise descriptor limits as the correction, add periodic restarts, or add an arbitrary deadline to established streams. Existing speech-operation-deadlines policy intentionally leaves established streams without a total-session deadline.
 
-## Eta prerequisite
+## Ox prerequisite
 
 Incoming D25, http-ws-close-execution/01-defer-incoming-shutdown-and-connect-work.md, makes close/connect/send work deferred. It is necessary for safely composing cleanup blueprints, but its stated requirements do not alone establish physical reader retirement.
 
-Before integrating, demonstrate that Eta WebSocket operation ownership can interrupt and settle outstanding reader/writer work and physically release its flow, including when the peer remains open or never acknowledges readiness. Installed Eio Rcfd defers physical close while users retain the descriptor. This may require strengthening Eta WebSocket ownership; existing acceptance status of D25 must not be used as proof that this additional contract is implemented. Keep that prerequisite in PIE until verified upstream; do not fork a second transport into PIE.
+Before integrating, demonstrate that Ox WebSocket operation ownership can interrupt and settle outstanding reader/writer work and physically release its flow, including when the peer remains open or never acknowledges readiness. Installed Eio Rcfd defers physical close while users retain the descriptor. This may require strengthening Ox WebSocket ownership; existing acceptance status of D25 must not be used as proof that this additional contract is implemented. Keep that prerequisite in PIE until verified upstream; do not fork a second transport into PIE.
 
 ## Acceptance
 
@@ -44,6 +44,6 @@ The original root-scope controls reproduce a defect class. The scoped variants a
 
 ## Workspace implementation (parent-reviewed)
 
-Private fixture `packages/pie/test/session_ownership/` exercises public `run_realtime_session` (buffered) and `run_realtime_stream_session` (streaming) with Conversation protocol only (`session.update` → `session.updated`; terminal `response.done` `status=completed`). One long-lived runtime. Held-open peers. No Service/Config/PTT/Codex production edits. No production API change for tests. Codex not exposing `ca_file` is a Pie caller choice; Eta `Ws.Client.connect` already has `?ca_file` — not a new Eta API gap and not a new upstream ticket.
+Private fixture `packages/pie/test/session_ownership/` exercises public `run_realtime_session` (buffered) and `run_realtime_stream_session` (streaming) with Conversation protocol only (`session.update` → `session.updated`; terminal `response.done` `status=completed`). One long-lived runtime. Held-open peers. No Service/Config/PTT/Codex production edits. No production API change for tests. Codex not exposing `ca_file` is a Pie caller choice; Ox `Ws.Client.connect` already has `?ca_file` — not a new Ox API gap and not a new upstream ticket.
 
-Evidence: `pie/.scratch/session-ownership-build/RESULTS.md`. Eta unassisted graceful-close contract `^wssettle-b6wb` remains open.
+Evidence: `pie/.scratch/session-ownership-build/RESULTS.md`. Ox unassisted graceful-close contract `^wssettle-b6wb` remains open.

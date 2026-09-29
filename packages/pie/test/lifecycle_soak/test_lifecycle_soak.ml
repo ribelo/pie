@@ -213,7 +213,7 @@ let header_value name raw =
       | _ -> None)
 
 let write_ws_text flow payload =
-  Eta_http.Ws_codec.encode
+  Ox_http.Ws_codec.encode
     { fin = true; opcode = Text; payload = Bytes.of_string payload }
   |> Bytes.to_string
   |> fun encoded -> Eio.Flow.copy_string encoded flow
@@ -226,7 +226,7 @@ let close_payload code reason =
   payload
 
 let write_ws_close flow =
-  Eta_http.Ws_codec.encode
+  Ox_http.Ws_codec.encode
     { fin = true; opcode = Close; payload = close_payload 1000 "" }
   |> Bytes.to_string
   |> fun encoded -> Eio.Flow.copy_string encoded flow
@@ -235,7 +235,7 @@ let write_ws_switching_response flow key =
   let response =
     "HTTP/1.1 101 Switching Protocols\r\n" ^ "Upgrade: websocket\r\n"
     ^ "Connection: keep-alive, Upgrade\r\n" ^ "Sec-WebSocket-Accept: "
-    ^ Eta_http.Ws_codec.accept_key ~sha1:Eta_http.Eta_http_tls_openssl.sha1 key
+    ^ Ox_http.Ws_codec.accept_key ~sha1:Ox_http.Ox_http_tls_openssl.sha1 key
     ^ "\r\n\r\n"
   in
   Eio.Flow.copy_string response flow
@@ -251,7 +251,7 @@ let drain_until_eof ~clock flow =
     | _ -> loop ()
     | exception End_of_file -> ()
     | exception Eio.Io _ -> ()
-    | exception Eta_http.Tls_flow.Tls_failure _ -> ()
+    | exception Ox_http.Tls_flow.Tls_failure _ -> ()
   in
   Eio.Time.with_timeout_exn clock 2.0 loop
 
@@ -363,8 +363,8 @@ let settle_op ~sw ~net ~clock ?ca_file ~url ~job scenario streaming =
   in
   let timed () =
     match
-      Eta.Timeout.timeout ~clock
-        (Eta.Duration.seconds operation_timeout_seconds) (fun () ->
+      Ox.Timeout.timeout ~clock (Ox.Duration.seconds operation_timeout_seconds)
+        (fun () ->
           match body () with
           | Ok text -> Ok text
           | Error (`Stt_error message) -> Error (`Stt_error message))
@@ -471,9 +471,9 @@ let serve_accepted ~clock ~tls_ctx socket job =
           in
           let pre_raw = probe_flow "accepted-raw" raw in
           let tls =
-            Eta_http.Tls_flow.create
+            Ox_http.Tls_flow.create
               ~raw:(raw_flow :> Eio.Flow.two_way_ty Eio.Resource.t)
-              ~ssl:(Eta_http.Eta_http_tls_openssl.create_server_ssl ctx)
+              ~ssl:(Ox_http.Ox_http_tls_openssl.create_server_ssl ctx)
           in
           let pre_tls = probe_flow "accepted-tls" tls in
           Fun.protect
@@ -598,8 +598,8 @@ let test_repeated_realtime_fd_soak ~scheme ~host ~tls_ctx () =
   in
   let join_peer job =
     match
-      Eta.Timeout.timeout ~clock
-        (Eta.Duration.seconds peer_join_timeout_seconds) (fun () ->
+      Ox.Timeout.timeout ~clock (Ox.Duration.seconds peer_join_timeout_seconds)
+        (fun () ->
           Eio.Promise.await job.done_;
           Ok ())
     with
@@ -659,7 +659,7 @@ let test_repeated_realtime_fd_soak ~scheme ~host ~tls_ctx () =
   in
   let outcome =
     match
-      Eta.Timeout.timeout ~clock (Eta.Duration.seconds soak_timeout_seconds)
+      Ox.Timeout.timeout ~clock (Ox.Duration.seconds soak_timeout_seconds)
         (fun () ->
           match operation () with
           | Ok () -> Ok ()
@@ -708,7 +708,7 @@ let tls_key_env = "PIE_SOAK_TLS_KEY"
 
 let run_tls_soak_in_process ~cert ~key =
   let ctx =
-    Eta_http.Eta_http_tls_openssl.create_server_ctx ~certificate_chain_file:cert
+    Ox_http.Ox_http_tls_openssl.create_server_ctx ~certificate_chain_file:cert
       ~private_key_file:key ~alpn_protocols:[ "http/1.1" ] ()
   in
   let host =

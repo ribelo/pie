@@ -2,4 +2,4 @@
 
 (test
  (name test_diagnostic_recording)
- (libraries pie alcotest eio_main eta eta_test eio unix))
+ (libraries pie alcotest eio_main ox ox_test eio unix))

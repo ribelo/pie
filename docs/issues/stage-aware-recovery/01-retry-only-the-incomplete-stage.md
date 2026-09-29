@@ -38,6 +38,6 @@ Use synthetic provider and injection seams with call counters: provider failure 
 
 Existing retain/discard tests are useful regression context but do not prove stage-aware recovery. No acceptance implementation was performed during this audit.
 
-## Eta prerequisites
+## Ox prerequisites
 
-No new Eta retry abstraction is required. Use settled result/finalizer contracts; PIE002 owns transport retirement and PIE004 owns attempts. Keep recovery policy in PIE.
+No new Ox retry abstraction is required. Use settled result/finalizer contracts; PIE002 owns transport retirement and PIE004 owns attempts. Keep recovery policy in PIE.

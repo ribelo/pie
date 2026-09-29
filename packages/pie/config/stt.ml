@@ -391,7 +391,7 @@ let yojson_of_t (config : t) =
       ("text_entry_rules", `List (List.map entry config.text_entry_rules));
     ]
 
-let door_spec : t Eta_app.Config.t =
+let door_spec : t Ox_app.Config.t =
   {
     of_yojson = decode_json;
     yojson_of_t;
@@ -399,10 +399,10 @@ let door_spec : t Eta_app.Config.t =
   }
 
 let default_source () =
-  Eta_app.Config.resolve_with ~file_name:"stt.toml" ~name:"pie" ~config:None
+  Ox_app.Config.resolve_with ~file_name:"stt.toml" ~name:"pie" ~config:None
     ~getenv:Sys.getenv_opt
 
-let source_path : Eta_app.Config.source -> string = function
+let source_path : Ox_app.Config.source -> string = function
   | `Default path | `Explicit path -> path
 
 let load ~fs ?source ?read () =
@@ -410,11 +410,11 @@ let load ~fs ?source ?read () =
   let path = source_path source in
   let read =
     Option.value read ~default:(fun path ->
-        Eta_app.Config.read_regular ~max_bytes:max_config_file_bytes
+        Ox_app.Config.read_regular ~max_bytes:max_config_file_bytes
           Eio.Path.(fs / path))
   in
   let result =
-    Eta_app.Config.load_with ~missing:`Required ~spec:door_spec
+    Ox_app.Config.load_with ~missing:`Required ~spec:door_spec
       ~getenv:Sys.getenv_opt ~read ~source
   in
   let result =

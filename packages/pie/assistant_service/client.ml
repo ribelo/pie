@@ -35,7 +35,7 @@ let send_request ~net ~sw:_ (req : Contract.request) =
 
 let call ~net ~clock ~sw req =
   match
-    Eta.Timeout.timeout ~clock (Eta.Duration.seconds 1) (fun () ->
+    Ox.Timeout.timeout ~clock (Ox.Duration.seconds 1) (fun () ->
         (send_request ~net ~sw req
           : (Contract.response, [> error | `Timeout ]) result))
   with

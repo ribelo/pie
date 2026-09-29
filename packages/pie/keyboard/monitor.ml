@@ -14,10 +14,10 @@ exception Setup_timeout
 
 type unix_endpoint = Filesystem of string | Abstract of string
 type bus_address = { endpoint : unix_endpoint; guid : string option }
-type budgets = { acquire : Eta.Duration.t; unwatch : Eta.Duration.t }
+type budgets = { acquire : Ox.Duration.t; unwatch : Ox.Duration.t }
 
 let production_budgets =
-  { acquire = Eta.Duration.seconds 10; unwatch = Eta.Duration.ms 250 }
+  { acquire = Ox.Duration.seconds 10; unwatch = Ox.Duration.ms 250 }
 
 let max_auth_line_bytes = 4096
 let max_message_bytes = 65536
@@ -806,7 +806,7 @@ let read_loop ~owner pin flow t =
 let with_monitor_budgets ~budgets ~sw ~net ~clock ~process_mgr:_ f =
   let t, flow, owner, pin =
     match
-      Eta.Timeout.timeout ~clock budgets.acquire (fun () ->
+      Ox.Timeout.timeout ~clock budgets.acquire (fun () ->
           let t = create () in
           let flow, owner, pin = setup_watch ~close:Eio.Flow.close ~sw ~net in
           Ok (t, flow, owner, pin))
@@ -824,12 +824,12 @@ let with_monitor_budgets ~budgets ~sw ~net ~clock ~process_mgr:_ f =
           ~finally:(fun () -> Eio.Flow.close flow)
           (fun () ->
             ignore
-              (Eta.Timeout.timeout ~clock budgets.unwatch (fun () ->
+              (Ox.Timeout.timeout ~clock budgets.unwatch (fun () ->
                    unwatch_write ~destination:owner flow;
                    Ok ()))))
   in
   Fun.protect ~finally:release @@ fun () ->
-  Eta.Concurrent.with_background ~sw
+  Ox.Concurrent.with_background ~sw
     (fun () -> Ok (read_loop ~owner pin flow t))
     (fun () -> f t)
 

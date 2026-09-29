@@ -5,7 +5,7 @@ kind: requirement
 
 ## Intent
 
-Bound finite external speech-service operations so a stalled provider cannot hang Pie, while leaving established realtime sessions free to remain active indefinitely. This capability covers timeout policy at Pie's provider boundary, not transport-level timeout APIs supplied by Eta.
+Bound finite external speech-service operations so a stalled provider cannot hang Pie, while leaving established realtime sessions free to remain active indefinitely. This capability covers timeout policy at Pie's provider boundary, not transport-level timeout APIs supplied by Ox.
 
 ## Requirements
 
@@ -18,6 +18,6 @@ Bound finite external speech-service operations so a stalled provider cannot han
 
 ## Verification seams
 
-- Use stalled local HTTP and WebSocket test servers at the provider boundary and a controllable Eta clock to observe each finite deadline without waiting for wall-clock time.
+- Use stalled local HTTP and WebSocket test servers at the provider boundary and a controllable Ox clock to observe each finite deadline without waiting for wall-clock time.
 - Exercise an established WebSocket stream beyond the finite-operation deadlines and observe that Pie leaves the stream active.
 - Exercise each timeout through the command-facing STT functions and assert the typed failure exposed to callers.

@@ -30,8 +30,8 @@ module Codex_auth : sig
   val access_token : unit -> (string, error) result
 end
 
-val oauth_response_idle_timeout : Eta.Duration.t
-val websocket_establishment_timeout : Eta.Duration.t
+val oauth_response_idle_timeout : Ox.Duration.t
+val websocket_establishment_timeout : Ox.Duration.t
 val realtime_access_token : client:'a -> unit -> (string, error) result
 
 val realtime_header_pairs :
@@ -41,15 +41,15 @@ val build_realtime_url :
   ?base_url:string -> mode:mode -> model:string -> unit -> string
 
 val build_transcription_session_update :
-  ?prompt:string -> model:string -> unit -> Eta_json.t
+  ?prompt:string -> model:string -> unit -> Ox_json.t
 
 val build_translation_session_update :
-  ?prompt:string -> ?target_language:string -> unit -> Eta_json.t
+  ?prompt:string -> ?target_language:string -> unit -> Ox_json.t
 
 val build_conversation_session_update :
-  model:string -> prompt:string -> Eta_json.t
+  model:string -> prompt:string -> Ox_json.t
 
-val build_conversation_response_create : prompt:string -> Eta_json.t
+val build_conversation_response_create : prompt:string -> Ox_json.t
 val parse_event : string -> (event, error) result
 val server_error_diagnostic : string option -> string
 val event_should_stop : mode:mode -> event -> bool
@@ -63,8 +63,8 @@ val run_realtime_session :
   url:string ->
   access_token:string ->
   mode:mode ->
-  ?session_update:Eta_json.t ->
-  ?response_create:Eta_json.t ->
+  ?session_update:Ox_json.t ->
+  ?response_create:Ox_json.t ->
   ?translation_output_drain_ms:int ->
   input_sample_rate:int ->
   bytes ->
@@ -78,8 +78,8 @@ val run_realtime_stream_session :
   url:string ->
   access_token:string ->
   mode:mode ->
-  ?session_update:Eta_json.t ->
-  ?response_create:Eta_json.t ->
+  ?session_update:Ox_json.t ->
+  ?response_create:Ox_json.t ->
   ?on_text:(string -> unit) ->
   ?translation_output_drain_ms:int ->
   input_sample_rate:int ->
@@ -96,14 +96,14 @@ val with_stream_session :
   sw:Eio.Switch.t ->
   net:_ Eio.Net.t ->
   clock:_ Eio.Time.clock ->
-  logger:Eta_observability.Logger.t ->
+  logger:Ox_observability.Logger.t ->
   url:string ->
   access_token:string ->
   mode:mode ->
   operation:string ->
   model:string ->
-  ?session_update:Eta_json.t ->
-  ?response_create:Eta_json.t ->
+  ?session_update:Ox_json.t ->
+  ?response_create:Ox_json.t ->
   ?sample_rate:int ->
   cancel_message:string ->
   (stream_handle -> ('a, error) result) ->
@@ -113,7 +113,7 @@ val with_transcription_stream :
   sw:Eio.Switch.t ->
   net:_ Eio.Net.t ->
   clock:_ Eio.Time.clock ->
-  logger:Eta_observability.Logger.t ->
+  logger:Ox_observability.Logger.t ->
   model:string ->
   language:string ->
   prompt_template:string ->
@@ -125,7 +125,7 @@ val with_translation_stream :
   sw:Eio.Switch.t ->
   net:_ Eio.Net.t ->
   clock:_ Eio.Time.clock ->
-  logger:Eta_observability.Logger.t ->
+  logger:Ox_observability.Logger.t ->
   model:string ->
   source_language:string ->
   target_language:string ->

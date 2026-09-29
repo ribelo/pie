@@ -8,7 +8,7 @@ Control sockets and stable locks are private and identity-owned, with bounded ha
 
 ## Earlier implementation checkpoints (superseded)
 
-Parent-reviewed. Implementation complete. Integrated suite pending. Does not claim the whole audit. PIE015. No deployment. No further server code changes. Staged Eta (`pie-audit-current-build`) unchanged.
+Parent-reviewed. Implementation complete. Integrated suite pending. Does not claim the whole audit. PIE015. No deployment. No further server code changes. Staged Ox (`pie-audit-current-build`) unchanged.
 
 Canonical listener is a native Unix socket imported with `Eio_unix.Net.import_socket_listening ~sw ~close_unix:true` (Fd-only cleanup; Eio.Net.listen is not used because it unlinks the path on switch exit). Admission: 16 active handlers, listen backlog 16, 1s peer read+reply deadline on the supplied mono clock. Process-local registry then a persistent 0600 lockfile (existing open `O_RDWR|O_CLOEXEC` only; create `O_CREAT|O_EXCL|O_CLOEXEC`); the lockfile is never unlinked (intentional split-lock-inode). This Unix.open_flag set has no `O_NOFOLLOW`; lock identity is lstat/fstat (and `st_nlink = 1`) in a same-uid cooperating namespace, not a kernel nofollow guarantee. Focused gates: control_socket_ownership 22.
 
@@ -38,6 +38,6 @@ Keep the existing request byte cap. Bound admission before spawning/waiting hand
 
 Private fixtures: pre-existing regular file; active listener; stale owned socket; two processes racing startup; old-owner retirement after a replacement attempt; inaccessible/unsafe runtime directory; peer that sends no newline; capacity saturation; client cancellation; server shutdown. Assert file identity, surviving listener reachability, bounded descriptors/workers and cleanup outcome.
 
-## Eta prerequisites
+## Ox prerequisites
 
 No new RPC framework. Use settled scope/cancellation/admission contracts with Eio listener ownership. Application endpoint identity remains PIE’s duty; ignoring unlink errors does not solve ownership.

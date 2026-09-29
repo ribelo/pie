@@ -142,11 +142,11 @@ let run_public ~body ~op () =
   let pcm_bytes = pcm in
   let clock = Eio.Stdenv.clock env in
   let logger =
-    Eta_observability.Logger.create ~service:"pie-test" ~clock
+    Ox_observability.Logger.create ~service:"pie-test" ~clock
       ~mono_clock:(Eio.Stdenv.mono_clock env)
       ~reporter:
-        (Eta_observability.Logger.Memory.reporter
-           (Eta_observability.Logger.Memory.create ()))
+        (Ox_observability.Logger.Memory.reporter
+           (Ox_observability.Logger.Memory.create ()))
       ()
   in
   let operation =

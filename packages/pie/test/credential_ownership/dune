@@ -2,4 +2,4 @@
 
 (test
  (name test_credential_ownership)
- (libraries pie alcotest eio_main eta eta_test unix yojson))
+ (libraries pie alcotest eio_main ox ox_test unix yojson))

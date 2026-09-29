@@ -23,7 +23,7 @@ Focused evidence: assistant_owner 16/16 including three live Service gates (pre-
 
 ## Evidence
 
-Actual workspace Ptt_loop with synthetic Scoped setup failure stops after one of two queued Press requests. The raw cause contains the setup failure and sibling cancellation. Current Eta.Exit.render_error omits it; wrapping with ignore_errors removes the typed failure but retains Error(Interrupts). See .scratch/research/core-audit/ptt-admission-r11.md. This is not a full Service/systemd reproduction.
+Actual workspace Ptt_loop with synthetic Scoped setup failure stops after one of two queued Press requests. The raw cause contains the setup failure and sibling cancellation. Current Ox.Exit.render_error omits it; wrapping with ignore_errors removes the typed failure but retains Error(Interrupts). See .scratch/research/core-audit/ptt-admission-r11.md. This is not a full Service/systemd reproduction.
 
 Service.on_press658–665 reserves Coordinator admission before constructing/entering the handle. Ptt_loop319–324 catches only failures after a handle is available; Scoped setup and on_press sit outside that handler. Coordinator.stop149–163 matches only the mode, not an attempt identity. Service clip/stream finish releases the mode before provider/delivery completion479–594; retry has a separate worker1212 onward and shares that coordinator. Follow cancellation/retry interleavings rather than assuming one event loop makes all attempt ownership identical.
 
@@ -43,6 +43,6 @@ Exercise the actual Service admission seam with synthetic prompt/provider failur
 
 Retain useful recovery material on failed delivery under the separate retry policy; closing an output channel is not permission to delete it. Do not read real retained recordings in tests.
 
-## Eta prerequisites
+## Ox prerequisites
 
-Use the settled all-exit finalizer and structured-worker contracts, plus PIE002 transport retirement. Confirm mixed Fail+Interrupt rendering and observer behavior against the target Eta artifact: current installed behavior hides the primary message. Do not rely on ignore_errors to define operation recovery. Do not duplicate Cause logic throughout PIE; select a verified central boundary for visible error reporting.
+Use the settled all-exit finalizer and structured-worker contracts, plus PIE002 transport retirement. Confirm mixed Fail+Interrupt rendering and observer behavior against the target Ox artifact: current installed behavior hides the primary message. Do not rely on ignore_errors to define operation recovery. Do not duplicate Cause logic throughout PIE; select a verified central boundary for visible error reporting.

@@ -35,7 +35,7 @@ let stop_msg = "capture_clock.stop"
 
 let audio_until_stop ~sw ~terminal audio () =
   match
-    Eta.Concurrent.race ~sw
+    Ox.Concurrent.race ~sw
       [
         (fun () ->
           Eio.Promise.await terminal;
@@ -52,8 +52,8 @@ let run_with_test_stop ~real ~clock ~mono_clock ~terminal operation =
     Eio.Time.with_timeout_exn real 7.0 @@ fun () ->
     Eio.Switch.run @@ fun sw ->
     let logger =
-      Eta_observability.Logger.create ~service:"pie-test" ~clock ~mono_clock
-        ~reporter:(Eta_observability.Logger.Reporter.writer ignore)
+      Ox_observability.Logger.create ~service:"pie-test" ~clock ~mono_clock
+        ~reporter:(Ox_observability.Logger.Reporter.writer ignore)
         ()
     in
     match operation ~sw ~logger ~terminal with
@@ -427,9 +427,9 @@ let test_external_cancellation () =
         Eio.Time.sleep real 0.05;
         Eio.Promise.resolve stop ());
     let logger =
-      Eta_observability.Logger.create ~service:"pie-test" ~clock:real
+      Ox_observability.Logger.create ~service:"pie-test" ~clock:real
         ~mono_clock:(Eio.Stdenv.mono_clock env)
-        ~reporter:(Eta_observability.Logger.Reporter.writer ignore)
+        ~reporter:(Ox_observability.Logger.Reporter.writer ignore)
         ()
     in
     let handle =
@@ -442,7 +442,7 @@ let test_external_cancellation () =
     let starts = ref 0 and finishes = ref 0 in
     let config = control_config ~starts ~finishes ~min_duration_ms:0 handle in
     match
-      Eta.Concurrent.with_background ~sw
+      Ox.Concurrent.with_background ~sw
         (fun () ->
           Eio.Promise.await terminal;
           Error (`Ptt_error stop_msg))

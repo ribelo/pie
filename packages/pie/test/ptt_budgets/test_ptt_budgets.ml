@@ -1,5 +1,5 @@
 (* PIE013 PTT slice: queue and capture PCM byte admission. Synthetic audio only,
-   no microphone or provider. Direct style: [Eta.Scope.run] owns the boundary, the
+   no microphone or provider. Direct style: [Ox.Scope.run] owns the boundary, the
    fixture is a private [Eio.Stream] behind the loop's own pull, and every wait is
    bounded so a regression fails instead of hanging.
    ^pienext-rgpp ^pienext-6nnq ^pienext-bee9 ^pienext-b3x8 *)
@@ -23,10 +23,10 @@ let recognize_test event =
   else None
 
 let test_logger env =
-  Eta_observability.Logger.create ~service:"pie-ptt-budgets-test"
+  Ox_observability.Logger.create ~service:"pie-ptt-budgets-test"
     ~clock:(Eio.Stdenv.clock env)
     ~mono_clock:(Eio.Stdenv.mono_clock env)
-    ~reporter:(Eta_observability.Logger.Reporter.records (fun _ -> ()))
+    ~reporter:(Ox_observability.Logger.Reporter.records (fun _ -> ()))
     ()
 
 (* One runtime clock; the loop's own timing stays on the monotonic clock. *)
@@ -45,31 +45,31 @@ let pp_run_error fmt : Pie.Ptt_loop.run_error -> unit = function
       Format.pp_print_string fmt (Pie.Pulse.Client.error_message error)
   | `Ptt_error msg -> Format.pp_print_string fmt msg
   | `Ptt_cause cause ->
-      Eta.Cause.pp
+      Ox.Cause.pp
         (fun fmt (`Ptt_error msg) -> Format.pp_print_string fmt msg)
         fmt cause
 
 (* Every defect anywhere in a failure tree, the new spelling of the removed
-   [Eta.Cause.defects]. *)
-let rec defects : 'e Eta.Cause.t -> exn list = function
-  | Eta.Cause.Die (exn, _) -> [ exn ]
-  | Eta.Cause.Suppressed { primary; finalizer } ->
+   [Ox.Cause.defects]. *)
+let rec defects : 'e Ox.Cause.t -> exn list = function
+  | Ox.Cause.Die (exn, _) -> [ exn ]
+  | Ox.Cause.Suppressed { primary; finalizer } ->
       defects primary @ defects finalizer
-  | Eta.Cause.Concurrent causes -> List.concat_map defects causes
-  | Eta.Cause.Finalizer cause -> defects cause
-  | Eta.Cause.Fail _ | Eta.Cause.Interrupt _ -> []
+  | Ox.Cause.Concurrent causes -> List.concat_map defects causes
+  | Ox.Cause.Finalizer cause -> defects cause
+  | Ox.Cause.Fail _ | Ox.Cause.Interrupt _ -> []
 
 (* The scope wraps the loop's own compound failure in [Fail] of a [`Ptt_cause], so
    a retained defect lives inside that typed payload and the search must descend. *)
-let rec defects_of_exit : Pie.Ptt_loop.run_error Eta.Cause.t -> exn list =
+let rec defects_of_exit : Pie.Ptt_loop.run_error Ox.Cause.t -> exn list =
   function
-  | Eta.Cause.Fail (`Ptt_cause cause) -> defects cause
-  | Eta.Cause.Die (exn, _) -> [ exn ]
-  | Eta.Cause.Suppressed { primary; finalizer } ->
+  | Ox.Cause.Fail (`Ptt_cause cause) -> defects cause
+  | Ox.Cause.Die (exn, _) -> [ exn ]
+  | Ox.Cause.Suppressed { primary; finalizer } ->
       defects_of_exit primary @ defects_of_exit finalizer
-  | Eta.Cause.Concurrent causes -> List.concat_map defects_of_exit causes
-  | Eta.Cause.Finalizer cause -> defects_of_exit cause
-  | Eta.Cause.Fail _ | Eta.Cause.Interrupt _ -> []
+  | Ox.Cause.Concurrent causes -> List.concat_map defects_of_exit causes
+  | Ox.Cause.Finalizer cause -> defects_of_exit cause
+  | Ox.Cause.Fail _ | Ox.Cause.Interrupt _ -> []
 
 let contains haystack needle =
   let length = String.length needle in
@@ -82,15 +82,14 @@ let contains haystack needle =
 (* Same meaning as the old [cause_has]: the message is visible in the failure the
    boundary reports. *)
 let cause_has cause needle =
-  contains (Format.asprintf "%a" (Eta.Cause.pp pp_run_error) cause) needle
+  contains (Format.asprintf "%a" (Ox.Cause.pp pp_run_error) cause) needle
 
 (* A missing message fails with the whole observed failure, so a regression names
    what it saw instead of only "false". *)
 let expect_cause_has ~label cause needle =
   if not (cause_has cause needle) then
     Alcotest.failf "%s: %S missing from %a" label needle
-      (Eta.Cause.pp pp_run_error)
-      cause
+      (Ox.Cause.pp pp_run_error) cause
 
 let scoped_press handle = Pie.Ptt_loop.Scoped (fun use -> use handle)
 
@@ -123,29 +122,29 @@ let loop_body ~env ~sw ~clock ~handle ~queue_pcm_bytes ~capture_pcm_bytes
     ~audio:(fun () -> Ok (Some (Eio.Stream.take audio)))
     ~queue_pcm_bytes ~capture_pcm_bytes ~queue_capacity config
 
-(* [Eta.Timeout.timeout] is the deadline: it cancels the loop and its own result, so a
+(* [Ox.Timeout.timeout] is the deadline: it cancels the loop and its own result, so a
    regression that never settles fails as [`Ptt_error "timeout"] instead of hanging. *)
 let run_lifetime ~env ~clock ~timeout_s ~handle ~queue_pcm_bytes
     ~capture_pcm_bytes ?press ~on_abort ~audio_fn ?queue_capacity () :
-    (unit, Pie.Ptt_loop.run_error) Eta.Exit.t =
+    (unit, Pie.Ptt_loop.run_error) Ox.Exit.t =
   match
-    Eta.Timeout.timeout ~clock (Eta.Duration.seconds timeout_s) (fun () ->
+    Ox.Timeout.timeout ~clock (Ox.Duration.seconds timeout_s) (fun () ->
         Ok
-          (Eta.Scope.run (fun sw ->
+          (Ox.Scope.run (fun sw ->
                loop_body ~env ~sw ~clock ~handle ~queue_pcm_bytes
                  ~capture_pcm_bytes ?press ~on_abort ~audio_fn ?queue_capacity
                  ())))
   with
   | Ok exit -> exit
-  | Error `Timeout -> Eta.Exit.Failure (Eta.Cause.Fail (`Ptt_error "timeout"))
+  | Error `Timeout -> Ox.Exit.Failure (Ox.Cause.Fail (`Ptt_error "timeout"))
 
 (* The old [with_background]: the loop stays live while the assertions run, the first
    side to finish stops the other, and a typed failure of either fails the test. *)
 let with_live_loop ~clock ~timeout_s ~sw body assertions =
   match
-    Eta.Timeout.timeout ~clock (Eta.Duration.seconds timeout_s) (fun () ->
+    Ox.Timeout.timeout ~clock (Ox.Duration.seconds timeout_s) (fun () ->
         Ok
-          (Eta.Concurrent.with_background ~sw body (fun () ->
+          (Ox.Concurrent.with_background ~sw body (fun () ->
                assertions ();
                Ok ())))
   with
@@ -156,10 +155,10 @@ let with_live_loop ~clock ~timeout_s ~sw body assertions =
 (* The scope is the test boundary: a typed failure or a defect in it must fail the
    test, never be reported as success. *)
 let run_scoped (body : Eio.Switch.t -> (unit, Pie.Ptt_loop.run_error) result) =
-  match Eta.Scope.run body with
-  | Eta.Exit.Success () -> ()
-  | Eta.Exit.Failure cause ->
-      Alcotest.failf "ptt scope failed: %a" (Eta.Cause.pp pp_run_error) cause
+  match Ox.Scope.run body with
+  | Ox.Exit.Success () -> ()
+  | Ox.Exit.Failure cause ->
+      Alcotest.failf "ptt scope failed: %a" (Ox.Cause.pp pp_run_error) cause
 
 let test_capture_budget_plus_one_rejects () =
   Eio_main.run @@ fun env ->
@@ -200,10 +199,10 @@ let test_capture_budget_plus_one_rejects () =
   Alcotest.(check int) "no offer of rejected bytes" 0 !offered;
   Alcotest.(check bool) "cancelled" true (!cancels >= 1);
   match exit with
-  | Eta.Exit.Failure cause ->
+  | Ox.Exit.Failure cause ->
       expect_cause_has ~label:"capture budget visible" cause
         "pcm:capture_budget"
-  | Eta.Exit.Success () ->
+  | Ox.Exit.Success () ->
       Alcotest.fail "expected capture budget error or timeout after fail"
 
 let test_capture_budget_exact_accepted () =
@@ -264,9 +263,9 @@ let test_queue_budget_plus_one_visible () =
         emit keyboard true)
       ()
   with
-  | Eta.Exit.Failure cause ->
+  | Ox.Exit.Failure cause ->
       expect_cause_has ~label:"queue budget visible" cause "pcm:queue_budget"
-  | Eta.Exit.Success () -> Alcotest.fail "expected queue budget error"
+  | Ox.Exit.Success () -> Alcotest.fail "expected queue budget error"
 
 let test_stalled_finish_keyboard_and_pause_live () =
   Eio_main.run @@ fun env ->
@@ -373,9 +372,9 @@ let test_item_full_cancel_settles () =
   in
   let done_ =
     match
-      Eta.Timeout.timeout ~clock (Eta.Duration.seconds 8) (fun () ->
+      Ox.Timeout.timeout ~clock (Ox.Duration.seconds 8) (fun () ->
           Ok
-            (Eta.Scope.run (fun sw ->
+            (Ox.Scope.run (fun sw ->
                  Eio.Fiber.fork ~sw (fun () ->
                      Eio.Promise.await queued;
                      Eio.Time.sleep clock 0.1;
@@ -488,8 +487,8 @@ let test_capture_budget_and_cleanup_defect_both_visible () =
         emit keyboard true)
       ()
   with
-  | Eta.Exit.Success () -> Alcotest.fail "expected budget failure"
-  | Eta.Exit.Failure cause ->
+  | Ox.Exit.Success () -> Alcotest.fail "expected budget failure"
+  | Ox.Exit.Failure cause ->
       Alcotest.(check bool)
         "cleanup defect retained" true
         (defects_of_exit cause <> []);
@@ -518,8 +517,8 @@ let test_scoped_capture_budget_propagates () =
         emit keyboard true)
       ()
   with
-  | Eta.Exit.Success () -> Alcotest.fail "scoped capture budget must propagate"
-  | Eta.Exit.Failure cause ->
+  | Ox.Exit.Success () -> Alcotest.fail "scoped capture budget must propagate"
+  | Ox.Exit.Failure cause ->
       expect_cause_has ~label:"scoped capture budget visible" cause
         "pcm:capture_budget"
 
@@ -545,8 +544,8 @@ let test_scoped_budget_and_cleanup_defect_both_visible () =
         emit keyboard true)
       ()
   with
-  | Eta.Exit.Success () -> Alcotest.fail "expected scoped budget failure"
-  | Eta.Exit.Failure cause ->
+  | Ox.Exit.Success () -> Alcotest.fail "expected scoped budget failure"
+  | Ox.Exit.Failure cause ->
       Alcotest.(check bool)
         "scoped cleanup defect retained" true
         (defects_of_exit cause <> []);

@@ -190,11 +190,10 @@ let run_production ~mode ~cfg ~check_body () =
           let process_mgr = Eio.Stdenv.process_mgr env in
           let clock = Eio.Stdenv.clock env in
           let logger =
-            Eta_observability.Logger.create ~service:"pie-explicit-prompts-test"
+            Ox_observability.Logger.create ~service:"pie-explicit-prompts-test"
               ~clock
               ~mono_clock:(Eio.Stdenv.mono_clock env)
-              ~reporter:
-                (Eta_observability.Logger.Reporter.records (fun _ -> ()))
+              ~reporter:(Ox_observability.Logger.Reporter.records (fun _ -> ()))
               ()
           in
           let socket =

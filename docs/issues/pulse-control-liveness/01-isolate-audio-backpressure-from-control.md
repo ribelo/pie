@@ -29,9 +29,9 @@ Use nonblocking audio admission. On full, fail the affected recording explicitly
 
 Keep stream overload distinct from a broken Pulse connection. Integrate its visible operation failure with PIE003/004. Clean up the failed stream with the existing finite control timeout and maintain application shutdown ownership.
 
-## Eta prerequisites
+## Ox prerequisites
 
-Installed Queue.try_offer already returns Full without waiting for bounded queues (queue.mli132–136); try_offer_now is the synchronous counterpart. Ordinary Queue.offer on bounded queues can wait and is not a substitute. Use the settled atomic admission/close contract and verify overload behavior against the target artifact. No new Eta queue or dispatcher abstraction is needed.
+Installed Queue.try_offer already returns Full without waiting for bounded queues (queue.mli132–136); try_offer_now is the synchronous counterpart. Ordinary Queue.offer on bounded queues can wait and is not a substitute. Use the settled atomic admission/close contract and verify overload behavior against the target artifact. No new Ox queue or dispatcher abstraction is needed.
 
 ## Acceptance
 

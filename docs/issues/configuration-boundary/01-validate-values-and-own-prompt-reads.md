@@ -10,9 +10,9 @@ Configuration and prompt reads are bounded, validated, and physically settled wi
 
 Parent-reviewed implementation complete. PIE018. Integrated full-suite still pending; this is not whole-audit acceptance.
 
-Standalone fixture `packages/pie/test/config_boundary` (own dune stanza, not `test_pie`). Current evidence: `--build-dir` `/home/ribelo/projects/ribelo/pie/.scratch/config-boundary-final-build`, `DUNE_CACHE=disabled`, staged Eta `OCAMLPATH` `/home/ribelo/projects/ribelo/ocaml/Eta/.scratch/pie-audit-current-build/install/default/lib` plus matching stublibs first. No shared install. Alcotest `-o` under `.scratch/config-boundary-final-build/alcotest`. Parent accepted 34/34 in 0.701s plus PIE006 `live_config` last-good / effective CLI / active-attempt evidence. `Config.Stt` and the reader fixture are frozen for ongoing integration. No Service API change, no new configuration framework, no deploy.
+Standalone fixture `packages/pie/test/config_boundary` (own dune stanza, not `test_pie`). Current evidence: `--build-dir` `/home/ribelo/projects/ribelo/pie/.scratch/config-boundary-final-build`, `DUNE_CACHE=disabled`, staged Ox `OCAMLPATH` `/home/ribelo/projects/ribelo/ocaml/ox/.scratch/pie-audit-current-build/install/default/lib` plus matching stublibs first. No shared install. Alcotest `-o` under `.scratch/config-boundary-final-build/alcotest`. Parent accepted 34/34 in 0.701s plus PIE006 `live_config` last-good / effective CLI / active-attempt evidence. `Config.Stt` and the reader fixture are frozen for ongoing integration. No Service API change, no new configuration framework, no deploy.
 
-Historical provenance (first 24 gates, not current evidence): `--build-dir .scratch/config-boundary-build/dune` with Eta `OCAMLPATH` `/home/ribelo/projects/ribelo/ocaml/Eta/.scratch/ws-reader-settle-build/install/default/lib`; 24/24 in 0.060s after wakeword-range correction. PIE024 later deleted inert wakeword settings; this reader rejects leftover wakeword keys as unsupported rather than retaining or range-checking them.
+Historical provenance (first 24 gates, not current evidence): `--build-dir .scratch/config-boundary-build/dune` with Ox `OCAMLPATH` `/home/ribelo/projects/ribelo/ocaml/ox/.scratch/ws-reader-settle-build/install/default/lib`; 24/24 in 0.060s after wakeword-range correction. PIE024 later deleted inert wakeword settings; this reader rejects leftover wakeword keys as unsupported rather than retaining or range-checking them.
 
 ## Requirements
 
@@ -28,7 +28,7 @@ Close: typed `Config_error` plus Unix close stays one `Config_error`; unknown/ca
 
 Current 34/34 in 0.701s: the historical 24 numeric/type/binding/FIFO/1MiB gates plus mid-read EIO fd-flat, pathname regular→FIFO/dir swap while the fd is held (original inode still read), growing-file cap after fstat, close-once, combined read+close, `Test_cancel` not wrapped as `Config_error`, `Test_cancel`+close EIO and `Config_error`+close defect both present, and Service `run_with_inputs` reload cancel via existing `config_control.load` + `~read_io` barrier (not settled while the owned loader thread is held; fixture barrier released independently of cancel; then join + FD closed). This does not claim an arbitrary blocking syscall can be killed, nor a multi-file content transaction. Last-good / effective CLI / active-attempt remain accepted PIE006 `live_config` evidence. No Service API change.
 
-Historical first red: directory FD leak, FIFO hang, unvalidated PTT RMS/peak. Historical 24/24 after wakeword-range correction used the ws-reader-settle Eta stage noted under Status.
+Historical first red: directory FD leak, FIFO hang, unvalidated PTT RMS/peak. Historical 24/24 after wakeword-range correction used the ws-reader-settle Ox stage noted under Status.
 
 ## Implementation direction
 
@@ -42,6 +42,6 @@ The reload thread must remain owned until its read completes. A system thread or
 
 Synthetic valid/boundary/out-of-range/overflow numbers, wrong types, duplicate effective bindings, absent prompt, existing directory, unreadable file and read failure after acquisition. Add FIFO-without-writer, oversized file, descriptor-type race and cancellation-during-reload cases. Repeated failures must leave FD count flat before GC. Check physical worker settlement rather than only logical timeout completion. Validate startup errors, unchanged last-good config after reload rejection and stable active-attempt config.
 
-## Eta prerequisites
+## Ox prerequisites
 
-No new Eta configuration abstraction. This source leak is in synchronous channel ownership and is not repaired by incoming WebSocket fixes. Use settled failure/finalizer contracts at the application boundary.
+No new Ox configuration abstraction. This source leak is in synchronous channel ownership and is not repaired by incoming WebSocket fixes. Use settled failure/finalizer contracts at the application boundary.

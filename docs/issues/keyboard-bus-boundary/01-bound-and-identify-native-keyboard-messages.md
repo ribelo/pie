@@ -40,6 +40,6 @@ Use the bus-assigned sender identity for the expected service, and treat owner l
 
 Synthetic address grammar cases; escaped delimiter values; separate filesystem/abstract endpoints; overflow/oversize/incomplete frames; truncated strings/terminators; unsupported signatures/byte order; setup timeout; unrelated sender; expected sender; service-owner change. Include positive real-encoding fixtures and local isolated bus tests where available. Never fuzz against the desktop bus.
 
-## Eta prerequisites
+## Ox prerequisites
 
-Existing timeout, scoped cleanup and error contracts suffice. No new Eta D-Bus package is required by this decision. A maintained replacement client may be evaluated only with actual toolchain/integration evidence, not assumed availability.
+Existing timeout, scoped cleanup and error contracts suffice. No new Ox D-Bus package is required by this decision. A maintained replacement client may be evaluated only with actual toolchain/integration evidence, not assumed availability.

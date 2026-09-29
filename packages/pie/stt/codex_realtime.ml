@@ -1,8 +1,8 @@
 type error = [ `Stt_error of string ]
 
-module Session = Eta_ai_realtime.Session
-module Ws = Eta_http.Ws_client
-module Logger = Eta_observability.Logger
+module Session = Ox_ai_realtime.Session
+module Ws = Ox_http.Ws_client
+module Logger = Ox_observability.Logger
 
 let ( let* ) = Result.bind
 
@@ -62,8 +62,8 @@ let realtime_sample_rate = 24_000
 let default_base_url = "wss://api.openai.com"
 let realtime_version = "0.0.0"
 let default_conversation_model = "gpt-realtime-2.1"
-let oauth_response_idle_timeout = Eta.Duration.seconds 30
-let websocket_establishment_timeout = Eta.Duration.seconds 10
+let oauth_response_idle_timeout = Ox.Duration.seconds 30
+let websocket_establishment_timeout = Ox.Duration.seconds 10
 
 let is_conversation_model model =
   model = "gpt-realtime-2" || model = default_conversation_model
@@ -132,21 +132,21 @@ let build_realtime_url ?(base_url = resolve_base_url ()) ~mode ~model () =
     if is_conversation_model model then "/v1/realtime" else path_for_mode mode
   in
   let scheme, http_base = http_scheme_stand_in base_url in
-  match Eta_http.Url.parse (http_base ^ path) with
+  match Ox_http.Url.parse (http_base ^ path) with
   | Error parse_error ->
-      invalid_arg (Eta_http.Url.parse_error_to_string parse_error)
+      invalid_arg (Ox_http.Url.parse_error_to_string parse_error)
   | Ok url ->
       let url =
         if is_conversation_model model then
-          Eta_http.Url.with_query_param url "model" model
+          Ox_http.Url.with_query_param url "model" model
         else
           match mode with
           | Transcription ->
-              Eta_http.Url.with_query_param url "intent" "transcription"
+              Ox_http.Url.with_query_param url "intent" "transcription"
           | Translation | Conversation ->
-              Eta_http.Url.with_query_param url "model" model
+              Ox_http.Url.with_query_param url "model" model
       in
-      restore_scheme scheme (Eta_http.Url.to_string url)
+      restore_scheme scheme (Ox_http.Url.to_string url)
 
 let render_template template variables =
   List.fold_left
@@ -584,7 +584,7 @@ let empty_session_result =
 let receive_event session =
   match Session.receive session with
   | Error error -> stt_error ("Codex realtime " ^ session_error error)
-  | Ok event -> parse_event (Eta_json.to_string event.raw)
+  | Ok event -> parse_event (Ox_json.to_string event.raw)
 
 let await_session_ready session =
   let rec loop () =
@@ -731,8 +731,8 @@ let connect ~sw ~net ~clock ?ca_file ~url ~access_token () =
     |> List.filter (fun (key, _) -> key <> "Authorization")
   in
   Session.connect ~sw ~net ~clock ?ca_file
-    ~api_key:(Eta_observability.Redact.make access_token)
-    ~headers ~establishment_timeout:(Eta.Duration.seconds 10) url
+    ~api_key:(Ox_observability.Redact.make access_token)
+    ~headers ~establishment_timeout:(Ox.Duration.seconds 10) url
   |> Result.map_error (fun error ->
       `Stt_error ("Codex realtime " ^ websocket_message error))
 
@@ -771,7 +771,7 @@ let run_realtime_session ~sw ~net ~clock ?ca_file ~url ~access_token ~mode
         in
         let receive () = receive_result ~mode session in
         if mode = Translation then
-          Eta.Concurrent.race_first ~sw
+          Ox.Concurrent.race_first ~sw
             [
               (fun () ->
                 let* result = receive () in
@@ -783,7 +783,7 @@ let run_realtime_session ~sw ~net ~clock ?ca_file ~url ~access_token ~mode
                 stt_error "Codex realtime response incomplete");
             ]
         else
-          let* result, () = Eta.Concurrent.par ~sw receive send in
+          let* result, () = Ox.Concurrent.par ~sw receive send in
           finish_result ~mode result)
 
 let make_pull_queue () =
@@ -862,7 +862,7 @@ let run_realtime_stream_session ~sw ~net ~clock ?ca_file ~url ~access_token
         in
         let receive () = receive_result ?on_text ~mode session in
         if mode = Translation then
-          Eta.Concurrent.race_first ~sw
+          Ox.Concurrent.race_first ~sw
             [
               (fun () ->
                 let* result = receive () in
@@ -876,7 +876,7 @@ let run_realtime_stream_session ~sw ~net ~clock ?ca_file ~url ~access_token
                 stt_error "Codex realtime response incomplete");
             ]
         else
-          let* result, () = Eta.Concurrent.par ~sw receive send in
+          let* result, () = Ox.Concurrent.par ~sw receive send in
           finish_result ~mode result)
 
 type stream_handle = {
@@ -952,7 +952,7 @@ let with_stream_session ~sw ~net ~clock ~logger ~url ~access_token ~mode
       (match result with Ok _ -> Ok None | Error error -> Error error);
     Ok ()
   in
-  Eta.Concurrent.with_background ~sw background (fun () ->
+  Ox.Concurrent.with_background ~sw background (fun () ->
       use { offer_chunk; finish_stream; cancel_stream })
 
 let with_transcription_stream ~sw ~net ~clock ~logger ~model ~language

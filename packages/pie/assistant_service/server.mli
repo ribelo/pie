@@ -7,7 +7,7 @@ type budget = { peer_timeout_s : float }
 
 val default_budget : budget
 
-type error = Eta_ipc.Listener.error
+type error = Ox_ipc.Listener.error
 
 val err_endpoint_conflict : string
 val err_unsafe_runtime_dir : string

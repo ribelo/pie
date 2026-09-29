@@ -1,5 +1,5 @@
 module Config = Pie.Config.Stt
-module Door = Eta_app.Config
+module Door = Ox_app.Config
 
 let with_sandbox f =
   let dir = Filename.temp_file "pie-config-boundary" "" in
