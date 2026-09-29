@@ -260,7 +260,4 @@ U1 + U2 + U3 + U4 + closed gaps ----------------------------+--> U5 final gates
 U5 integration acceptance is evidence-based, not a deployment. The final pass
 
 ## Master rebuild swap (2026-09-29)
-
-- `~/.cache/opam/5.4.0+ox/bin/pie` is now the rebuild against Eta master 64db430e (sha256 4c8e28e2…, from `pie.eta-64db430e`), swapped in with one `systemctl --user restart pie.service` at 10:32.
-- The previous binary (the 2026-09-28 cut-over build from 80ac0bd, sha256 d53d1b23…) is kept as `~/.cache/opam/5.4.0+ox/bin/pie.v1-20260928`; roll back by copying it over `bin/pie` and restarting.
-- Verified: active, NRestarts 0, Result=success, control socket present, `pie msg status` armed; the restart logged Stopped/Started with no failure (the v1 exit-130 quirk is gone); the AGS bar's `pie msg subscribe` survived the restart.
+- PTT through the swapped binary: transcribe and translate captures from 10:33 onwards, each stopped cleanly and answered by Codex Realtime (stt first token).
