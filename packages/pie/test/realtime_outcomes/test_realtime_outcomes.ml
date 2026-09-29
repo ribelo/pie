@@ -151,7 +151,7 @@ type script = {
   after_audio : string list;
 }
 
-let serve ~saw_audio script flow =
+let serve ?(close_peer = write_ws_close) ~saw_audio script flow =
   handshake flow;
   List.iter (write_ws_text flow) script.after_handshake;
   let rec loop stage =
@@ -177,19 +177,20 @@ let serve ~saw_audio script flow =
                     script.after_session_update
                 in
                 if has_session_updated || has_error then loop `Updated
-                else write_ws_close flow
+                else close_peer flow
             | Some (`String type_name) when is_audio_append type_name ->
                 saw_audio := true;
                 if stage <> `Audio then (
                   List.iter (write_ws_text flow) script.after_audio;
-                  write_ws_close flow);
+                  close_peer flow);
                 loop `Audio
             | _ -> loop stage)
         | _ -> loop stage)
   in
   loop `Init
 
-let run_session ~mode ~script ~drain_ms =
+let run_session_with ?tls ?(peer_close = `Websocket) ~mode ~script ~drain_ms ()
+    =
   let saw_audio = ref false in
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
@@ -202,9 +203,28 @@ let run_session ~mode ~script ~drain_ms =
   let port = tcp_port (Eio.Net.listening_addr socket) in
   Eio.Fiber.fork ~sw (fun () ->
       Eio.Switch.run @@ fun conn_sw ->
-      let flow, _ = Eio.Net.accept ~sw:conn_sw socket in
-      try serve ~saw_audio script flow with _ -> ());
-  let url = Printf.sprintf "ws://127.0.0.1:%d" port in
+      let raw, _ = Eio.Net.accept ~sw:conn_sw socket in
+      let flow =
+        match tls with
+        | None -> (raw :> Ox_http.Tls_flow.ty Eio.Resource.t)
+        | Some (ctx, _) ->
+            Ox_http.Tls_flow.create
+              ~raw:(raw :> Ox_http.Tls_flow.ty Eio.Resource.t)
+              ~ssl:(Ox_http.Ox_http_tls_openssl.create_server_ssl ctx)
+      in
+      let close_peer flow =
+        match peer_close with
+        | `Websocket -> write_ws_close flow
+        | `Notify -> Eio.Flow.close flow
+        | `Tcp_eof -> Eio.Flow.close raw
+        | `Truncated ->
+            Eio.Flow.copy_string "\x17\x03\x03\x00" raw;
+            Eio.Flow.close raw
+      in
+      try serve ~close_peer ~saw_audio script flow with _ -> ());
+  let scheme = if Option.is_some tls then "wss" else "ws" in
+  let ca_file = Option.map snd tls in
+  let url = Printf.sprintf "%s://127.0.0.1:%d" scheme port in
   let session_update =
     match mode with
     | Codex.Transcription ->
@@ -221,12 +241,15 @@ let run_session ~mode ~script ~drain_ms =
   let result =
     try
       Eio.Time.with_timeout_exn clock 3.0 (fun () ->
-          Codex.run_realtime_session ~caps ~sw ~net ~clock ~url
+          Codex.run_realtime_session ~caps ~sw ~net ~clock ?ca_file ~url
             ~access_token:"synthetic" ~mode ?session_update
             ~translation_output_drain_ms:drain_ms ~input_sample_rate:16000 pcm)
     with Eio.Time.Timeout -> Error (`Stt_error "timeout")
   in
   (result, !saw_audio)
+
+let run_session ~mode ~script ~drain_ms =
+  run_session_with ~mode ~script ~drain_ms ()
 
 let created = {|{"type":"session.created"}|}
 let created_tx = {|{"type":"transcription_session.created"}|}
@@ -451,6 +474,49 @@ let test_translation_drain_is_incomplete () =
   Alcotest.(check bool) "audio after ack" true saw_audio;
   expect_error "incomplete" (result, ())
 
+(* nhttp-7pp8 nhttp-rs5p pienext-jlmd pienext-4ps6: TLS EOF must reach the
+   Codex session as a closed WebSocket, never as a spurious TLS failure or a
+   successful incomplete response. TLS close_notify alone is not a WS close. *)
+let with_tls test =
+  let cert = Filename.temp_file "pie-r38-cert-" ".pem" in
+  let key = Filename.temp_file "pie-r38-key-" ".pem" in
+  Fun.protect
+    ~finally:(fun () ->
+      Sys.remove cert;
+      Sys.remove key)
+    (fun () ->
+      let command =
+        Printf.sprintf
+          "openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 1 -subj \
+           /CN=localhost -addext %s -keyout %s -out %s >/dev/null 2>&1"
+          (Filename.quote "subjectAltName=DNS:localhost,IP:127.0.0.1")
+          (Filename.quote key) (Filename.quote cert)
+      in
+      if Sys.command command <> 0 then
+        Alcotest.fail "TLS fixture generation failed";
+      let ctx =
+        Ox_http.Ox_http_tls_openssl.create_server_ctx
+          ~certificate_chain_file:cert ~private_key_file:key
+          ~alpn_protocols:[ "http/1.1" ] ()
+      in
+      test (ctx, cert))
+
+let test_tls_peer_close peer_close diagnostic () =
+  with_tls (fun tls ->
+      let result, saw_audio =
+        run_session_with ~tls ~peer_close ~mode:Codex.Conversation
+          ~script:
+            {
+              after_handshake = [ created ];
+              after_session_update = [];
+              after_audio = [];
+            }
+          ~drain_ms:20 ()
+      in
+      expect_error diagnostic (result, ());
+      Alcotest.(check bool)
+        "closed before readiness sends no audio" false saw_audio)
+
 let () =
   Alcotest.run "realtime-outcomes"
     [
@@ -464,6 +530,15 @@ let () =
             `Quick test_wrong_ack_sends_no_audio;
           Alcotest.test_case "delayed ack then transcription completed" `Quick
             test_delayed_ack_then_transcription_completed;
+        ] );
+      ( "TLS close (nhttp-7pp8 nhttp-rs5p pienext-jlmd)",
+        [
+          Alcotest.test_case "TCP EOF is a closed session" `Quick
+            (test_tls_peer_close `Tcp_eof "closed (1006)");
+          Alcotest.test_case "close_notify is a closed session" `Quick
+            (test_tls_peer_close `Notify "closed (1006)");
+          Alcotest.test_case "truncated record is still TLS failure" `Quick
+            (test_tls_peer_close `Truncated "TLS failed");
         ] );
       ( "terminal",
         [

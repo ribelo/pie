@@ -494,17 +494,17 @@ let serve_tls ctx ~clock ~job scenario raw =
     (raw :> [ Eio.Flow.two_way_ty | Eio.Resource.close_ty ] Eio.Resource.t)
   in
   let tls =
-    Ox_http.Tls_flow.create
-      ~raw:(raw_flow :> Eio.Flow.two_way_ty Eio.Resource.t)
+    Ox_http.Tls_flow.create ~raw:raw_flow
       ~ssl:(Ox_http.Ox_http_tls_openssl.create_server_ssl ctx)
   in
   Fun.protect
-    ~finally:(fun () -> try Eio.Flow.close raw with _ -> ())
+  (* nhttp-rs5p piesession-ml14: the wrapped flow sends close_notify. *)
+    ~finally:(fun () -> try Eio.Flow.close tls with Eio.Io _ -> ())
     (fun () ->
       handle_peer ~clock scenario
         ~on_connected:(fun () -> Eio.Promise.resolve job.resolve_connected ())
         ~hold:job.hold
-        ~close_flow:(fun () -> Eio.Flow.close raw)
+        ~close_flow:(fun () -> Eio.Flow.close tls)
         tls)
 
 let repeat_wss_in_process ~cert ~key ~rounds =

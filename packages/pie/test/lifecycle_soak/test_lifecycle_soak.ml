@@ -242,9 +242,8 @@ let write_ws_switching_response flow key =
   in
   Eio.Flow.copy_string response flow
 
-(* Drain until the client goes away: a reset (the client closing with the
-   scripted close frame still unread) and a TLS flow whose peer closed without a
-   close_notify both end the drain like EOF. *)
+(* nhttp-7pp8 pienext-jlmd: complete-record TCP EOF is End_of_file.
+   A reset may end the drain, but damaged TLS records must not be swallowed. *)
 let drain_until_eof ~clock flow =
   let buf = Cstruct.create 4096 in
   let rec loop () =
@@ -253,7 +252,6 @@ let drain_until_eof ~clock flow =
     | _ -> loop ()
     | exception End_of_file -> ()
     | exception Eio.Io _ -> ()
-    | exception Ox_http.Tls_flow.Tls_failure _ -> ()
   in
   Eio.Time.with_timeout_exn clock 2.0 loop
 
@@ -445,17 +443,6 @@ let with_localhost_tls f =
         Alcotest.fail "failed to generate synthetic localhost TLS material";
       f { cert; key })
 
-(* The TLS adapter wraps the accepted flow and does not own a close; the socket
-   itself is what is released. *)
-let close_raw raw =
-  let raw_exn =
-    try
-      Eio.Flow.close raw;
-      None
-    with exn -> Some exn
-  in
-  Option.iter raise raw_exn
-
 let serve_accepted ~clock ~tls_ctx socket job =
   Eio.Switch.run (fun conn_sw ->
       let raw, _ = Eio.Net.accept ~sw:conn_sw socket in
@@ -473,14 +460,14 @@ let serve_accepted ~clock ~tls_ctx socket job =
           in
           let pre_raw = probe_flow "accepted-raw" raw in
           let tls =
-            Ox_http.Tls_flow.create
-              ~raw:(raw_flow :> Eio.Flow.two_way_ty Eio.Resource.t)
+            Ox_http.Tls_flow.create ~raw:raw_flow
               ~ssl:(Ox_http.Ox_http_tls_openssl.create_server_ssl ctx)
           in
           let pre_tls = probe_flow "accepted-tls" tls in
           Fun.protect
             ~finally:(fun () ->
-              close_raw raw;
+              (* nhttp-rs5p pienext-4ps6: close the wrapped TLS flow. *)
+              (try Eio.Flow.close tls with Eio.Io _ -> ());
               last_peer_diag :=
                 String.concat " | "
                   [
@@ -493,7 +480,7 @@ let serve_accepted ~clock ~tls_ctx socket job =
               handle_peer ~clock
                 ~on_connected:(fun () ->
                   Eio.Promise.resolve job.resolve_connected ())
-                ~close_flow:(fun () -> close_raw raw)
+                ~close_flow:(fun () -> Eio.Flow.close tls)
                 job.scenario tls))
 
 let log_localhost_addrs () =
