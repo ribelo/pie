@@ -1,0 +1,6 @@
+(include_subdirs no)
+
+(test
+ (name test_history)
+ (libraries ox_test pie alcotest unix threads yojson)
+ (deps ../../bin/pie.exe))

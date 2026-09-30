@@ -16,6 +16,7 @@ type cli_error =
   | `Notification_error of string
   | `Portal_error of string
   | `Daemon_error of string
+  | `History of string
   | `Daemon_protocol_error of string
   | `Daemon_off
   | `Closed
@@ -38,7 +39,8 @@ let render_error = function
   | `Niri_error msg
   | `Notification_error msg
   | `Portal_error msg
-  | `Daemon_error msg ->
+  | `Daemon_error msg
+  | `History msg ->
       msg
   | `Daemon_protocol_error label -> label
   | `Daemon_off -> "daemon is not running"
@@ -298,13 +300,171 @@ let commands_with_env (env : _ Ox_app.Env.t) door_run_owned =
                 loop None))
         $ interval)
   in
+  let take n entries =
+    let rec loop n acc = function
+      | [] -> List.rev acc
+      | _ when n <= 0 -> List.rev acc
+      | entry :: rest -> loop (n - 1) (entry :: acc) rest
+    in
+    loop n [] entries
+  in
+  let newline_terminated text =
+    if text = "" || text.[String.length text - 1] <> '\n' then text ^ "\n"
+    else text
+  in
+  let history_list limit as_json =
+    run_owned (fun _sw ->
+        let path = Pie.History.path ~caps in
+        match Pie.History.read ~caps ~path with
+        | Error (`History message) -> Error (`History message)
+        | Ok entries ->
+            let entries =
+              match limit with None -> entries | Some n -> take n entries
+            in
+            if as_json then
+              Ox_caps.Cap_stdlib.printf ~caps "%s\n%!"
+                (Yojson.Safe.to_string (Pie.History.json_of_entries entries))
+            else
+              List.iter
+                (fun entry ->
+                  Ox_caps.Cap_stdlib.printf ~caps "%s\n%!"
+                    (Pie.History.format_listing_line entry))
+                entries;
+            Ok ())
+  in
+  let find_entry entries selector =
+    match entries with
+    | newest :: _ when selector = "last" -> Ok newest
+    | _ -> (
+        match
+          List.find_opt
+            (fun (entry : Pie.History.entry) -> String.equal entry.id selector)
+            entries
+        with
+        | Some entry -> Ok entry
+        | None -> Error ("unknown history entry " ^ selector))
+  in
+  let history_show selector ~raw ~as_json =
+    run_owned (fun _sw ->
+        if raw && as_json then
+          Error (`History "--raw and --json cannot be combined")
+        else
+          let path = Pie.History.path ~caps in
+          match Pie.History.read ~caps ~path with
+          | Error (`History message) -> Error (`History message)
+          | Ok [] -> Error (`History "no history")
+          | Ok entries -> (
+              match find_entry entries selector with
+              | Error message -> Error (`History message)
+              | Ok entry -> (
+                  if as_json then (
+                    Ox_caps.Cap_stdlib.printf ~caps "%s\n%!"
+                      (Yojson.Safe.to_string (Pie.History.json_of_entry entry));
+                    Ok ())
+                  else
+                    let text =
+                      if raw then entry.raw_text else entry.final_text
+                    in
+                    match text with
+                    | Some text ->
+                        Ox_caps.Cap_stdlib.printf ~caps "%s%!"
+                          (newline_terminated text);
+                        Ok ()
+                    | None ->
+                        Error
+                          (`History
+                             (Printf.sprintf
+                                (if raw then
+                                   "history entry %s has no raw transcript"
+                                 else "history entry %s has no final text")
+                                entry.id)))))
+  in
+  let positive_int =
+    let parse text =
+      match int_of_string_opt text with
+      | Some n when n > 0 -> Ok n
+      | _ -> Error (`Msg "must be a positive integer")
+    in
+    Arg.conv (parse, fun ppf n -> Format.pp_print_int ppf n)
+  in
+  let history_limit =
+    Arg.(
+      value
+      & opt (some positive_int) None
+      & info [ "limit" ] ~docv:"N"
+          ~doc:"Maximum number of entries to list, newest first")
+  in
+  let list_json =
+    Arg.(value & flag & info [ "json" ] ~doc:"Print a JSON array of entries")
+  in
+  let show_json =
+    Arg.(value & flag & info [ "json" ] ~doc:"Print the entry as a JSON object")
+  in
+  let show_raw =
+    Arg.(
+      value & flag
+      & info [ "raw" ]
+          ~doc:"Print the raw pass-1 transcript instead of the final text")
+  in
+  let show_id =
+    Arg.(
+      value & pos 0 string "last"
+      & info [] ~docv:"ID"
+          ~doc:"Attempt id, or last for the newest entry. Defaults to last.")
+  in
+  let history_man =
+    [
+      `S Manpage.s_description;
+      `P
+        "Lists dictation transcripts, newest first, or prints one entry so it \
+         can be piped to the clipboard. History is read from \
+         XDG_DATA_HOME/pie/history.jsonl (default \
+         ~/.local/share/pie/history.jsonl).";
+      `S Manpage.s_examples;
+      `Pre "pie history --limit 20";
+      `Noblank;
+      `Pre "pie history --json";
+      `Noblank;
+      `Pre "pie history show | wl-copy";
+      `Noblank;
+      `Pre "pie history show --raw last";
+    ]
+  in
+  let history =
+    Cmd.group
+      ~default:
+        Term.(
+          const (fun limit as_json -> history_list limit as_json)
+          $ history_limit $ list_json)
+      (Cmd.info "history" ~doc:"List and recover dictation transcripts"
+         ~man:history_man)
+      [
+        Cmd.v
+          (Cmd.info "show"
+             ~doc:"Print one entry's final text, or its raw transcript")
+          Term.(
+            const (fun selector raw as_json ->
+                history_show selector ~raw ~as_json)
+            $ show_id $ show_raw $ show_json);
+      ]
+  in
   let msg =
     Cmd.group
       (Cmd.info "msg" ~doc:"Send a message to the running daemon")
       [ action; msg_status; subscribe ]
   in
   [
-    source; meter; record; type_text; status; toggle; pause; resume; retry; msg;
+    source;
+    meter;
+    record;
+    type_text;
+    status;
+    toggle;
+    pause;
+    resume;
+    retry;
+    history;
+    msg;
   ]
 
 let service_args =
