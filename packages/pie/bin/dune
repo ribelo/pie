@@ -1,6 +1,26 @@
 (include_subdirs no)
 
 (executable
+ (name gen_skill_data)
+ (modules gen_skill_data))
+
+(rule
+ (target pie_skill_data.ml)
+ (deps
+  gen_skill_data.exe
+  (source_tree ../../../skill/pie-glossary))
+ (action
+  (with-stdout-to
+   pie_skill_data.ml
+   (run ./gen_skill_data.exe ../../../skill/pie-glossary))))
+
+(library
+ (name pie_cli_support)
+ (modules skill_cli skill_install pie_skill_data)
+ (libraries cmdliner ox_caps unix yojson))
+
+(executable
  (public_name pie)
  (name pie)
- (libraries pie cmdliner eio_main ox ox_app ox_caps))
+ (modules pie)
+ (libraries pie pie_cli_support cmdliner eio_main ox ox_app ox_caps))

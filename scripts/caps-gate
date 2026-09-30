@@ -13,4 +13,6 @@ if [ ! -f "$gate" ]; then
   exit 2
 fi
 
-exec bash "$gate" "$@" packages
+# gen_skill_data.ml is a build-time reader of skill/pie-glossary. It has no
+# Door and no capability to take; the generated module is what the binary links.
+exec bash "$gate" --allow 'packages/pie/bin/gen_skill_data.ml' "$@" packages

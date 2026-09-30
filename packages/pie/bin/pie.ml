@@ -453,6 +453,7 @@ let commands_with_env (env : _ Ox_app.Env.t) door_run_owned =
       (Cmd.info "msg" ~doc:"Send a message to the running daemon")
       [ action; msg_status; subscribe ]
   in
+  let skill = Pie_cli_support.Skill_cli.command ~caps in
   [
     source;
     meter;
@@ -464,6 +465,7 @@ let commands_with_env (env : _ Ox_app.Env.t) door_run_owned =
     resume;
     retry;
     history;
+    skill;
     msg;
   ]
 

@@ -1,0 +1,6 @@
+(include_subdirs no)
+
+(test
+ (name test_skill_install)
+ (libraries unix alcotest yojson)
+ (deps ../../bin/pie.exe))
