@@ -2092,8 +2092,11 @@ let test_buffered_clip_cancellation_settles_after_offer () =
   Alcotest.(check bool)
     "cancellation releases admission" false
     (Recording.Coordinator.snapshot coordinator).Recording.Coordinator.active;
+  (* dict-u5xj: the attempt was not paused or cancelled by the user, so the
+     captured audio stays available for pie retry (a service stop is the same
+     kind of cancellation). *)
   Alcotest.(check bool)
-    "abort does not publish a recovery candidate" true
+    "unrequested cancellation publishes the captured audio" false
     (peek_none (require_store dir));
   remove_dir dir
 

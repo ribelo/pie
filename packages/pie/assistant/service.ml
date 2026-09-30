@@ -1236,7 +1236,15 @@ let with_failure_retention owner body () =
         owner.failed
         || not (Ox.Cause.is_interrupt_only (cause_of_ptt_error error));
       result
-  | exception (Eio.Cancel.Cancelled _ as exn) -> raise exn
+  | exception (Eio.Cancel.Cancelled _ as exn) ->
+      (* A cancellation the user did not ask for (the service stopping, a
+         restart) ends an attempt that may hold minutes of speech: keep its
+         audio for pie retry. A user pause or cancel is signalled on the
+         attempt and still discards. On 2026-09-30 a service restart during
+         a dictation lost it. (dict-u5xj) *)
+      if not (Recording.Coordinator.cancel_signalled owner.attempt) then
+        owner.failed <- true;
+      raise exn
   | exception exn ->
       let backtrace = Printexc.get_raw_backtrace () in
       owner.failed <- true;

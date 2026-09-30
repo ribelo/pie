@@ -485,6 +485,59 @@ let test_cancel_waits_for_blocked_loader () =
       Alcotest.(check bool)
         "loader returned before service switch finished" true (Atomic.get left))
 
+(* dict-u5xj: a service stop in the middle of a dictation (on 2026-09-30 an
+   install restart) keeps the captured audio for pie retry. *)
+let test_service_stop_retains_capture () =
+  Pie_test_runtime.run @@ fun env ->
+  let clock = Eio.Stdenv.clock env in
+  let mono_clock = Eio.Stdenv.mono_clock env in
+  let net = Eio.Stdenv.net env in
+  let process_mgr = Eio.Stdenv.process_mgr env in
+  with_dir (fun dir ->
+      let keyboard = Pie.Keyboard.Monitor.create () in
+      let audio_q, audio = make_audio () in
+      let stamp () = [ Some (1, 1, 0, 0.) ] in
+      let load _ = (base_config (), stamp ()) in
+      let stt _ _ _ = Ok "unused" in
+      let deliver _ _ _ = Ok () in
+      let retry_dir_ref = ref None in
+      let recorded, set_recorded = Eio.Promise.create () in
+      let service_done, resolve_done = Eio.Promise.create () in
+      Eio.Switch.run @@ fun outer ->
+      Eio.Fiber.fork ~sw:outer (fun () ->
+          (match
+             Eio.Switch.run @@ fun service_sw ->
+             let _socket, retry_dir, workflow =
+               owner_workflow ~logger:(test_logger env) ~env ~sw:service_sw ~net
+                 ~process_mgr ~mono_clock ~dir ~config_control:{ stamp; load }
+                 ~stt ~deliver ~keyboard ~audio
+             in
+             retry_dir_ref := Some retry_dir;
+             Eio.Fiber.fork ~sw:service_sw (fun () ->
+                 Eio.Promise.await recorded;
+                 raise Cancel_service);
+             ignore (workflow ())
+           with
+          | () -> ()
+          | exception Cancel_service -> ()
+          | exception exn ->
+              let name = Printexc.to_string exn in
+              if String.length name >= 7 && String.sub name 0 7 = "Cancel." then
+                ()
+              else raise exn);
+          Eio.Promise.resolve resolve_done ());
+      Eio.Time.sleep clock 0.2;
+      let retry_dir = Option.get !retry_dir_ref in
+      Pie.Keyboard.Monitor.emit keyboard (key ~released:false);
+      offer_pcm audio_q;
+      wait_until ~clock (fun () -> pcm_files retry_dir <> []);
+      wait_for_recorded_pcm ~clock ~audio_q ~retry_dir;
+      Eio.Promise.resolve set_recorded ();
+      Eio.Promise.await service_done;
+      Alcotest.(check (option string))
+        "dict-u5xj service stop retains captured audio" (Some "audio")
+        (peek_kind retry_dir))
+
 let test_cancelled_attempt_releases_recording_fd () =
   Pie_test_runtime.run @@ fun env ->
   with_dir (fun dir ->
@@ -2726,6 +2779,8 @@ let () =
                 test_cancel_waits_for_blocked_loader;
               Alcotest.test_case "cancelled attempt releases recording fd"
                 `Quick test_cancelled_attempt_releases_recording_fd;
+              Alcotest.test_case "dict-u5xj service stop retains captured audio"
+                `Quick test_service_stop_retains_capture;
               Alcotest.test_case
                 "pause latch is one-shot; resume does not stop next attempt"
                 `Quick test_pause_latch_one_shot_resume_fresh_attempt;
