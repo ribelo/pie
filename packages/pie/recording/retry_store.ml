@@ -939,6 +939,33 @@ module Active = struct
               | () -> known_unix exn
               | exception close_exn -> raise (combine exn close_exn))))
 
+  let load_sealed_audio (writer : writer) =
+    let caps = writer.store.caps in
+    if writer.phase <> Sealed || writer.fd <> None then
+      err "audio writer is not sealed"
+    else
+      match
+        open_owned_regular ~caps writer.draft Dictation_limits.capture_pcm_bytes
+      with
+      | Error e -> Error e
+      | Ok Excluded -> err "sealed audio rejected"
+      | Ok (Opened (fd, st)) -> (
+          let owned = ref true in
+          try
+            let body =
+              if st.st_size <> writer.byte_count then err "pcm length mismatch"
+              else
+                match read_fd fd st.st_size with
+                | None -> err "sealed audio read failed"
+                | Some pcm -> Ok pcm
+            in
+            close_owned ~caps owned fd;
+            body
+          with exn -> (
+            match close_owned ~caps owned fd with
+            | () -> known_unix exn
+            | exception close_exn -> raise (combine exn close_exn)))
+
   let load_audio store generation =
     match peek store with
     | Error e -> Error e

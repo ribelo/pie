@@ -61,6 +61,7 @@ val with_cli_overrides :
 
 val make_live_recognizer :
   load_bindings:(unit -> ptt_binding * ptt_binding) ->
+  ?load_config_bindings:(unit -> Config.Stt.binding list) ->
   ?coordinator:Recording.Coordinator.t ->
   ?latch_keycode:int option ref ->
   unit ->
@@ -68,6 +69,7 @@ val make_live_recognizer :
   Ptt_loop.trigger option
 
 val create_attempt_owner :
+  ?dictation:Dictation.t ->
   store:Recording.Retry_store.Active.store ->
   coordinator:Recording.Coordinator.t ->
   attempt:Recording.Coordinator.attempt ->
@@ -126,6 +128,9 @@ val on_press :
   config:Config.Stt.t ->
   ?store:Recording.Retry_store.Active.store ->
   ?retry_dir:string ->
+  ?pipeline:Dictation.dependencies ->
+  ?binding:Config.Stt.binding ->
+  ?on_owner:(attempt_owner -> unit) ->
   stt:(Config.Stt.t -> ptt_mode -> bytes -> (string, Ptt_loop.error) result) ->
   deliver:(Config.Stt.t -> ptt_mode -> string -> (unit, Ptt_loop.error) result) ->
   string ->
@@ -158,6 +163,7 @@ val run_with_inputs :
   retry_dir:string ->
   ?config_path:string ->
   ?initial_config:Config.Stt.t ->
+  ?pipeline:Dictation.dependencies ->
   ?ptt_transcribe_keysym:int ->
   ?ptt_translate_keysym:int ->
   ?min_duration_ms:int ->

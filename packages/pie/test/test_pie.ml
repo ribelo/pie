@@ -2133,9 +2133,16 @@ let test_buffered_clip_defect_settles_after_offer () =
   Alcotest.(check bool)
     "defect releases admission" false
     (Recording.Coordinator.snapshot coordinator).Recording.Coordinator.active;
-  Alcotest.(check bool)
-    "defect abort does not publish" true
-    (peek_none (require_store dir));
+  (match Recording.Retry_store.Active.peek (require_store dir) with
+  | Ok (Some (Recording.Retry_store.Active.Audio { generation; _ })) -> (
+      match
+        Recording.Retry_store.Active.load_audio (require_store dir) generation
+      with
+      | Ok retained ->
+          Alcotest.(check bytes)
+            "dict-u5xj defect retains exact audio" pcm_bytes retained
+      | Error (`Retry_store message) -> Alcotest.fail message)
+  | _ -> Alcotest.fail "dict-u5xj defect must retain an audio candidate");
   remove_dir dir
 
 let test_on_press_construction_does_not_admit () =

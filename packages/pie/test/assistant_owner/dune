@@ -12,4 +12,5 @@
   ox_http
   unix
   yojson
-  cstruct))
+  cstruct
+  base64))

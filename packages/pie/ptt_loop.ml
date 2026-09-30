@@ -1,4 +1,8 @@
-type trigger = Press of string | Release of string
+type trigger =
+  | Press of string
+  | Press_binding of Config.Stt.binding
+  | Release of string
+
 type captured_clip = { duration_ms : int; pcm_bytes : bytes }
 
 type error =
@@ -151,9 +155,9 @@ let ptt_fields ?duration_ms ?held_duration_ms ?bytes ?rms ?peak config mode =
   |> add "ptt.rms" (fun x -> Float x) rms
   |> add "ptt.peak" (fun x -> Float x) peak
 
-let run ?control ?(on_capture_resumed = fun () -> Ok ())
-    ?(on_low_input = fun () -> Ok ()) ~sw ~mono_clock ~logger
-    ~(keyboard : Keyboard.Monitor.t) ~audio
+let run ?control ?on_press_binding ?(on_capture_failure = fun _ -> Ok ())
+    ?(on_capture_resumed = fun () -> Ok ()) ?(on_low_input = fun () -> Ok ())
+    ~sw ~mono_clock ~logger ~(keyboard : Keyboard.Monitor.t) ~audio
     ?(queue_pcm_bytes = Dictation_limits.queue_pcm_bytes)
     ?(capture_pcm_bytes = Dictation_limits.capture_pcm_bytes)
     ?(queue_capacity = 1024 + 256) (config : config) : (unit, run_error) result
@@ -184,9 +188,10 @@ let run ?control ?(on_capture_resumed = fun () -> Ok ())
     in
     match stamped.input with
     | Chunk _ -> consume_processing_input ()
-    | Trigger (Press _ | Release _) when stamped.operation_active ->
+    | Trigger (Press _ | Press_binding _ | Release _)
+      when stamped.operation_active ->
         consume_processing_input ()
-    | Trigger (Press _ | Release _) -> park stamped
+    | Trigger (Press _ | Press_binding _ | Release _) -> park stamped
     | Event event -> (
         match config.recognize event with
         | Some trigger when not stamped.operation_active ->
@@ -375,7 +380,14 @@ let run ?control ?(on_capture_resumed = fun () -> Ok ())
             handle_trigger ~notify_resumed:false capture_state dead_input
               offered chunks acc trigger
       and handle_trigger ~notify_resumed capture_state dead_input offered chunks
-          acc = function
+          acc trigger =
+        let trigger =
+          match trigger with
+          | Press_binding binding ->
+              Press (Config.Stt.string_of_mode binding.mode)
+          | trigger -> trigger
+        in
+        match trigger with
         | Release release_mode when release_mode = mode -> (
             match capture_state with
             | Ptt.Capture.Capturing _ ->
@@ -445,25 +457,43 @@ let run ?control ?(on_capture_resumed = fun () -> Ok ())
                      (Ox.Cause.Suppressed
                         { primary = to_cause error; finalizer }))
               in
+              let publication = on_capture_failure error in
+              let with_publication cause =
+                match publication with
+                | Ok () -> cause
+                | Error error ->
+                    Ox.Cause.Suppressed
+                      { primary = to_cause error; finalizer = cause }
+              in
               match handle.cancel () with
-              | Ok () -> Error error
-              | Error cleanup -> with_cleanup (to_cause cleanup)
+              | Ok () -> (
+                  match publication with
+                  | Ok () -> Error error
+                  | Error cleanup -> with_cleanup (to_cause cleanup))
+              | Error cleanup ->
+                  with_cleanup (with_publication (to_cause cleanup))
               | exception (Eio.Cancel.Cancelled _ as cancelled) ->
                   raise cancelled
               | exception exn ->
                   with_cleanup
-                    (Ox.Cause.Die (exn, Printexc.get_raw_backtrace ())))
+                    (with_publication
+                       (Ox.Cause.Die (exn, Printexc.get_raw_backtrace ()))))
         in
         recover_operation mode "PTT capture failed" result
       in
-      let begin_press mode received_during_attempt =
+      let begin_press ?binding mode received_during_attempt =
         if received_during_attempt then (
           log_info ~fields:(ptt_fields config mode)
             "PTT press ignored: operation already active";
           idle_loop ())
         else
           let thresholds = config.capture_thresholds () in
-          match config.on_press mode with
+          let pressed =
+            match (binding, on_press_binding) with
+            | Some binding, Some on_press -> on_press binding
+            | _ -> config.on_press mode
+          in
+          match pressed with
           | Error
               (`Ptt_error (("pcm:capture_budget" | "pcm:queue_budget") as m)) ->
               Error (`Ptt_error m)
@@ -494,10 +524,18 @@ let run ?control ?(on_capture_resumed = fun () -> Ok ())
       match take_input () with
       | { input = Chunk _; _ } | { input = Trigger (Release _); _ } ->
           idle_loop ()
+      | { input = Trigger (Press_binding binding); operation_active } ->
+          begin_press ~binding
+            (Config.Stt.string_of_mode binding.mode)
+            operation_active
       | { input = Trigger (Press mode); operation_active } ->
           begin_press mode operation_active
       | { input = Event event; operation_active } -> (
           match config.recognize event with
+          | Some (Press_binding binding) ->
+              begin_press ~binding
+                (Config.Stt.string_of_mode binding.mode)
+                operation_active
           | Some (Press mode) -> begin_press mode operation_active
           | _ -> idle_loop ())
     in

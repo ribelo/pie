@@ -49,6 +49,7 @@ val resolve :
 val resolve_focused :
   caps:< Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; .. > ->
   process_mgr:_ Eio.Process.mgr ->
+  ?on_focus:(Niri.window_info option -> unit) ->
   unit ->
   t
 (** [resolve_focused ~caps ~process_mgr ()] is [resolve] for the process id of

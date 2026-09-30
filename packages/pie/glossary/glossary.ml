@@ -277,7 +277,7 @@ let resolve ~caps ~pid =
     cwd;
   }
 
-let resolve_focused ~caps ~process_mgr () =
+let resolve_focused ~caps ~process_mgr ?(on_focus = fun _ -> ()) () =
   match Niri.focused_window ~process_mgr () with
   | Error (`Niri_error message) ->
       let resolution = resolve ~caps ~pid:None in
@@ -285,5 +285,9 @@ let resolve_focused ~caps ~process_mgr () =
         resolution with
         warnings = Focus_unavailable message :: resolution.warnings;
       }
-  | Ok None -> resolve ~caps ~pid:None
-  | Ok (Some window) -> resolve ~caps ~pid:window.pid
+  | Ok None ->
+      on_focus None;
+      resolve ~caps ~pid:None
+  | Ok (Some window) ->
+      on_focus (Some window);
+      resolve ~caps ~pid:window.pid

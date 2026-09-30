@@ -1,4 +1,8 @@
-type trigger = Press of string | Release of string
+type trigger =
+  | Press of string
+  | Press_binding of Config.Stt.binding
+  | Release of string
+
 type captured_clip = { duration_ms : int; pcm_bytes : bytes }
 
 type error =
@@ -37,6 +41,8 @@ type config = {
 
 val run :
   ?control:trigger Eio.Stream.t ->
+  ?on_press_binding:(Config.Stt.binding -> (press_result, error) result) ->
+  ?on_capture_failure:(error -> (unit, error) result) ->
   ?on_capture_resumed:(unit -> (unit, error) result) ->
   ?on_low_input:(unit -> (unit, error) result) ->
   sw:Eio.Switch.t ->

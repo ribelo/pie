@@ -74,8 +74,8 @@ let recognize ~transcribe_binding ~translate_binding event =
    key whose capture is current. Only the owner's keyup emits Release.
    Autorepeat of a down key is Press only while that key still owns an
    active admission. Latch toggles only on a fresh physical press. *)
-let make_live_recognizer ~load_bindings ?coordinator ?(latch_keycode = ref None)
-    () =
+let make_live_recognizer ~load_bindings ?load_config_bindings ?coordinator
+    ?(latch_keycode = ref None) () =
   let down = Hashtbl.create 2 in
   let owner = ref None in
   let right_shift_keysym = 65506 in
@@ -84,9 +84,31 @@ let make_live_recognizer ~load_bindings ?coordinator ?(latch_keycode = ref None)
     | Some c -> Recording.Coordinator.is_active c
     | None -> Hashtbl.length down > 0
   in
+  let press mode =
+    match load_config_bindings with
+    | None -> Ptt_loop.Press (mode_name mode)
+    | Some load -> (
+        let config_mode =
+          match mode with
+          | Transcribe -> Config.Stt.Transcribe
+          | Translate -> Config.Stt.Translate
+        in
+        match
+          List.find_opt
+            (fun (binding : Config.Stt.binding) -> binding.mode = config_mode)
+            (load ())
+        with
+        | Some binding -> Ptt_loop.Press_binding binding
+        | None -> Ptt_loop.Press (mode_name mode))
+  in
+  let trigger_mode = function
+    | Ptt_loop.Press mode -> mode
+    | Ptt_loop.Press_binding binding -> Config.Stt.string_of_mode binding.mode
+    | Ptt_loop.Release mode -> mode
+  in
   let latch mode =
     match coordinator with
-    | None -> Some (Ptt_loop.Press (mode_name mode))
+    | None -> Some (press mode)
     | Some c ->
         let snap = Recording.Coordinator.snapshot c in
         if
@@ -94,7 +116,7 @@ let make_live_recognizer ~load_bindings ?coordinator ?(latch_keycode = ref None)
           && snap.mode
              = Recording.Coordinator.string_of_mode (recording_mode mode)
         then Some (Ptt_loop.Release (mode_name mode))
-        else Some (Ptt_loop.Press (mode_name mode))
+        else Some (press mode)
   in
   fun event ->
     if event.Keyboard.Monitor.released then (
@@ -108,28 +130,43 @@ let make_live_recognizer ~load_bindings ?coordinator ?(latch_keycode = ref None)
         match (!owner, mode) with
         | Some code, Some mode when code = event.keycode ->
             owner := None;
-            Some (Ptt_loop.Release mode)
+            Some (Ptt_loop.Release (trigger_mode mode))
         | _ -> None)
     else
       match Hashtbl.find_opt down event.keycode with
       | Some mode ->
-          if !owner = Some event.keycode && busy () then
-            Some (Ptt_loop.Press mode)
-          else None
+          if !owner = Some event.keycode && busy () then Some mode else None
       | None -> (
           let transcribe_binding, translate_binding = load_bindings () in
           let has_mod5 = event.Keyboard.Monitor.state land 128 <> 0 in
           if has_mod5 && event.keysym = translate_binding.keysym then (
-            Hashtbl.replace down event.keycode (mode_name Translate);
+            Hashtbl.replace down event.keycode (press Translate);
             latch_keycode := Some event.keycode;
             latch Translate)
           else if has_mod5 && event.keysym = right_shift_keysym then (
-            Hashtbl.replace down event.keycode (mode_name Transcribe);
+            Hashtbl.replace down event.keycode (press Transcribe);
             latch_keycode := Some event.keycode;
             latch Transcribe)
           else
-            match recognize ~transcribe_binding ~translate_binding event with
-            | Some (Ptt_loop.Press mode) as trigger ->
+            let recognized =
+              match load_config_bindings with
+              | None -> recognize ~transcribe_binding ~translate_binding event
+              | Some load ->
+                  let shift =
+                    event.Keyboard.Monitor.state land shift_modifier_mask <> 0
+                  in
+                  (* The lookup is the same (keysym, shift) contract as
+                     Config.Stt.find_binding, over the current snapshot. *)
+                  Option.map
+                    (fun binding -> Ptt_loop.Press_binding binding)
+                    (List.find_opt
+                       (fun (binding : Config.Stt.binding) ->
+                         binding.keysym = event.keysym && binding.shift = shift)
+                       (load ()))
+            in
+            match recognized with
+            | Some ((Ptt_loop.Press _ | Ptt_loop.Press_binding _) as mode) as
+              trigger ->
                 let admitted = not (busy ()) in
                 Hashtbl.replace down event.keycode mode;
                 if admitted then (
@@ -169,8 +206,34 @@ let with_cli_overrides ?ptt_transcribe_keysym ?ptt_translate_keysym config =
   let transcribe, translate =
     effective_bindings ?ptt_transcribe_keysym ?ptt_translate_keysym config
   in
+  let update_first mode override bindings =
+    match override with
+    | None -> bindings
+    | Some keysym ->
+        let updated = ref false in
+        List.map
+          (fun (binding : Config.Stt.binding) ->
+            if binding.mode = mode && not !updated then (
+              updated := true;
+              { binding with keysym })
+            else binding)
+          bindings
+  in
+  let bindings =
+    config.Config.Stt.bindings
+    |> update_first Config.Stt.Transcribe ptt_transcribe_keysym
+    |> update_first Config.Stt.Translate ptt_translate_keysym
+  in
+  let seen = Hashtbl.create (List.length bindings) in
+  List.iter
+    (fun (binding : Config.Stt.binding) ->
+      if Hashtbl.mem seen (binding.keysym, binding.shift) then
+        raise (Config.Stt.Config_error "effective PTT bindings must differ");
+      Hashtbl.add seen (binding.keysym, binding.shift) ())
+    bindings;
   {
     config with
+    bindings;
     ptt_transcribe_keysym = transcribe.keysym;
     ptt_translate_keysym = translate.keysym;
     ptt_transcribe_shift = transcribe.shift;
@@ -231,7 +294,10 @@ let status_of_cause cause =
            failures)
 
 let ptt_of_injection error = ptt_error (injection_error_message error)
-let stt_of_ptt (`Ptt_error msg) = `Stt_error msg
+
+let stt_of_ptt = function
+  | `Ptt_error msg -> `Stt_error msg
+  | `Ptt_cause _ -> `Stt_error "PTT callback failed"
 
 let recognize_with_shift ~transcribe_keysym ~transcribe_shift ~translate_keysym
     ~translate_shift event =
@@ -486,6 +552,10 @@ type attempt_owner = {
   mode : ptt_mode;
   stage : attempt_stage ref;
   settled : bool Atomic.t;
+  dictation : Dictation.t option;
+  mutable captured_bytes : int;
+  mutable discard_audio : bool;
+  mutable failed : bool;
 }
 
 (* Create only missing ancestors at 0700. Existing directories are left
@@ -515,7 +585,7 @@ let open_recovery_store ~caps ~root =
   | Error e -> Error e
   | Ok () -> Active.open_store ~caps ~root
 
-let create_attempt_owner ~store ~coordinator ~attempt mode =
+let create_attempt_owner ?dictation ~store ~coordinator ~attempt mode =
   match Active.open_audio_writer store ~mode:(retry_mode mode) with
   | Error e -> Error (ptt_of_retry e)
   | Ok writer ->
@@ -527,6 +597,10 @@ let create_attempt_owner ~store ~coordinator ~attempt mode =
           mode;
           stage = ref (Capturing writer);
           settled = Atomic.make false;
+          dictation;
+          captured_bytes = 0;
+          discard_audio = false;
+          failed = false;
         }
 
 let current_writer owner =
@@ -576,7 +650,19 @@ let set_attempt_phase owner phase =
 let settle_attempt owner =
   let* () = set_attempt_phase owner Recording.Phase.Finishing in
   if Atomic.compare_and_set owner.settled false true then (
-    let result = abort_unpublished owner in
+    Option.iter Dictation.fail_unfinished owner.dictation;
+    let result =
+      if
+        (not owner.failed) || owner.discard_audio || owner.captured_bytes = 0
+        || Recording.Coordinator.cancel_signalled owner.attempt
+      then abort_unpublished owner
+      else
+        match !(owner.stage) with
+        | Closed -> Ok ()
+        | Capturing _ | Sealed _ ->
+            let* () = seal_writer owner in
+            publish_sealed_audio owner
+    in
     ignore (Recording.Coordinator.release owner.coordinator owner.attempt);
     result)
   else Ok ()
@@ -631,13 +717,23 @@ let after_capture owner ~deliver recognize =
     deliver text
   in
   let guarded action () = unless_cancelled owner.attempt action in
-  recognize_then_deliver ~recognize ~deliver
-    ~on_provider_failure:(guarded (fun () -> publish_sealed_audio owner))
-    ~on_blank:(guarded (fun () -> publish_sealed_audio owner))
-    ~on_delivery_failure:(fun text ->
-      guarded (fun () ->
-          publish_recognized_text owner text ~dispatch_uncertain:true))
-    ~on_success:(fun () -> abort_unpublished owner)
+  match owner.dictation with
+  | Some dictation ->
+      Dictation.run dictation ~recognize ~deliver
+        ~on_audio_failure:(guarded (fun () -> publish_sealed_audio owner))
+        ~on_text_failure:(fun text ~dispatch_uncertain ->
+          guarded
+            (fun () -> publish_recognized_text owner text ~dispatch_uncertain)
+            ())
+        ~on_success:(fun () -> abort_unpublished owner)
+  | None ->
+      recognize_then_deliver ~recognize ~deliver
+        ~on_provider_failure:(guarded (fun () -> publish_sealed_audio owner))
+        ~on_blank:(guarded (fun () -> publish_sealed_audio owner))
+        ~on_delivery_failure:(fun text ->
+          guarded (fun () ->
+              publish_recognized_text owner text ~dispatch_uncertain:true))
+        ~on_success:(fun () -> abort_unpublished owner)
 
 (* Tee PCM into the attempt Draft. Admission is released only by the
    outermost run_acquired_attempt on_settle, after provider scope finalizers. *)
@@ -647,13 +743,17 @@ let attempt_handle owner (handle : Ptt_loop.handle) : Ptt_loop.handle =
       (fun chunk ->
         let* () =
           match !(owner.stage) with
-          | Capturing writer -> retry_result (Active.append_audio writer chunk)
+          | Capturing writer ->
+              let* () = retry_result (Active.append_audio writer chunk) in
+              owner.captured_bytes <- owner.captured_bytes + Bytes.length chunk;
+              Ok ()
           | Sealed _ | Closed -> Error (`Ptt_error "recording:writer-closed")
         in
         handle.offer chunk);
     finish = handle.finish;
     cancel =
       (fun () ->
+        owner.discard_audio <- true;
         let result = handle.cancel () in
         ignore (abort_unpublished owner);
         result);
@@ -673,6 +773,124 @@ let production_deliver ~caps ~clock ~process_mgr ?clipboard_owner
     ~newline_rules:config.newline_rules
     ~text_entry_rules:config.text_entry_rules mode text
 
+let source_language (config : Config.Stt.t) (binding : Config.Stt.binding) =
+  match binding.mode with
+  | Config.Stt.Transcribe -> config.transcription_language
+  | Translate -> config.translation_source_language
+
+let glossary_prompt (glossary : Glossary.t) =
+  if glossary.text = "" then None else Some glossary.text
+
+(* All production two-pass effects live here; tests replace this record. *)
+let production_pipeline ~caps ~sw ~net ~clock ~logger ~process_mgr =
+  let warn message =
+    ignore (Ox_observability.Logger.warn logger message ~fields:[])
+  in
+  let history_path = lazy (History.path ~caps) in
+  {
+    Dictation.resolve_glossary =
+      (fun () ->
+        let window = ref None in
+        let glossary =
+          Glossary.resolve_focused ~caps ~process_mgr
+            ~on_focus:(fun focused ->
+              window :=
+                Option.map
+                  (fun (w : Niri.window_info) ->
+                    { History.app_id = w.app_id; title = w.title })
+                  focused)
+            ()
+        in
+        (glossary, !window));
+    pass1 =
+      (fun config binding glossary pcm ->
+        let model = resolved_model_for_mode config Transcribe in
+        let language = Stt.Language.iso639_1 (source_language config binding) in
+        let prompt = glossary_prompt glossary in
+        let pcm = normalize_for_stt config pcm in
+        Result.map_error ptt_of_stt
+          (match model.provider with
+          | Config.Stt.Codex_realtime ->
+              Stt.Codex_realtime.transcribe_pass1 ~caps ~sw ~net ~clock
+                ~model:model.model ?language ?context:prompt pcm
+          | Openrouter -> (
+              match Stt.Openrouter.resolve_api_key ~caps () with
+              | None ->
+                  Error (`Stt_error "OpenRouter API key is not configured")
+              | Some api_key ->
+                  Stt.Openrouter.transcribe ~caps ~sw ~net ~clock ~api_key
+                    ~model:model.model ?language ?prompt pcm)));
+    pass2 =
+      (fun config binding glossary transcript ->
+        match config.Config.Stt.correction with
+        | None -> Error Stt.Correction.Blank
+        | Some correction ->
+            Stt.Correction.run ~caps ~sw ~net ~clock ~logger
+              ~model:correction.model
+              ~timeout:(Ox.Duration.of_seconds correction.timeout_seconds)
+              ~prompt_template:binding.prompt
+              ~language:config.transcription_language
+              ~source_language:config.translation_source_language
+              ~target_language:config.translation_target_language ~transcript
+              ~glossary:glossary.Glossary.text
+              ?reasoning_effort:correction.reasoning_effort
+              ~temperature:correction.temperature ());
+    append_transcribed =
+      (fun event ->
+        History.append_transcribed ~caps ~path:(Lazy.force history_path) event);
+    append_finished =
+      (fun event ->
+        History.append_finished ~caps ~path:(Lazy.force history_path) event);
+    warn;
+    notify_correction_failure =
+      (fun failure ->
+        let diagnostic = Stt.Correction.diagnostic failure in
+        warn ("Correction skipped: " ^ diagnostic);
+        ignore
+          (Desktop.Notification.notify_warning ~caps ~process_mgr
+             "Pie correction skipped" diagnostic));
+    fresh_id = History.fresh_id ~caps;
+    now = (fun () -> Eio.Time.now clock);
+    log_pass =
+      (fun pass ~model ~duration_ms ->
+        let prefix =
+          match pass with
+          | Dictation.Pass1 -> "stt.pass1"
+          | Pass2 -> "stt.pass2"
+        in
+        ignore
+          (Ox_observability.Logger.info logger "Dictation pass completed"
+             ~fields:
+               [
+                 (prefix ^ "_ms", Ox_observability.Logger.Int duration_ms);
+                 (prefix ^ "_model", Ox_observability.Logger.String model);
+               ]));
+  }
+
+let first_binding (config : Config.Stt.t) mode =
+  let mode =
+    match mode with
+    | Transcribe -> Config.Stt.Transcribe
+    | Translate -> Config.Stt.Translate
+  in
+  List.find_opt
+    (fun (binding : Config.Stt.binding) -> binding.mode = mode)
+    config.bindings
+
+let create_dictation ~config ?binding pipeline mode =
+  if not config.Config.Stt.two_pass then Ok None
+  else
+    match
+      ( pipeline,
+        match binding with
+        | Some binding -> Some binding
+        | None -> first_binding config mode )
+    with
+    | Some deps, Some binding ->
+        Ok (Some (Dictation.create deps ~config ~binding))
+    | None, _ -> Error (`Ptt_error "stt:two-pass-pipeline-missing")
+    | _, None -> Error (`Ptt_error "stt:no-binding-for-mode")
+
 let make_clip_handle ~owner ~stt ~deliver ~config mode =
   {
     Ptt_loop.offer = (fun _chunk -> Ok ());
@@ -681,42 +899,97 @@ let make_clip_handle ~owner ~stt ~deliver ~config mode =
         (fun clip ->
           after_capture owner
             ~deliver:(fun text -> deliver config mode text)
-            (fun () -> stt config mode clip.Ptt_loop.pcm_bytes));
+            (fun () ->
+              match owner.dictation with
+              | Some dictation ->
+                  Dictation.recognize dictation clip.Ptt_loop.pcm_bytes
+              | None -> stt config mode clip.Ptt_loop.pcm_bytes));
     cancel = (fun () -> Ok ());
   }
 
-let make_streaming_handle ~caps ~sw ~net ~clock ~logger ~owner ~config ~deliver
-    mode =
-  let model = (resolved_model_for_mode config mode).model in
-  let with_stream =
-    match mode with
-    | Transcribe ->
-        Stt.Codex_realtime.with_transcription_stream ~caps ~sw ~net ~clock
-          ~logger ~model ~language:config.transcription_language
-          ~prompt_template:config.transcription_prompt
-    | Translate ->
-        Stt.Codex_realtime.with_translation_stream ~caps ~sw ~net ~clock ~logger
-          ~model ~source_language:config.translation_source_language
-          ~target_language:config.translation_target_language
-          ~prompt_template:config.translation_prompt
+let make_streaming_handle ~caps ~sw ~net ~clock ~logger ~owner ~config ~stt
+    ~deliver mode =
+  let model =
+    match owner.dictation with
+    | None -> (resolved_model_for_mode config mode).model
+    | Some _ -> (resolved_model_for_mode config Transcribe).model
+  in
+  let with_stream use =
+    match owner.dictation with
+    | Some dictation ->
+        let language =
+          Stt.Language.iso639_1
+            (source_language config (Dictation.binding dictation))
+        in
+        let context = glossary_prompt (Dictation.glossary dictation) in
+        Stt.Codex_realtime.with_pass1_stream ~caps ~sw ~net ~clock ~logger
+          ~model ?language ?context use
+    | None -> (
+        match mode with
+        | Transcribe ->
+            Stt.Codex_realtime.with_transcription_stream ~caps ~sw ~net ~clock
+              ~logger ~model ~language:config.transcription_language
+              ~prompt_template:config.transcription_prompt use
+        | Translate ->
+            Stt.Codex_realtime.with_translation_stream ~caps ~sw ~net ~clock
+              ~logger ~model ~source_language:config.translation_source_language
+              ~target_language:config.translation_target_language
+              ~prompt_template:config.translation_prompt use)
+  in
+  let warn_fallback () =
+    ignore
+      (Ox_observability.Logger.warn logger
+         "Realtime stream failed; keep recording and retry buffered pass 1 \
+          after release"
+         ~fields:[ ("stt.model", Ox_observability.Logger.String model) ])
+  in
+  let buffered () =
+    match !(owner.stage) with
+    | Sealed writer -> (
+        let* pcm = retry_result (Active.load_sealed_audio writer) in
+        match owner.dictation with
+        | Some dictation -> Dictation.recognize dictation pcm
+        | None -> stt config mode pcm)
+    | Capturing _ | Closed -> Error (`Ptt_error "recording:writer-not-sealed")
   in
   Ptt_loop.Scoped
     (fun use ->
       let callback_error = ref None in
+      let used = ref false in
+      Option.iter Dictation.begin_pass1 owner.dictation;
       let stream_result =
         with_stream (fun stream ->
+            used := true;
+            let dead = ref false in
+            let fallback () =
+              if not !dead then (
+                dead := true;
+                warn_fallback ())
+            in
             let handle =
               {
                 Ptt_loop.offer =
                   (fun chunk ->
-                    Result.map_error ptt_of_stt (stream.offer_chunk chunk));
+                    if !dead then Ok ()
+                    else
+                      match stream.Stt.Codex_realtime.offer_chunk chunk with
+                      | Ok () -> Ok ()
+                      | Error _ ->
+                          fallback ();
+                          Ok ());
                 finish =
                   Ptt_loop.Streaming
                     (fun ~duration_ms:_ ->
                       after_capture owner
                         ~deliver:(fun text -> deliver config mode text)
                         (fun () ->
-                          Result.map_error ptt_of_stt (stream.finish_stream ())));
+                          if !dead then buffered ()
+                          else
+                            match stream.finish_stream () with
+                            | Ok text -> Ok text
+                            | Error _ ->
+                                fallback ();
+                                buffered ()));
                 cancel =
                   (fun () ->
                     Result.map_error ptt_of_stt (stream.cancel_stream ()));
@@ -726,26 +999,37 @@ let make_streaming_handle ~caps ~sw ~net ~clock ~logger ~owner ~config ~deliver
             | Ok () -> Ok ()
             | Error error ->
                 callback_error := Some error;
-                Error (`Stt_error "ptt:callback"))
+                Error (stt_of_ptt error))
       in
       match !callback_error with
       | Some error -> Error error
-      | None -> Result.map_error ptt_of_stt stream_result)
+      | None -> (
+          match stream_result with
+          | Ok () -> Ok ()
+          | Error _ when not !used ->
+              warn_fallback ();
+              use
+                (attempt_handle owner
+                   (make_clip_handle ~owner ~stt ~deliver ~config mode))
+          | Error error -> Error (ptt_of_stt error)))
 
 let acquire_and_run ~caps ~sw ~net ~clock ~logger ~owner ~config ~stt ~deliver
     mode use =
   match
-    try Ok (resolved_model_for_mode config mode)
+    try
+      Ok
+        (resolved_model_for_mode config
+           (if config.Config.Stt.two_pass then Transcribe else mode))
     with Config.Stt.Config_error _ -> Error (`Ptt_error "config:model")
   with
   | Error _ as error -> error
   | Ok resolved -> (
       let handle =
         match resolved.provider with
-        | Codex_realtime ->
+        | Codex_realtime when (not config.two_pass) || config.streaming ->
             make_streaming_handle ~caps ~sw ~net ~clock ~logger ~owner ~config
-              ~deliver mode
-        | Openrouter ->
+              ~stt ~deliver mode
+        | Codex_realtime | Openrouter ->
             Ptt_loop.Handle
               (attempt_handle owner
                  (make_clip_handle ~owner ~stt ~deliver ~config mode))
@@ -798,8 +1082,23 @@ let run_acquired_attempt ~sw ~attempt
   | (Error _ as error), Ok () -> error
   | Ok (), result -> result
 
+let with_failure_retention owner body () =
+  match body () with
+  | Ok () -> Ok ()
+  | Error error as result ->
+      owner.failed <-
+        owner.failed
+        || not (Ox.Cause.is_interrupt_only (cause_of_ptt_error error));
+      result
+  | exception (Eio.Cancel.Cancelled _ as exn) -> raise exn
+  | exception exn ->
+      let backtrace = Printexc.get_raw_backtrace () in
+      owner.failed <- true;
+      Printexc.raise_with_backtrace exn backtrace
+
 let on_press ~caps ~sw ~net ~clock ~logger ~coordinator ~config ?store
-    ?retry_dir ~stt ~deliver mode_name =
+    ?retry_dir ?pipeline ?binding ?(on_owner = fun _ -> ()) ~stt ~deliver
+    mode_name =
   let mode = mode_of_name mode_name in
   match
     Recording.Coordinator.try_start coordinator (recording_mode mode) ()
@@ -825,20 +1124,25 @@ let on_press ~caps ~sw ~net ~clock ~logger ~coordinator ~config ?store
           ignore (Recording.Coordinator.release coordinator attempt);
           Error (ptt_of_retry error)
       | Ok store -> (
-          match create_attempt_owner ~store ~coordinator ~attempt mode with
+          let created =
+            let* dictation = create_dictation ~config ?binding pipeline mode in
+            create_attempt_owner ?dictation ~store ~coordinator ~attempt mode
+          in
+          match created with
           | Error error ->
               ignore (Recording.Coordinator.release coordinator attempt);
               Error error
           | Ok owner ->
+              on_owner owner;
               let* () = set_attempt_phase owner Recording.Phase.Recording in
               Ok
                 (Ptt_loop.Scoped
                    (fun use ->
                      run_acquired_attempt ~sw ~attempt
                        ~on_settle:(fun () -> settle_attempt owner)
-                       (fun () ->
-                         acquire_and_run ~caps ~sw ~net ~clock ~logger ~owner
-                           ~config ~stt ~deliver mode use)))))
+                       (with_failure_retention owner (fun () ->
+                            acquire_and_run ~caps ~sw ~net ~clock ~logger ~owner
+                              ~config ~stt ~deliver mode use))))))
 
 (* PIE004: keyboard and RPC presses share one control path. The handler queues
    triggers for the same PTT loop and admission owner the keyboard path uses,
@@ -1006,7 +1310,7 @@ type 'audio owned_inputs = {
 
 let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
     ~inputs ~config_control ~stt ~deliver ~socket_path ~retry_dir ?config_path
-    ?initial_config ?ptt_transcribe_keysym ?ptt_translate_keysym
+    ?initial_config ?pipeline ?ptt_transcribe_keysym ?ptt_translate_keysym
     ?(min_duration_ms = default_min_duration_ms) ?queue_pcm_bytes
     ?capture_pcm_bytes ?queue_capacity () =
   let config_path =
@@ -1014,6 +1318,11 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
   in
   Eio.Switch.check sw;
   let run_on_switch ~sw =
+    let pipeline =
+      match pipeline with
+      | Some pipeline -> pipeline
+      | None -> production_pipeline ~caps ~sw ~net ~clock ~logger ~process_mgr
+    in
     let load_initial () =
       match initial_config with
       | Some config -> Ok (config, config_control.stamp ())
@@ -1130,11 +1439,21 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
       loop ()
     in
     let ptt_loop () =
+      let active_owner = ref None in
+      let press ?binding mode_name =
+        on_press ~caps ~sw ~net ~clock ~logger ~coordinator ~config:!current
+          ~pipeline ?binding
+          ~on_owner:(fun owner -> active_owner := Some owner)
+          ?store:
+            (match get_store () with Ok store -> Some store | Error _ -> None)
+          ~retry_dir ~stt ~deliver mode_name
+      in
       let latch_keycode = ref None in
       let ptt_config : Ptt_loop.config =
         {
           recognize =
             make_live_recognizer ~coordinator ~latch_keycode
+              ~load_config_bindings:(fun () -> !current.Config.Stt.bindings)
               ~load_bindings:(fun () ->
                 let cfg = !current in
                 ( {
@@ -1164,15 +1483,7 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
                 (if cfg.ptt_translate_shift then "+shift" else "")
                 (Option.value ~default:"<default>" inputs.source_name);
               Ok ());
-          on_press =
-            (fun mode_name ->
-              on_press ~caps ~sw ~net ~clock ~logger ~coordinator
-                ~config:!current
-                ?store:
-                  (match get_store () with
-                  | Ok store -> Some store
-                  | Error _ -> None)
-                ~retry_dir ~stt ~deliver mode_name);
+          on_press = (fun mode -> press mode);
           on_release =
             (fun _ ->
               Option.iter
@@ -1206,8 +1517,24 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
       in
       let result =
         Ptt_loop.run ~sw ~mono_clock ~logger ~control ~keyboard:inputs.keyboard
-          ~audio:inputs.audio ?queue_pcm_bytes ?capture_pcm_bytes
-          ?queue_capacity
+          ~on_press_binding:(fun binding ->
+            press ~binding (Config.Stt.string_of_mode binding.mode))
+          ~on_capture_failure:(fun _ ->
+            match !active_owner with
+            | None -> Ok ()
+            | Some owner ->
+                let* () = seal_writer owner in
+                if owner.captured_bytes = 0 then abort_unpublished owner
+                else publish_sealed_audio owner)
+          ~audio:(fun () ->
+            match inputs.audio () with
+            | Ok _ as result -> result
+            | Error _ as result ->
+                (* The audio producer fails in a sibling fiber, so the owner
+                   observes cancellation rather than this original failure. *)
+                Option.iter (fun owner -> owner.failed <- true) !active_owner;
+                result)
+          ?queue_pcm_bytes ?capture_pcm_bytes ?queue_capacity
           ~on_capture_resumed:(publish_current_phase Recording.Phase.Recording)
           ~on_low_input:(fun () ->
             Result.map_error
@@ -1242,12 +1569,12 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
           ignore (Recording.Coordinator.release coordinator attempt);
           Ok ()
         in
-        let publish_text_slot store text () =
+        let publish_text_slot ?(dispatch_uncertain = true) store text () =
           unless_cancelled attempt (fun () ->
               let* _ =
                 retry_result
                   (Active.publish_text store ~mode:(retry_mode mode) ~text
-                     ~dispatch_uncertain:true)
+                     ~dispatch_uncertain)
               in
               Ok ())
         in
@@ -1263,15 +1590,32 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
         let retry_body store () =
           let* () =
             match metadata with
-            | Active.Audio _ ->
+            | Active.Audio _ -> (
                 let* pcm = retry_result (Active.load_audio store generation) in
-                recognize_then_deliver
-                  ~recognize:(fun () -> stt config mode pcm)
-                  ~deliver:(fun text -> deliver config mode text)
-                  ~on_provider_failure:(fun () -> Ok ())
-                  ~on_blank:(fun () -> Ok ())
-                  ~on_delivery_failure:(publish_text_slot store)
-                  ~on_success:(fun () -> Ok ())
+                let* dictation =
+                  create_dictation ~config (Some pipeline) mode
+                in
+                match dictation with
+                | Some dictation ->
+                    Fun.protect
+                      ~finally:(fun () -> Dictation.fail_unfinished dictation)
+                      (fun () ->
+                        Dictation.run dictation
+                          ~recognize:(fun () ->
+                            Dictation.recognize dictation pcm)
+                          ~deliver:(fun text -> deliver config mode text)
+                          ~on_audio_failure:(fun () -> Ok ())
+                          ~on_text_failure:(fun text ~dispatch_uncertain ->
+                            publish_text_slot ~dispatch_uncertain store text ())
+                          ~on_success:(fun () -> Ok ()))
+                | None ->
+                    recognize_then_deliver
+                      ~recognize:(fun () -> stt config mode pcm)
+                      ~deliver:(fun text -> deliver config mode text)
+                      ~on_provider_failure:(fun () -> Ok ())
+                      ~on_blank:(fun () -> Ok ())
+                      ~on_delivery_failure:(publish_text_slot store)
+                      ~on_success:(fun () -> Ok ()))
             | Active.Text _ ->
                 let* text = retry_result (Active.load_text store generation) in
                 deliver_retained_text

@@ -30,6 +30,10 @@ module Active : sig
   val close_writer : writer -> (unit, [> `Retry_store of string ]) result
   val abort_writer : writer -> (unit, [> `Retry_store of string ]) result
 
+  val load_sealed_audio : writer -> (bytes, [> `Retry_store of string ]) result
+  (** Read the entire sealed draft without publishing it or replacing the
+      recovery slot. Used for buffered fallback after a streaming failure. *)
+
   val publish_audio :
     store -> writer -> (generation, [> `Retry_store of string ]) result
 

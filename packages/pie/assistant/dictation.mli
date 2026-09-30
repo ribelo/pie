@@ -1,0 +1,51 @@
+(** Opt-in two-pass attempts. Legacy attempts do not create this context. *)
+type pass = Pass1 | Pass2
+
+type dependencies = {
+  resolve_glossary : unit -> Glossary.t * History.window option;
+  pass1 :
+    Config.Stt.t ->
+    Config.Stt.binding ->
+    Glossary.t ->
+    bytes ->
+    (string, Ptt_loop.error) result;
+  pass2 :
+    Config.Stt.t ->
+    Config.Stt.binding ->
+    Glossary.t ->
+    string ->
+    (string, Stt.Correction.failure) result;
+  append_transcribed :
+    History.transcribed -> (unit, [ `History of string ]) result;
+  append_finished : History.finished -> (unit, [ `History of string ]) result;
+  warn : string -> unit;
+  notify_correction_failure : Stt.Correction.failure -> unit;
+  fresh_id : unit -> string;
+  now : unit -> float;
+  log_pass : pass -> model:string -> duration_ms:int -> unit;
+}
+
+type t
+
+val create :
+  dependencies -> config:Config.Stt.t -> binding:Config.Stt.binding -> t
+(** Resolve the glossary and capture the focused window once, at admission. *)
+
+val glossary : t -> Glossary.t
+val binding : t -> Config.Stt.binding
+val begin_pass1 : t -> unit
+val recognize : t -> bytes -> (string, Ptt_loop.error) result
+
+val fail_unfinished : t -> unit
+(** Append [failed] if no outcome was recorded, including failures during
+    capture. *)
+
+val run :
+  t ->
+  recognize:(unit -> (string, Ptt_loop.error) result) ->
+  deliver:(string -> (unit, Ptt_loop.error) result) ->
+  on_audio_failure:(unit -> (unit, Ptt_loop.error) result) ->
+  on_text_failure:
+    (string -> dispatch_uncertain:bool -> (unit, Ptt_loop.error) result) ->
+  on_success:(unit -> (unit, Ptt_loop.error) result) ->
+  (unit, Ptt_loop.error) result
