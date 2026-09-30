@@ -1,0 +1,42 @@
+[
+ {
+  "id": "t1-bullets",
+  "say": "Dobra, to mamy trzy rzeczy do zrobienia na jutro. A teraz w punktach. Po pierwsze, trzeba ogarnąć debugging tego serwisu, bo logi są puste. Po drugie, odpalić testy na CI. Po trzecie, zrobić code review tego pull requesta od Marka.",
+  "expect": "bulleted/numbered list of three items; the phrase 'a teraz w punktach' NOT in output; debugging/CI/code review/pull request stay English"
+ },
+ {
+  "id": "t2-formal",
+  "say": "Hej, słuchaj, wczoraj deployowałem nową wersję i coś się wysypało na stagingu. Zrobiłem rollback, ale dalej nie wiem, co jest root causem. Dobra, napisz to trochę bardziej formalnie.",
+  "expect": "message rewritten more formally; the instruction 'napisz to bardziej formalnie' NOT in output; deploy/staging/rollback/root cause in English"
+ },
+ {
+  "id": "t3-correction-bold",
+  "say": "Spotkanie przesuwamy na czwartek. Nie, czekaj, jednak na piątek. I pogrub to, że na piątek.",
+  "expect": "only Friday remains; 'piątek' in bold; no instruction text"
+ },
+ {
+  "id": "t4-content-not-instruction",
+  "say": "Napisz mu, że ma to zrobić w punktach, bo inaczej nikt tego nie przeczyta w tym Slacku.",
+  "expect": "a sentence ABOUT telling someone to use bullet points; must NOT be turned into a list; Slack spelled right"
+ },
+ {
+  "id": "t5-codeswitch",
+  "say": "Ten feature flag jest włączony tylko na canary, więc jak zrobisz rebase na mastera i force push, to pipeline w Jenkinsie powinien przejść, a potem po prostu mergujemy i robimy release.",
+  "expect": "Polish sentence with English jargon kept: feature flag, canary, rebase, master, force push, pipeline, Jenkins, merge, release"
+ },
+ {
+  "id": "t6-asides",
+  "say": "No więc ten nowy model, znaczy ten Gemini, który testowaliśmy wczoraj, no ten flash, jest szybki, ale, i to jest ważne, czasem gubi kontekst, zwłaszcza jak prompt jest długi, jakieś kilka tysięcy tokenów.",
+  "expect": "no em dashes, no semicolons; asides handled with commas/parentheses or sentences"
+ },
+ {
+  "id": "t7-heading-list",
+  "say": "Zrób z tego krótką notatkę z nagłówkiem Plan na piątek. Musimy skończyć glossary dla Pie, przetestować latency na OpenRouterze i wrzucić nowy build.",
+  "expect": "markdown heading 'Plan na piątek' + list or short text; instruction not transcribed"
+ },
+ {
+  "id": "t8-codeblock",
+  "say": "Odpal komendę systemctl, spacja, minus minus user, spacja, restart, spacja, pie kropka service. Wrzuć to w blok kodu.",
+  "expect": "code block containing `systemctl --user restart pie.service`"
+ }
+]
