@@ -398,6 +398,7 @@ let startup_config_json ~caps ?config_path ~(config : Config.Stt.t)
         `List (List.mapi text_entry_rule_json config.text_entry_rules) );
       ("two_pass", `Bool config.two_pass);
       ("streaming", `Bool config.streaming);
+      ("audio_retention_hours", `Float config.audio_retention_hours);
       ( "correction_model",
         option_json
           (fun (correction : Config.Stt.correction) -> `String correction.model)
@@ -545,6 +546,14 @@ type attempt_stage =
   | Sealed of Active.writer
   | Closed
 
+type archive_hooks = {
+  retention_hours : unit -> float;
+  fresh_id : unit -> string;
+  predict_path : string -> string;
+  schedule : id:string -> record_history:bool -> bytes -> unit;
+  warn : string -> unit;
+}
+
 type attempt_owner = {
   coordinator : Recording.Coordinator.t;
   attempt : Recording.Coordinator.attempt;
@@ -556,6 +565,9 @@ type attempt_owner = {
   mutable captured_bytes : int;
   mutable discard_audio : bool;
   mutable failed : bool;
+  mutable archive_hooks : archive_hooks option;
+  mutable archive_started : bool;
+  mutable archive_id : string option;
 }
 
 (* Create only missing ancestors at 0700. Existing directories are left
@@ -601,6 +613,9 @@ let create_attempt_owner ?dictation ~store ~coordinator ~attempt mode =
           captured_bytes = 0;
           discard_audio = false;
           failed = false;
+          archive_hooks = None;
+          archive_started = false;
+          archive_id = None;
         }
 
 let current_writer owner =
@@ -608,7 +623,57 @@ let current_writer owner =
   | Capturing writer | Sealed writer -> Some writer
   | Closed -> None
 
+let archive_attempt_id hooks owner =
+  match owner.archive_id with
+  | Some id -> id
+  | None ->
+      let id =
+        match owner.dictation with
+        | Some dictation -> Dictation.id dictation
+        | None -> hooks.fresh_id ()
+      in
+      owner.archive_id <- Some id;
+      id
+
+(* Copy sealed PCM and encode after the caller returns. A missing hook, a
+   cancel or pause, a discarded or empty capture, or retention 0 skips the
+   copy. Errors are warnings: they do not change publication or the attempt
+   result. *)
+let maybe_archive owner =
+  match owner.archive_hooks with
+  | None -> ()
+  | Some hooks -> (
+      if
+        owner.archive_started || owner.discard_audio || owner.captured_bytes = 0
+        || Recording.Coordinator.cancel_signalled owner.attempt
+        || hooks.retention_hours () <= 0.
+      then ()
+      else
+        match !(owner.stage) with
+        | Sealed writer -> (
+            owner.archive_started <- true;
+            try
+              match Active.load_sealed_audio writer with
+              | Error (`Retry_store message) ->
+                  hooks.warn ("audio archive skipped: " ^ message)
+              | Ok pcm ->
+                  let id = archive_attempt_id hooks owner in
+                  let predicted = hooks.predict_path id in
+                  Option.iter
+                    (fun dictation ->
+                      Dictation.note_audio_path dictation predicted)
+                    owner.dictation;
+                  hooks.schedule ~id
+                    ~record_history:(Option.is_some owner.dictation)
+                    pcm
+            with
+            | Eio.Cancel.Cancelled _ as exn -> raise exn
+            | exn ->
+                hooks.warn ("audio archive skipped: " ^ Printexc.to_string exn))
+        | Capturing _ | Closed -> ())
+
 let abort_unpublished owner =
+  maybe_archive owner;
   match current_writer owner with
   | None -> Ok ()
   | Some writer ->
@@ -625,6 +690,7 @@ let seal_writer owner =
       Ok ()
 
 let publish_sealed_audio owner =
+  maybe_archive owner;
   match !(owner.stage) with
   | Sealed writer ->
       let* _ = retry_result (Active.publish_audio owner.store writer) in
@@ -1148,8 +1214,25 @@ let on_press ~caps ~sw ~net ~clock ~logger ~coordinator ~config ?store
    triggers for the same PTT loop and admission owner the keyboard path uses,
    and a press received while an operation owns admission is rejected here
    instead of being replayed as a fresh attempt after settlement. *)
-let action_handler ~coordinator ~send_control ~retries ~get_store raw_action =
-  let action = raw_action |> String.trim |> String.lowercase_ascii in
+type retry_job =
+  | Retained of Active.metadata
+  | Archived of { path : string; mode : ptt_mode }
+
+let split_action raw =
+  let trimmed = String.trim raw in
+  match String.index_opt trimmed ' ' with
+  | None -> (String.lowercase_ascii trimmed, None)
+  | Some index ->
+      let command = String.lowercase_ascii (String.sub trimmed 0 index) in
+      let rest =
+        String.trim
+          (String.sub trimmed (index + 1) (String.length trimmed - index - 1))
+      in
+      (command, if rest = "" then None else Some rest)
+
+let action_handler ~coordinator ~send_control ~retries ~get_store ~load_archived
+    raw_action =
+  let action, archive_id = split_action raw_action in
   let snap = Assistant_service.Server.snapshot_of_coordinator coordinator in
   let enqueue trigger message =
     send_control trigger;
@@ -1229,16 +1312,51 @@ let action_handler ~coordinator ~send_control ~retries ~get_store raw_action =
       else
         enqueue (Ptt_loop.Press "translate") (Some "ptt translate start queued")
   | "retry" | "ptt-retry" -> (
-      match get_store () with
-      | Error _ ->
-          {
-            action = raw_action;
-            accepted = false;
-            message = Some "recovery-store-unavailable";
-            snapshot = snap;
-          }
-      | Ok store -> (
-          match Active.peek store with
+      let queue mode job : Assistant_service.Contract.action_result =
+        match
+          Recording.Coordinator.try_start coordinator (recording_mode mode) ()
+        with
+        | Recording.Coordinator.Started attempt ->
+            Eio.Stream.add retries (job, attempt);
+            {
+              action = raw_action;
+              accepted = true;
+              message = Some "retry queued";
+              snapshot =
+                Assistant_service.Server.snapshot_of_coordinator coordinator;
+            }
+        | Recording.Coordinator.Busy active ->
+            {
+              action = raw_action;
+              accepted = false;
+              message =
+                Some
+                  ("cannot retry while "
+                  ^ Recording.Coordinator.string_of_mode active
+                  ^ " is active");
+              snapshot = snap;
+            }
+        | Recording.Coordinator.Disabled ->
+            {
+              action = raw_action;
+              accepted = false;
+              message = Some "cannot retry while PIE is paused";
+              snapshot = snap;
+            }
+      in
+      match archive_id with
+      | Some id -> (
+          match load_archived id with
+          | Error message ->
+              {
+                action = raw_action;
+                accepted = false;
+                message = Some message;
+                snapshot = snap;
+              }
+          | Ok (path, mode) -> queue mode (Archived { path; mode }))
+      | None -> (
+          match get_store () with
           | Error _ ->
               {
                 action = raw_action;
@@ -1246,47 +1364,56 @@ let action_handler ~coordinator ~send_control ~retries ~get_store raw_action =
                 message = Some "recovery-store-unavailable";
                 snapshot = snap;
               }
-          | Ok None ->
-              {
-                action = raw_action;
-                accepted = false;
-                message = Some "no retained recording to retry";
-                snapshot = snap;
-              }
-          | Ok (Some metadata) -> (
-              let mode = mode_of_active_metadata metadata in
-              match
-                Recording.Coordinator.try_start coordinator
-                  (recording_mode mode) ()
-              with
-              | Recording.Coordinator.Started attempt ->
-                  Eio.Stream.add retries (metadata, attempt);
-                  {
-                    action = raw_action;
-                    accepted = true;
-                    message = Some "retry queued";
-                    snapshot =
-                      Assistant_service.Server.snapshot_of_coordinator
-                        coordinator;
-                  }
-              | Recording.Coordinator.Busy active ->
+          | Ok store -> (
+              match Active.peek store with
+              | Error _ ->
                   {
                     action = raw_action;
                     accepted = false;
-                    message =
-                      Some
-                        ("cannot retry while "
-                        ^ Recording.Coordinator.string_of_mode active
-                        ^ " is active");
+                    message = Some "recovery-store-unavailable";
                     snapshot = snap;
                   }
-              | Recording.Coordinator.Disabled ->
+              | Ok None ->
                   {
                     action = raw_action;
                     accepted = false;
-                    message = Some "cannot retry while PIE is paused";
+                    message = Some "no retained recording to retry";
                     snapshot = snap;
-                  })))
+                  }
+              | Ok (Some metadata) -> (
+                  let mode = mode_of_active_metadata metadata in
+                  match
+                    Recording.Coordinator.try_start coordinator
+                      (recording_mode mode) ()
+                  with
+                  | Recording.Coordinator.Started attempt ->
+                      Eio.Stream.add retries (Retained metadata, attempt);
+                      {
+                        action = raw_action;
+                        accepted = true;
+                        message = Some "retry queued";
+                        snapshot =
+                          Assistant_service.Server.snapshot_of_coordinator
+                            coordinator;
+                      }
+                  | Recording.Coordinator.Busy active ->
+                      {
+                        action = raw_action;
+                        accepted = false;
+                        message =
+                          Some
+                            ("cannot retry while "
+                            ^ Recording.Coordinator.string_of_mode active
+                            ^ " is active");
+                        snapshot = snap;
+                      }
+                  | Recording.Coordinator.Disabled ->
+                      {
+                        action = raw_action;
+                        accepted = false;
+                        message = Some "cannot retry while PIE is paused";
+                        snapshot = snap;
+                      }))))
   | _ ->
       {
         action = raw_action;
@@ -1312,7 +1439,7 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
     ~inputs ~config_control ~stt ~deliver ~socket_path ~retry_dir ?config_path
     ?initial_config ?pipeline ?ptt_transcribe_keysym ?ptt_translate_keysym
     ?(min_duration_ms = default_min_duration_ms) ?queue_pcm_bytes
-    ?capture_pcm_bytes ?queue_capacity () =
+    ?capture_pcm_bytes ?queue_capacity ?audio_dir ?history_path () =
   let config_path =
     Option.value config_path ~default:(Paths.stt_config_path ~caps)
   in
@@ -1344,8 +1471,7 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
     let last_stamp = ref initial_stamp in
     let coordinator = Recording.Coordinator.create ~caps () in
     let control : Ptt_loop.trigger Eio.Stream.t = Eio.Stream.create 1024 in
-    let retries : (Active.metadata * Recording.Coordinator.attempt) Eio.Stream.t
-        =
+    let retries : (retry_job * Recording.Coordinator.attempt) Eio.Stream.t =
       Eio.Stream.create 16
     in
     let store_cell = ref None in
@@ -1358,6 +1484,31 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
           | Ok store ->
               store_cell := Some store;
               Ok store)
+    in
+    let audio_dir =
+      Option.value audio_dir
+        ~default:(Filename.concat (Paths.data_dir ~caps) "audio")
+    in
+    let history_file =
+      Option.value history_path ~default:(History.path ~caps)
+    in
+    let load_archived id =
+      match Recording.Audio_archive.locate ~caps ~dir:audio_dir ~id with
+      | Error message -> Error message
+      | Ok located ->
+          let mode =
+            match History.read ~caps ~path:history_file with
+            | Ok entries -> (
+                match
+                  List.find_opt
+                    (fun (entry : History.entry) -> String.equal entry.id id)
+                    entries
+                with
+                | Some { mode = Some History.Translate; _ } -> Translate
+                | _ -> Transcribe)
+            | Error _ -> Transcribe
+          in
+          Ok (located.path, mode)
     in
     let send_control trigger = Eio.Stream.add control trigger in
     let* () =
@@ -1382,7 +1533,8 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
                error))
         (Assistant_service.Server.start ~caps ~sw ~net ~fs ~socket_path ~clock
            ~action_handler:
-             (action_handler ~coordinator ~send_control ~retries ~get_store)
+             (action_handler ~coordinator ~send_control ~retries ~get_store
+                ~load_archived)
            coordinator)
     in
     Ox_observability.Logger.info logger "assistant_service started"
@@ -1438,12 +1590,81 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
       in
       loop ()
     in
+    let warn_archive message =
+      ignore
+        (Ox_observability.Logger.warn logger message
+           ~fields:[ ("audio.dir", Ox_observability.Logger.String audio_dir) ])
+    in
+    let prune_audio () =
+      let hours = !current.Config.Stt.audio_retention_hours in
+      if hours <= 0. then ()
+      else
+        try
+          match
+            Recording.Audio_archive.prune ~caps ~dir:audio_dir
+              ~retention_hours:hours ~now:(Eio.Time.now clock)
+          with
+          | Ok _ -> ()
+          | Error message ->
+              warn_archive ("audio archive prune failed: " ^ message)
+        with
+        | Eio.Cancel.Cancelled _ as exn -> raise exn
+        | exn ->
+            warn_archive
+              ("audio archive prune failed: " ^ Printexc.to_string exn)
+    in
+    let schedule_archive ~id ~record_history pcm =
+      try
+        Eio.Fiber.fork ~sw (fun () ->
+            try
+              match
+                Eio.Time.with_timeout clock
+                  Recording.Audio_archive.encode_timeout_s (fun () ->
+                    Ok
+                      (Recording.Audio_archive.store ~caps ~process_mgr
+                         ~dir:audio_dir ~id pcm))
+              with
+              | Error `Timeout ->
+                  warn_archive "audio archive encoding timed out"
+              | Ok (Error message) ->
+                  warn_archive ("audio archive failed: " ^ message)
+              | Ok (Ok path) -> (
+                  if record_history then
+                    match
+                      History.append_audio ~caps ~path:history_file
+                        { id; time = Eio.Time.now clock; path }
+                    with
+                    | Ok () -> ()
+                    | Error (`History message) ->
+                        warn_archive
+                          ("audio archive history write failed: " ^ message))
+            with
+            | Eio.Cancel.Cancelled _ -> ()
+            | exn ->
+                warn_archive ("audio archive failed: " ^ Printexc.to_string exn))
+      with Eio.Cancel.Cancelled _ -> ()
+    in
+    let archive_hooks =
+      {
+        retention_hours = (fun () -> !current.Config.Stt.audio_retention_hours);
+        fresh_id = History.fresh_id ~caps;
+        predict_path =
+          (fun id ->
+            Recording.Audio_archive.predict_path ~caps ~dir:audio_dir ~id);
+        schedule = schedule_archive;
+        warn = warn_archive;
+      }
+    in
+    prune_audio ();
     let ptt_loop () =
       let active_owner = ref None in
       let press ?binding mode_name =
+        prune_audio ();
         on_press ~caps ~sw ~net ~clock ~logger ~coordinator ~config:!current
           ~pipeline ?binding
-          ~on_owner:(fun owner -> active_owner := Some owner)
+          ~on_owner:(fun owner ->
+            owner.archive_hooks <- Some archive_hooks;
+            active_owner := Some owner)
           ?store:
             (match get_store () with Ok store -> Some store | Error _ -> None)
           ~retry_dir ~stt ~deliver mode_name
@@ -1557,13 +1778,20 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
     in
     let retry_loop () =
       let rec loop () =
-        let metadata, attempt = Eio.Stream.take retries in
+        let job, attempt = Eio.Stream.take retries in
         let config = !current in
-        let mode = mode_of_active_metadata metadata in
+        let mode =
+          match job with
+          | Retained metadata -> mode_of_active_metadata metadata
+          | Archived { mode; _ } -> mode
+        in
         let generation =
-          match metadata with
-          | Active.Audio { generation; _ } | Active.Text { generation; _ } ->
-              generation
+          match job with
+          | Retained
+              (Active.Audio { generation; _ } | Active.Text { generation; _ })
+            ->
+              Some generation
+          | Archived _ -> None
         in
         let release () =
           ignore (Recording.Coordinator.release coordinator attempt);
@@ -1579,19 +1807,24 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
               Ok ())
         in
         let clear_selected store =
-          match retry_result (Active.clear store generation) with
-          | Ok () -> Ok ()
-          | Error _ as error ->
-              Recording.Coordinator.set_error coordinator "recovery:cleanup";
-              Ox_observability.Logger.error logger
-                "retained recording retry cleanup failed";
-              error
+          match generation with
+          | None -> Ok ()
+          | Some generation -> (
+              match retry_result (Active.clear store generation) with
+              | Ok () -> Ok ()
+              | Error _ as error ->
+                  Recording.Coordinator.set_error coordinator "recovery:cleanup";
+                  Ox_observability.Logger.error logger
+                    "retained recording retry cleanup failed";
+                  error)
         in
         let retry_body store () =
           let* () =
-            match metadata with
-            | Active.Audio _ -> (
-                let* pcm = retry_result (Active.load_audio store generation) in
+            match job with
+            | Retained (Active.Audio _) -> (
+                let* pcm =
+                  retry_result (Active.load_audio store (Option.get generation))
+                in
                 let* dictation =
                   create_dictation ~config (Some pipeline) mode
                 in
@@ -1616,13 +1849,45 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
                       ~on_blank:(fun () -> Ok ())
                       ~on_delivery_failure:(publish_text_slot store)
                       ~on_success:(fun () -> Ok ()))
-            | Active.Text _ ->
-                let* text = retry_result (Active.load_text store generation) in
+            | Retained (Active.Text _) ->
+                let* text =
+                  retry_result (Active.load_text store (Option.get generation))
+                in
                 deliver_retained_text
                   ~deliver:(fun t -> deliver config mode t)
                   ~on_delivery_failure:(publish_text_slot store)
                   ~on_success:(fun () -> Ok ())
                   text
+            | Archived { path; _ } -> (
+                match Recording.Audio_archive.load ~caps ~process_mgr ~path with
+                | Error message -> Error (`Ptt_error message)
+                | Ok pcm -> (
+                    let* dictation =
+                      create_dictation ~config (Some pipeline) mode
+                    in
+                    match dictation with
+                    | Some dictation ->
+                        Fun.protect
+                          ~finally:(fun () ->
+                            Dictation.fail_unfinished dictation)
+                          (fun () ->
+                            Dictation.run dictation
+                              ~recognize:(fun () ->
+                                Dictation.recognize dictation pcm)
+                              ~deliver:(fun text -> deliver config mode text)
+                              ~on_audio_failure:(fun () -> Ok ())
+                              ~on_text_failure:(fun text ~dispatch_uncertain ->
+                                publish_text_slot ~dispatch_uncertain store text
+                                  ())
+                              ~on_success:(fun () -> Ok ()))
+                    | None ->
+                        recognize_then_deliver
+                          ~recognize:(fun () -> stt config mode pcm)
+                          ~deliver:(fun text -> deliver config mode text)
+                          ~on_provider_failure:(fun () -> Ok ())
+                          ~on_blank:(fun () -> Ok ())
+                          ~on_delivery_failure:(publish_text_slot store)
+                          ~on_success:(fun () -> Ok ())))
           in
           let* () = clear_selected store in
           Ox_observability.Logger.info logger

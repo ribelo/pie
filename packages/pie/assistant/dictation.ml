@@ -36,10 +36,15 @@ type t = {
   mutable pass1_started : float option;
   mutable pass2_duration : int option;
   mutable finished : bool;
+  mutable audio_path : string option;
 }
 
 let glossary t = t.glossary
 let binding t = t.binding
+let id t = t.id
+
+let note_audio_path t path =
+  if t.audio_path = None then t.audio_path <- Some path
 
 let create deps ~config ~binding =
   let glossary, window = deps.resolve_glossary () in
@@ -60,6 +65,7 @@ let create deps ~config ~binding =
     pass1_started = None;
     pass2_duration = None;
     finished = false;
+    audio_path = None;
   }
 
 let begin_pass1 t = t.pass1_started <- Some (t.deps.now ())
@@ -97,6 +103,7 @@ let finish t ?final_text ?diagnostic outcome =
            pass2_duration_ms = t.pass2_duration;
            outcome;
            diagnostic;
+           audio_path = t.audio_path;
          }))
 
 let fail_unfinished t = finish t ~diagnostic:"stt:attempt-failed" History.Failed

@@ -1831,6 +1831,7 @@ let openrouter_clip_config () : Pie.Config.Stt.t =
     two_pass = false;
     streaming = false;
     correction = None;
+    audio_retention_hours = 24.;
     bindings =
       [
         {
@@ -2671,6 +2672,7 @@ let test_assistant_startup_config_json () =
             timeout_seconds = 6.5;
             temperature = 0.2;
           };
+      audio_retention_hours = 24.;
       bindings =
         [
           {

@@ -33,6 +33,7 @@ let base_config ?(transcribe = transcribe_keysym)
     two_pass = false;
     streaming = false;
     correction = None;
+    audio_retention_hours = 24.;
     bindings =
       [
         {

@@ -60,6 +60,7 @@ type t = {
   streaming : bool;
   correction : correction option;
   bindings : binding list;
+  audio_retention_hours : float;
 }
 
 exception Config_error of string
@@ -123,6 +124,7 @@ let entry_method_of_string = function
 
 let string_of_entry_method = function Type -> "type" | Paste -> "paste"
 let max_config_file_bytes = 1024 * 1024
+let default_audio_retention_hours = 24.
 let default_correction_timeout_seconds = 8.
 let default_correction_temperature = 0.2
 let default_correction_prompt_file = "correction.md"
@@ -203,6 +205,15 @@ let get_float table key default_val =
   | Some (`Int value) -> float_of_int value
   | Some _ -> type_error key "a number"
   | None -> default_val
+
+let parse_audio_retention table =
+  let value =
+    get_float table "audio_retention_hours" default_audio_retention_hours
+  in
+  if (not (Float.is_finite value)) || value < 0. then
+    raise
+      (Config_error "audio_retention_hours must be a finite non-negative number");
+  value
 
 let get_int table key default_val =
   match toml_find table key with
@@ -698,6 +709,7 @@ let of_json table : t =
     streaming;
     correction;
     bindings;
+    audio_retention_hours = parse_audio_retention table;
   }
 
 let decode_json json =
@@ -777,6 +789,7 @@ let yojson_of_t (config : t) =
       correction_field "correction_temperature" (fun correction ->
           `Float correction.temperature);
       ("bindings", `List (List.map binding_json config.bindings));
+      ("audio_retention_hours", `Float config.audio_retention_hours);
     ]
 
 let door_spec : t Ox_app.Config.t =

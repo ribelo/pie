@@ -39,6 +39,7 @@ let base_config ?(provider = Pie.Config.Stt.Openrouter)
       | Pie.Config.Stt.Codex_realtime -> true
       | Pie.Config.Stt.Openrouter -> false);
     correction = None;
+    audio_retention_hours = 24.;
     bindings =
       [
         {
@@ -238,7 +239,7 @@ let press_cycle ~clock ~keyboard ~audio_q ~retry_dir ~delivered =
   Pie.Keyboard.Monitor.emit keyboard (key ~released:false);
   wait_for_recorded_pcm ~clock ~audio_q ~retry_dir;
   Pie.Keyboard.Monitor.emit keyboard (key ~released:true);
-  wait_until ~clock (fun () -> Atomic.get delivered <> [])
+  wait_until ~steps:120 ~clock (fun () -> Atomic.get delivered <> [])
 
 let test_record_to_delivery_last_good_then_reload () =
   Pie_test_runtime.run @@ fun env ->

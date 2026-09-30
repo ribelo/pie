@@ -94,6 +94,10 @@ type t = {
           when [two_pass] is false. Meaningful only when [two_pass]. *)
   correction : correction option;
   bindings : binding list;
+  audio_retention_hours : float;
+      (** How long settled audio stays in the archive. Default 24. [0] disables
+          archiving of new attempts and deletes nothing. Negative values are
+          rejected. *)
 }
 
 exception Config_error of string
@@ -108,6 +112,9 @@ val resolve_model_provider :
   default_provider:provider -> string -> resolved_model
 
 val find_binding : t -> keysym:int -> shift:bool -> binding option
+
+val default_audio_retention_hours : float
+(** [24.]. [0] disables archiving and does not delete existing files. *)
 
 val default_correction_timeout_seconds : float
 (** [8.]. *)

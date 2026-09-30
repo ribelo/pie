@@ -203,14 +203,28 @@ let commands_with_env (env : _ Ox_app.Env.t) door_run_owned =
                 Pie.Assistant_service.Client.resume ~caps ~net ~clock ~sw ()))
         $ const ())
   in
+  let retry_id =
+    Arg.(
+      value
+      & pos 0 (some string) None
+      & info [] ~docv:"ID"
+          ~doc:
+            "History id of an archived recording. Omit to retry the newest \
+             retained failure.")
+  in
   let retry =
-    command "retry" "Retry the newest retained failed recording"
+    command "retry" "Retry a retained failure, or an archived recording by id"
       Term.(
-        const (fun () ->
+        const (fun id ->
+            let action =
+              match id with
+              | None -> "retry"
+              | Some id -> "retry " ^ String.trim id
+            in
             run_owned (fun sw ->
                 let* result =
                   Pie.Assistant_service.Client.action ~caps ~net ~clock ~sw
-                    "retry"
+                    action
                 in
                 if result.Pie.Assistant_service.Contract.accepted then (
                   Ox_caps.Cap_stdlib.printf ~caps "%s\n%!"
@@ -221,7 +235,7 @@ let commands_with_env (env : _ Ox_app.Env.t) door_run_owned =
                     (`Daemon_error
                        (Option.value ~default:"retry was rejected"
                           result.message))))
-        $ const ())
+        $ retry_id)
   in
   let action =
     let name =

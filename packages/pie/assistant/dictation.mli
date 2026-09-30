@@ -33,6 +33,12 @@ val create :
 
 val glossary : t -> Glossary.t
 val binding : t -> Config.Stt.binding
+val id : t -> string
+
+val note_audio_path : t -> string -> unit
+(** Record the archive path before the finished event is written. A path already
+    noted is kept. *)
+
 val begin_pass1 : t -> unit
 val recognize : t -> bytes -> (string, Ptt_loop.error) result
 

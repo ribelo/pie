@@ -75,6 +75,7 @@ let finished ?(id = "attempt-1") ?(time = 1_700_000_001.5)
     pass2_duration_ms;
     outcome;
     diagnostic;
+    audio_path = None;
   }
 
 let test_round_trip () =
@@ -362,6 +363,7 @@ let test_listing_truncation () =
         outcome = None;
         diagnostic = None;
         finished_at = None;
+        audio_path = None;
       }
   in
   Alcotest.(check bool) "ellipsis" true (string_contains preview "...");
@@ -693,6 +695,53 @@ let test_cli_help () =
         "help mentions limit" true
         (string_contains help "limit"))
 
+let test_audio_path_is_optional () =
+  (* dict-z1ax: old lines still read; show JSON carries the archive path. *)
+  with_root (fun root ->
+      let path = Filename.concat root "history.jsonl" in
+      let channel =
+        open_out_gen [ Open_creat; Open_wronly; Open_trunc ] 0o600 path
+      in
+      Fun.protect
+        ~finally:(fun () -> close_out_noerr channel)
+        (fun () ->
+          output_string channel
+            "{\"v\":1,\"event\":\"finished\",\"id\":\"old\",\"time\":\"2023-11-14T22:13:20.000Z\",\"outcome\":\"delivered\"}\n");
+      let entries = fail_history (Pie.History.read ~caps ~path) in
+      (match entries with
+      | [ entry ] ->
+          Alcotest.(check (option string))
+            "old line has no audio" None entry.audio_path
+      | _ -> Alcotest.fail "expected the old finished line");
+      let noted =
+        { (finished ~id:"noted" ()) with audio_path = Some "/a/noted.opus" }
+      in
+      fail_history (Pie.History.append_finished ~caps ~path noted);
+      fail_history
+        (Pie.History.append_audio ~caps ~path
+           { id = "old"; time = 1_700_000_002.; path = "/a/old.wav" });
+      let entries = fail_history (Pie.History.read ~caps ~path) in
+      let audio id =
+        match
+          List.find_opt
+            (fun (entry : Pie.History.entry) -> entry.id = id)
+            entries
+        with
+        | Some entry -> entry.audio_path
+        | None -> Alcotest.fail ("missing " ^ id)
+      in
+      Alcotest.(check (option string))
+        "audio event" (Some "/a/old.wav") (audio "old");
+      Alcotest.(check (option string))
+        "finished field" (Some "/a/noted.opus") (audio "noted");
+      let json =
+        Pie.History.json_of_entry
+          (List.find (fun (e : Pie.History.entry) -> e.id = "old") entries)
+      in
+      Alcotest.(check bool)
+        "show json" true
+        (Yojson.Safe.Util.member "audioPath" json = `String "/a/old.wav"))
+
 let () =
   Alcotest.run "history"
     [
@@ -721,6 +770,9 @@ let () =
             test_binding_and_fresh_id;
           Alcotest.test_case "listing truncation dict-zzju" `Quick
             test_listing_truncation;
+          Alcotest.test_case
+            "audio path is optional and shown in json dict-z1ax" `Quick
+            test_audio_path_is_optional;
         ] );
       ( "cli",
         [

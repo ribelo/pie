@@ -57,6 +57,7 @@ type finished = {
   pass2_duration_ms : int option;
   outcome : outcome;
   diagnostic : string option;
+  audio_path : string option;
 }
 
 type entry = {
@@ -75,9 +76,15 @@ type entry = {
   outcome : outcome option;
   diagnostic : string option;
   finished_at : float option;
+  audio_path : string option;
 }
 
-type event = Transcribed of transcribed | Finished of finished
+type audio_recorded = { id : string; time : float; path : string }
+
+type event =
+  | Transcribed of transcribed
+  | Finished of finished
+  | Audio of audio_recorded
 
 let file_name = "history.jsonl"
 let path ~caps = Filename.concat (Paths.data_dir ~caps) file_name
@@ -195,7 +202,7 @@ let json_window = function
           ("title", json_string_opt window.title);
         ]
 
-let json_of_entry entry =
+let json_of_entry (entry : entry) =
   `Assoc
     [
       ("id", `String entry.id);
@@ -223,6 +230,7 @@ let json_of_entry entry =
         match entry.finished_at with
         | None -> `Null
         | Some time -> `String (iso_of_unix time) );
+      ("audioPath", json_string_opt entry.audio_path);
     ]
 
 let json_of_entries entries = `List (List.map json_of_entry entries)
@@ -297,10 +305,24 @@ let event_json = function
       let fields =
         fields @ [ ("outcome", `String (string_of_outcome event.outcome)) ]
       in
+      let fields =
+        add "diagnostic"
+          (Option.map (fun text -> `String text) event.diagnostic)
+          fields
+      in
       `Assoc
-        (add "diagnostic"
-           (Option.map (fun text -> `String text) event.diagnostic)
+        (add "audioPath"
+           (Option.map (fun path -> `String path) event.audio_path)
            fields)
+  | Audio event ->
+      `Assoc
+        [
+          ("v", `Int 1);
+          ("event", `String "audio");
+          ("id", `String event.id);
+          ("time", `String (iso_of_unix event.time));
+          ("audioPath", `String event.path);
+        ]
 
 let encode_line event =
   let line = Yojson.Safe.to_string (event_json event) in
@@ -421,6 +443,7 @@ let event_of_json json =
           | None -> Error "unknown outcome"
         in
         let* diagnostic = optional_string fields "diagnostic" in
+        let* audio_path = optional_string fields "audioPath" in
         if Option.fold ~none:false ~some:(fun n -> n < 0) pass2_duration_ms then
           Error "pass2DurationMs is negative"
         else
@@ -434,7 +457,12 @@ let event_of_json json =
                  pass2_duration_ms;
                  outcome;
                  diagnostic;
+                 audio_path;
                })
+    | "audio" ->
+        let* path = require_string fields "audioPath" in
+        if path = "" then Error "audioPath is empty"
+        else Ok (Audio { id; time; path })
     | _ -> Error "unknown history event"
 
 let event_of_line line =
@@ -458,6 +486,7 @@ let lines_of content =
 type pending = {
   transcribed : transcribed option;
   finished : finished option;
+  audio_path : string option;
   sort_time : float;
   sort_index : int;
 }
@@ -502,6 +531,7 @@ let entry_of id pending =
     diagnostic =
       Option.bind finished (fun (event : finished) -> event.diagnostic);
     finished_at = Option.map (fun (event : finished) -> event.time) finished;
+    audio_path = pending.audio_path;
   }
 
 let merge events =
@@ -513,6 +543,12 @@ let merge events =
         match event with
         | Transcribed event -> (event.id, event.time)
         | Finished event -> (event.id, event.time)
+        | Audio event -> (event.id, event.time)
+      in
+      let audio_path_of = function
+        | Audio event -> Some event.path
+        | Finished event -> event.audio_path
+        | Transcribed _ -> None
       in
       match Hashtbl.find_opt table id with
       | None ->
@@ -522,19 +558,28 @@ let merge events =
               transcribed =
                 (match event with
                 | Transcribed event -> Some event
-                | Finished _ -> None);
+                | Finished _ | Audio _ -> None);
               finished =
                 (match event with
                 | Finished event -> Some event
-                | Transcribed _ -> None);
+                | Transcribed _ | Audio _ -> None);
+              audio_path = audio_path_of event;
               sort_time = time;
               sort_index = index;
             }
       | Some previous ->
+          let audio_path =
+            match audio_path_of event with
+            | Some path -> Some path
+            | None -> previous.audio_path
+          in
           let next =
             match event with
-            | Transcribed event -> { previous with transcribed = Some event }
-            | Finished event -> { previous with finished = Some event }
+            | Transcribed event ->
+                { previous with transcribed = Some event; audio_path }
+            | Finished event ->
+                { previous with finished = Some event; audio_path }
+            | Audio _ -> { previous with audio_path }
           in
           let sort_time, sort_index =
             if
@@ -754,6 +799,12 @@ let append_finished ~caps ~path (event : finished) =
     | Some duration -> validate_duration "pass-2" duration
   in
   append_event ~caps ~path (Finished event)
+
+let append_audio ~caps ~path (event : audio_recorded) =
+  let* () = validate_id event.id in
+  let* () = validate_time event.time in
+  if event.path = "" then err "audio path is empty"
+  else append_event ~caps ~path (Audio event)
 
 let preview_limit = 80
 

@@ -29,6 +29,7 @@ let base_config ?(provider = Pie.Config.Stt.Openrouter)
       | Pie.Config.Stt.Codex_realtime -> true
       | Pie.Config.Stt.Openrouter -> false);
     correction = None;
+    audio_retention_hours = 24.;
     bindings =
       [
         {

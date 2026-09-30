@@ -62,6 +62,7 @@ let config ~transcription_prompt ~translation_prompt ~transcription_model
     two_pass = false;
     streaming = false;
     correction = None;
+    audio_retention_hours = 24.;
     bindings =
       [
         {

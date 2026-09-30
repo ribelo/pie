@@ -170,6 +170,8 @@ val run_with_inputs :
   ?queue_pcm_bytes:int ->
   ?capture_pcm_bytes:int ->
   ?queue_capacity:int ->
+  ?audio_dir:string ->
+  ?history_path:string ->
   unit ->
   (unit, Ptt_loop.run_error) result
 

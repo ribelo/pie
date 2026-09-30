@@ -55,6 +55,9 @@ type finished = {
   outcome : outcome;
   diagnostic : string option;
       (** Short reason. Absent when there is nothing to say. *)
+  audio_path : string option;
+      (** Archive file for this attempt. Absent on lines written before the
+          archive existed, and until encoding has recorded a path. *)
 }
 
 type entry = {
@@ -73,6 +76,7 @@ type entry = {
   outcome : outcome option;
   diagnostic : string option;
   finished_at : float option;
+  audio_path : string option;
 }
 (** Merged view of one attempt. Fields known only after pass 1 or pass 2 are
     optional, so a transcript can be recovered before the attempt finishes.
@@ -101,6 +105,16 @@ val append_finished :
   finished ->
   (unit, [> `History of string ]) result
 
+type audio_recorded = { id : string; time : float; path : string }
+
+val append_audio :
+  caps:< Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; .. > ->
+  path:string ->
+  audio_recorded ->
+  (unit, [> `History of string ]) result
+(** Record the archive path after encoding. A later line wins. Does not change
+    the attempt outcome. *)
+
 val read :
   caps:< Ox_caps.Cap.fs_read ; .. > ->
   path:string ->
@@ -118,7 +132,7 @@ val json_of_entry : entry -> Yojson.Safe.t
 (** Stable object: [id], [time] (UTC [YYYY-MM-DDTHH:MM:SS.sssZ]), [mode],
     [binding], [window] ([{appId, title}] or null), [glossaryPaths],
     [pass1Model], [pass1DurationMs], [rawText], [finalText], [pass2Model],
-    [pass2DurationMs], [outcome], [diagnostic], [finishedAt]. Absent fields are
-    null. *)
+    [pass2DurationMs], [outcome], [diagnostic], [finishedAt], [audioPath].
+    Absent fields are null. *)
 
 val json_of_entries : entry list -> Yojson.Safe.t

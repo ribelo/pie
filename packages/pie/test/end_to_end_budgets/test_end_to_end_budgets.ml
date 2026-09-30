@@ -34,6 +34,11 @@ let base_config () : Pie.Config.Stt.t =
     two_pass = false;
     streaming = false;
     correction = None;
+    (* This plateau counts fds at attempt idle. Archive encode runs after
+       settlement and holds ffmpeg pipes and a pidfd only while it is in
+       flight; those close when the encode finishes. Retention 0 keeps that
+       background work out of the attempt budget. *)
+    audio_retention_hours = 0.;
     bindings =
       [
         {
