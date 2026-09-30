@@ -131,6 +131,21 @@ let refusal_body =
              ] );
        ])
 
+(* Gemini through OpenRouter adds a reasoning item after the message when
+   reasoning.effort is set. *)
+let reasoning_body text =
+  Yojson.Safe.to_string
+    (`Assoc
+       [
+         ("status", `String "completed");
+         ( "output",
+           `List
+             [
+               output_text text;
+               `Assoc [ ("type", `String "reasoning"); ("summary", `List []) ];
+             ] );
+       ])
+
 let tool_body =
   Yojson.Safe.to_string
     (`Assoc
@@ -365,6 +380,21 @@ let child_request () =
   | Some (head, body) ->
       assert_request ~temperature:0.4 ~reasoning:(Some "low") head body
 
+let child_reasoning_item () =
+  let result, _hits, _captured =
+    with_fixture
+      ~reply:(Json (reasoning_body "hello"))
+      (fun ~sw ~net ~clock ~logger ->
+        call ~sw ~net ~clock ~logger
+          ~prompt_template:(prompt_sentinel ^ " {{glossary}}")
+          ())
+  in
+  match result with
+  | Ok text -> Alcotest.(check string) "text delivered" "hello" text
+  | Error failure ->
+      Alcotest.failf "reasoning item must not reject: %s"
+        (Pie.Stt.Correction.diagnostic failure)
+
 let child_success () =
   let result, hits, captured =
     with_fixture
@@ -577,6 +607,7 @@ let child_main name =
   match name with
   | "request" -> child_request () (* dict-ldo9 dict-l4zp dict-g52m *)
   | "success" -> child_success () (* dict-ldo9 dict-g52m *)
+  | "reasoning-item" -> child_reasoning_item () (* dict-dq3o dict-ldo9 *)
   | "blank" -> child_blank () (* dict-bpuh *)
   | "at-budget" -> child_at_budget () (* dict-fk8i *)
   | "oversize" -> child_oversize () (* dict-fk8i *)
@@ -630,6 +661,7 @@ let () =
             [
               case "request" "dict-ldo9 dict-l4zp dict-g52m" ~with_key:true;
               case "success" "dict-ldo9 dict-g52m" ~with_key:true;
+              case "reasoning-item" "dict-dq3o dict-ldo9" ~with_key:true;
               case "blank" "dict-bpuh" ~with_key:true;
               case "at-budget" "dict-fk8i" ~with_key:true;
               case "oversize" "dict-fk8i" ~with_key:true;

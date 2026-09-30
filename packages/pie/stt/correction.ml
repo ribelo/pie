@@ -87,6 +87,20 @@ let max_response_bytes = Dictation_limits.result_utf8_bytes + 65_536
 let obj = Ox_json.object_
 let s value = Some (Ox_json.string value)
 
+(* A request with [reasoning.effort] gets a [reasoning] output item next to the
+   message (seen from Gemini through OpenRouter on 2026-09-30). It carries no
+   deliverable text and is not a tool call or refusal, so it is dropped before
+   the delivery verdict; every other kind still disqualifies the reply. *)
+let without_reasoning (response : Ox_ai_openrouter.Responses.response) =
+  {
+    response with
+    output =
+      List.filter
+        (function
+          | Ox_ai_openrouter.Responses.Other "reasoning" -> false | _ -> true)
+        response.output;
+  }
+
 let audio_part wav =
   obj
     [
@@ -183,7 +197,10 @@ let run ~caps ~sw ~net ~clock ~logger ~model ~prompt_template ~transcript ?audio
                 match Ox_ai_openrouter.Responses.decode json with
                 | Error error -> Error (failure_of_ai error)
                 | Ok decoded -> (
-                    match Ox_ai_openrouter.Responses.deliverable decoded with
+                    match
+                      Ox_ai_openrouter.Responses.deliverable
+                        (without_reasoning decoded)
+                    with
                     | Error rejection ->
                         Error (Rejected (outcome_of_rejection rejection))
                     | Ok raw -> accept_text raw))))
