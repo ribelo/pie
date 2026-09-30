@@ -49,6 +49,15 @@ val locate :
 (** [Error] names the problem: unknown id, no file, a symbolic link, or no
     decoder for an Opus file when no WAV sibling exists. *)
 
+val encode_mp3 :
+  caps:< Ox_caps.Cap.env ; .. > ->
+  process_mgr:_ Eio.Process.mgr ->
+  bytes ->
+  (bytes, string) result
+(** Encode 16 kHz mono s16le PCM to a 32 kbit/s MP3 in memory with the encoder
+    {!resolve_ffmpeg} finds, for upload to a provider. [Error] names the problem
+    (no encoder, encoder failure); the caller falls back to WAV. *)
+
 val store :
   caps:< Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; .. > ->
   process_mgr:_ Eio.Process.mgr ->

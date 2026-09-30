@@ -262,14 +262,15 @@ let expect_failure expected result =
         diagnostic
 
 let call ~sw ~net ~clock ~logger ?temperature ?reasoning_effort ?audio
-    ?provider_order ?(prompt_template = prompt_sentinel ^ " {{glossary}}")
+    ?audio_format ?provider_order
+    ?(prompt_template = prompt_sentinel ^ " {{glossary}}")
     ?(glossary = glossary_sentinel) ?(language = "pl") ?(source_language = "pl")
     ?(target_language = "en") ?(transcript = transcript_sentinel)
     ?(timeout = Ox.Duration.seconds 5) () =
   Pie.Stt.Correction.run ~caps ~sw ~net ~clock ~logger ~model:"test-model"
     ~prompt_template ~transcript ~glossary ~language ~source_language
-    ~target_language ?audio ?provider_order ?temperature ?reasoning_effort
-    ~timeout ()
+    ~target_language ?audio ?audio_format ?provider_order ?temperature
+    ?reasoning_effort ~timeout ()
 
 let fields = function
   | `Assoc items -> items
@@ -538,6 +539,41 @@ let spawn_case name ~with_key =
 
 module C = Pie.Stt.Correction
 
+(* A four-minute dictation (7.7 MB of PCM) was refused locally as "input too
+   large" by Ox's 4 MiB default request limit. 6 MiB of mp3 must reach the
+   provider with its format. *)
+let child_large_audio () =
+  let mp3 = Bytes.make (6 * 1024 * 1024) 'm' in
+  let result, hits, captured =
+    with_fixture
+      ~reply:(Json (completed "heard"))
+      (fun ~sw ~net ~clock ~logger ->
+        call ~sw ~net ~clock ~logger ~audio:mp3 ~audio_format:"mp3"
+          ~transcript:Pie.Stt.Correction.audio_cue ())
+  in
+  Alcotest.(check int) "one request" 1 hits;
+  (match result with
+  | Ok "heard" -> ()
+  | Ok text -> Alcotest.failf "unexpected text %s" text
+  | Error failure ->
+      Alcotest.failf "request failed: %s"
+        (Pie.Stt.Correction.diagnostic failure));
+  match captured with
+  | None -> Alcotest.fail "fixture saw no request"
+  | Some (_head, body) ->
+      let json = Yojson.Safe.from_string body in
+      let audio_part =
+        match field "input" json with
+        | `List [ message ] -> (
+            match field "content" message with
+            | `List [ _; audio_part ] -> audio_part
+            | _ -> Alcotest.fail "user content was not text plus audio")
+        | _ -> Alcotest.fail "input was not one message"
+      in
+      Alcotest.(check string)
+        "format" "mp3"
+        (string_field "format" (field "input_audio" audio_part))
+
 let child_audio () =
   let wav = Bytes.of_string "RIFF-wav" in
   let order = [ "Google AI Studio"; "Google" ] in
@@ -643,6 +679,7 @@ let child_main name =
   | "timeout" -> child_timeout () (* dict-l4zp dict-bpuh *)
   | "missing-key" -> child_missing_key () (* dict-bpuh *)
   | "audio" -> child_audio () (* dict-dq3o dict-4y4r *)
+  | "large-audio" -> child_large_audio () (* dict-dq3o *)
   | other -> Alcotest.failf "unknown child case %s" other
 
 let () =
@@ -675,5 +712,6 @@ let () =
               case "timeout" "dict-l4zp dict-bpuh" ~with_key:true;
               case "missing-key" "dict-bpuh" ~with_key:false;
               case "audio" "dict-dq3o dict-4y4r" ~with_key:true;
+              case "large-audio" "dict-dq3o" ~with_key:true;
             ] );
         ]

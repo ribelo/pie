@@ -20,7 +20,7 @@ Form (Markdown, written the way a person types on a keyboard):
 - Never use em dashes or en dashes as punctuation, and never use semicolons. Use a comma, a full stop, a colon or parentheses instead.
 - Use straight quotes (" and ') and three dots (...) rather than typographic quotes or the ellipsis character.
 
-Output only the typed text, with no preamble and no explanation.
+Output only the final typed text, once, with no notes, timestamps, analysis or drafts, no preamble and no explanation.
 
 Glossary:
 {{glossary}}

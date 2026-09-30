@@ -932,9 +932,19 @@ let production_pipeline ~caps ~sw ~net ~clock ~logger ~process_mgr =
             let wav = Bytes.create (Bytes.length header + Bytes.length pcm) in
             Bytes.blit header 0 wav 0 (Bytes.length header);
             Bytes.blit pcm 0 wav (Bytes.length header) (Bytes.length pcm);
+            let audio, audio_format =
+              match
+                Recording.Audio_archive.encode_mp3 ~caps ~process_mgr pcm
+              with
+              | Ok mp3 -> (mp3, "mp3")
+              | Error message ->
+                  warn
+                    ("One-pass upload as WAV: mp3 encoding failed: " ^ message);
+                  (wav, "wav")
+            in
             Stt.Correction.run ~caps ~sw ~net ~clock ~logger
               ~model:resolved.model ~prompt_template:binding.prompt
-              ~transcript:Stt.Correction.audio_cue ~audio:wav
+              ~transcript:Stt.Correction.audio_cue ~audio ~audio_format
               ?provider_order:config.openrouter_provider_order
               ~glossary:glossary.Glossary.text
               ~language:config.transcription_language

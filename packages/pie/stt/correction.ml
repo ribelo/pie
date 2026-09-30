@@ -101,15 +101,16 @@ let without_reasoning (response : Ox_ai_openrouter.Responses.response) =
         response.output;
   }
 
-let audio_part wav =
+let audio_part ~format audio =
   obj
     [
       ("type", s "input_audio");
       ( "input_audio",
         Some
           (obj
-             [ ("data", s (Openrouter.base64_encode wav)); ("format", s "wav") ])
-      );
+             [
+               ("data", s (Openrouter.base64_encode audio)); ("format", s format);
+             ]) );
     ]
 
 let provider_field = function
@@ -119,11 +120,13 @@ let provider_field = function
         (obj
            [ ("order", Some (Ox_json.array (List.map Ox_json.string names))) ])
 
-let encode ~model ~instructions ~input_text ?audio ?provider_order ~temperature
-    ~reasoning_effort () =
+let encode ~model ~instructions ~input_text ?audio ?(audio_format = "wav")
+    ?provider_order ~temperature ~reasoning_effort () =
   let text = obj [ ("type", s "input_text"); ("text", s input_text) ] in
   let parts =
-    match audio with None -> [ text ] | Some wav -> [ text; audio_part wav ]
+    match audio with
+    | None -> [ text ]
+    | Some audio -> [ text; audio_part ~format:audio_format audio ]
   in
   let message =
     obj [ ("role", s "user"); ("content", Some (Ox_json.array parts)) ]
@@ -145,6 +148,12 @@ let encode ~model ~instructions ~input_text ?audio ?provider_order ~temperature
    recording this process admitted. *)
 let max_audio_bytes = Dictation_limits.capture_pcm_bytes + 44
 
+(* Ox's transport refuses bodies over 4 MiB by default, which a WAV of about
+   90 seconds already exceeds (2026-09-30: a 4-minute dictation failed locally
+   with "input too large"). Allow the largest admitted audio, base64-encoded,
+   plus the prompt and glossary. *)
+let max_request_bytes = (max_audio_bytes / 3 * 4) + (4 * 1024 * 1024)
+
 let parse_body bytes =
   match Ox_json.parse (Bytes.to_string bytes) with
   | Ok json -> Ok json
@@ -159,9 +168,9 @@ let accept_text raw =
   else Ok text
 
 let run ~caps ~sw ~net ~clock ~logger ~model ~prompt_template ~transcript ?audio
-    ?provider_order ?(glossary = "") ?(language = "") ?(source_language = "")
-    ?(target_language = "") ?(temperature = default_temperature)
-    ?reasoning_effort ~timeout () =
+    ?audio_format ?provider_order ?(glossary = "") ?(language = "")
+    ?(source_language = "") ?(target_language = "")
+    ?(temperature = default_temperature) ?reasoning_effort ~timeout () =
   if String.trim model = "" || not (Float.is_finite temperature) then
     Error (Provider Invalid_request)
   else if
@@ -180,12 +189,13 @@ let run ~caps ~sw ~net ~clock ~logger ~model ~prompt_template ~transcript ?audio
         let body =
           Ox_ai.Transport.bytes_of_json
             (encode ~model ~instructions ~input_text:transcript ?audio
-               ?provider_order ~temperature ~reasoning_effort ())
+               ?audio_format ?provider_order ~temperature ~reasoning_effort ())
         in
         let http = Process.make_http ~sw ~net ~clock in
         match
           Ox_ai.Transport.post_json ~http ~clock ~logger ~timeout
-            ~max_response_bytes ~endpoint:(responses_endpoint ~caps)
+            ~max_request_bytes ~max_response_bytes
+            ~endpoint:(responses_endpoint ~caps)
             ~authorization:(Ox_ai.Bearer.header ~api_key)
             ~body ~deadline:timeout ()
         with

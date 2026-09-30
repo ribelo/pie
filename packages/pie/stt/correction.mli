@@ -5,9 +5,9 @@
     target_language are replaced. Pie adds no other instructions.
 
     The user message is one [input_text] part. When [audio] is given, a second
-    [input_audio] part carries that WAV, base64-encoded, with format ["wav"].
-    One pass passes {!audio_cue} as the text part and the recording as [audio].
-    Pass 2 passes the transcript and no audio.
+    [input_audio] part carries that audio, base64-encoded, with its format. One
+    pass passes {!audio_cue} as the text part and the recording as [audio]. Pass
+    2 passes the transcript and no audio.
 
     [?provider_order] is sent as [provider.order] when the list is non-empty.
     Fallbacks stay allowed: [allow_fallbacks] is not set.
@@ -66,6 +66,7 @@ val run :
   prompt_template:string ->
   transcript:string ->
   ?audio:bytes ->
+  ?audio_format:string ->
   ?provider_order:string list ->
   ?glossary:string ->
   ?language:string ->
@@ -81,8 +82,10 @@ val run :
     [?glossary], [?language], [?source_language] and [?target_language] default
     to the empty string and are substituted into [prompt_template].
     [?temperature] defaults to {!default_temperature}. [?reasoning_effort] is
-    omitted from the request when absent. [?audio] is WAV bytes; a recording
-    larger than the capture budget plus a WAV header is [Input_too_large].
-    [?provider_order] is omitted when absent or empty. The returned text is
-    trimmed. Blank text and text longer than
-    {!Dictation_limits.result_utf8_bytes} are failures. *)
+    omitted from the request when absent. [?audio] is the recording in
+    [?audio_format] (default ["wav"]; one pass sends ["mp3"] when an encoder is
+    available); audio larger than the capture budget plus a WAV header is
+    [Input_too_large]. The request may be as large as that audio base64-encoded
+    plus 4 MiB, above Ox's 4 MiB transport default. [?provider_order] is omitted
+    when absent or empty. The returned text is trimmed. Blank text and text
+    longer than {!Dictation_limits.result_utf8_bytes} are failures. *)

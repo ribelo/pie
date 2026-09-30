@@ -185,6 +185,46 @@ let encode_opus ~process_mgr ~ffmpeg ~caps path pcm =
       unlink_quiet ~caps tmp;
       err (failure_text ~ffmpeg exn)
 
+(* MP3 for provider upload: 32 kbit/s mono keeps a twelve-minute dictation
+   under 3 MB, where the WAV is 23 MB. OpenRouter's Responses API accepts wav
+   and mp3 but rejects ogg/opus. *)
+let encode_mp3 ~caps ~process_mgr pcm =
+  match resolve_ffmpeg ~caps with
+  | None -> err "no ffmpeg"
+  | Some ffmpeg -> (
+      try
+        let mp3 =
+          Eio.Process.parse_out process_mgr Eio.Buf_read.take_all
+            ~executable:ffmpeg
+            ~stdin:(Eio.Flow.string_source (Bytes.to_string pcm))
+            ~stderr:(Sh.discarded_stderr ())
+            (ffmpeg
+            :: [
+                 "-hide_banner";
+                 "-loglevel";
+                 "error";
+                 "-f";
+                 "s16le";
+                 "-ar";
+                 "16000";
+                 "-ac";
+                 "1";
+                 "-i";
+                 "pipe:0";
+                 "-c:a";
+                 "libmp3lame";
+                 "-b:a";
+                 "32k";
+                 "-f";
+                 "mp3";
+                 "pipe:1";
+               ])
+        in
+        if mp3 = "" then err "ffmpeg wrote no mp3" else Ok (Bytes.of_string mp3)
+      with
+      | Eio.Cancel.Cancelled _ as exn -> raise exn
+      | exn -> err (failure_text ~ffmpeg exn))
+
 let store ~caps ~process_mgr ~dir ~id pcm =
   if not (is_safe_id id) then err ("unknown archive id " ^ id)
   else
