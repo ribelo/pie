@@ -22,3 +22,22 @@
   re
   unix
   threads))
+
+; The shipped pass-2 prompts, embedded as OCaml quoted strings. The prompts
+; must not contain the closing delimiter |pie_prompt}.
+
+(rule
+ (target embedded_prompts.ml)
+ (deps
+  config/default_prompts/correction.md
+  config/default_prompts/correction-translate.md)
+ (action
+  (with-stdout-to
+   %{target}
+   (progn
+    (echo "(* Generated from config/default_prompts. Do not edit. *)\n\n")
+    (echo "let correction = {pie_prompt|")
+    (cat config/default_prompts/correction.md)
+    (echo "|pie_prompt}\n\nlet correction_translate = {pie_prompt|")
+    (cat config/default_prompts/correction-translate.md)
+    (echo "|pie_prompt}\n")))))

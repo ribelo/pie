@@ -59,6 +59,30 @@ let config ~transcription_prompt ~translation_prompt ~transcription_model
     translation_prompt;
     newline_rules = [];
     text_entry_rules = [];
+    two_pass = false;
+    streaming = false;
+    correction = None;
+    bindings =
+      [
+        {
+          keysym = 1;
+          shift = false;
+          mode = Pie.Config.Stt.Transcribe;
+          correct = false;
+          prompt_named = false;
+          prompt_file = "correction.md";
+          prompt = "{{glossary}}";
+        };
+        {
+          keysym = 2;
+          shift = false;
+          mode = Pie.Config.Stt.Translate;
+          correct = false;
+          prompt_named = false;
+          prompt_file = "correction-translate.md";
+          prompt = "{{glossary}} {{source_language}} {{target_language}}";
+        };
+      ];
   }
 
 let completed_body text =

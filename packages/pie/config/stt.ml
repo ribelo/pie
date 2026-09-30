@@ -19,6 +19,25 @@ type text_entry_rule = Input.Text_injection.text_entry_rule = {
   method_ : entry_method;
 }
 
+type mode = Transcribe | Translate
+
+type correction = {
+  model : string;
+  reasoning_effort : string option;
+  timeout_seconds : float;
+  temperature : float;
+}
+
+type binding = {
+  keysym : int;
+  shift : bool;
+  mode : mode;
+  correct : bool;
+  prompt_named : bool;
+  prompt_file : string;
+  prompt : string;
+}
+
 type t = {
   provider : provider;
   transcription_model : string;
@@ -37,6 +56,10 @@ type t = {
   translation_prompt : string;
   newline_rules : newline_rule list;
   text_entry_rules : text_entry_rule list;
+  two_pass : bool;
+  streaming : bool;
+  correction : correction option;
+  bindings : binding list;
 }
 
 exception Config_error of string
@@ -51,6 +74,10 @@ let provider_of_string = function
 let string_of_provider = function
   | Codex_realtime -> "codex-realtime"
   | Openrouter -> "openrouter"
+
+let string_of_mode = function
+  | Transcribe -> "transcribe"
+  | Translate -> "translate"
 
 let split_first_slash value =
   match String.index_opt value '/' with
@@ -96,6 +123,19 @@ let entry_method_of_string = function
 
 let string_of_entry_method = function Type -> "type" | Paste -> "paste"
 let max_config_file_bytes = 1024 * 1024
+let default_correction_timeout_seconds = 8.
+let default_correction_temperature = 0.2
+let default_correction_prompt_file = "correction.md"
+let default_correction_translate_prompt_file = "correction-translate.md"
+let default_correction_prompt = Embedded_prompts.correction
+let default_correction_translate_prompt = Embedded_prompts.correction_translate
+let default_transcribe_keysym = 65478
+let default_translate_keysym = 65479
+
+let find_binding config ~keysym ~shift =
+  List.find_opt
+    (fun binding -> binding.keysym = keysym && binding.shift = shift)
+    config.bindings
 
 let toml_find table key =
   match table with `Assoc fields -> List.assoc_opt key fields | _ -> None
@@ -134,8 +174,8 @@ let validate_translation_prompt content =
   then
     raise
       (Config_error
-         "translation prompt missing required placeholders {{source_language}} \
-          and {{target_language}}")
+         "translation prompt missing required placeholders \
+          {{source_language}}           and {{target_language}}")
 
 let type_error key expected =
   raise (Config_error (Printf.sprintf "%s must be %s" key expected))
@@ -177,6 +217,13 @@ let get_optional_string table key =
   | Some `Null | None -> None
   | Some _ -> type_error key "a string"
 
+let optional_number table key =
+  match toml_find table key with
+  | None | Some `Null -> None
+  | Some (`Float value) -> Some value
+  | Some (`Int value) -> Some (float_of_int value)
+  | Some _ -> type_error key "a number"
+
 let parse_thinking_effort table =
   match get_optional_string table "thinking_effort" with
   | None -> None
@@ -189,9 +236,225 @@ let parse_thinking_effort table =
           raise
             (Config_error
                (Printf.sprintf
-                  "thinking_effort must be minimal, low, medium, high, or \
-                   xhigh; got %s"
+                  "thinking_effort must be minimal, low, medium, high, \
+                   or                    xhigh; got %s"
                   effort)))
+
+let parse_correction_reasoning table =
+  match get_optional_string table "correction_reasoning_effort" with
+  | None -> None
+  | Some value -> (
+      match String.lowercase_ascii (String.trim value) with
+      | "" ->
+          raise (Config_error "correction_reasoning_effort must not be empty")
+      | ("none" | "minimal" | "low" | "medium" | "high" | "xhigh") as effort ->
+          Some effort
+      | effort ->
+          raise
+            (Config_error
+               (Printf.sprintf
+                  "correction_reasoning_effort must be none, minimal, \
+                   low,                    medium, high, or xhigh; got %s"
+                  effort)))
+
+let parse_correction_timeout table =
+  match optional_number table "correction_timeout_seconds" with
+  | None -> default_correction_timeout_seconds
+  | Some value ->
+      if (not (Float.is_finite value)) || value <= 0. then
+        raise
+          (Config_error
+             "correction_timeout_seconds must be a positive finite number");
+      value
+
+let parse_correction_temperature table =
+  match optional_number table "correction_temperature" with
+  | None -> default_correction_temperature
+  | Some value ->
+      if (not (Float.is_finite value)) || value < 0. || value > 2. then
+        raise
+          (Config_error
+             "correction_temperature must be a finite value in 0.0-2.0");
+      value
+
+let parse_correction_model table =
+  match toml_find table "correction_model" with
+  | None | Some `Null -> None
+  | Some (`String value) -> (
+      let value = String.trim value in
+      if value = "" then
+        raise (Config_error "correction_model must not be empty");
+      let resolved =
+        resolve_model_provider ~default_provider:Openrouter value
+      in
+      match resolved.provider with
+      | Openrouter -> Some resolved.model
+      | Codex_realtime ->
+          raise
+            (Config_error
+               (Printf.sprintf
+                  "correction_model provider %s is not supported; pass 2 \
+                   only                    supports openrouter"
+                  (string_of_provider resolved.provider))))
+  | Some _ -> type_error "correction_model" "a string"
+
+let default_prompt_file = function
+  | Transcribe -> default_correction_prompt_file
+  | Translate -> default_correction_translate_prompt_file
+
+let embedded_prompt = function
+  | Transcribe -> default_correction_prompt
+  | Translate -> default_correction_translate_prompt
+
+let validate_prompt_file_name ~where name =
+  let name = String.trim name in
+  if name = "" then raise (Config_error (where ^ " must not be empty"));
+  let parts = String.split_on_char '/' name in
+  if
+    String.contains name '/' || name = "."
+    || List.exists (fun part -> part = "" || part = "..") parts
+  then
+    raise
+      (Config_error (where ^ " must be a file name in the prompts directory"));
+  name
+
+let validate_pass2_prompt mode file content =
+  let trimmed = String.trim content in
+  if String.length trimmed = 0 then
+    raise (Config_error (Printf.sprintf "%s: prompt is empty" file));
+  let missing needle = not (contains_substring ~needle trimmed) in
+  match mode with
+  | Transcribe ->
+      if missing "{{glossary}}" then
+        raise
+          (Config_error
+             (Printf.sprintf "%s: missing required placeholder {{glossary}}"
+                file))
+  | Translate ->
+      if
+        missing "{{glossary}}"
+        || missing "{{source_language}}"
+        || missing "{{target_language}}"
+      then
+        raise
+          (Config_error
+             (Printf.sprintf
+                "%s: missing required placeholders \
+                 {{glossary}},                  {{source_language}} and \
+                 {{target_language}}"
+                file))
+
+let parse_binding index ~correct_default table =
+  let where field = Printf.sprintf "bindings[%d].%s" index field in
+  let keysym =
+    match toml_find table "keysym" with
+    | Some (`Int value) -> value
+    | Some _ -> type_error (where "keysym") "an integer"
+    | None -> raise (Config_error (where "keysym" ^ " is required"))
+  in
+  if keysym <= 0 then
+    raise (Config_error (where "keysym" ^ " must be positive"));
+  let shift =
+    match toml_find table "shift" with
+    | None | Some `Null -> false
+    | Some (`Bool value) -> value
+    | Some _ -> type_error (where "shift") "a bool"
+  in
+  let mode =
+    match toml_find table "mode" with
+    | Some (`String value) -> (
+        match value with
+        | "transcribe" -> Transcribe
+        | "translate" -> Translate
+        | other ->
+            raise
+              (Config_error
+                 (Printf.sprintf "%s must be transcribe or translate; got %s"
+                    (where "mode") other)))
+    | Some _ -> type_error (where "mode") "a string"
+    | None -> raise (Config_error (where "mode" ^ " is required"))
+  in
+  let correct =
+    match toml_find table "correct" with
+    | None | Some `Null -> correct_default
+    | Some (`Bool value) -> value
+    | Some _ -> type_error (where "correct") "a bool"
+  in
+  let prompt_named, prompt_file =
+    match toml_find table "prompt" with
+    | Some (`String value) ->
+        (true, validate_prompt_file_name ~where:(where "prompt") value)
+    | Some `Null | None -> (
+        match toml_find table "prompt_file" with
+        | Some (`String value) ->
+            (false, validate_prompt_file_name ~where:(where "prompt_file") value)
+        | Some _ -> type_error (where "prompt_file") "a string"
+        | None -> (false, default_prompt_file mode))
+    | Some _ -> type_error (where "prompt") "a string"
+  in
+  {
+    keysym;
+    shift;
+    mode;
+    correct;
+    prompt_named;
+    prompt_file;
+    prompt = embedded_prompt mode;
+  }
+
+let check_duplicate_bindings bindings =
+  let rec loop seen = function
+    | [] -> ()
+    | binding :: rest ->
+        let key = (binding.keysym, binding.shift) in
+        if List.exists (( = ) key) seen then
+          raise
+            (Config_error
+               (Printf.sprintf "duplicate binding for keysym %d shift %b"
+                  binding.keysym binding.shift))
+        else loop (key :: seen) rest
+  in
+  loop [] bindings
+
+let derived_binding ~keysym ~shift ~mode ~correct =
+  {
+    keysym;
+    shift;
+    mode;
+    correct;
+    prompt_named = false;
+    prompt_file = default_prompt_file mode;
+    prompt = embedded_prompt mode;
+  }
+
+let first_of mode bindings =
+  List.find_opt (fun binding -> binding.mode = mode) bindings
+
+let legacy_key mode ~default_keysym ~default_shift bindings =
+  match first_of mode bindings with
+  | Some binding -> (binding.keysym, binding.shift)
+  | None -> (default_keysym, default_shift)
+
+let require_pass2 ~two_pass ~has_model bindings =
+  if (not two_pass) || has_model then ()
+  else
+    List.iteri
+      (fun index binding ->
+        if binding.mode = Translate then
+          raise
+            (Config_error
+               (Printf.sprintf
+                  "bindings[%d]: translate binding requires \
+                   correction_model                    when two_pass is true"
+                  index));
+        if binding.correct then
+          raise
+            (Config_error
+               (Printf.sprintf
+                  "bindings[%d]: correct = true requires correction_model \
+                   when                    two_pass is true"
+                  index)))
+      bindings
 
 let validate_title_regex section index = function
   | None -> ()
@@ -273,6 +536,16 @@ let reject_unsupported_wakeword table =
   | None -> ()
   | Some _ -> raise (Config_error "unsupported wakeword table")
 
+let parse_bindings table ~correct_default =
+  match toml_find table "bindings" with
+  | None -> None
+  | Some (`List rules)
+    when List.for_all (function `Assoc _ -> true | _ -> false) rules ->
+      let bindings = List.mapi (parse_binding ~correct_default) rules in
+      check_duplicate_bindings bindings;
+      Some bindings
+  | Some _ -> raise (Config_error "bindings must be an array of tables")
+
 let of_json table : t =
   (match table with
   | `Assoc _ -> ()
@@ -290,20 +563,98 @@ let of_json table : t =
     get_string table "transcription_model" default_model
   in
   let translation_model = get_string table "translation_model" default_model in
-  let ptt_transcribe_keysym = get_int table "ptt_transcribe_keysym" 65478 in
-  let ptt_translate_keysym = get_int table "ptt_translate_keysym" 65479 in
-  let ptt_transcribe_shift = get_bool table "ptt_transcribe_shift" false in
-  let ptt_translate_shift = get_bool table "ptt_translate_shift" false in
-  if ptt_transcribe_keysym <= 0 then
-    raise (Config_error "ptt_transcribe_keysym must be positive");
-  if ptt_translate_keysym <= 0 then
-    raise (Config_error "ptt_translate_keysym must be positive");
-  if
-    ptt_transcribe_keysym = ptt_translate_keysym
-    && ptt_transcribe_shift = ptt_translate_shift
-  then raise (Config_error "PTT transcribe and translate bindings must differ");
-  ignore (resolve_model_provider ~default_provider:provider transcription_model);
+  let pass1 =
+    resolve_model_provider ~default_provider:provider transcription_model
+  in
   ignore (resolve_model_provider ~default_provider:provider translation_model);
+  let streaming_default =
+    match pass1.provider with Codex_realtime -> true | Openrouter -> false
+  in
+  let streaming = get_bool table "streaming" streaming_default in
+  if streaming && pass1.provider <> Codex_realtime then
+    raise
+      (Config_error
+         (Printf.sprintf "streaming is not supported for provider %s"
+            (string_of_provider pass1.provider)));
+  let two_pass = get_bool table "two_pass" false in
+  let correction_model = parse_correction_model table in
+  let reasoning_effort = parse_correction_reasoning table in
+  let timeout_seconds = parse_correction_timeout table in
+  let temperature = parse_correction_temperature table in
+  let correction =
+    match correction_model with
+    | None -> None
+    | Some model ->
+        Some { model; reasoning_effort; timeout_seconds; temperature }
+  in
+  let correct_default = correction_model <> None in
+  let legacy_keys () =
+    let ptt_transcribe_keysym =
+      get_int table "ptt_transcribe_keysym" default_transcribe_keysym
+    in
+    let ptt_translate_keysym =
+      get_int table "ptt_translate_keysym" default_translate_keysym
+    in
+    let ptt_transcribe_shift = get_bool table "ptt_transcribe_shift" false in
+    let ptt_translate_shift = get_bool table "ptt_translate_shift" false in
+    if ptt_transcribe_keysym <= 0 then
+      raise (Config_error "ptt_transcribe_keysym must be positive");
+    if ptt_translate_keysym <= 0 then
+      raise (Config_error "ptt_translate_keysym must be positive");
+    if
+      ptt_transcribe_keysym = ptt_translate_keysym
+      && ptt_transcribe_shift = ptt_translate_shift
+    then
+      raise (Config_error "PTT transcribe and translate bindings must differ");
+    ( ptt_transcribe_keysym,
+      ptt_transcribe_shift,
+      ptt_translate_keysym,
+      ptt_translate_shift )
+  in
+  let ( ptt_transcribe_keysym,
+        ptt_transcribe_shift,
+        ptt_translate_keysym,
+        ptt_translate_shift,
+        bindings ) =
+    match parse_bindings table ~correct_default with
+    | None ->
+        let ( ptt_transcribe_keysym,
+              ptt_transcribe_shift,
+              ptt_translate_keysym,
+              ptt_translate_shift ) =
+          legacy_keys ()
+        in
+        let bindings =
+          [
+            derived_binding ~keysym:ptt_transcribe_keysym
+              ~shift:ptt_transcribe_shift ~mode:Transcribe
+              ~correct:correct_default;
+            derived_binding ~keysym:ptt_translate_keysym
+              ~shift:ptt_translate_shift ~mode:Translate
+              ~correct:correct_default;
+          ]
+        in
+        ( ptt_transcribe_keysym,
+          ptt_transcribe_shift,
+          ptt_translate_keysym,
+          ptt_translate_shift,
+          bindings )
+    | Some bindings ->
+        let ptt_transcribe_keysym, ptt_transcribe_shift =
+          legacy_key Transcribe ~default_keysym:default_transcribe_keysym
+            ~default_shift:false bindings
+        in
+        let ptt_translate_keysym, ptt_translate_shift =
+          legacy_key Translate ~default_keysym:default_translate_keysym
+            ~default_shift:false bindings
+        in
+        ( ptt_transcribe_keysym,
+          ptt_transcribe_shift,
+          ptt_translate_keysym,
+          ptt_translate_shift,
+          bindings )
+  in
+  require_pass2 ~two_pass ~has_model:(correction_model <> None) bindings;
   let transcription_prompt =
     get_string table "transcription_prompt"
       "Transcribe the following audio in {{language}}."
@@ -343,6 +694,10 @@ let of_json table : t =
     translation_prompt;
     newline_rules = parse_newline_rules table;
     text_entry_rules = parse_text_entry_rules table;
+    two_pass;
+    streaming;
+    correction;
+    bindings;
   }
 
 let decode_json json =
@@ -369,6 +724,28 @@ let yojson_of_t (config : t) =
         ("method", string (string_of_entry_method r.method_));
       ]
   in
+  let correction_field name encode =
+    match config.correction with
+    | None -> (name, `Null)
+    | Some correction -> (name, encode correction)
+  in
+  let binding_json (binding : binding) =
+    let fields =
+      [
+        ("keysym", `Int binding.keysym);
+        ("shift", `Bool binding.shift);
+        ("mode", string (string_of_mode binding.mode));
+        ("correct", `Bool binding.correct);
+        ("prompt_file", string binding.prompt_file);
+      ]
+    in
+    let fields =
+      if binding.prompt_named then
+        ("prompt", string binding.prompt_file) :: fields
+      else fields
+    in
+    `Assoc fields
+  in
   `Assoc
     [
       ("provider", string (string_of_provider config.provider));
@@ -389,6 +766,17 @@ let yojson_of_t (config : t) =
       ( "newline_rules",
         `List (List.map (fun r -> rule r.action r) config.newline_rules) );
       ("text_entry_rules", `List (List.map entry config.text_entry_rules));
+      ("two_pass", `Bool config.two_pass);
+      ("streaming", `Bool config.streaming);
+      correction_field "correction_model" (fun correction ->
+          string correction.model);
+      correction_field "correction_reasoning_effort" (fun correction ->
+          opt correction.reasoning_effort);
+      correction_field "correction_timeout_seconds" (fun correction ->
+          `Float correction.timeout_seconds);
+      correction_field "correction_temperature" (fun correction ->
+          `Float correction.temperature);
+      ("bindings", `List (List.map binding_json config.bindings));
     ]
 
 let door_spec : t Ox_app.Config.t =
@@ -404,6 +792,28 @@ let default_source ~caps () =
 
 let source_path : Ox_app.Config.source -> string = function
   | `Default path | `Explicit path -> path
+
+let resolve_pass2_prompts ~read ~prompts_dir config =
+  if not config.two_pass then config
+  else
+    let bindings =
+      List.map
+        (fun binding ->
+          let path = Filename.concat prompts_dir binding.prompt_file in
+          let content =
+            match read path with
+            | Ok content -> content
+            | Error `Missing when not binding.prompt_named ->
+                embedded_prompt binding.mode
+            | Error `Missing -> raise (Config_error (path ^ ": no such file"))
+            | Error (`Unreadable reason) ->
+                raise (Config_error (path ^ ": " ^ reason))
+          in
+          validate_pass2_prompt binding.mode binding.prompt_file content;
+          { binding with prompt = content })
+        config.bindings
+    in
+    { config with bindings }
 
 let load ~caps ~fs ?source ?read () =
   let source = Option.value source ~default:(default_source ~caps ()) in
@@ -428,8 +838,8 @@ let load ~caps ~fs ?source ?read () =
             Error
               (`Config
                  (Printf.sprintf
-                    "STT config moved to TOML at %s; migrate legacy JSON \
-                     config from %s"
+                    "STT config moved to TOML at %s; migrate legacy \
+                     JSON                      config from %s"
                     path
                     (Filename.concat (Filename.dirname path) "stt.json")))
         | _ -> err)
@@ -437,10 +847,9 @@ let load ~caps ~fs ?source ?read () =
   in
   let ( let* ) = Result.bind in
   let* config = result in
+  let prompts_dir = Filename.concat (Filename.dirname path) "prompts" in
   let prompt name default =
-    let prompt_path =
-      Filename.concat (Filename.concat (Filename.dirname path) "prompts") name
-    in
+    let prompt_path = Filename.concat prompts_dir name in
     match read prompt_path with
     | Ok content -> Ok content
     | Error `Missing -> Ok default
@@ -454,7 +863,8 @@ let load ~caps ~fs ?source ?read () =
   match
     validate_transcription_prompt transcription_prompt;
     validate_translation_prompt translation_prompt;
-    { config with transcription_prompt; translation_prompt }
+    resolve_pass2_prompts ~read ~prompts_dir
+      { config with transcription_prompt; translation_prompt }
   with
   | config -> Ok config
   | exception Config_error message -> Error (`Config message)

@@ -11,6 +11,9 @@ let watched_paths ~caps ?config_path () =
     config_path;
     Filename.concat prompts_dir "transcription.md";
     Filename.concat prompts_dir "translation.md";
+    Filename.concat prompts_dir Config.Stt.default_correction_prompt_file;
+    Filename.concat prompts_dir
+      Config.Stt.default_correction_translate_prompt_file;
   ]
 
 let stamp path =
@@ -327,6 +330,37 @@ let startup_config_json ~caps ?config_path ~(config : Config.Stt.t)
       ("newline_rules", `List (List.mapi newline_rule_json config.newline_rules));
       ( "text_entry_rules",
         `List (List.mapi text_entry_rule_json config.text_entry_rules) );
+      ("two_pass", `Bool config.two_pass);
+      ("streaming", `Bool config.streaming);
+      ( "correction_model",
+        option_json
+          (fun (correction : Config.Stt.correction) -> `String correction.model)
+          config.correction );
+      ( "correction_reasoning_effort",
+        option_json
+          (fun (correction : Config.Stt.correction) ->
+            option_json
+              (fun effort -> `String effort)
+              correction.reasoning_effort)
+          config.correction );
+      ( "correction_timeout_seconds",
+        option_json
+          (fun (correction : Config.Stt.correction) ->
+            `Float correction.timeout_seconds)
+          config.correction );
+      ( "bindings",
+        `List
+          (List.map
+             (fun (binding : Config.Stt.binding) ->
+               `Assoc
+                 [
+                   ("keysym", `Int binding.keysym);
+                   ("shift", `Bool binding.shift);
+                   ("mode", `String (Config.Stt.string_of_mode binding.mode));
+                   ("correct", `Bool binding.correct);
+                   ("prompt_file", `String binding.prompt_file);
+                 ])
+             config.bindings) );
     ]
   |> Yojson.Safe.pretty_to_string
 

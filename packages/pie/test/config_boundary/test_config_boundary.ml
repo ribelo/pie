@@ -192,6 +192,438 @@ let test_door_spec () =
   | Error _ -> ()
   | Ok _ -> Alcotest.fail "invalid provider accepted"
 
+let transcribe_binding config =
+  match
+    List.find_opt
+      (fun (binding : Config.binding) -> binding.mode = Config.Transcribe)
+      config.Config.bindings
+  with
+  | Some binding -> binding
+  | None -> Alcotest.fail "missing transcribe binding"
+
+let translate_binding config =
+  match
+    List.find_opt
+      (fun (binding : Config.binding) -> binding.mode = Config.Translate)
+      config.Config.bindings
+  with
+  | Some binding -> binding
+  | None -> Alcotest.fail "missing translate binding"
+
+let contains needle hay =
+  let n = String.length needle in
+  let h = String.length hay in
+  let rec loop i =
+    i <= h - n && (n = 0 || String.sub hay i n = needle || loop (i + 1))
+  in
+  loop 0
+
+let test_pass1_provider_prefix () =
+  (* dict-m2xr *)
+  with_sandbox @@ fun dir ->
+  Eio_main.run @@ fun env ->
+  let path = Filename.concat dir "stt.toml" in
+  write path "transcription_model = \"codex-realtime/gpt-live-transcribe\"\n";
+  let config = expect_ok (load env path) in
+  let resolved =
+    Config.resolve_model_provider ~default_provider:config.provider
+      config.transcription_model
+  in
+  Alcotest.(check bool)
+    "codex provider" true
+    (resolved.provider = Config.Codex_realtime);
+  Alcotest.(check string) "codex model" "gpt-live-transcribe" resolved.model;
+  write path
+    "provider = \"codex-realtime\"\n\
+     transcription_model = \"openrouter/microsoft/mai-transcribe-2\"\n";
+  let config = expect_ok (load env path) in
+  let resolved =
+    Config.resolve_model_provider ~default_provider:config.provider
+      config.transcription_model
+  in
+  Alcotest.(check bool)
+    "openrouter provider" true
+    (resolved.provider = Config.Openrouter);
+  Alcotest.(check string)
+    "openrouter model" "microsoft/mai-transcribe-2" resolved.model
+
+let test_streaming_switch () =
+  (* dict-q6xd dict-i28t *)
+  with_sandbox @@ fun dir ->
+  Eio_main.run @@ fun env ->
+  let path = Filename.concat dir "stt.toml" in
+  write path "";
+  let config = expect_ok (load env path) in
+  Alcotest.(check bool) "codex streams by default" true config.streaming;
+  write path "provider = \"openrouter\"\n";
+  let config = expect_ok (load env path) in
+  Alcotest.(check bool) "openrouter buffers by default" false config.streaming;
+  write path "streaming = false\n";
+  let config = expect_ok (load env path) in
+  Alcotest.(check bool) "explicit buffered" false config.streaming;
+  write path
+    "provider = \"openrouter\"\n\
+     transcription_model = \"codex-realtime/gpt-live-transcribe\"\n";
+  let config = expect_ok (load env path) in
+  Alcotest.(check bool)
+    "default follows resolved pass-1 provider" true config.streaming;
+  List.iter
+    (fun text ->
+      write path text;
+      expect_error ~needle:"openrouter" (load env path))
+    [
+      "provider = \"openrouter\"\nstreaming = true\n";
+      "two_pass = false\nprovider = \"openrouter\"\nstreaming = true\n";
+      "transcription_model = \"openrouter/microsoft/mai-transcribe-2\"\n\
+       streaming = true\n";
+    ]
+
+let test_correction_settings () =
+  (* dict-l4zp *)
+  with_sandbox @@ fun dir ->
+  Eio_main.run @@ fun env ->
+  let path = Filename.concat dir "stt.toml" in
+  write path
+    "two_pass = true\n\
+     correction_model = \"openrouter/google/gemini-3.8-flash\"\n\
+     correction_reasoning_effort = \"low\"\n\
+     correction_timeout_seconds = 3\n\
+     correction_temperature = 0\n";
+  let config = expect_ok (load env path) in
+  (match config.correction with
+  | None -> Alcotest.fail "expected correction"
+  | Some correction ->
+      Alcotest.(check string)
+        "resolved model" "google/gemini-3.8-flash" correction.model;
+      Alcotest.(check (option string))
+        "effort" (Some "low") correction.reasoning_effort;
+      Alcotest.(check (float 0.00001)) "timeout" 3. correction.timeout_seconds;
+      Alcotest.(check (float 0.00001)) "temperature" 0. correction.temperature);
+  write path
+    "two_pass = true\n\
+     correction_model = \"google/gemini-3.8-flash\"\n\
+     correction_reasoning_effort = \"none\"\n\
+     correction_temperature = 2\n";
+  let config = expect_ok (load env path) in
+  (match config.correction with
+  | None -> Alcotest.fail "expected bare-model correction"
+  | Some correction ->
+      Alcotest.(check string)
+        "bare model stays openrouter id" "google/gemini-3.8-flash"
+        correction.model;
+      Alcotest.(check (option string))
+        "none is kept" (Some "none") correction.reasoning_effort;
+      Alcotest.(check (float 0.00001))
+        "default timeout" Config.default_correction_timeout_seconds
+        correction.timeout_seconds;
+      Alcotest.(check (float 0.00001))
+        "upper temperature" 2. correction.temperature);
+  List.iter
+    (fun (text, needle) ->
+      write path text;
+      expect_error ~needle (load env path))
+    [
+      ( "correction_model = \"codex-realtime/gpt-realtime-2.1\"\n",
+        "codex-realtime" );
+      ("correction_model = \"\"\n", "empty");
+      ("correction_reasoning_effort = \"ultra\"\n", "correction_reasoning");
+      ("correction_timeout_seconds = 0\n", "positive");
+      ("correction_timeout_seconds = -1\n", "positive");
+      ("correction_temperature = 2.1\n", "0.0-2.0");
+      ("correction_temperature = -0.1\n", "0.0-2.0");
+      ("two_pass = \"yes\"\n", "bool");
+    ]
+
+let test_legacy_keys_become_bindings () =
+  (* dict-ezcr *)
+  with_sandbox @@ fun dir ->
+  Eio_main.run @@ fun env ->
+  let path = Filename.concat dir "stt.toml" in
+  write path
+    "ptt_transcribe_keysym = 11\n\
+     ptt_transcribe_shift = true\n\
+     ptt_translate_keysym = 12\n\
+     ptt_translate_shift = true\n";
+  let config = expect_ok (load env path) in
+  Alcotest.(check int) "bindings" 2 (List.length config.bindings);
+  let transcribe = transcribe_binding config in
+  let translate = translate_binding config in
+  Alcotest.(check int) "transcribe key" 11 transcribe.keysym;
+  Alcotest.(check bool) "transcribe shift" true transcribe.shift;
+  Alcotest.(check bool) "transcribe correct" false transcribe.correct;
+  Alcotest.(check int) "translate key" 12 translate.keysym;
+  Alcotest.(check bool) "translate shift" true translate.shift;
+  Alcotest.(check bool)
+    "lookup" true
+    (Config.find_binding config ~keysym:11 ~shift:true = Some transcribe)
+
+let test_bindings () =
+  (* dict-wrbh *)
+  with_sandbox @@ fun dir ->
+  Eio_main.run @@ fun env ->
+  let path = Filename.concat dir "stt.toml" in
+  let prompts = Filename.concat dir "prompts" in
+  Unix.mkdir prompts 0o700;
+  write (Filename.concat prompts "raw.md") "Raw {{glossary}}";
+  write path
+    "two_pass = true\n\
+     correction_model = \"google/gemini-3.8-flash\"\n\
+     ptt_transcribe_keysym = 99\n\
+     ptt_translate_keysym = 98\n\
+     [[bindings]]\n\
+     keysym = 11\n\
+     shift = true\n\
+     mode = \"transcribe\"\n\
+     correct = false\n\
+     prompt = \"raw.md\"\n\
+     [[bindings]]\n\
+     keysym = 11\n\
+     mode = \"translate\"\n";
+  let config = expect_ok (load env path) in
+  Alcotest.(check int) "authoritative count" 2 (List.length config.bindings);
+  Alcotest.(check int)
+    "legacy transcribe follows first binding" 11 config.ptt_transcribe_keysym;
+  Alcotest.(check bool) "legacy shift" true config.ptt_transcribe_shift;
+  Alcotest.(check int)
+    "legacy translate follows first translate" 11 config.ptt_translate_keysym;
+  let transcribe = transcribe_binding config in
+  Alcotest.(check bool) "explicit correct" false transcribe.correct;
+  Alcotest.(check bool) "named prompt" true transcribe.prompt_named;
+  Alcotest.(check string) "named text" "Raw {{glossary}}" transcribe.prompt;
+  let translate = translate_binding config in
+  Alcotest.(check bool)
+    "correct defaults true when a model is set" true translate.correct;
+  write path
+    "ptt_translate_keysym = 98\n\
+     [[bindings]]\n\
+     keysym = 11\n\
+     mode = \"transcribe\"\n";
+  let config = expect_ok (load env path) in
+  Alcotest.(check int) "one binding" 1 (List.length config.bindings);
+  Alcotest.(check int)
+    "missing translate keeps built-in default" 65479 config.ptt_translate_keysym;
+  Alcotest.(check bool)
+    "file translate key ignored" true
+    (config.ptt_translate_keysym <> 98);
+  List.iter
+    (fun (text, needle) ->
+      write path text;
+      expect_error ~needle (load env path))
+    [
+      ( "[[bindings]]\n\
+         keysym = 11\n\
+         mode = \"transcribe\"\n\
+         [[bindings]]\n\
+         keysym = 11\n\
+         mode = \"translate\"\n",
+        "duplicate" );
+      ("[[bindings]]\nkeysym = 0\nmode = \"transcribe\"\n", "positive");
+      ("[[bindings]]\nmode = \"transcribe\"\n", "required");
+      ("[[bindings]]\nkeysym = 11\n", "mode");
+      ("[[bindings]]\nkeysym = 11\nmode = \"nope\"\n", "transcribe or translate");
+      ( "[[bindings]]\n\
+         keysym = 11\n\
+         mode = \"transcribe\"\n\
+         prompt = \"../secret.md\"\n",
+        "file name" );
+      ( "[[bindings]]\nkeysym = 11\nmode = \"transcribe\"\nprompt = \"\"\n",
+        "empty" );
+      ( "[[bindings]]\nkeysym = 11\nmode = \"transcribe\"\nprompt = \"..\"\n",
+        "file name" );
+      ("bindings = \"no\"\n", "array of tables");
+      ( "two_pass = true\n[[bindings]]\nkeysym = 11\nmode = \"translate\"\n",
+        "correction_model" );
+      ( "two_pass = true\n\
+         [[bindings]]\n\
+         keysym = 11\n\
+         mode = \"transcribe\"\n\
+         correct = true\n",
+        "correction_model" );
+      ("two_pass = true\n", "correction_model");
+    ];
+  write path
+    "two_pass = true\n\
+     [[bindings]]\n\
+     keysym = 11\n\
+     mode = \"transcribe\"\n\
+     correct = false\n";
+  let config = expect_ok (load env path) in
+  Alcotest.(check bool)
+    "raw transcribe needs no model" false (transcribe_binding config).correct;
+  write path
+    "two_pass = false\n[[bindings]]\nkeysym = 11\nmode = \"translate\"\n";
+  ignore (expect_ok (load env path))
+
+let test_pass2_prompts () =
+  (* dict-g52m dict-4faf *)
+  with_sandbox @@ fun dir ->
+  Eio_main.run @@ fun env ->
+  let path = Filename.concat dir "stt.toml" in
+  write path "two_pass = true\ncorrection_model = \"google/gemini-3.8-flash\"\n";
+  let config = expect_ok (load env path) in
+  let transcribe = transcribe_binding config in
+  let translate = translate_binding config in
+  Alcotest.(check string)
+    "embedded correction" Config.default_correction_prompt transcribe.prompt;
+  Alcotest.(check string)
+    "embedded translation" Config.default_correction_translate_prompt
+    translate.prompt;
+  Alcotest.(check string)
+    "default transcribe file" Config.default_correction_prompt_file
+    transcribe.prompt_file;
+  Alcotest.(check bool)
+    "shipped correction has glossary" true
+    (contains "{{glossary}}" Config.default_correction_prompt);
+  Alcotest.(check bool)
+    "shipped correction does not claim context is appended" false
+    (contains "appended" Config.default_correction_prompt
+    || contains "project context" Config.default_correction_prompt);
+  Alcotest.(check bool)
+    "shipped translation placeholders" true
+    (contains "{{glossary}}" Config.default_correction_translate_prompt
+    && contains "{{source_language}}" Config.default_correction_translate_prompt
+    && contains "{{target_language}}" Config.default_correction_translate_prompt
+    );
+  let prompts = Filename.concat dir "prompts" in
+  Unix.mkdir prompts 0o700;
+  write
+    (Filename.concat prompts "correction.md")
+    "Custom glossary {{glossary}}.";
+  write
+    (Filename.concat prompts "correction-translate.md")
+    "From {{source_language}} to {{target_language}} {{glossary}}";
+  let config = expect_ok (load env path) in
+  Alcotest.(check string)
+    "file overrides embed" "Custom glossary {{glossary}}."
+    (transcribe_binding config).prompt;
+  write (Filename.concat prompts "correction.md") "no placeholders";
+  expect_error ~needle:"{{glossary}}" (load env path);
+  write
+    (Filename.concat prompts "correction.md")
+    "Custom glossary {{glossary}}.";
+  write (Filename.concat prompts "named.md") "Named {{glossary}}";
+  write path
+    "two_pass = true\n\
+     correction_model = \"google/gemini-3.8-flash\"\n\
+     [[bindings]]\n\
+     keysym = 11\n\
+     mode = \"transcribe\"\n\
+     prompt = \"named.md\"\n";
+  let config = expect_ok (load env path) in
+  Alcotest.(check string)
+    "named prompt" "Named {{glossary}}" (transcribe_binding config).prompt;
+  write path
+    "two_pass = true\n\
+     correction_model = \"google/gemini-3.8-flash\"\n\
+     [[bindings]]\n\
+     keysym = 11\n\
+     mode = \"transcribe\"\n\
+     prompt = \"missing.md\"\n";
+  expect_error ~needle:"no such file" (load env path);
+  write
+    (Filename.concat prompts "correction-translate.md")
+    "missing a placeholder {{glossary}}";
+  write path "two_pass = true\ncorrection_model = \"google/gemini-3.8-flash\"\n";
+  expect_error ~needle:"{{source_language}}" (load env path)
+
+let test_two_pass_off_is_legacy () =
+  (* dict-26tm *)
+  with_sandbox @@ fun dir ->
+  Eio_main.run @@ fun env ->
+  let path = Filename.concat dir "stt.toml" in
+  let prompts = Filename.concat dir "prompts" in
+  Unix.mkdir prompts 0o700;
+  write
+    (Filename.concat prompts "transcription.md")
+    "Transcribe in {{language}}. LEGACY";
+  write
+    (Filename.concat prompts "translation.md")
+    "Translate {{source_language}} to {{target_language}}. LEGACY";
+  write
+    (Filename.concat prompts "correction.md")
+    "invalid pass-2 prompt that must not be read";
+  write path "provider = \"codex-realtime\"\n";
+  let config = expect_ok (load env path) in
+  Alcotest.(check bool) "two_pass default" false config.two_pass;
+  Alcotest.(check string)
+    "legacy model" "gpt-realtime-2.1" config.transcription_model;
+  Alcotest.(check string)
+    "legacy transcription prompt" "Transcribe in {{language}}. LEGACY"
+    config.transcription_prompt;
+  Alcotest.(check string)
+    "legacy translation prompt"
+    "Translate {{source_language}} to {{target_language}}. LEGACY"
+    config.translation_prompt;
+  Alcotest.(check int) "legacy key" 65478 config.ptt_transcribe_keysym;
+  Alcotest.(check bool)
+    "invalid correction.md ignored" true
+    ((transcribe_binding config).prompt = Config.default_correction_prompt);
+  Unix.unlink (Filename.concat prompts "transcription.md");
+  Unix.unlink (Filename.concat prompts "translation.md");
+  write path "";
+  let config = expect_ok (load env path) in
+  Alcotest.(check string)
+    "inline transcription default"
+    "Transcribe the following audio in {{language}}."
+    config.transcription_prompt
+
+let test_status_json_fields () =
+  (* dict-oagf *)
+  with_sandbox @@ fun dir ->
+  Eio_main.run @@ fun env ->
+  let path = Filename.concat dir "stt.toml" in
+  write path
+    "two_pass = true\n\
+     streaming = true\n\
+     correction_model = \"google/gemini-3.8-flash\"\n\
+     correction_reasoning_effort = \"minimal\"\n\
+     correction_timeout_seconds = 4\n\
+     [[bindings]]\n\
+     keysym = 11\n\
+     shift = true\n\
+     mode = \"transcribe\"\n\
+     correct = true\n\
+     prompt = \"correction.md\"\n";
+  let prompts = Filename.concat dir "prompts" in
+  Unix.mkdir prompts 0o700;
+  write (Filename.concat prompts "correction.md") "Keep {{glossary}}";
+  let config = expect_ok (load env path) in
+  let json = Config.door_spec.yojson_of_t config in
+  let member name =
+    match Yojson.Safe.Util.member name json with
+    | `Null -> Alcotest.failf "missing %s" name
+    | value -> value
+  in
+  Alcotest.(check bool) "two_pass" true (member "two_pass" = `Bool true);
+  Alcotest.(check bool) "streaming" true (member "streaming" = `Bool true);
+  Alcotest.(check bool)
+    "model" true
+    (member "correction_model" = `String "google/gemini-3.8-flash");
+  Alcotest.(check bool)
+    "effort" true
+    (member "correction_reasoning_effort" = `String "minimal");
+  Alcotest.(check bool)
+    "timeout" true
+    (member "correction_timeout_seconds" = `Float 4.);
+  match member "bindings" with
+  | `List [ binding ] ->
+      Alcotest.(check bool)
+        "keysym" true
+        (Yojson.Safe.Util.member "keysym" binding = `Int 11);
+      Alcotest.(check bool)
+        "shift" true
+        (Yojson.Safe.Util.member "shift" binding = `Bool true);
+      Alcotest.(check bool)
+        "mode" true
+        (Yojson.Safe.Util.member "mode" binding = `String "transcribe");
+      Alcotest.(check bool)
+        "correct" true
+        (Yojson.Safe.Util.member "correct" binding = `Bool true);
+      Alcotest.(check bool)
+        "prompt file" true
+        (Yojson.Safe.Util.member "prompt_file" binding = `String "correction.md")
+  | _ -> Alcotest.fail "expected one binding"
+
 let () =
   Alcotest.run "config_boundary"
     [
@@ -214,5 +646,20 @@ let () =
           Alcotest.test_case "legacy filename guidance" `Quick
             test_legacy_json_hint;
           Alcotest.test_case "Door spec codec" `Quick test_door_spec;
+          Alcotest.test_case "dict-m2xr pass-1 provider prefix" `Quick
+            test_pass1_provider_prefix;
+          Alcotest.test_case "dict-q6xd dict-i28t streaming switch" `Quick
+            test_streaming_switch;
+          Alcotest.test_case "dict-l4zp correction settings" `Quick
+            test_correction_settings;
+          Alcotest.test_case "dict-ezcr legacy keys become bindings" `Quick
+            test_legacy_keys_become_bindings;
+          Alcotest.test_case "dict-wrbh bindings" `Quick test_bindings;
+          Alcotest.test_case "dict-g52m dict-4faf pass-2 prompts" `Quick
+            test_pass2_prompts;
+          Alcotest.test_case "dict-26tm two_pass off is legacy" `Quick
+            test_two_pass_off_is_legacy;
+          Alcotest.test_case "dict-oagf status JSON fields" `Quick
+            test_status_json_fields;
         ] );
     ]

@@ -32,6 +32,33 @@ let base_config ?(provider = Pie.Config.Stt.Openrouter)
       "Translate from {{source_language}} to {{target_language}}.";
     newline_rules = [];
     text_entry_rules = [];
+    two_pass = false;
+    streaming =
+      (match provider with
+      | Pie.Config.Stt.Codex_realtime -> true
+      | Pie.Config.Stt.Openrouter -> false);
+    correction = None;
+    bindings =
+      [
+        {
+          keysym = transcribe_keysym;
+          shift = false;
+          mode = Pie.Config.Stt.Transcribe;
+          correct = false;
+          prompt_named = false;
+          prompt_file = "correction.md";
+          prompt = "{{glossary}}";
+        };
+        {
+          keysym = 65479;
+          shift = false;
+          mode = Pie.Config.Stt.Translate;
+          correct = false;
+          prompt_named = false;
+          prompt_file = "correction-translate.md";
+          prompt = "{{glossary}} {{source_language}} {{target_language}}";
+        };
+      ];
   }
 
 let loud_pcm =

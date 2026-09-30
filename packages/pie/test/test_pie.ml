@@ -1828,6 +1828,30 @@ let openrouter_clip_config () : Pie.Config.Stt.t =
       "Translate from {{source_language}} to {{target_language}}.";
     newline_rules = [];
     text_entry_rules = [];
+    two_pass = false;
+    streaming = false;
+    correction = None;
+    bindings =
+      [
+        {
+          keysym = 65516;
+          shift = true;
+          mode = Pie.Config.Stt.Transcribe;
+          correct = false;
+          prompt_named = false;
+          prompt_file = "correction.md";
+          prompt = "{{glossary}}";
+        };
+        {
+          keysym = 65508;
+          shift = false;
+          mode = Pie.Config.Stt.Translate;
+          correct = false;
+          prompt_named = false;
+          prompt_file = "correction-translate.md";
+          prompt = "{{glossary}} {{source_language}} {{target_language}}";
+        };
+      ];
   }
 
 let rec remove_dir dir =
@@ -2630,6 +2654,37 @@ let test_assistant_startup_config_json () =
             method_ = Pie.Input.Text_injection.Paste;
           };
         ];
+      two_pass = true;
+      streaming = false;
+      correction =
+        Some
+          {
+            model = "google/gemini-3.8-flash";
+            reasoning_effort = Some "low";
+            timeout_seconds = 6.5;
+            temperature = 0.2;
+          };
+      bindings =
+        [
+          {
+            keysym = 65516;
+            shift = true;
+            mode = Pie.Config.Stt.Transcribe;
+            correct = true;
+            prompt_named = false;
+            prompt_file = "correction.md";
+            prompt = "{{glossary}}";
+          };
+          {
+            keysym = 65508;
+            shift = false;
+            mode = Pie.Config.Stt.Translate;
+            correct = true;
+            prompt_named = true;
+            prompt_file = "custom.md";
+            prompt = "{{glossary}} {{source_language}} {{target_language}}";
+          };
+        ];
     }
   in
   let report =
@@ -2664,6 +2719,40 @@ let test_assistant_startup_config_json () =
   Alcotest.(check string)
     "resolved model" "google/gemini-3.1-flash-lite"
     (json_string "model" resolved);
+  (* dict-oagf: startup config JSON carries the two-pass fields. *)
+  Alcotest.(check bool)
+    "two_pass" true
+    (json_member "two_pass" json = `Bool true);
+  Alcotest.(check bool)
+    "streaming" true
+    (json_member "streaming" json = `Bool false);
+  Alcotest.(check string)
+    "correction model" "google/gemini-3.8-flash"
+    (json_string "correction_model" json);
+  Alcotest.(check string)
+    "correction effort" "low"
+    (json_string "correction_reasoning_effort" json);
+  Alcotest.(check bool)
+    "correction timeout" true
+    (json_member "correction_timeout_seconds" json = `Float 6.5);
+  (match json_member "bindings" json with
+  | `List [ transcribe; translate ] ->
+      Alcotest.(check string)
+        "transcribe mode" "transcribe"
+        (json_string "mode" transcribe);
+      Alcotest.(check string)
+        "transcribe prompt file" "correction.md"
+        (json_string "prompt_file" transcribe);
+      Alcotest.(check bool)
+        "transcribe correct" true
+        (json_member "correct" transcribe = `Bool true);
+      Alcotest.(check string)
+        "translate mode" "translate"
+        (json_string "mode" translate);
+      Alcotest.(check string)
+        "translate prompt file" "custom.md"
+        (json_string "prompt_file" translate)
+  | _ -> Alcotest.fail "expected two bindings");
   (match json_member "newline_rules" json with
   | `List [ rule ] ->
       Alcotest.(check string)
