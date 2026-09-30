@@ -21,4 +21,5 @@ uncommitted work is effectively lost work.
 - When subagents implement slices, the coordinating session reviews each result
   and commits it before starting dependent work.
 - Push only when the user asks.
+- The user dictates through the running `pie.service` all the time. Replace its binary or restart it only when asked, and only after `pie msg status` says `armed` and the journal shows no `PTT capture started` without a matching stop: a restart during a dictation ends it.
 - Dangerous calls go through `Ox_caps.Cap_*` and require a capability in the signature; `scripts/caps-gate` checks production code.
