@@ -81,6 +81,15 @@ Nothing changes until I opt in: an existing configuration keeps today's single-p
 34. As an agent, I want the skill to tell me how to create or update `.pie/glossary.md` for a directory (which names, identifiers, tools and commands to collect, and how to list the ways speech recognition mishears them), so that the glossary actually helps both passes. ^dict-5w57
 35. As a dictation user, I want the skill install to report each target as installed, replaced or current, support dry runs and forced replacement, and never wait for input without a terminal, so that it is safe in scripts. ^dict-pguq
 
+### Audio retention and long recordings
+
+39. As a dictation user, I want the audio of every attempt kept for 24 hours by default, with the retention configurable and 0 disabling it, so that I can re-run a recording that went wrong. ^dict-c0yv
+40. As a dictation user, I want retained audio stored compactly (Opus when an encoder is available, WAV otherwise), so that keeping it costs almost no disk space. ^dict-agvw
+41. As a dictation user, I want each history entry to name its audio file and `pie retry` to accept a history ID, so that I can run a past recording through the current passes again. ^dict-z1ax
+42. As a dictation user, I want Pie to keep recording locally when the pass-1 stream closes or fails while I am still speaking, and to transcribe the whole recording buffered after I release the key, so that a long dictation is never cut off. ^dict-oj7u
+43. As a dictation user, I want the captured audio retained for `pie retry` after any failure, including a pass-1 stream that closed during capture, so that speech is never discarded. ^dict-u5xj
+44. As a dictation user, I want expired audio removed at service start and at each new attempt, so that the archive never grows past the retention window. ^dict-g3ap
+
 ### Prompts, vocabulary and diagnostics
 
 36. As a dictation user, I want default pass-2 prompts for correction and translation shipped with Pie, and no prompt that claims context is appended when it is not, so that the documentation matches the behavior. ^dict-4faf
@@ -98,6 +107,8 @@ Nothing changes until I opt in: an existing configuration keeps today's single-p
 - **Glossary resolution** happens at key press, before pass 1 starts, so streaming sessions can include it. Take the focused window's PID from niri; among that process and its descendants, use the working directory of the most recently started leaf, falling back to the window process itself; walk up from there to `$HOME` or the root for `.pie/glossary.md`. Files are read at every attempt, symlinks followed, no size cap. The global glossary is `glossary.md` in Pie's configuration directory unless `PIE_GLOSSARY` names another file. The rendered glossary is the global file then the project file, each under a heading naming its path.
 - **History.** Append-only JSON Lines at `$XDG_DATA_HOME/pie/history.jsonl` (default `~/.local/share/pie/history.jsonl`), file 0600, directory created 0700 like the recovery store. One line per event keyed by an attempt ID: `transcribed` (raw text, pass-1 model, pass-1 duration, mode, binding, window, glossary paths) and `finished` (final text, pass-2 model, pass-2 duration, outcome: delivered, delivered-raw-after-correction-failure, correction-failed, delivery-failed). Writes are synchronous appends of complete lines; a failure logs a warning and does not change the attempt's outcome.
 - **CLI.** `pie history [--limit N] [--json]` lists entries newest first; `pie history show [ID|last] [--raw] [--json]` prints one entry's final (or raw) text. `pie skill install [PATH] [--force] [--dry-run] [--no-input]` follows Nema's skill-installation contract (targets `~/.claude/skills`, `~/.codex/skills`, `~/.pi/agent/skills`, `~/.agents/skills` when their roots exist; one JSON result per target). The skill tree is compiled into the binary with a Dune generator, as Nema does.
+- **Audio archive.** Every attempt's captured PCM (the recovery draft Pie already writes while recording) is copied at settlement to `$XDG_DATA_HOME/pie/audio/<attempt-id>.opus`, encoded with `ffmpeg` (found on PATH or through `PIE_FFMPEG`) at speech bitrate, or `.wav` when no encoder is available. Encoding runs after delivery and never delays or fails the attempt. `audio_retention_hours` (default 24, 0 disables) bounds the archive; expired files are deleted at service start and when an attempt starts. History entries carry the audio path; `pie retry ID` decodes it (through the same encoder) and reruns pass 1 and pass 2 with the current configuration.
+- **Stream failure during capture.** A pass-1 streaming failure no longer ends the capture: the attempt keeps appending to its draft until release, then runs buffered pass 1 on the whole draft (Codex through the websocket, OpenRouter through its endpoint). Only if that also fails does the attempt end as a pass-1 failure, and the sealed audio is published for `pie retry` as today. This applies to the legacy single-pass path too, because the draft is shared.
 - **Bindings in the keyboard path.** The recognizer maps key events to a binding instead of to one of two modes; the recording mode stays transcribe or translate, and the binding travels with the attempt to the pipeline and history.
 - **Status.** The status JSON and `pie status` include the pass-1 model, streaming flag, pass-2 model and bindings; the per-pass durations are logged with the existing structured logger.
 
@@ -113,7 +124,7 @@ Nothing changes until I opt in: an existing configuration keeps today's single-p
 
 ## Out of Scope
 
-- Keeping audio in the history, evaluation datasets or any quality-measurement tooling.
+- Evaluation datasets or any quality-measurement tooling (audio is retained for recovery only).
 - A live on-screen preview of partial text, or typing text while I am still speaking.
 - A pass 2 that receives audio.
 - Changes to the installed binary, the systemd unit or my configuration files; switching the running service is a separate decision after this lands.
@@ -121,6 +132,7 @@ Nothing changes until I opt in: an existing configuration keeps today's single-p
 
 ## Further Notes
 
+- On 2026-09-30 two long dictations (11:12:32 and 11:24:54) failed after exactly 11 min 6 s each with "Codex realtime stream closed" on the legacy gpt-realtime-2.1 path, and their audio was discarded because a capture-time stream failure aborts the draft. dict-oj7u and dict-u5xj address the loss; the cause of the cutoff (server session limit or Pie) is being probed separately.
 - The seams above were not reviewed with the user before writing; the user asked for autonomous work.
 - Which pass-2 model to configure is the user's choice. Benchmarks (docs/research/2026-09-30-dictation-models): gemini-3.8-flash at low reasoning is the most accurate (about 1.8-2.0 s p50, under 3 s p90); gemini-3.1-flash-lite is about 1.0 s p50 / 1.4 s p90 with weaker term recovery. Qwen3-ASR, Grok STT and Whisper are not usable for Polish as pass 1.
 - The Codex ChatGPT token is refused by the plain OpenAI transcription endpoint ("no credits") but accepted by the realtime transcription websocket, so free gpt-transcribe/gpt-live-transcribe must go through the websocket, even in buffered mode.
