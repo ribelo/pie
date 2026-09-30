@@ -1,0 +1,5 @@
+(include_subdirs no)
+
+(test
+ (name test_glossary)
+ (libraries pie alcotest pie_test_runtime ox ox_test eio unix))

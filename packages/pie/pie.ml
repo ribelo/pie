@@ -19,3 +19,4 @@ module Stt = Stt
 module Process = Process
 module Sh = Sh
 module Fs = Fs
+module Glossary = Glossary
