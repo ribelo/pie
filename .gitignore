@@ -10,5 +10,7 @@ last-transcription.txt
 last-translation.txt
 last-two-translations.txt
 translations-since-*.txt
+# OCaml runtime-events rings (<pid>.events) left by test runs
+/*.events
 .scratch/
 _build_*/
