@@ -58,3 +58,33 @@ Cost for all correction runs together was below USD 0.30; for all STT runs below
 - Pass 1: gpt-live-transcribe over the Codex realtime websocket is free and adds about 0.6 s after key release when audio streams during capture. MAI-Transcribe-2 through OpenRouter is the most accurate, at about 1.0 s p50 / 1.7 s p90 buffered. qwen3-asr-0.6b, Grok STT and Whisper (Groq) are not usable for Polish.
 - Pass 2: gemini-3.8-flash at low reasoning is clearly the most accurate and stays under 3 s at p90 (worst seen 4.2 s). gemini-3.1-flash-lite is about 1.0 s p50 / 1.4 s p90 with somewhat weaker term recovery.
 - Expected end to end after key release: gpt-live-transcribe + gemini-3.1-flash-lite ≈ 1.6 s p50 / 2.0 s p90; gpt-live-transcribe + gemini-3.8-flash low ≈ 2.5 s p50 / 3.5 s p90.
+## One pass (Gemini hears the audio) versus two passes
+
+Added the same afternoon at the user's request. Same 10 recordings, 3 runs each (n=30 per row), same glossary. Two passes: gpt-live-transcribe streamed at real-time pace through the Codex login, then google/gemini-3.8-flash (reasoning low) through OpenRouter with the default correction prompt. One pass: google/gemini-3.8-flash (reasoning low) receives the WAV and the same prompt reworded for audio. Latency is from key release to the full final text. Scripts: `scripts/cmp.mjs`, `scripts/cmp-prov.mjs`.
+
+| Pipeline | p50 ms | p90 ms | max ms |
+|---|---|---|---|
+| Two passes: pass 1 alone (after release) | 604 | 656 | 669 |
+| Two passes: pass 2 alone | 1873 | 2523 | 23257 |
+| Two passes: total | 2542 | 3127 | 23687 |
+| One pass, OpenRouter (default routing) | 2782 | 6522 | 10756 |
+| One pass, OpenRouter pinned to Google AI Studio | 2248 | 5047 | 7404 |
+| One pass, OpenRouter pinned to Google (Vertex) | 2811 | 4705 | 4789 |
+| One pass, Google API direct (latency only) | 2475 | 3812 | 7062 |
+
+The two 17.7 s and 23.3 s pass-2 responses were both on the same recording (s4, where the speaker talks about transcription mistakes); the text-only corrector also invented "odmiana słów z glossary" there.
+
+Quality at the eight hardest spots, judged against what the best recognizers agree was said:
+
+| Spot | One pass | Two passes |
+|---|---|---|
+| s1 "Contributor" | right | "kontrybutor" |
+| s2 "Zero zdziwienia" | right | paraphrased away |
+| s3 "Mnie nie satysfakcjonuje" | right | "Co z tego" (guessed, meaning changed) |
+| s4 "odmiana grillowania" | right | "odmiana słów z glossary" (invented) |
+| s5 opening clause | "minąłem się z rekomendacji" (wrong) | "dałeś mi rekomendacje" (plausible) |
+| s6 "mam problem ewentualnie z pisaniem" | right | inverted ("nie mam problemu ... z pisaniem") |
+| s9 "Cała konfiguracja" | right | "Co, jeśli" (guessed) |
+| s10 "wysłać", "one-shot cron" | right | right |
+
+One pass got 7 of 8, two passes 2 of 8 (s5 counted for two passes). The text-only corrector cannot hear, so where pass 1 garbles a phrase it guesses, and with a tidy prompt the guess reads fluently and hides the error. One pass is also the simpler path. Its costs: no audio streaming during capture, so latency grows with recording length (upload plus audio tokens), and OpenRouter's tail is worse than Google's API direct.
