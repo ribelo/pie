@@ -1,0 +1,2979 @@
+[
+  {
+    "term": "OCaml",
+    "mishearings": [
+      "ocaml",
+      "camel",
+      "plain camel",
+      "okaml",
+      "ocamel",
+      "o caml",
+      "OCaml-owe"
+    ],
+    "observed": [
+      "ocaml (projects-ribelo-leash)",
+      "plain camel (projects-ribelo-ocaml-Eta)",
+      "camel (projects-ribelo-ocaml-Eta)",
+      "OCaml-owe (projects-ribelo-ocaml-Eta, pasted changelog)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-inn",
+      "projects-ribelo-leash",
+      "projects-ribelo-ocaml-eta-next",
+      "projects-ribelo-ocaml-Eta",
+      "projects-ribelo-pie"
+    ],
+    "category": "ocaml",
+    "scope": "global",
+    "note": "Spoken OCaml transcribed as plain camel twice in Eta audit message."
+  },
+  {
+    "term": "OxCaml",
+    "mishearings": [
+      "oxcaml",
+      "OXCAML",
+      "OX camel",
+      "oxcamel",
+      "ox caml"
+    ],
+    "observed": [
+      "oxcaml (projects-ribelo-leash)",
+      "OXCAML (projects-ribelo-ocaml-Eta)",
+      "OX camel (projects-ribelo-inn)",
+      "oxcamel (projects-ribelo-ocaml-Eta)"
+    ],
+    "projects": [
+      "projects-ribelo-inn",
+      "projects-ribelo-leash",
+      "projects-ribelo-ocaml-eta-next",
+      "projects-ribelo-ocaml-Eta"
+    ],
+    "category": "ocaml",
+    "scope": "global",
+    "note": "Inn message even warns: This part will probably transcribe badly."
+  },
+  {
+    "term": "dune",
+    "mishearings": [
+      "duna",
+      "DUNE"
+    ],
+    "observed": [
+      "DUNE (projects-ribelo-leash)"
+    ],
+    "projects": [
+      "projects-ribelo-leash",
+      "projects-ribelo-ocaml-eta-next",
+      "projects-ribelo-ocaml-Eta"
+    ],
+    "category": "ocaml",
+    "scope": "global",
+    "note": "Lowercase canonical (build tool)."
+  },
+  {
+    "term": "opam",
+    "mishearings": [
+      "opamu",
+      "OPAM"
+    ],
+    "observed": [
+      "OPAM (projects-ribelo-leash)"
+    ],
+    "projects": [
+      "projects-ribelo-leash",
+      "projects-ribelo-ocaml-eta-next",
+      "projects-ribelo-ocaml-Eta",
+      "-"
+    ],
+    "category": "ocaml",
+    "scope": "global",
+    "note": "Lowercase canonical (package manager)."
+  },
+  {
+    "term": "Eio",
+    "mishearings": [
+      "eio",
+      "EIO",
+      "ejo",
+      "e i o",
+      "eeyo"
+    ],
+    "observed": [
+      "eio (projects-ribelo-leash)",
+      "EIO (projects-ribelo-leash)"
+    ],
+    "projects": [
+      "projects-ribelo-leash",
+      "projects-ribelo-ocaml-eta-next"
+    ],
+    "category": "ocaml",
+    "scope": "global",
+    "note": "Effects-based OCaml IO lib; ejo is the classic Polish mishearing (plausible, unobserved)."
+  },
+  {
+    "term": "Lwt",
+    "mishearings": [
+      "lwt",
+      "LWT",
+      "elwt"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "ocaml",
+    "scope": "global",
+    "note": "Unobserved in corpus; core OCaml lib, plausible spoken."
+  },
+  {
+    "term": "ppx",
+    "mishearings": [
+      "p p x",
+      "pe pe x"
+    ],
+    "observed": [
+      "ppx (projects-ribelo-leash)"
+    ],
+    "projects": [
+      "projects-ribelo-leash",
+      "projects-ribelo-ocaml-eta-next"
+    ],
+    "category": "ocaml",
+    "scope": "global",
+    "note": ""
+  },
+  {
+    "term": "ppxlib",
+    "mishearings": [
+      "ppx lib",
+      "ppx-lib"
+    ],
+    "observed": [
+      "ppxlib (projects-ribelo-leash, agent report: no ppxlib for OxCaml 5.4)"
+    ],
+    "projects": [
+      "projects-ribelo-leash"
+    ],
+    "category": "ocaml",
+    "scope": "global",
+    "note": "Eta has its own deriver ppx-yojson-minimal."
+  },
+  {
+    "term": "Merlin",
+    "mishearings": [
+      "merlin",
+      "Merlinem",
+      "merlina"
+    ],
+    "observed": [
+      "Merlinem (projects-ribelo-ocaml-Eta, pasted changelog: integracja z Merlinem)"
+    ],
+    "projects": [
+      "projects-ribelo-ocaml-Eta"
+    ],
+    "category": "ocaml",
+    "scope": "global",
+    "note": ""
+  },
+  {
+    "term": "ocamlformat",
+    "mishearings": [
+      "ocaml format",
+      "ocaml-format"
+    ],
+    "observed": [
+      "ocamlformat (projects-ribelo-leash)"
+    ],
+    "projects": [
+      "projects-ribelo-leash"
+    ],
+    "category": "ocaml",
+    "scope": "global",
+    "note": ""
+  },
+  {
+    "term": "ocaml-lsp",
+    "mishearings": [
+      "ocaml lsp",
+      "ocaml el es pi"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "ocaml",
+    "scope": "global",
+    "note": "Unobserved; core OCaml tooling."
+  },
+  {
+    "term": "odoc",
+    "mishearings": [
+      "o doc",
+      "odock"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "ocaml",
+    "scope": "global",
+    "note": "Unobserved; OCaml doc generator."
+  },
+  {
+    "term": "Alcotest",
+    "mishearings": [
+      "alcotest",
+      "alco test"
+    ],
+    "observed": [
+      "alcotest (projects-ribelo-leash)"
+    ],
+    "projects": [
+      "projects-ribelo-leash"
+    ],
+    "category": "ocaml",
+    "scope": "global",
+    "note": ""
+  },
+  {
+    "term": "QCheck",
+    "mishearings": [
+      "qcheck",
+      "q check",
+      "kyu check"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "ocaml",
+    "scope": "global",
+    "note": "Unobserved; property testing lib."
+  },
+  {
+    "term": "Crowbar",
+    "mishearings": [
+      "crowbar",
+      "crow bar"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "ocaml",
+    "scope": "global",
+    "note": "Unobserved; fuzzing lib."
+  },
+  {
+    "term": "Cmdliner",
+    "mishearings": [
+      "cmdliner",
+      "cmd liner",
+      "command liner"
+    ],
+    "observed": [
+      "cmdliner (projects-ribelo-leash)"
+    ],
+    "projects": [
+      "projects-ribelo-leash",
+      "projects-ribelo-ocaml-eta-next"
+    ],
+    "category": "ocaml",
+    "scope": "global",
+    "note": ""
+  },
+  {
+    "term": "Yojson",
+    "mishearings": [
+      "yojson",
+      "yo json",
+      "yojason"
+    ],
+    "observed": [
+      "yojson (projects-ribelo-leash)"
+    ],
+    "projects": [
+      "projects-ribelo-leash",
+      "projects-ribelo-ocaml-eta-next"
+    ],
+    "category": "ocaml",
+    "scope": "global",
+    "note": "Capital-Y canonical."
+  },
+  {
+    "term": "jsont",
+    "mishearings": [
+      "json tee",
+      "jason tee",
+      "jsont"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "ocaml",
+    "scope": "global",
+    "note": "Unobserved in corpus but user has a jsont skill; typed JSON codecs."
+  },
+  {
+    "term": "Menhir",
+    "mishearings": [
+      "menhir",
+      "men hir"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "ocaml",
+    "scope": "global",
+    "note": "Unobserved; parser generator."
+  },
+  {
+    "term": "utop",
+    "mishearings": [
+      "utop",
+      "you top",
+      "u top"
+    ],
+    "observed": [
+      "utop (projects-ribelo-ocaml-eta-next)"
+    ],
+    "projects": [
+      "projects-ribelo-ocaml-eta-next"
+    ],
+    "category": "ocaml",
+    "scope": "global",
+    "note": "Lowercase canonical (REPL)."
+  },
+  {
+    "term": "Flambda",
+    "mishearings": [
+      "flambda",
+      "flam da"
+    ],
+    "observed": [
+      "Flambda (projects-ribelo-ocaml-Eta)"
+    ],
+    "projects": [
+      "projects-ribelo-ocaml-Eta"
+    ],
+    "category": "ocaml",
+    "scope": "global",
+    "note": "OCaml optimizer; always capitalized in corpus."
+  },
+  {
+    "term": "JSOO",
+    "mishearings": [
+      "jsoo",
+      "j s o o",
+      "dżejsu"
+    ],
+    "observed": [
+      "jsoo (projects-ribelo-ocaml-eta-next)"
+    ],
+    "projects": [
+      "projects-ribelo-ocaml-eta-next",
+      "projects-ribelo-ocaml-Eta"
+    ],
+    "category": "ocaml",
+    "scope": "global",
+    "note": "js_of_ocaml; user says JSOO."
+  },
+  {
+    "term": "Melange",
+    "mishearings": [
+      "melange",
+      "melanż"
+    ],
+    "observed": [
+      "melange (projects-ribelo-leash)"
+    ],
+    "projects": [
+      "projects-ribelo-leash"
+    ],
+    "category": "ocaml",
+    "scope": "global",
+    "note": "OCaml-to-JS; niche but general ecosystem."
+  },
+  {
+    "term": "MoonBit",
+    "mishearings": [
+      "moon bit",
+      "moonbit"
+    ],
+    "observed": [
+      "MoonBit (projects-ribelo-ocaml-Eta)"
+    ],
+    "projects": [
+      "projects-ribelo-ocaml-Eta"
+    ],
+    "category": "ocaml",
+    "scope": "project:projects-ribelo-ocaml-Eta",
+    "note": "User tracks MoonBit for a possible Eta port; Eta-context only."
+  },
+  {
+    "term": "Jane Street",
+    "mishearings": [
+      "jane street"
+    ],
+    "observed": [
+      "Jane Street (projects-ribelo-oura: Jane Street capsule)"
+    ],
+    "projects": [
+      "projects-ribelo-leash",
+      "projects-ribelo-ocaml-Eta",
+      "projects-ribelo-oura"
+    ],
+    "category": "ocaml",
+    "scope": "global",
+    "note": ""
+  },
+  {
+    "term": "GADT",
+    "mishearings": [
+      "gadt",
+      "gadts",
+      "GADTs"
+    ],
+    "observed": [
+      "GADTs (projects-ribelo-ocaml-Eta)"
+    ],
+    "projects": [
+      "projects-ribelo-ocaml-Eta"
+    ],
+    "category": "ocaml",
+    "scope": "global",
+    "note": "Generalized algebraic data types; Eta design talk."
+  },
+  {
+    "term": "eta-next",
+    "mishearings": [
+      "eta next"
+    ],
+    "observed": [
+      "eta-next (projects-ribelo-leash)"
+    ],
+    "projects": [
+      "projects-ribelo-leash",
+      "projects-ribelo-ocaml-eta-next"
+    ],
+    "category": "ocaml",
+    "scope": "global",
+    "note": "Eta next-gen branch/repo (ocaml/eta-next)."
+  },
+  {
+    "term": "dune-project",
+    "mishearings": [
+      "dune project"
+    ],
+    "observed": [
+      "dune-project (projects-ribelo-leash)"
+    ],
+    "projects": [
+      "projects-ribelo-leash",
+      "projects-ribelo-ocaml-Eta"
+    ],
+    "category": "ocaml",
+    "scope": "global",
+    "note": "Dictated filename (dune manifest)."
+  },
+  {
+    "term": "Rust",
+    "mishearings": [
+      "rust",
+      "rast",
+      "Rustcie"
+    ],
+    "observed": [
+      "rust (projects-ribelo-dsh: make changes in rust app; Think OCaml, or think Rust)",
+      "Rustcie (-.txt, Polish locative: katalogi typu target w Rustcie)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-ocaml-Eta",
+      "projects-ribelo-pie",
+      "projects-ribelo-xitter",
+      ".dotfiles-skills"
+    ],
+    "category": "rust",
+    "scope": "global",
+    "note": ""
+  },
+  {
+    "term": "cargo",
+    "mishearings": [
+      "kargo",
+      "cargo"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "rust",
+    "scope": "global",
+    "note": "Unobserved; core Rust tooling."
+  },
+  {
+    "term": "crate",
+    "mishearings": [
+      "krejt",
+      "crejt"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "rust",
+    "scope": "global",
+    "note": "Unobserved; krejt is the Polish phonetic spelling."
+  },
+  {
+    "term": "rustc",
+    "mishearings": [
+      "rust c",
+      "rustc"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "rust",
+    "scope": "global",
+    "note": "Unobserved (the one corpus rustc hit was Polish w Rustcie, an inflection of Rust). Rust compiler."
+  },
+  {
+    "term": "clippy",
+    "mishearings": [
+      "klipi",
+      "clippy"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "rust",
+    "scope": "global",
+    "note": "Unobserved; linter."
+  },
+  {
+    "term": "rustfmt",
+    "mishearings": [
+      "rust fmt",
+      "rastfempt"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "rust",
+    "scope": "global",
+    "note": "Unobserved; formatter."
+  },
+  {
+    "term": "tokio",
+    "mishearings": [
+      "tokio"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "rust",
+    "scope": "global",
+    "note": "Unobserved; async runtime."
+  },
+  {
+    "term": "serde",
+    "mishearings": [
+      "serde",
+      "serd"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "rust",
+    "scope": "global",
+    "note": "Unobserved; serialization."
+  },
+  {
+    "term": "anyhow",
+    "mishearings": [
+      "any how",
+      "anyhow"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "rust",
+    "scope": "global",
+    "note": "Unobserved; error handling."
+  },
+  {
+    "term": "thiserror",
+    "mishearings": [
+      "this error"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "rust",
+    "scope": "global",
+    "note": "Unobserved; error derive."
+  },
+  {
+    "term": "axum",
+    "mishearings": [
+      "axum",
+      "aksum"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "rust",
+    "scope": "global",
+    "note": "Unobserved; web framework."
+  },
+  {
+    "term": "rayon",
+    "mishearings": [
+      "rayon",
+      "rejon"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "rust",
+    "scope": "global",
+    "note": "Unobserved; data parallelism."
+  },
+  {
+    "term": "Cargo.toml",
+    "mishearings": [
+      "cargo toml",
+      "cargo.toml"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "rust",
+    "scope": "global",
+    "note": "Unobserved; manifest filename, dictated as cargo toml."
+  },
+  {
+    "term": "TypeScript",
+    "mishearings": [
+      "type script",
+      "typescript"
+    ],
+    "observed": [
+      "TypeScript (projects-ribelo-leash)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-leash",
+      "projects-ribelo-ocaml-Eta",
+      "projects-ribelo-pie",
+      "projects-ribelo-xitter",
+      ".dotfiles-skills"
+    ],
+    "category": "typescript",
+    "scope": "global",
+    "note": ""
+  },
+  {
+    "term": "tsconfig.json",
+    "mishearings": [
+      "tsconfig",
+      "ts config",
+      "tease config"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "typescript",
+    "scope": "global",
+    "note": "Unobserved; dictated as tees config."
+  },
+  {
+    "term": "tsc",
+    "mishearings": [
+      "tee ess see",
+      "tsc"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "typescript",
+    "scope": "global",
+    "note": "Unobserved; TS compiler."
+  },
+  {
+    "term": "tsgo",
+    "mishearings": [
+      "tees go",
+      "ts go"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "typescript",
+    "scope": "global",
+    "note": "Unobserved; native TS compiler."
+  },
+  {
+    "term": "Bun",
+    "mishearings": [
+      "bun",
+      "ban"
+    ],
+    "observed": [
+      "bun (projects-ribelo-xitter: bun link)"
+    ],
+    "projects": [
+      "projects-ribelo-xitter"
+    ],
+    "category": "typescript",
+    "scope": "global",
+    "note": ""
+  },
+  {
+    "term": "pnpm",
+    "mishearings": [
+      "pee en pee em",
+      "pnpm"
+    ],
+    "observed": [
+      "pnpm (projects-ribelo-dsh)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh"
+    ],
+    "category": "typescript",
+    "scope": "global",
+    "note": ""
+  },
+  {
+    "term": "npm",
+    "mishearings": [
+      "en pee em",
+      "NPM"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "typescript",
+    "scope": "global",
+    "note": "Unobserved (corpus npm hits were all inside pnpm - user is a pnpm user); enforce lowercase."
+  },
+  {
+    "term": "Vite",
+    "mishearings": [
+      "vite",
+      "wit",
+      "wite"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "typescript",
+    "scope": "global",
+    "note": "Unobserved (the one corpus vite hit was Latin vitae phantom)."
+  },
+  {
+    "term": "Vitest",
+    "mishearings": [
+      "vitest",
+      "wi test"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "typescript",
+    "scope": "global",
+    "note": "Unobserved."
+  },
+  {
+    "term": "oxlint",
+    "mishearings": [
+      "OXlint",
+      "ox lint"
+    ],
+    "observed": [
+      "OXlint (projects-ribelo-xitter: add OXlint)"
+    ],
+    "projects": [
+      "projects-ribelo-xitter"
+    ],
+    "category": "typescript",
+    "scope": "global",
+    "note": "Lowercase canonical (Oxc linter); user adopts it plus anti-slop rules everywhere."
+  },
+  {
+    "term": "oxfmt",
+    "mishearings": [
+      "ox fmt",
+      "oxformat"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "typescript",
+    "scope": "global",
+    "note": "Unobserved; Oxc formatter."
+  },
+  {
+    "term": "knip",
+    "mishearings": [
+      "knip",
+      "nip"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "typescript",
+    "scope": "global",
+    "note": "Unobserved; unused-code checker."
+  },
+  {
+    "term": "Biome",
+    "mishearings": [
+      "biome",
+      "bajom"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "typescript",
+    "scope": "global",
+    "note": "Unobserved; toolchain."
+  },
+  {
+    "term": "ESLint",
+    "mishearings": [
+      "eslint",
+      "es lint"
+    ],
+    "observed": [
+      "eslint (projects-ribelo-xitter: anti-slope eslint rules)"
+    ],
+    "projects": [
+      "projects-ribelo-xitter"
+    ],
+    "category": "typescript",
+    "scope": "global",
+    "note": ""
+  },
+  {
+    "term": "anti-slop",
+    "mishearings": [
+      "anti-slope",
+      "anti slop"
+    ],
+    "observed": [
+      "anti-slope (projects-ribelo-xitter: anti-slope eslint rules, cf. dmmulroy/anti-slop link in same message)"
+    ],
+    "projects": [
+      "projects-ribelo-xitter"
+    ],
+    "category": "typescript",
+    "scope": "global",
+    "note": "User lint philosophy (anti-slop eslint plugin); the -slope error is directly observed."
+  },
+  {
+    "term": "Zod",
+    "mishearings": [
+      "zod",
+      "zot"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "typescript",
+    "scope": "global",
+    "note": "Unobserved: all 63 corpus zod hits were Polish epizod/epizody (episodes) phantoms in randy."
+  },
+  {
+    "term": "React",
+    "mishearings": [
+      "react",
+      "riakt"
+    ],
+    "observed": [
+      "React (projects-ribelo-dsh: React, HTML, CSS)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-xitter",
+      ".dotfiles-skills"
+    ],
+    "category": "typescript",
+    "scope": "global",
+    "note": "Collides with the English verb react; capitalize only for the library."
+  },
+  {
+    "term": "Remotion",
+    "mishearings": [
+      "remotion",
+      "rimotion"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "typescript",
+    "scope": "global",
+    "note": "Unobserved; React video framework."
+  },
+  {
+    "term": "package.json",
+    "mishearings": [
+      "package json"
+    ],
+    "observed": [
+      "package.json (projects-ribelo-xitter)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-xitter"
+    ],
+    "category": "typescript",
+    "scope": "global",
+    "note": "Dictated filename."
+  },
+  {
+    "term": "Effect",
+    "mishearings": [
+      "effect"
+    ],
+    "observed": [
+      "effect v4 (projects-ribelo-xitter: we use effect v4)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-leash",
+      "projects-ribelo-nema",
+      "projects-ribelo-ocaml-eta-next",
+      "projects-ribelo-ocaml-Eta",
+      "projects-ribelo-pie",
+      "projects-ribelo-xitter",
+      ".dotfiles-skills",
+      "projects-retailic-randy"
+    ],
+    "category": "effect",
+    "scope": "global",
+    "note": "TS Effect library; lowercase in prose is the recurring ambiguity - capitalize only for the library."
+  },
+  {
+    "term": "Effect.gen",
+    "mishearings": [
+      "effect gen",
+      "effect dot gen"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "effect",
+    "scope": "global",
+    "note": "Unobserved (corpus hits were the typed URL github.com/tim-smart/effect-genserver). Effect generator API."
+  },
+  {
+    "term": "Context.Tag",
+    "mishearings": [
+      "context tag",
+      "context dot tag"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "effect",
+    "scope": "global",
+    "note": "Unobserved; Effect service tag."
+  },
+  {
+    "term": "Effect.Service",
+    "mishearings": [
+      "effect service"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "effect",
+    "scope": "global",
+    "note": "Unobserved; Effect service definition."
+  },
+  {
+    "term": "Nix",
+    "mishearings": [
+      "nix",
+      "niks"
+    ],
+    "observed": [
+      "Nix (projects-ribelo-dsh)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-leash",
+      "projects-ribelo-ocaml-eta-next",
+      "projects-ribelo-ocaml-Eta",
+      "projects-ribelo-xitter",
+      "-"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": "Package manager and language."
+  },
+  {
+    "term": "NixOS",
+    "mishearings": [
+      "nixos",
+      "niksos"
+    ],
+    "observed": [
+      "nixos (projects-ribelo-dsh: my NixOS config / nixos config; -.txt: nixos config)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-leash",
+      "projects-ribelo-nema",
+      "projects-ribelo-ocaml-eta-next",
+      "projects-ribelo-oura",
+      "projects-ribelo-pie",
+      "-"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": ""
+  },
+  {
+    "term": "home-manager",
+    "mishearings": [
+      "home manager"
+    ],
+    "observed": [
+      "home-manager (projects-ribelo-leash)"
+    ],
+    "projects": [
+      "projects-ribelo-leash"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": ""
+  },
+  {
+    "term": "nixos-rebuild",
+    "mishearings": [
+      "NixOS rebuild",
+      "nixos rebuild"
+    ],
+    "observed": [
+      "NixOS rebuild (projects-ribelo-dsh: I run the NixOS rebuild; projects-ribelo-oura: a NixOS rebuild)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-leash",
+      "projects-ribelo-ocaml-eta-next",
+      "projects-ribelo-oura",
+      "projects-ribelo-pie",
+      "-"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": ""
+  },
+  {
+    "term": "nixpkgs",
+    "mishearings": [
+      "nix pkgs",
+      "nixpackages"
+    ],
+    "observed": [
+      "nixpkgs (projects-ribelo-dsh)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-ocaml-eta-next"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": ""
+  },
+  {
+    "term": "flake.nix",
+    "mishearings": [
+      "flake nix"
+    ],
+    "observed": [
+      "flake.nix (projects-ribelo-leash)"
+    ],
+    "projects": [
+      "projects-ribelo-leash",
+      "projects-ribelo-ocaml-Eta"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": "Dictated filename."
+  },
+  {
+    "term": "AGENTS.md",
+    "mishearings": [
+      "agents md",
+      "agents emdee"
+    ],
+    "observed": [
+      "agents.md (projects-ribelo-inn: update agents.md; projects-ribelo-xitter: a good AGENTS.md)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-inn",
+      "projects-ribelo-leash",
+      "projects-ribelo-ocaml-eta-next",
+      "projects-ribelo-ocaml-Eta",
+      "projects-ribelo-xitter",
+      ".dotfiles-skills"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": "Dictated in every repo."
+  },
+  {
+    "term": "TOML",
+    "mishearings": [
+      "toml",
+      "tommel"
+    ],
+    "observed": [
+      "toml (projects-ribelo-leash: dependency list)"
+    ],
+    "projects": [
+      "projects-ribelo-leash"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": ""
+  },
+  {
+    "term": "niri",
+    "mishearings": [
+      "niri",
+      "neeri",
+      "Niri"
+    ],
+    "observed": [
+      "niri (projects-ribelo-leash; also niri-mcp project and leash README niri config)"
+    ],
+    "projects": [
+      "projects-ribelo-leash",
+      "projects-ribelo-ocaml-eta-next"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": "Lowercase canonical (scrollable-tiling Wayland compositor)."
+  },
+  {
+    "term": "Wayland",
+    "mishearings": [
+      "wayland",
+      "wejland",
+      "way land"
+    ],
+    "observed": [
+      "Wayland (projects-ribelo-leash)"
+    ],
+    "projects": [
+      "projects-ribelo-leash",
+      "projects-ribelo-ocaml-eta-next"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": ""
+  },
+  {
+    "term": "PipeWire",
+    "mishearings": [
+      "pipe wire",
+      "pipewire",
+      "pajpwire"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "tooling",
+    "scope": "global",
+    "note": "Unobserved; audio/video server."
+  },
+  {
+    "term": "PulseAudio",
+    "mishearings": [
+      "pulse audio",
+      "pulseaudio"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "tooling",
+    "scope": "global",
+    "note": "Unobserved; audio server."
+  },
+  {
+    "term": "systemd",
+    "mishearings": [
+      "system d",
+      "systemd"
+    ],
+    "observed": [
+      "systemd (projects-ribelo-pie: restart systemd service; projects-ribelo-inn: run as a systemd service)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-inn",
+      "projects-ribelo-leash",
+      "projects-ribelo-nema",
+      "projects-ribelo-ocaml-eta-next",
+      "projects-ribelo-ocaml-Eta",
+      "projects-ribelo-pie"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": ""
+  },
+  {
+    "term": "systemctl",
+    "mishearings": [
+      "system ctl",
+      "systemctl"
+    ],
+    "observed": [
+      "systemctl (projects-ribelo-leash)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-leash",
+      "projects-ribelo-ocaml-eta-next"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": ""
+  },
+  {
+    "term": "journalctl",
+    "mishearings": [
+      "journal ctl",
+      "journal c t l"
+    ],
+    "observed": [
+      "journalctl (projects-ribelo-dsh)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": ""
+  },
+  {
+    "term": "wtype",
+    "mishearings": [
+      "w type",
+      "double-u type"
+    ],
+    "observed": [
+      "wtype (projects-ribelo-ocaml-eta-next)"
+    ],
+    "projects": [
+      "projects-ribelo-ocaml-eta-next",
+      "projects-ribelo-ocaml-Eta"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": "Wayland keystroke injection (pie uses it to paste)."
+  },
+  {
+    "term": "Alacritty",
+    "mishearings": [
+      "alakriti",
+      "alacrity",
+      "alacritty"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "tooling",
+    "scope": "global",
+    "note": "Unobserved; GPU terminal."
+  },
+  {
+    "term": "OTLP",
+    "mishearings": [
+      "otlp",
+      "o t l p"
+    ],
+    "observed": [
+      "OTLP (projects-ribelo-inn: all the applications I write already use OTLP)"
+    ],
+    "projects": [
+      "projects-ribelo-inn",
+      "projects-ribelo-leash",
+      "projects-ribelo-ocaml-eta-next"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": ""
+  },
+  {
+    "term": "OTel",
+    "mishearings": [
+      "otel",
+      "OTEL",
+      "o tel"
+    ],
+    "observed": [
+      "OTel (projects-ribelo-pie: connect to OTel)",
+      "otel (projects-ribelo-leash)"
+    ],
+    "projects": [
+      "projects-ribelo-leash",
+      "projects-ribelo-ocaml-eta-next",
+      "projects-ribelo-pie"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": "Mixed-case canonical."
+  },
+  {
+    "term": "Chrome CDP",
+    "mishearings": [
+      "chrome cdp",
+      "chrome-cdp",
+      "see dee pee"
+    ],
+    "observed": [
+      "chrome-cdp (projects-ribelo-dsh: /chrome-cdp opencode-go)",
+      "Chrome CDP (projects-ribelo-xitter: started the Chrome CDP skill)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-leash",
+      "projects-ribelo-ocaml-eta-next",
+      "projects-ribelo-oura",
+      "projects-ribelo-pie",
+      "projects-ribelo-xitter",
+      ".dotfiles-skills"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": "CDP = Chrome DevTools Protocol; also the /chrome-cdp skill."
+  },
+  {
+    "term": "to-spec",
+    "mishearings": [
+      "to spec",
+      "skill to spec"
+    ],
+    "observed": [
+      "skill to spec (projects-ribelo-pie: odpalam skill to spec)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-inn",
+      "projects-ribelo-leash",
+      "projects-ribelo-nema",
+      "projects-ribelo-ocaml-Eta",
+      "projects-ribelo-pie",
+      "projects-ribelo-xitter"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": "The /to-spec skill; dictated constantly across projects."
+  },
+  {
+    "term": "grill-me",
+    "mishearings": [
+      "grill me",
+      "grill - me"
+    ],
+    "observed": [
+      "grill - me (-.txt: I am starting grill - me skill)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-inn",
+      "projects-ribelo-leash",
+      "projects-ribelo-nema",
+      "projects-ribelo-pie",
+      ".dotfiles-skills",
+      "-"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": "The /grill-me skill; user says grilling errors annoy them most, but no mangled variant found - this split is the closest observed."
+  },
+  {
+    "term": "subagent-driven development",
+    "mishearings": [
+      "subagent-drivent-development",
+      "sub-agent driven development",
+      "agent-driven development"
+    ],
+    "observed": [
+      "subagent-drivent-development (-.txt)",
+      "sub-agent driven development (projects-ribelo-dsh)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-ocaml-Eta",
+      "projects-ribelo-xitter",
+      ".dotfiles-skills",
+      "-"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": "The skill and methodology name."
+  },
+  {
+    "term": "Exa",
+    "mishearings": [
+      "exa"
+    ],
+    "observed": [
+      "ExaSearch (projects-github-x-algorithm: not just ExaSearch)",
+      "exa search (projects-ribelo-oura)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-leash",
+      "projects-ribelo-ocaml-eta-next",
+      "projects-ribelo-oura"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": "Exa.ai search plus DSH ExaSearch tool."
+  },
+  {
+    "term": "gh",
+    "mishearings": [
+      "GH",
+      "gee aitch"
+    ],
+    "observed": [
+      "gh (projects-ribelo-dsh, spoken: You can use the gh CLI command)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-leash",
+      "projects-ribelo-ocaml-eta-next",
+      ".dotfiles-skills"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": "GitHub CLI; enforce lowercase."
+  },
+  {
+    "term": "GitHub",
+    "mishearings": [
+      "github",
+      "git hub"
+    ],
+    "observed": [
+      "github (projects-ribelo-xitter lowercase prose)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-inn",
+      "projects-ribelo-leash",
+      "projects-ribelo-nema",
+      "projects-ribelo-ocaml-eta-next",
+      "projects-ribelo-ocaml-Eta",
+      "projects-ribelo-oura",
+      "projects-ribelo-xitter",
+      ".dotfiles-skills",
+      "-",
+      "projects-retailic-randy"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": ""
+  },
+  {
+    "term": "Bitbucket",
+    "mishearings": [
+      "bitbucket",
+      "bit bucket"
+    ],
+    "observed": [
+      "bitbucket (projects-ribelo-pie: user enumerating glossary scope: stuff like jira, bitbucket)"
+    ],
+    "projects": [
+      "projects-ribelo-pie"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": ""
+  },
+  {
+    "term": "SQL",
+    "mishearings": [
+      "sequel",
+      "siquel",
+      "es kuw el"
+    ],
+    "observed": [
+      "SQL (projects-ribelo-leash: eta_sql and ppx_sql packages)"
+    ],
+    "projects": [
+      "projects-ribelo-leash",
+      "projects-ribelo-ocaml-eta-next"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": "Spoken sequel is the classic STT trap (plausible, unobserved); Eta has an eta_sql package."
+  },
+  {
+    "term": "Kubernetes",
+    "mishearings": [
+      "kubernetes",
+      "kubernetis",
+      "kubernets"
+    ],
+    "observed": [
+      "Kubernetes (projects-retailic-hourglass, spoken: Fuck, there is Kubernetes)"
+    ],
+    "projects": [
+      "-",
+      "projects-retailic-hourglass",
+      "projects-retailic-randy"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": ""
+  },
+  {
+    "term": "SQLite",
+    "mishearings": [
+      "sqlite",
+      "es queue lite",
+      "sequel lite"
+    ],
+    "observed": [
+      "sqlite (projects-ribelo-leash)"
+    ],
+    "projects": [
+      "projects-ribelo-leash",
+      "projects-ribelo-ocaml-eta-next",
+      "projects-ribelo-ocaml-Eta"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": ""
+  },
+  {
+    "term": "WebSocket",
+    "mishearings": [
+      "web socket",
+      "websocket"
+    ],
+    "observed": [
+      "WebSocket (projects-ribelo-leash: WebSocket client in eta_http)"
+    ],
+    "projects": [
+      "projects-ribelo-leash",
+      "projects-ribelo-ocaml-eta-next"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": ""
+  },
+  {
+    "term": "OAuth",
+    "mishearings": [
+      "o out",
+      "oauth",
+      "oh auth"
+    ],
+    "observed": [
+      "OAuth (projects-ribelo-dsh: using Codex OAuth)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": ""
+  },
+  {
+    "term": "Tailscale",
+    "mishearings": [
+      "tailscale",
+      "tail scale"
+    ],
+    "observed": [
+      "Tailscale (-.txt, spoken: connect DeepSeek Harness, NixOS, and Tailscale)"
+    ],
+    "projects": [
+      "-"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": ""
+  },
+  {
+    "term": "Neovim",
+    "mishearings": [
+      "neovim",
+      "neowim",
+      "nvim",
+      "en vim"
+    ],
+    "observed": [
+      "nvim (projects-ribelo-dsh, spoken: the nvim annotator)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": "CLI spells it nvim."
+  },
+  {
+    "term": "MCP",
+    "mishearings": [
+      "mcp",
+      "em see pee"
+    ],
+    "observed": [
+      "MCP (projects-retailic-randy, pasted Slack: dane sa wystawione przez MCP)"
+    ],
+    "projects": [
+      "projects-retailic-randy"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": "Model Context Protocol; unobserved in user speech but task-listed core vocab."
+  },
+  {
+    "term": "Realtime",
+    "mishearings": [
+      "realtime",
+      "real time"
+    ],
+    "observed": [
+      "realtime (projects-ribelo-pie, spoken Polish: realtime tez moze byc)",
+      "Realtime (projects-ribelo-leash: Codex Realtime session)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-leash",
+      "projects-ribelo-ocaml-eta-next",
+      "projects-ribelo-pie"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": "OpenAI Realtime and GPT Live API family."
+  },
+  {
+    "term": "SmartRouter",
+    "mishearings": [
+      "smart router",
+      "Smart Router",
+      "smart-router",
+      "smart route",
+      "smart routera"
+    ],
+    "observed": [
+      "smart router (projects-ribelo-dsh)",
+      "smart route (projects-ribelo-dsh: The smart route should not care)",
+      "smart routera (projects-ribelo-dsh, Polish inflection)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-inn",
+      "projects-ribelo-leash",
+      "projects-ribelo-nema",
+      "projects-ribelo-ocaml-eta-next",
+      ".dotfiles-skills",
+      "-"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": "User DSH plugin (repo dir smart-router, README title SmartRouter); selects model and effort for workers."
+  },
+  {
+    "term": "DSH",
+    "mishearings": [
+      "dsh",
+      "gipsy"
+    ],
+    "observed": [
+      "dsh (projects-ribelo-dsh: dsh restarted)",
+      "gipsy (-.txt: rewrite the gipsy harness, for DSH harness)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-leash",
+      "projects-ribelo-nema",
+      "projects-ribelo-ocaml-eta-next",
+      "projects-ribelo-ocaml-Eta",
+      "projects-ribelo-pie",
+      ".dotfiles-skills",
+      "-"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": "DeepSeek Harness short name; lowercase dsh is correct in commands and paths, DSH in prose."
+  },
+  {
+    "term": "DeepSeek Harness",
+    "mishearings": [
+      "DeepSeekHarness",
+      "Deepseek Harness",
+      "DeepSea Harness",
+      "DeepSeaHarness",
+      "DS harness",
+      "DeepSeek harness"
+    ],
+    "observed": [
+      "DeepSeaHarness (-.txt: we use DeepSeaHarness)",
+      "DeepSea Harness (-.txt)",
+      "Deepseek Harness (-.txt)",
+      "DeepSeekHarness (projects-ribelo-dsh)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-ocaml-Eta",
+      "projects-ribelo-oura",
+      ".dotfiles-skills",
+      "-"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": "The harness; DeepSea is a pure STT error, Deepseek a casing error."
+  },
+  {
+    "term": "harness",
+    "mishearings": [
+      "hardware"
+    ],
+    "observed": [
+      "hardware (projects-ribelo-dsh, user-confirmed: hardware=harness. stt error)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-leash",
+      "projects-ribelo-nema",
+      "projects-ribelo-ocaml-eta-next",
+      "projects-ribelo-ocaml-Eta",
+      "projects-ribelo-oura",
+      "projects-ribelo-pie",
+      "projects-ribelo-xitter",
+      ".dotfiles-skills",
+      "-"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": "CAUTION: hardware is also a real word - map to harness only in DSH and restart context."
+  },
+  {
+    "term": "subagent",
+    "mishearings": [
+      "sub-agent",
+      "sub agent",
+      "sabagent"
+    ],
+    "observed": [
+      "sub-agent (projects-ribelo-dsh)",
+      "sub agent (projects-ribelo-dsh: forked the sub agent tool)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-leash",
+      "projects-ribelo-nema",
+      "projects-ribelo-ocaml-eta-next",
+      "projects-ribelo-ocaml-Eta",
+      "projects-ribelo-oura",
+      "projects-ribelo-pie",
+      "projects-ribelo-xitter",
+      ".dotfiles-skills",
+      "-",
+      "projects-retailic-randy"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": "Canonical unhyphenated (DSH tools are subagent_*); hyphenated and split forms dominate transcripts."
+  },
+  {
+    "term": "Wayfinder",
+    "mishearings": [
+      "wayfinder"
+    ],
+    "observed": [
+      "wayfinder (projects-ribelo-oura)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-leash",
+      "projects-ribelo-ocaml-Eta",
+      "projects-ribelo-oura"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": "User research and design protocol plus skill; map docs."
+  },
+  {
+    "term": "Pi",
+    "mishearings": [
+      "pi"
+    ],
+    "observed": [
+      "Pi (projects-ribelo-dsh: Pi handles this [Claude subscription]; The pinned Pi provider)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh"
+    ],
+    "category": "tooling",
+    "scope": "project:projects-ribelo-dsh",
+    "note": "DSH provider id (pi-ai catalog). CLASH: Pi is also the observed mishearing of Pie - context decides. String pi elsewhere is math-pi or the Pie mishearing."
+  },
+  {
+    "term": "Codex",
+    "mishearings": [
+      "codex",
+      "CODEX",
+      "kodeks",
+      "kodex"
+    ],
+    "observed": [
+      "codex (projects-ribelo-dsh)",
+      "CODEX (projects-ribelo-dsh)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-leash",
+      "projects-ribelo-ocaml-eta-next",
+      "projects-ribelo-ocaml-Eta",
+      "projects-ribelo-pie",
+      ".dotfiles-skills",
+      "-",
+      "projects-retailic-randy"
+    ],
+    "category": "ai-models",
+    "scope": "global",
+    "note": "Model plus Codex app, Codex CLI, Codex Desktop; casing is the issue."
+  },
+  {
+    "term": "Claude Code",
+    "mishearings": [
+      "claude code",
+      "claude-code",
+      "klod code"
+    ],
+    "observed": [
+      "claude-code (projects-retailic-randy, pasted Slack: swojego claude-code)",
+      "Claude Code (.dotfiles-skills.txt, benchmark harness column)"
+    ],
+    "projects": [
+      ".dotfiles-skills",
+      "projects-retailic-randy"
+    ],
+    "category": "ai-models",
+    "scope": "global",
+    "note": ""
+  },
+  {
+    "term": "OpenRouter",
+    "mishearings": [
+      "open router",
+      "OpenRoutera",
+      "OpenRouterze",
+      "open routera",
+      "OpeRouter",
+      "Front Servera"
+    ],
+    "observed": [
+      "OpenRoutera (projects-ribelo-pie, Polish: API do OpenRoutera)",
+      "OpenRouterze (projects-ribelo-pie: LLMow na OpenRouterze)",
+      "Open Router (projects-retailic-randy, pasted Slack)",
+      "OpeRouterze (projects-retailic-randy, pasted Slack typo)",
+      "Front Servera (projects-ribelo-pie, UNCERTAIN: best guess from wybrac najlepszy model context)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-leash",
+      "projects-ribelo-nema",
+      "projects-ribelo-ocaml-eta-next",
+      "projects-ribelo-ocaml-Eta",
+      "projects-ribelo-pie",
+      "projects-retailic-randy"
+    ],
+    "category": "ai-models",
+    "scope": "global",
+    "note": "LLM provider; Polish inflections are the norm in speech."
+  },
+  {
+    "term": "Gemini",
+    "mishearings": [
+      "gemini",
+      "dzemini",
+      "geminaj"
+    ],
+    "observed": [
+      "gemini (projects-ribelo-dsh: tables plus prose)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-pie",
+      ".dotfiles-skills",
+      "-",
+      "projects-retailic-randy"
+    ],
+    "category": "ai-models",
+    "scope": "global",
+    "note": ""
+  },
+  {
+    "term": "Qwen",
+    "mishearings": [
+      "qwen",
+      "kwen",
+      "klen"
+    ],
+    "observed": [
+      "qwen (projects-ribelo-pie, spoken: sugestii jakichs qwen czy deepseek-3.2)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-pie",
+      ".dotfiles-skills",
+      "-"
+    ],
+    "category": "ai-models",
+    "scope": "global",
+    "note": "kwen is the Polish phonetic spelling (plausible, unobserved)."
+  },
+  {
+    "term": "Groq",
+    "mishearings": [
+      "grok"
+    ],
+    "observed": [
+      "Groq (projects-ribelo-dsh, spoken: Groq, honestly, I do not really know)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-pie"
+    ],
+    "category": "ai-models",
+    "scope": "global",
+    "note": "Provider (groq-ox project exists). Constant confusion risk with xAI Grok - keep distinct!"
+  },
+  {
+    "term": "Grok",
+    "mishearings": [
+      "grok",
+      "groq",
+      "Grok 4-6"
+    ],
+    "observed": [
+      "Grok 4-6 (-.txt, spoken: Grok 4-6 was used as a worker - should be Grok 4.6)",
+      "Grok (projects-ribelo-dsh, spoken: For Grok, we only want high and medium)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-pie",
+      ".dotfiles-skills",
+      "-",
+      "projects-retailic-randy"
+    ],
+    "category": "ai-models",
+    "scope": "global",
+    "note": "xAI model family (4.5/4.6/4.7 in tables); hyphen-for-dot in versions is the observed error."
+  },
+  {
+    "term": "GPT",
+    "mishearings": [
+      "gpt",
+      "gee pee tee"
+    ],
+    "observed": [
+      "gpt (projects-ribelo-dsh)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-leash",
+      "projects-ribelo-ocaml-eta-next",
+      "projects-ribelo-ocaml-Eta",
+      "projects-ribelo-pie",
+      "projects-github-x-algorithm",
+      ".dotfiles-skills",
+      "-",
+      "projects-retailic-randy"
+    ],
+    "category": "ai-models",
+    "scope": "global",
+    "note": ""
+  },
+  {
+    "term": "GPT Live",
+    "mishearings": [
+      "gpt live",
+      "GPT-live",
+      "gpt-live"
+    ],
+    "observed": [
+      "GPT-live (projects-ribelo-pie, spoken: czyli GPT-live, jak dobrze pamietam)",
+      "gpt-live-1 (projects-ribelo-pie, spoken: Jest jeszcze gpt-live-1, doslownie)",
+      "GPT Live (projects-ribelo-dsh: GPT Live sends a message to DeepSeek Harness)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-pie"
+    ],
+    "category": "ai-models",
+    "scope": "global",
+    "note": "OpenAI voice and realtime interface incl. model ids gpt-live, gpt-live-1."
+  },
+  {
+    "term": "ChatGPT",
+    "mishearings": [
+      "chat gpt",
+      "chatgpt",
+      "Chat GPT"
+    ],
+    "observed": [
+      "Chat GPT Live (projects-ribelo-dsh: between Chat GPT Live and DeepSeek Harness)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-ocaml-Eta",
+      ".dotfiles-skills"
+    ],
+    "category": "ai-models",
+    "scope": "global",
+    "note": ""
+  },
+  {
+    "term": "Muse",
+    "mishearings": [
+      "muse",
+      "klod",
+      "clod"
+    ],
+    "observed": [
+      "muse (projects-ribelo-dsh, dictated: let us replace muse with xai/grok-4.6)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-leash",
+      "projects-ribelo-pie",
+      ".dotfiles-skills",
+      "-",
+      "projects-retailic-randy"
+    ],
+    "category": "ai-models",
+    "scope": "global",
+    "note": "klod/clod Polish phonetic (plausible, unobserved); see also Mios/Miu under Muse Spark."
+  },
+  {
+    "term": "Sonnet",
+    "mishearings": [
+      "sonnet",
+      "sonet",
+      "SONET"
+    ],
+    "observed": [
+      "SONET (projects-ribelo-dsh, Polish: wyszedl nowy model SONET 5.5)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-leash",
+      "projects-ribelo-ocaml-eta-next",
+      ".dotfiles-skills",
+      "-"
+    ],
+    "category": "ai-models",
+    "scope": "global",
+    "note": "Claude Sonnet (5 in tables)."
+  },
+  {
+    "term": "Opus",
+    "mishearings": [
+      "opus"
+    ],
+    "observed": [
+      "opus (projects-ribelo-dsh: tables)",
+      "opus 5.5 (-.txt: claude subscription provider with opus 5.5 at medium)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-leash",
+      "projects-ribelo-ocaml-eta-next",
+      ".dotfiles-skills",
+      "-",
+      "projects-retailic-randy"
+    ],
+    "category": "ai-models",
+    "scope": "global",
+    "note": "Claude Opus (4.8/5/5.5 in corpus)."
+  },
+  {
+    "term": "Haiku",
+    "mishearings": [
+      "haiku",
+      "hajku"
+    ],
+    "observed": [
+      "haiku-type (projects-ribelo-dsh, spoken: haiku-type models, luna-type models)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      ".dotfiles-skills"
+    ],
+    "category": "ai-models",
+    "scope": "global",
+    "note": ""
+  },
+  {
+    "term": "Fable",
+    "mishearings": [
+      "fable"
+    ],
+    "observed": [
+      "Fable (.dotfiles-skills.txt, tables: Fable 5.1 (max) on Claude Code; claude-fable-5)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      ".dotfiles-skills",
+      "-"
+    ],
+    "category": "ai-models",
+    "scope": "global",
+    "note": "Anthropic Fable family; tables-only, no confirmed spoken instance - plausible spoken."
+  },
+  {
+    "term": "Luna",
+    "mishearings": [
+      "luna"
+    ],
+    "observed": [
+      "Luna (projects-ribelo-dsh, spoken: We use Luna where we are not in a hurry; -.txt: luna limit is basically unlimited)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-leash",
+      "projects-ribelo-nema",
+      "projects-ribelo-ocaml-eta-next",
+      ".dotfiles-skills",
+      "-"
+    ],
+    "category": "ai-models",
+    "scope": "global",
+    "note": "Model codename family (gpt-5.6-luna etc.); also Luna Max effort naming."
+  },
+  {
+    "term": "Sol",
+    "mishearings": [
+      "sol",
+      "sole",
+      "soul",
+      "Son"
+    ],
+    "observed": [
+      "sole (projects-ribelo-dsh: tts-1 does not have sole - the Sol voice)",
+      "gpt-5.6-soul and gpt-soul (projects-ribelo-dsh, for gpt-5.6-sol)",
+      "Son Medium (projects-ribelo-dsh: We use Son Medium where tasks are long - UNCERTAIN: Sol-at-medium or Sonnet-at-medium)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-leash",
+      ".dotfiles-skills",
+      "-",
+      "projects-retailic-randy"
+    ],
+    "category": "ai-models",
+    "scope": "global",
+    "note": "Model codename (gpt-5.6-sol, gpt-6.1-sol) plus DSH voice and agent name. L/N confusion (Son) is the trap."
+  },
+  {
+    "term": "Astra",
+    "mishearings": [
+      "astra"
+    ],
+    "observed": [
+      "Astra (-.txt, spoken: We use Astra mainly not as a model that implements, but as an orchestrator)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-leash",
+      ".dotfiles-skills",
+      "-"
+    ],
+    "category": "ai-models",
+    "scope": "global",
+    "note": "Model codename (gpt-6-astra) plus DSH subagent route (subagent_astra)."
+  },
+  {
+    "term": "Terra",
+    "mishearings": [
+      "terra"
+    ],
+    "observed": [
+      "Terra (-.txt, spoken: around the level of Terra)",
+      "GPT-5.6 Terra (.dotfiles-skills.txt, tables)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      ".dotfiles-skills",
+      "-"
+    ],
+    "category": "ai-models",
+    "scope": "global",
+    "note": "Model codename family."
+  },
+  {
+    "term": "Kimi",
+    "mishearings": [
+      "kimi"
+    ],
+    "observed": [
+      "kimi (projects-ribelo-dsh: kimi have some [skills], kimi-code repo)",
+      "kimi-k3 (projects-ribelo-dsh, tables)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      ".dotfiles-skills",
+      "-"
+    ],
+    "category": "ai-models",
+    "scope": "global",
+    "note": "Moonshot Kimi (K2/K3 in corpus)."
+  },
+  {
+    "term": "GLM",
+    "mishearings": [
+      "glm",
+      "ge el em"
+    ],
+    "observed": [
+      "GLM (projects-ribelo-dsh, spoken: GLM, I am coming to the conclusion you can remove entirely; Rush should be GLM 5.3 Flash)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      ".dotfiles-skills",
+      "-"
+    ],
+    "category": "ai-models",
+    "scope": "global",
+    "note": "Zhipu GLM (5.2/5.3 in corpus)."
+  },
+  {
+    "term": "MiniMax",
+    "mishearings": [
+      "minimax",
+      "mini max"
+    ],
+    "observed": [
+      "MiniMax M2.7 and M3 (projects-ribelo-dsh, price lists; .dotfiles-skills.txt tables)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      ".dotfiles-skills"
+    ],
+    "category": "ai-models",
+    "scope": "global",
+    "note": "MiniMax models; tables and price-lists only, plausible spoken."
+  },
+  {
+    "term": "Mistral",
+    "mishearings": [
+      "mistral"
+    ],
+    "observed": [
+      "Mistral (.dotfiles-skills.txt, spoken: we have Mistral, which is a very specific model)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      ".dotfiles-skills"
+    ],
+    "category": "ai-models",
+    "scope": "global",
+    "note": ""
+  },
+  {
+    "term": "Llama",
+    "mishearings": [
+      "llama",
+      "lama"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "ai-models",
+    "scope": "global",
+    "note": "Unobserved (corpus llama hits were all inside Ollama). Meta Llama; plausible spoken."
+  },
+  {
+    "term": "Ollama",
+    "mishearings": [
+      "olama",
+      "ollama",
+      "lama"
+    ],
+    "observed": [
+      "Ollama (.dotfiles-skills.txt, tables)"
+    ],
+    "projects": [
+      ".dotfiles-skills"
+    ],
+    "category": "ai-models",
+    "scope": "global",
+    "note": "Local runner; tables-only (olama plausible, unobserved)."
+  },
+  {
+    "term": "xAI",
+    "mishearings": [
+      "xai",
+      "ex ay eye"
+    ],
+    "observed": [
+      "xai (projects-ribelo-dsh: replace muse with xai/grok-4.6; add it to our xai plugin)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-retailic-randy"
+    ],
+    "category": "ai-models",
+    "scope": "global",
+    "note": "Lowercase-x capital-AI canonical."
+  },
+  {
+    "term": "Anthropic",
+    "mishearings": [
+      "anthropic"
+    ],
+    "observed": [
+      "anthropic (projects-ribelo-dsh)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh"
+    ],
+    "category": "ai-models",
+    "scope": "global",
+    "note": "Mostly repo-name (anthropic-ox) mentions; general term anyway."
+  },
+  {
+    "term": "OpenAI",
+    "mishearings": [
+      "openai",
+      "open AI"
+    ],
+    "observed": [
+      "openai (projects-ribelo-dsh)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-leash",
+      "projects-ribelo-ocaml-eta-next",
+      "projects-ribelo-pie",
+      ".dotfiles-skills",
+      "-",
+      "projects-retailic-randy"
+    ],
+    "category": "ai-models",
+    "scope": "global",
+    "note": ""
+  },
+  {
+    "term": "DeepSeek",
+    "mishearings": [
+      "deepseek",
+      "Deepseek",
+      "deep seek",
+      "dipsik"
+    ],
+    "observed": [
+      "Deepseek (-.txt: Deepseek Agent, Deepseek-Harness)",
+      "deepseek (projects-ribelo-dsh: tables plus Deepseek Flash prose)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-leash",
+      "projects-ribelo-ocaml-Eta",
+      "projects-ribelo-oura",
+      "projects-ribelo-pie",
+      ".dotfiles-skills",
+      "-"
+    ],
+    "category": "ai-models",
+    "scope": "global",
+    "note": "Capital-S canonical; Deepseek casing error recurs."
+  },
+  {
+    "term": "Muse Spark",
+    "mishearings": [
+      "muse spark",
+      "Mios Spark",
+      "Miu Spark",
+      "meta-muse spark",
+      "MuseSparka"
+    ],
+    "observed": [
+      "Mios Spark (projects-ribelo-dsh: For Mios Spark 1.3)",
+      "Miu Spark (-.txt: Things that stay: Miu Spark)",
+      "meta-muse spark (-.txt: we also have meta-muse spark 1.3 - UNCERTAIN, likely STT prefix intrusion)",
+      "MuseSparka (projects-retailic-randy, pasted Slack Polish genitive: model MuseSparka)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      ".dotfiles-skills",
+      "-",
+      "projects-retailic-randy"
+    ],
+    "category": "ai-models",
+    "scope": "global",
+    "note": "Model family incl. Muse Spark Contributor (free tier) and ids muse-spark-1.x; the word Muse is STT-hostile."
+  },
+  {
+    "term": "MiMo",
+    "mishearings": [
+      "mimo",
+      "Mimo"
+    ],
+    "observed": [
+      "mimo (projects-ribelo-dsh, spoken: a sub agent mimo flash)",
+      "MiMo-V2.5-Pro (projects-ribelo-dsh, price lists)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      ".dotfiles-skills",
+      "-",
+      "projects-retailic-randy"
+    ],
+    "category": "ai-models",
+    "scope": "global",
+    "note": "Xiaomi MiMo (capital M-M canonical per tables); Flash and Pro variants."
+  },
+  {
+    "term": "JEV",
+    "mishearings": [
+      "jev",
+      "Jeff",
+      "yev"
+    ],
+    "observed": [
+      "Jeff (projects-ribelo-dsh, user-confirmed: Jeff=JEV - transcription error)",
+      "yev (projects-ribelo-leash, user-confirmed: yev=jev. sorry for stt transcription errors)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-leash",
+      "projects-ribelo-ocaml-eta-next",
+      ".dotfiles-skills"
+    ],
+    "category": "ai-models",
+    "scope": "global",
+    "note": "The JEV decision model (browser-use jev-ultrafast lineage); SmartRouter plus Leash use it via OpenRouter. Pronounced like Jeff - user-confirmed."
+  },
+  {
+    "term": "OpenCode",
+    "mishearings": [
+      "opencode"
+    ],
+    "observed": [
+      "opencode (projects-ribelo-dsh)",
+      "OpenCode (projects-ribelo-dsh: add it to OpenCode, to my profile)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh"
+    ],
+    "category": "ai-models",
+    "scope": "global",
+    "note": "The OpenCode coding agent (opencode.ai). Distinct from opencode-go below."
+  },
+  {
+    "term": "opencode-go",
+    "mishearings": [
+      "opencodego",
+      "OpenCodeGo",
+      "OpenCode Go",
+      "open code go",
+      "open code Go"
+    ],
+    "observed": [
+      "opencode-go (projects-ribelo-dsh: /chrome-cdp opencode-go)",
+      "opencodego (projects-ribelo-dsh: problem with opencodego)",
+      "OpenCodeGo (projects-ribelo-dsh: OpenRouter or OpenCodeGo often have free models)",
+      "open code Go (projects-ribelo-dsh: our open code Go does not work)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      ".dotfiles-skills"
+    ],
+    "category": "ai-models",
+    "scope": "global",
+    "note": "OpenCode Zen Go API provider (opencode.ai/zen/go); DSH has an opencode-go-session plugin; hyphenated slug canonical, OpenCode Go in prose."
+  },
+  {
+    "term": "Eta",
+    "mishearings": [
+      "eta",
+      "ETA"
+    ],
+    "observed": [
+      "eta (projects-ribelo-nema, spoken: Some of nema bugs may come from eta; projects-ribelo-pie: close gaps in eta)",
+      "ETA (projects-ribelo-pie, spoken: If you find any bug in ETA)"
+    ],
+    "projects": [
+      "projects-ribelo-inn",
+      "projects-ribelo-leash",
+      "projects-ribelo-nema",
+      "projects-ribelo-ocaml-eta-next",
+      "projects-ribelo-ocaml-Eta",
+      "projects-ribelo-oura",
+      "projects-ribelo-pie",
+      "-"
+    ],
+    "category": "ocaml",
+    "scope": "global",
+    "note": "User OCaml effect framework (repo Eta, README title Eta); lowercase eta is the opam package name and the prose mishearing."
+  },
+  {
+    "term": "Nema",
+    "mishearings": [
+      "nema",
+      "NEMA",
+      "NEMa",
+      "neema",
+      "nima"
+    ],
+    "observed": [
+      "nema (projects-ribelo-nema, spoken: We need to audit nema)",
+      "NEMa (projects-ribelo-pie, Polish: jak w NEMa wyglada skill)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-inn",
+      "projects-ribelo-leash",
+      "projects-ribelo-nema",
+      "projects-ribelo-ocaml-eta-next",
+      "projects-ribelo-ocaml-Eta",
+      "projects-ribelo-pie",
+      "-"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": "User vault search tool (README title Nema); NEMa capital-E is the signature STT error."
+  },
+  {
+    "term": "Leash",
+    "mishearings": [
+      "leash",
+      "lish",
+      "lisz"
+    ],
+    "observed": [
+      "leash (projects-ribelo-dsh, spoken: leash is not done)",
+      "lish (projects-ribelo-leash, backticked lish discovery - no lish exists in the repo, so this is leash misheard)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-leash",
+      "projects-ribelo-ocaml-eta-next",
+      "projects-ribelo-ocaml-Eta"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": "User browser service for agents (README title Leash); CLI is leash, so lish is a mishearing."
+  },
+  {
+    "term": "Pie",
+    "mishearings": [
+      "pie",
+      "PIE",
+      "Pi",
+      "py"
+    ],
+    "observed": [
+      "Pi (projects-ribelo-pie, Polish: zeby uzywac Pi; zeby Pi bylo lepsze)",
+      "py (projects-ribelo-pie: annoying things in py; dot py lamane na context dot md for .pie/context.md)",
+      "PIE (projects-ribelo-inn: make sure that PIE compiles)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-inn",
+      "projects-ribelo-leash",
+      "projects-ribelo-ocaml-eta-next",
+      "projects-ribelo-ocaml-Eta",
+      "projects-ribelo-pie",
+      "-"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": "Push-to-talk dictation tool (README title Pie). CLASH: Pi is also a real DSH provider id - context decides."
+  },
+  {
+    "term": "grip",
+    "mishearings": [
+      "grypis"
+    ],
+    "observed": [
+      "grypis (projects-ribelo-inn, user-confirmed: grypis = grip. fucking stt transcription...)"
+    ],
+    "projects": [
+      "projects-ribelo-inn",
+      "projects-ribelo-leash",
+      "projects-ribelo-ocaml-eta-next",
+      "projects-ribelo-ocaml-Eta",
+      "-"
+    ],
+    "category": "project-specific",
+    "scope": "global",
+    "note": "OCaml input and key handling lib (README title grip, lowercase); used across Eta-family repos."
+  },
+  {
+    "term": "Taumel",
+    "mishearings": [
+      "taumel"
+    ],
+    "observed": [
+      "taumel (projects-ribelo-ocaml-eta-next)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-leash",
+      "projects-ribelo-ocaml-eta-next"
+    ],
+    "category": "project-specific",
+    "scope": "global",
+    "note": "Eta-family interpreter project (README title Taumel); corpus has only lowercase."
+  },
+  {
+    "term": "Ladybug",
+    "mishearings": [
+      "ladybug"
+    ],
+    "observed": [
+      "ladybug (projects-ribelo-nema)",
+      "Ladybug (projects-ribelo-nema: bugs around Ladybug; projects-ribelo-leash: local Ladybug database layer)"
+    ],
+    "projects": [
+      "projects-ribelo-leash",
+      "projects-ribelo-nema",
+      "projects-ribelo-ocaml-eta-next",
+      "projects-ribelo-ocaml-Eta"
+    ],
+    "category": "project-specific",
+    "scope": "global",
+    "note": "Nema local database component; discussed across Eta-family corpora."
+  },
+  {
+    "term": "Xitter",
+    "mishearings": [
+      "xitter",
+      "shitter",
+      "ksitter"
+    ],
+    "observed": [
+      "xitter (projects-github-x-algorithm, spoken: I wrote xitter!)"
+    ],
+    "projects": [
+      "projects-ribelo-xitter",
+      "projects-github-x-algorithm"
+    ],
+    "category": "project-specific",
+    "scope": "global",
+    "note": "User X/Twitter analytics tool; repo does not exist yet (I hope a new project will live here)."
+  },
+  {
+    "term": "Oura",
+    "mishearings": [
+      "oura",
+      "Aura",
+      "ora"
+    ],
+    "observed": [
+      "Aura (projects-ribelo-oura, spoken: try using it to connect to Aura)"
+    ],
+    "projects": [
+      "projects-ribelo-oura"
+    ],
+    "category": "project-specific",
+    "scope": "project:projects-ribelo-oura",
+    "note": "Oura Ring reverse-engineering project (repo oura); ring BLE, ouraring dashboard."
+  },
+  {
+    "term": "Elenchus",
+    "mishearings": [
+      "elenchus",
+      "elenkus"
+    ],
+    "observed": [
+      "elenchus (projects-ribelo-elenchus, spoken: What stage is elenchus at)"
+    ],
+    "projects": [
+      "projects-ribelo-elenchus"
+    ],
+    "category": "project-specific",
+    "scope": "project:projects-ribelo-elenchus",
+    "note": "Rule-instrumentation project (CONTEXT title Elenchus)."
+  },
+  {
+    "term": "inn",
+    "mishearings": [
+      "IN",
+      "in",
+      "INN"
+    ],
+    "observed": [
+      "IN (projects-ribelo-inn, dictated: migrate IN; IN still compiles)",
+      "INN (projects-ribelo-inn: Since you finished INN)"
+    ],
+    "projects": [
+      "projects-ribelo-inn",
+      "projects-ribelo-leash",
+      "projects-ribelo-ocaml-eta-next",
+      "-"
+    ],
+    "category": "project-specific",
+    "scope": "global",
+    "note": "Lowercase canonical per README (title inn); OTLP log collector (motel rewrite). CAUTION: lowercase in collides with the English word - never map blindly. Mentioned as an Eta consumer across leash/eta-next; randy hit was Polish inna phantom."
+  },
+  {
+    "term": "Hourglass",
+    "mishearings": [
+      "hourglass",
+      "hourglassa"
+    ],
+    "observed": [
+      "hourglassa (projects-retailic-hourglass, pasted Slack Polish instrumental: z kopnieciem hourglassa)"
+    ],
+    "projects": [
+      "projects-retailic-hourglass"
+    ],
+    "category": "project-specific",
+    "scope": "project:projects-retailic-hourglass",
+    "note": "Retailic time-tracking sync (FogBugz); README title Hourglass."
+  },
+  {
+    "term": "Randy",
+    "mishearings": [
+      "randy"
+    ],
+    "observed": [
+      "randy (projects-retailic-randy)"
+    ],
+    "projects": [
+      "projects-retailic-randy"
+    ],
+    "category": "project-specific",
+    "scope": "project:projects-retailic-randy",
+    "note": "Retailic research tool (README title Randy)."
+  },
+  {
+    "term": "Xwire",
+    "mishearings": [
+      "x wire",
+      "XWire",
+      "xwire"
+    ],
+    "observed": [
+      "Xwire (projects-ribelo-xwire, spoken: on the Xwire side)"
+    ],
+    "projects": [
+      "projects-ribelo-xitter",
+      "projects-ribelo-xwire"
+    ],
+    "category": "project-specific",
+    "scope": "project:projects-ribelo-xwire",
+    "note": "README spells it Xwire (lowercase w). The xitter project was being renamed to xwire (xitter corpus: change the name of the entire project to xwire)."
+  },
+  {
+    "term": "Jira",
+    "mishearings": [
+      "jira"
+    ],
+    "observed": [
+      "jira (projects-ribelo-pie: user enumerating glossary scope: stuff like jira, bitbucket)"
+    ],
+    "projects": [
+      "projects-ribelo-pie"
+    ],
+    "category": "work",
+    "scope": "global",
+    "note": ""
+  },
+  {
+    "term": "Slack",
+    "mishearings": [
+      "slack"
+    ],
+    "observed": [
+      "Slack (projects-retailic-randy, pasted chat logs)"
+    ],
+    "projects": [
+      "projects-ribelo-pie",
+      "projects-retailic-randy"
+    ],
+    "category": "work",
+    "scope": "global",
+    "note": ""
+  },
+  {
+    "term": "Discord",
+    "mishearings": [
+      "discord"
+    ],
+    "observed": [
+      "Discord (projects-ribelo-pie: like Discord, Chrome, Chromium)"
+    ],
+    "projects": [
+      "projects-ribelo-pie"
+    ],
+    "category": "work",
+    "scope": "global",
+    "note": ""
+  },
+  {
+    "term": "FogBugz",
+    "mishearings": [
+      "fogbugz",
+      "fog bugs",
+      "FogBugza"
+    ],
+    "observed": [
+      "fogbugz (projects-retailic-randy)",
+      "FogBugza (projects-retailic-randy, pasted Slack Polish genitive)"
+    ],
+    "projects": [
+      "projects-retailic-hourglass",
+      "projects-retailic-randy"
+    ],
+    "category": "work",
+    "scope": "project:projects-retailic-randy",
+    "note": "Retailic issue tracker; also appears in hourglass corpus."
+  },
+  {
+    "term": "Comscore",
+    "mishearings": [
+      "comscore",
+      "CodeScore",
+      "code score"
+    ],
+    "observed": [
+      "comscore (projects-ribelo-pie: weird names at comscore)",
+      "CodeScore (-.txt, dictated: CodeScore Workhorse agent - tools spell it subagent_comscore_workhorse)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-ribelo-leash",
+      "projects-ribelo-oura",
+      "projects-ribelo-pie",
+      ".dotfiles-skills",
+      "-",
+      "projects-retailic-hourglass"
+    ],
+    "category": "company",
+    "scope": "global",
+    "note": "Employer (rkrzywaznia@comscore.com; dsh comscore-gateway plugin). CodeScore is the observed STT error."
+  },
+  {
+    "term": "Retailic",
+    "mishearings": [
+      "Ritalniku",
+      "retailik",
+      "rytalik"
+    ],
+    "observed": [
+      "Ritalniku (projects-retailic-hourglass, user-flagged: there is no DevOps in Ritalniku - that will probably be transcribed badly)"
+    ],
+    "projects": [
+      "projects-retailic-hourglass"
+    ],
+    "category": "company",
+    "scope": "global",
+    "note": "Client company; Polish locative w Retailicu mangled."
+  },
+  {
+    "term": "CSAI",
+    "mishearings": [
+      "csai",
+      "see ess ay eye"
+    ],
+    "observed": [
+      "CSAI (projects-ribelo-pie: TypeScript, Effect, and CSAI, weird names at comscore)"
+    ],
+    "projects": [
+      "projects-ribelo-pie"
+    ],
+    "category": "company",
+    "scope": "global",
+    "note": "Comscore AI platform (csaidev GCP service accounts in pasted terminal)."
+  },
+  {
+    "term": "glossary",
+    "mishearings": [
+      "glosary"
+    ],
+    "observed": [
+      "glosary (projects-ribelo-pie, spoken Polish: transkrypcji plus glosary)"
+    ],
+    "projects": [
+      "projects-ribelo-pie"
+    ],
+    "category": "other",
+    "scope": "global",
+    "note": "Pie core concept (global plus per-project glossaries); the dropped-s error is observed."
+  },
+  {
+    "term": "hardcode",
+    "mishearings": [
+      "hard code",
+      "hardkodować",
+      "shartcode"
+    ],
+    "observed": [
+      "shartcodować (projects-ribelo-pie, spoken: shartcodować ten prompt, for hardkodować)",
+      "hardcode (projects-ribelo-leash: The less we hardcode; projects-retailic-hourglass: you can hardcode that key)"
+    ],
+    "projects": [
+      "projects-ribelo-leash",
+      "projects-ribelo-ocaml-eta-next",
+      "projects-ribelo-pie",
+      ".dotfiles-skills",
+      "projects-retailic-hourglass"
+    ],
+    "category": "other",
+    "scope": "global",
+    "note": "Dev verb, often Polonized (hardkodować); STT heard shart-."
+  },
+  {
+    "term": "Obsidian",
+    "mishearings": [
+      "obsidian",
+      "obsydian"
+    ],
+    "observed": [
+      "Obsidian (projects-ribelo-ocaml-Eta, spoken: constrained by how I use Obsidian)"
+    ],
+    "projects": [
+      "projects-ribelo-ocaml-Eta"
+    ],
+    "category": "other",
+    "scope": "global",
+    "note": "Vault and notes app; Nema searches the user vault."
+  },
+  {
+    "term": "Bitwarden",
+    "mishearings": [
+      "bitwarden",
+      "bit warden"
+    ],
+    "observed": [
+      "Bitwarden (projects-ribelo-oura, spoken: send it to Bitwarden)"
+    ],
+    "projects": [
+      "projects-ribelo-oura"
+    ],
+    "category": "other",
+    "scope": "global",
+    "note": "Password manager (user unsure of CLI name bw vs BRW/BWR - memory, not STT)."
+  },
+  {
+    "term": "poteto",
+    "mishearings": [
+      "potato"
+    ],
+    "observed": [
+      "poteto (projects-ribelo-dsh, spoken: basically poteto with E; poteto mode; If we apply poteto)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh"
+    ],
+    "category": "other",
+    "scope": "project:projects-ribelo-dsh",
+    "note": "Intentional potato misspelling: cursor pstack potato mode workflow. STT corrects it to potato - do not let it."
+  },
+  {
+    "term": "pstack",
+    "mishearings": [
+      "pee stack",
+      "pi stack"
+    ],
+    "observed": [
+      "pstack (projects-ribelo-dsh, spoken: The best thing I have found is pstack)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh"
+    ],
+    "category": "other",
+    "scope": "project:projects-ribelo-dsh",
+    "note": "Cursor plugin (pstack docs); shares name with the Linux process-stack tool."
+  },
+  {
+    "term": "DeepSWE",
+    "mishearings": [
+      "deep sve",
+      "deep s w e"
+    ],
+    "observed": [
+      "deep sve (-.txt, spoken: this is deep sve)",
+      "DeepSWE (projects-ribelo-dsh: DeepSWE Pass@1 user table)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      ".dotfiles-skills",
+      "-"
+    ],
+    "category": "other",
+    "scope": "global",
+    "note": "Coding benchmark (saturated, versus newer FrontierCode)."
+  }
+]

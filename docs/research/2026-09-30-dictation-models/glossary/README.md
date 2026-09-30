@@ -1,0 +1,3 @@
+# Glossary mining (2026-09-30)
+
+The global glossary (~/.config/pie/glossary.md, 227 terms) and 13 project glossaries (<project>/.pie/glossary.md) were built from the user's own dictated messages in ~/.dsh/sessions (top-level sessions only, human-authored user messages; extractor: extract.mjs). Three agents mined them by area (dev.json, work.json, creative.json: term, observed and likely mishearings, projects, category, scope). A term seen in two or more project corpora, or a general ecosystem, tool or work term, went to the global glossary; the rest to the project that uses it. global.md is the merged global file as installed.

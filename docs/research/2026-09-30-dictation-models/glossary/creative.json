@@ -1,0 +1,1298 @@
+[
+  {
+    "term": "Progress Bureau",
+    "mishearings": [
+      "Progress Biuro",
+      "Progress Burau",
+      "progress biuro",
+      "progress bureau",
+      "progres biuro"
+    ],
+    "observed": [
+      "Progress Biuro (projects-WorthInheriting)",
+      "Progress Biuro (videos-bureau)",
+      "Progress Burau (projects-WorthInheriting)",
+      "progress bureau (projects-ribelo-xitter)"
+    ],
+    "projects": [
+      "projects-WorthInheriting",
+      "projects-stockroom",
+      "videos-bureau",
+      "projects-ribelo-xitter"
+    ],
+    "category": "creative",
+    "scope": "global",
+    "note": "Old org/channel name until 2026-09-28 (now Worth Inheriting). Correct 122x + ProgressBureau 62x (joined = code form) + progress_bureau 9x (handle); misheard 17x (Biuro 10x, Burau 7x). Standalone Polish biuro (=office) is correct — only fix Progress Biuro/Burau."
+  },
+  {
+    "term": "Worth Inheriting",
+    "mishearings": [
+      "Word Inherit",
+      "Word Inheriting",
+      "World Inheriting",
+      "worth inheriting",
+      "wort inheriting"
+    ],
+    "observed": [
+      "Word Inherit (projects-WorthInheriting)",
+      "Word Inheriting (projects-WorthInheriting)",
+      "World Inheriting (projects-WorthInheriting)"
+    ],
+    "projects": [
+      "projects-WorthInheriting"
+    ],
+    "category": "creative",
+    "scope": "global",
+    "note": "Current org name (since 2026-09-28). Only 6x correct vs 6x misheard (50%!): Word Inherit(ing) 4x (incl. Word Inherit Ink), World Inheriting 2x. Global by judgment: org brand said in chats too."
+  },
+  {
+    "term": "Stockroom",
+    "mishearings": [
+      "stockroom",
+      "stock room",
+      "stockroomie",
+      "stockrooma",
+      "stockroomu",
+      "stockroomem",
+      "stokrum"
+    ],
+    "observed": [
+      "stockroom (projects-WorthInheriting)",
+      "stockroom (projects-stockroom)",
+      "stockroom (videos-bureau)",
+      "stock room (projects-stockroom)",
+      "stock room (videos-bureau)",
+      "stockroomie (projects-WorthInheriting)",
+      "stockrooma (projects-stockroom)"
+    ],
+    "projects": [
+      "projects-WorthInheriting",
+      "projects-stockroom",
+      "videos-bureau",
+      "projects-ribelo-dsh"
+    ],
+    "category": "creative",
+    "scope": "global",
+    "note": "Footage-library product. Lowercase stockroom (30x) outnumbers Stockroom (22x); split stock room 3x (incl. bureau: uploading costs); Polish stockroomie (w stockroomie), stockrooma (zrobili stockrooma)."
+  },
+  {
+    "term": "Nothing Extraordinary Happened",
+    "mishearings": [
+      "nothing ordinary happened",
+      "Noting Ordinary Happened",
+      "nothing extraordinary happened",
+      "nothing extraordinary happen"
+    ],
+    "observed": [
+      "nothing ordinary happened (projects-WorthInheriting)",
+      "nothing ordinary happened (projects-stockroom)",
+      "Noting Ordinary Happened (projects-WorthInheriting)",
+      "Noting Ordinary Happened (videos-bureau)"
+    ],
+    "projects": [
+      "projects-WorthInheriting",
+      "projects-stockroom",
+      "videos-bureau"
+    ],
+    "category": "creative",
+    "scope": "global",
+    "note": "WI-002 film (canonical per journal). Correct Title Case only 6x vs misheard 16x: ordinary-for-extraordinary 14x (user habit or STT simplification), nothing→noting 2x (incl. finish the film Noting Ordinary Happened)."
+  },
+  {
+    "term": "Kubrick",
+    "mishearings": [
+      "Kubrickiem",
+      "Kubricka",
+      "kubrick"
+    ],
+    "observed": [
+      "Kubrickiem (projects-WorthInheriting)",
+      "Kubricka (videos-bureau)"
+    ],
+    "projects": [
+      "projects-WorthInheriting",
+      "projects-stockroom",
+      "videos-bureau"
+    ],
+    "category": "creative",
+    "scope": "global",
+    "note": "Stanley Kubrick. Spoken WI (Wes Anderson pomieszany z Kubrickiem; Anderson/Kubrick style) + ST (Kubrick films, with Tarantino/2001). Correct 12x; BU hits pasted archival lists."
+  },
+  {
+    "term": "GPT Image",
+    "mishearings": [
+      "GPT-Image",
+      "GPT-Image-2",
+      "ChatGPT Image",
+      "gpt image"
+    ],
+    "observed": [
+      "GPT Image (projects-stockroom)",
+      "GPT Image (projects-WorthInheriting)",
+      "GPT Image (projects-BloodyRamen)",
+      "GPT-Image-2 (projects-WorthInheriting)",
+      "GPT-Image-2 (projects-BloodyRamen)",
+      "ChatGPT Image (projects-BloodyRamen)"
+    ],
+    "projects": [
+      "projects-WorthInheriting",
+      "projects-BloodyRamen",
+      "projects-stockroom",
+      "projects-ribelo-dsh"
+    ],
+    "category": "ai-models",
+    "scope": "global",
+    "note": "OpenAI image model (marketing GPT Image; user says GPT-Image-2). 17x: split GPT Image 7x (ST spoken: you can use GPT Image), GPT-Image-2 4x, ChatGPT Image 6x (= ChatGPT download filenames). No GPT-live/DALL-E/Midjourney/SD ever said."
+  },
+  {
+    "term": "Remotion",
+    "mishearings": [
+      "remotion",
+      "rimotion",
+      "remouszyn"
+    ],
+    "observed": [
+      "remotion (projects-WorthInheriting)",
+      "remotion (projects-BloodyRamen)"
+    ],
+    "projects": [
+      "projects-WorthInheriting",
+      "projects-BloodyRamen"
+    ],
+    "category": "creative",
+    "scope": "global",
+    "note": "React→video renderer (BR channel built on it; WI compares vs hyperframes). Lowercase remotion 11x vs Remotion 6x. Remotion Studio 1x."
+  },
+  {
+    "term": "Pexels",
+    "mishearings": [
+      "pexal",
+      "peksels",
+      "pexel"
+    ],
+    "observed": [
+      "pexal (projects-stockroom)"
+    ],
+    "projects": [
+      "projects-WorthInheriting",
+      "projects-stockroom"
+    ],
+    "category": "company",
+    "scope": "global",
+    "note": "Stock footage site. Correct 10x; ST user unsure of name: pixbay and that pexal, or whatever it's called. User says Polish piksele/pikseli for image pixels — distinct, don't confuse."
+  },
+  {
+    "term": "Pixabay",
+    "mishearings": [
+      "Pixbay",
+      "piksabej",
+      "pixabay"
+    ],
+    "observed": [
+      "Pixbay (projects-WorthInheriting)",
+      "Pixbay (projects-stockroom)"
+    ],
+    "projects": [
+      "projects-WorthInheriting",
+      "projects-stockroom"
+    ],
+    "category": "company",
+    "scope": "global",
+    "note": "Stock site. Correct Pixabay only 2x vs Pixbay (dropped a) 2x (WI: something like Pixbay or Pexels)."
+  },
+  {
+    "term": "YouTube",
+    "mishearings": [
+      "YouTube'a",
+      "youtuba",
+      "jutub",
+      "you tube",
+      "yt"
+    ],
+    "observed": [
+      "YouTube'a (projects-WorthInheriting)"
+    ],
+    "projects": [
+      "projects-WorthInheriting",
+      "projects-stockroom",
+      "videos-bureau",
+      "-",
+      "projects-retailic-randy",
+      "projects-shareablee-wiser"
+    ],
+    "category": "creative",
+    "scope": "global",
+    "note": "Correct 213x; Polish genitive YouTube'a 3x (trafią na YouTube'a). User abbreviates YT (z yt). Never says YouTube Studio (0x)."
+  },
+  {
+    "term": "Blender",
+    "mishearings": [
+      "blender",
+      "blendera",
+      "blenderze",
+      "blenderem",
+      "blendrze"
+    ],
+    "observed": [
+      "blender (projects-WorthInheriting)",
+      "blendera (projects-WorthInheriting)",
+      "blenderze (projects-WorthInheriting)"
+    ],
+    "projects": [
+      "projects-WorthInheriting",
+      "projects-ribelo-dsh"
+    ],
+    "category": "creative",
+    "scope": "global",
+    "note": "3D/rendering for films (Golden Record Blender renders; blender+H3/seedance). Correct 35x; lowercase 3x; Polish blendera 2x, blenderze 5x."
+  },
+  {
+    "term": "Shorts",
+    "mishearings": [
+      "shorts",
+      "shortów",
+      "shorty",
+      "shorta",
+      "shortem",
+      "shortsy",
+      "szorts",
+      "Short"
+    ],
+    "observed": [
+      "shorts (projects-WorthInheriting)",
+      "shortów (projects-WorthInheriting)",
+      "shorty (projects-WorthInheriting)",
+      "shorta (projects-WorthInheriting)",
+      "shortem (projects-WorthInheriting)"
+    ],
+    "projects": [
+      "projects-WorthInheriting",
+      "projects-retailic-randy"
+    ],
+    "category": "creative",
+    "scope": "global",
+    "note": "YouTube Shorts (WI format; 77x family: Shorts 28, shorts 17, shortów 9, shorty 14, shorta 8, shortem 1). randy shares a youtube.com/shorts URL. WI house also uses singular Short (test Shorts); short film(s) ordinary."
+  },
+  {
+    "term": "TikTok",
+    "mishearings": [
+      "tiktok",
+      "TikToku",
+      "TikToka",
+      "tik toka",
+      "tick tock"
+    ],
+    "observed": [
+      "tiktok (projects-WorthInheriting)",
+      "TikToku (projects-WorthInheriting)",
+      "TikToka (projects-WorthInheriting)"
+    ],
+    "projects": [
+      "projects-WorthInheriting",
+      "projects-shareablee-wiser"
+    ],
+    "category": "creative",
+    "scope": "global",
+    "note": "Correct 21x; lowercase 2x; Polish TikToku 3x, TikToka 2x. WI tests posting Shorts to TikTok; wiser posts work video there."
+  },
+  {
+    "term": "FLUX",
+    "mishearings": [
+      "Flux",
+      "flux",
+      "fluks",
+      "flux.1"
+    ],
+    "observed": [
+      "Flux (projects-WorthInheriting)",
+      "flux (projects-WorthInheriting)"
+    ],
+    "projects": [
+      "projects-WorthInheriting",
+      "projects-shareablee-ai-team-iced"
+    ],
+    "category": "ai-models",
+    "scope": "global",
+    "note": "Black Forest Labs image model (canonical all-caps). Correct FLUX only 3x vs Flux 16x, flux 9x. Keyframes/concepts; iced has flux-aisandbox. Unresolved: user said Flux 3 3x (version? attempt #3?)."
+  },
+  {
+    "term": "MiniMax",
+    "mishearings": [
+      "minimax",
+      "minimaks",
+      "mini max",
+      "minimaxa"
+    ],
+    "observed": [
+      "minimax (projects-WorthInheriting)"
+    ],
+    "projects": [
+      "projects-WorthInheriting",
+      ".dotfiles-skills",
+      "projects-ribelo-dsh"
+    ],
+    "category": "ai-models",
+    "scope": "global",
+    "note": "Video-model vendor (H3). User NEVER writes camelCase: minimax lowercase 10x (backticked model refs). Lowercase correct in fal.ai paths (minimax/h3-max/director)."
+  },
+  {
+    "term": "fal.ai",
+    "mishearings": [
+      "Fal AI",
+      "FAL AI",
+      "fal",
+      "falaj",
+      "val.ai"
+    ],
+    "observed": [
+      "Fal AI (projects-WorthInheriting)",
+      "FAL AI (projects-WorthInheriting)",
+      "fal (projects-WorthInheriting)"
+    ],
+    "projects": [
+      "projects-WorthInheriting",
+      "projects-shareablee-wiser"
+    ],
+    "category": "company",
+    "scope": "global",
+    "note": "Serverless media-model platform (H3, FLUX...). fal.ai 18x + Fal AI/FAL AI 8x + standalone fal ~7x. wiser uses @fal (background removal) via Grok bot."
+  },
+  {
+    "term": "hyperframes",
+    "mishearings": [
+      "HyperFrames",
+      "hyperframe",
+      "Hyperframe",
+      "hyper frames"
+    ],
+    "observed": [
+      "HyperFrames (projects-WorthInheriting)",
+      "hyperframe (projects-WorthInheriting)",
+      "Hyperframe (projects-WorthInheriting)"
+    ],
+    "projects": [
+      "projects-WorthInheriting",
+      "projects-ribelo-ocaml-eta-next"
+    ],
+    "category": "creative",
+    "scope": "global",
+    "note": "WI film renderer (npm hyperframes, pinned 0.8.22; CLI render/preview/lint; film-kit). Lowercase plural 10x vs HyperFrames 4x, singulars 4x. eta-next references a stray hyperframes render job. Distinct from generic wireframe (7x, 3D view)."
+  },
+  {
+    "term": "2001: A Space Odyssey",
+    "mishearings": [
+      "2001 A Space Odyssey",
+      "2001 a space odyssey",
+      "Odyseja kosmiczna",
+      "2001"
+    ],
+    "observed": [
+      "2001 A Space Odyssey (projects-stockroom)"
+    ],
+    "projects": [
+      "projects-stockroom",
+      "videos-bureau"
+    ],
+    "category": "creative",
+    "scope": "global",
+    "note": "ST spoken example for film-review feature (we take 2001: A Space Odyssey; downloads/2001 A Space Odyssey (1968) [BluRay] [YTS.AM]); BU 1x pasted (Nie jest to jeszcze 2001). Other-corpora 2001 = years."
+  },
+  {
+    "term": "H3",
+    "mishearings": [
+      "h3",
+      "H10",
+      "H 10",
+      "H 10 max",
+      "ha trzy",
+      "H3-max"
+    ],
+    "observed": [
+      "h3 (projects-WorthInheriting)",
+      "H10 (projects-WorthInheriting)",
+      "H 10 max (projects-WorthInheriting)"
+    ],
+    "projects": [
+      "projects-WorthInheriting"
+    ],
+    "category": "ai-models",
+    "scope": "project:projects-WorthInheriting",
+    "note": "MiniMax H3 video model (53x: H3 45, h3 8). User error corrected on-mic: H3 — masz rację, H3, nie H10. Via fal.ai (minimax/h3-max/director, reference-to-video); H3 made the coffee fly."
+  },
+  {
+    "term": "Seedance",
+    "mishearings": [
+      "Seedens",
+      "seedense",
+      "seedence",
+      "seedens",
+      "seedensem",
+      "seedance",
+      "side dance",
+      "see dance"
+    ],
+    "observed": [
+      "Seedens (projects-WorthInheriting)",
+      "seedense (projects-WorthInheriting)",
+      "seedence (projects-WorthInheriting)",
+      "seedens (projects-WorthInheriting)",
+      "seedensem (projects-WorthInheriting)",
+      "seedance (projects-WorthInheriting)"
+    ],
+    "projects": [
+      "projects-WorthInheriting"
+    ],
+    "category": "ai-models",
+    "scope": "project:projects-WorthInheriting",
+    "note": "ByteDance Seedance video model. Correct 27x (Seedance 5, lowercase 22) vs misheard 13x (Seedens 7, seedense 2, seedence 1, seedens 2, seedensem 1 — instrumental of the mishearing!). User warned: seedance pewnie zostanie źle przetranskrybowana, spelled S E E + dance."
+  },
+  {
+    "term": "ElevenLabs",
+    "mishearings": [
+      "eleven labs",
+      "elevenlabs",
+      "elevenlabsa",
+      "ileven labs"
+    ],
+    "observed": [
+      "eleven labs (projects-WorthInheriting)",
+      "elevenlabs (projects-WorthInheriting)"
+    ],
+    "projects": [
+      "projects-WorthInheriting"
+    ],
+    "category": "ai-models",
+    "scope": "project:projects-WorthInheriting",
+    "note": "Narration voice (69x: ElevenLabs 61, split eleven labs 5, lowercase 3). Chciałbym żebyś użył Gemini i ElevenLabs. film.yaml model eleven_v3; v3/v4 user mentions = production versions."
+  },
+  {
+    "term": "SuperCollider",
+    "mishearings": [
+      "SuperCollidera",
+      "supercolliderem",
+      "supercolliderze",
+      "Super Collider",
+      "superkolajder",
+      "supercollider"
+    ],
+    "observed": [
+      "SuperCollidera (projects-WorthInheriting)",
+      "supercolliderem (projects-WorthInheriting)",
+      "supercolliderze (projects-WorthInheriting)"
+    ],
+    "projects": [
+      "projects-WorthInheriting"
+    ],
+    "category": "creative",
+    "scope": "project:projects-WorthInheriting",
+    "note": "Code-sound scores/SFX (most mature toolkit part; Day of Two Noons built on it). Correct 8x + Polish SuperCollidera 2x, supercolliderem 1x (jakimś supercolliderem), supercolliderze 2x. Never split/misspelled; scsynth/sclang never said."
+  },
+  {
+    "term": "Wan",
+    "mishearings": [
+      "VANN",
+      "van",
+      "łan",
+      "Wan 2"
+    ],
+    "observed": [
+      "VANN (projects-WorthInheriting)"
+    ],
+    "projects": [
+      "projects-WorthInheriting"
+    ],
+    "category": "ai-models",
+    "scope": "project:projects-WorthInheriting",
+    "note": "Alibaba Wan video/image model (probable): models VANN, Gemini Omni, and Flux (5x, all-caps). Polish v/w confusion (Wan→Vann). UNCERTAIN: no known model VANN; Wan fits (fal.ai hosts it). BU/dsh/xitter wan/van = ordinary words."
+  },
+  {
+    "term": "Topaz",
+    "mishearings": [
+      "topaz",
+      "topaz video ai",
+      "Topaz Video AI"
+    ],
+    "observed": [],
+    "projects": [
+      "projects-WorthInheriting"
+    ],
+    "category": "company",
+    "scope": "project:projects-WorthInheriting",
+    "note": "Topaz Video AI (Topaz Labs): upscaling/restoration in AI pipeline (ChatGPT script → ElevenLabs voice → AI thumbnail → Topaz…). 3x, all backticked-correct; likely case/likely-full-name variants only."
+  },
+  {
+    "term": "halftone",
+    "mishearings": [
+      "halfton",
+      "hafton",
+      "half tone"
+    ],
+    "observed": [
+      "halfton (projects-WorthInheriting)"
+    ],
+    "projects": [
+      "projects-WorthInheriting"
+    ],
+    "category": "creative",
+    "scope": "project:projects-WorthInheriting",
+    "note": "WI motion effect (color→halfton wave transition). Correct halftone 20x vs halfton 10x (czarno-biały halfton; user adopted it: będę nazywał halfton albo partitus)."
+  },
+  {
+    "term": "particles",
+    "mishearings": [
+      "partitus",
+      "partikls",
+      "particlesy"
+    ],
+    "observed": [
+      "partitus (projects-WorthInheriting)"
+    ],
+    "projects": [
+      "projects-WorthInheriting"
+    ],
+    "category": "creative",
+    "scope": "project:projects-WorthInheriting",
+    "note": "Motion-design particles. Correct 3x; partitus 1x (halfton albo partitus… jak kulki — little balls on material/water). STT mangling of particles."
+  },
+  {
+    "term": "B-roll",
+    "mishearings": [
+      "B roll",
+      "broll",
+      "birol",
+      "b-roll"
+    ],
+    "observed": [],
+    "projects": [
+      "projects-WorthInheriting"
+    ],
+    "category": "creative",
+    "scope": "project:projects-WorthInheriting",
+    "note": "1x correct (realistyczne AI B-roll, in AI-modification labeling discussion). Likely split/joined/phonetic variants."
+  },
+  {
+    "term": "J-cut",
+    "mishearings": [
+      "J cut",
+      "jay cut",
+      "dżej kat"
+    ],
+    "observed": [],
+    "projects": [
+      "projects-WorthInheriting"
+    ],
+    "category": "creative",
+    "scope": "project:projects-WorthInheriting",
+    "note": "Editing jargon, 5x correct (To byłby J-cut; manifest of L-cut/J-cut techniques). Paired with L-cut."
+  },
+  {
+    "term": "L-cut",
+    "mishearings": [
+      "L cut",
+      "ell cut",
+      "el kat"
+    ],
+    "observed": [],
+    "projects": [
+      "projects-WorthInheriting"
+    ],
+    "category": "creative",
+    "scope": "project:projects-WorthInheriting",
+    "note": "Editing jargon, 5x correct (L-cut, czyli muzyka trwa dłużej niż scena). Paired with J-cut. No match/jump cut/Ken Burns ever said."
+  },
+  {
+    "term": "Content ID",
+    "mishearings": [
+      "content id",
+      "kontent ajdi",
+      "content ay di"
+    ],
+    "observed": [],
+    "projects": [
+      "projects-WorthInheriting"
+    ],
+    "category": "creative",
+    "scope": "project:projects-WorthInheriting",
+    "note": "YouTube Content ID. 2x correct (czy istnieje Content ID — footage clearance). Proper-name capitalization + Polish-phonetic risk."
+  },
+  {
+    "term": "BPM",
+    "mishearings": [
+      "bpm",
+      "be pe em"
+    ],
+    "observed": [],
+    "projects": [
+      "projects-WorthInheriting"
+    ],
+    "category": "creative",
+    "scope": "project:projects-WorthInheriting",
+    "note": "Score tempo, 13x spoken (okolicach 150 BPM; pobrać z yt film i policzyć BPM). Acronym case risk. (Vendiver Production music ref 1x — unresolved, skipped.)"
+  },
+  {
+    "term": "VJ",
+    "mishearings": [
+      "VJ-a",
+      "widżej",
+      "vj"
+    ],
+    "observed": [
+      "VJ-a (projects-WorthInheriting)"
+    ],
+    "projects": [
+      "projects-WorthInheriting"
+    ],
+    "category": "creative",
+    "scope": "project:projects-WorthInheriting",
+    "note": "VJ-ing (live visuals): bawienie w VJ-a i w DJ-a (visual toolkit play). VJ 1x + inflected VJ-a 1x."
+  },
+  {
+    "term": "DJ",
+    "mishearings": [
+      "didżej",
+      "didżeja",
+      "dj"
+    ],
+    "observed": [],
+    "projects": [
+      "projects-WorthInheriting"
+    ],
+    "category": "creative",
+    "scope": "project:projects-WorthInheriting",
+    "note": "2x correct (twórca, który jest przy okazji DJ). Polish-pronunciation variants likely."
+  },
+  {
+    "term": "Voyager",
+    "mishearings": [
+      "voyager",
+      "wojadżer",
+      "wojager",
+      "voager"
+    ],
+    "observed": [
+      "voyager (projects-WorthInheriting)"
+    ],
+    "projects": [
+      "projects-WorthInheriting"
+    ],
+    "category": "creative",
+    "scope": "project:projects-WorthInheriting",
+    "note": "NASA probe; WI-001 Golden Record subject. Voyager 19x + lowercase 6x (film about the probe, Voyager). No phonetic errors observed."
+  },
+  {
+    "term": "ZEISS",
+    "mishearings": [
+      "Zeiss",
+      "zajs",
+      "ceis",
+      "Carl Zeiss"
+    ],
+    "observed": [
+      "Zeiss (projects-WorthInheriting)"
+    ],
+    "projects": [
+      "projects-WorthInheriting"
+    ],
+    "category": "company",
+    "scope": "project:projects-WorthInheriting",
+    "note": "Canonical all-caps (company). User says zeiss lowercase 6x (dictated paths: docs/issues/zeiss-…, videos/zeiss/…). ZEISS series ZEISS-F1 The Company Nobody Can Buy (title never spoken)."
+  },
+  {
+    "term": "Dune",
+    "mishearings": [
+      "Diuny",
+      "diuna",
+      "diunie",
+      "duna"
+    ],
+    "observed": [
+      "Diuny (projects-WorthInheriting)"
+    ],
+    "projects": [
+      "projects-WorthInheriting"
+    ],
+    "category": "creative",
+    "scope": "project:projects-WorthInheriting",
+    "note": "Villeneuve's Dune (WI scale reference). Dune 2x + genitive Diuny 1x (człowiek od Diuny). OCaml corpora dune = build tool (different sense)."
+  },
+  {
+    "term": "Blade Runner 2049",
+    "mishearings": [
+      "Blade Runnera 2049",
+      "blade runnera",
+      "blejd raner"
+    ],
+    "observed": [
+      "Blade Runnera 2049 (projects-WorthInheriting)"
+    ],
+    "projects": [
+      "projects-WorthInheriting"
+    ],
+    "category": "creative",
+    "scope": "project:projects-WorthInheriting",
+    "note": "Villeneuve reference (awesome opening). Correct 1x + genitive Blade Runnera 2049 1x."
+  },
+  {
+    "term": "Villeneuve",
+    "mishearings": [
+      "Wilnew",
+      "Vilanova",
+      "Vilnev",
+      "Wilniewa",
+      "Villeneuve's"
+    ],
+    "observed": [],
+    "projects": [
+      "projects-WorthInheriting"
+    ],
+    "category": "creative",
+    "scope": "project:projects-WorthInheriting",
+    "note": "Denis Villeneuve. 2x correct BUT user warned: to może być źle transkrybowane, chodzi o człowieka od Diuny / Blade Runnera 2049. High-risk French name; include on warning."
+  },
+  {
+    "term": "Wes Anderson",
+    "mishearings": [
+      "Andersona",
+      "Wesa",
+      "Wesanderson",
+      "wes anderson"
+    ],
+    "observed": [],
+    "projects": [
+      "projects-WorthInheriting"
+    ],
+    "category": "creative",
+    "scope": "project:projects-WorthInheriting",
+    "note": "8x correct (reżyserów jak Wes Anderson i Kubrick, genialna geometry; Wes Anderson / Kubrick style interludes). Polish inflections highly likely."
+  },
+  {
+    "term": "Chuck Berry",
+    "mishearings": [
+      "Chucka Berry'ego",
+      "czaka beriego",
+      "chuck berry"
+    ],
+    "observed": [
+      "Chucka Berry'ego (projects-WorthInheriting)"
+    ],
+    "projects": [
+      "projects-WorthInheriting"
+    ],
+    "category": "creative",
+    "scope": "project:projects-WorthInheriting",
+    "note": "Correct Chuck Berry 3x + Polish Chucka Berry'ego 3x (same zdjęcie Chucka Berry'ego; muzyka Chucka Berry'ego — film feedback)."
+  },
+  {
+    "term": "Joseph Henrich",
+    "mishearings": [
+      "Joseph Heinrich",
+      "Heinrich",
+      "Henricha",
+      "Henrika",
+      "henrich"
+    ],
+    "observed": [
+      "Joseph Heinrich (projects-WorthInheriting)",
+      "Heinrich (projects-WorthInheriting)"
+    ],
+    "projects": [
+      "projects-WorthInheriting"
+    ],
+    "category": "other",
+    "scope": "project:projects-WorthInheriting",
+    "note": "Anthropologist (WI film reference with Deutsch). 41% error: Heinrich 7x (Joseph Heinrich 3x + standalone 4x) vs Henrich 10x. User unfamiliar (I don't know Joseph Heinrich) → STT defaults to common Heinrich."
+  },
+  {
+    "term": "Meadows",
+    "mishearings": [
+      "Donelly H. Meadows",
+      "Medows",
+      "Medousa",
+      "Donella"
+    ],
+    "observed": [
+      "Donelly H. Meadows (projects-WorthInheriting)"
+    ],
+    "projects": [
+      "projects-WorthInheriting"
+    ],
+    "category": "other",
+    "scope": "project:projects-WorthInheriting",
+    "note": "Donella Meadows (systems thinking; Thinking in Systems = Myślenie systemowe). Meadows 10x; full name once as Donelly H. Meadows (Donella→Donelly!). Never Donella correctly. Burau mindset: Meadows, systems theory, Hayek."
+  },
+  {
+    "term": "Mises",
+    "mishearings": [
+      "Misesa",
+      "Mizesa",
+      "Misesem",
+      "Mizis"
+    ],
+    "observed": [
+      "Misesa (projects-WorthInheriting)"
+    ],
+    "projects": [
+      "projects-WorthInheriting"
+    ],
+    "category": "other",
+    "scope": "project:projects-WorthInheriting",
+    "note": "Ludwig von Mises (6x + full name 1x + tag Mises Institute). ubierz to w Misesa czy innego hayeka. wiser mises = promises (different)."
+  },
+  {
+    "term": "Hayek",
+    "mishearings": [
+      "Hayeka",
+      "hayeka",
+      "Hajeka",
+      "Hayekiem",
+      "Hajek"
+    ],
+    "observed": [
+      "Hayeka (projects-WorthInheriting)",
+      "hayeka (projects-WorthInheriting)"
+    ],
+    "projects": [
+      "projects-WorthInheriting"
+    ],
+    "category": "other",
+    "scope": "project:projects-WorthInheriting",
+    "note": "Friedrich Hayek (16x + full 1x; tag Hayek Institute). innego hayeka (lowercase!) + Hayeka. Austrian core."
+  },
+  {
+    "term": "Kahneman",
+    "mishearings": [
+      "Kahnemana",
+      "Kanemana",
+      "kaneman"
+    ],
+    "observed": [
+      "Kahnemana (projects-WorthInheriting)"
+    ],
+    "projects": [
+      "projects-WorthInheriting"
+    ],
+    "category": "other",
+    "scope": "project:projects-WorthInheriting",
+    "note": "Daniel Kahneman. 3x: Kahnemana (fanem Pułapek myślenia Kahnemana — Polish Thinking Fast and Slow) + the Kahneman one (lens) + 1. No Tversky ever."
+  },
+  {
+    "term": "Dukaj",
+    "mishearings": [
+      "Dukaja",
+      "Jacka Dukaja",
+      "Dukajem",
+      "Dukaju"
+    ],
+    "observed": [
+      "Dukaja (projects-WorthInheriting)",
+      "Jacka Dukaja (projects-WorthInheriting)"
+    ],
+    "projects": [
+      "projects-WorthInheriting"
+    ],
+    "category": "other",
+    "scope": "project:projects-WorthInheriting",
+    "note": "Jacek Dukaj (Polish SF author; 24x + Jacek Dukaj 1x). Dukaja 2x (sposobu myślenia Jacka Dukaja). Rzeczy nie da się odzobaczyć; UE @Ustanowski."
+  },
+  {
+    "term": "Hans-Hermann Hoppe",
+    "mishearings": [
+      "Herman Hoppe",
+      "Hoppego",
+      "Hopp"
+    ],
+    "observed": [
+      "Herman Hoppe (projects-WorthInheriting)"
+    ],
+    "projects": [
+      "projects-WorthInheriting"
+    ],
+    "category": "other",
+    "scope": "project:projects-WorthInheriting",
+    "note": "User misremembers first name: Herman Hoppe 4x (in the style of Herman Hoppe… bit of a bastard) vs Hans-Hermann Hoppe 1x. Glossary auto-corrects user's error."
+  },
+  {
+    "term": "Rothbard",
+    "mishearings": [
+      "Rothbarda",
+      "Rotbarda",
+      "Rothbart",
+      "rotbard"
+    ],
+    "observed": [],
+    "projects": [
+      "projects-WorthInheriting"
+    ],
+    "category": "other",
+    "scope": "project:projects-WorthInheriting",
+    "note": "Murray Rothbard. 3x correct (quoting Rothbard… starving children; property argument). th-spelling + Polish inflection risk."
+  },
+  {
+    "term": "Taleb",
+    "mishearings": [
+      "Taleba",
+      "Talebem",
+      "talib"
+    ],
+    "observed": [],
+    "projects": [
+      "projects-WorthInheriting"
+    ],
+    "category": "other",
+    "scope": "project:projects-WorthInheriting",
+    "note": "Nassim Taleb (Taleb 4x + Nassim 1x; generalized Taleb lens). Likely Taleba inflection; note talib (Taliban member) confusion danger."
+  },
+  {
+    "term": "Fat Tony",
+    "mishearings": [
+      "fat phony",
+      "fat tony",
+      "fet tony"
+    ],
+    "observed": [
+      "fat phony (projects-WorthInheriting)"
+    ],
+    "projects": [
+      "projects-WorthInheriting"
+    ],
+    "category": "other",
+    "scope": "project:projects-WorthInheriting",
+    "note": "Taleb's character; WI methodology lens (Use the Fat Tony lens). Correct 5x; fat phony 1x (generalized Taleb, Fleisher, fat phony, Meadows — Tony→phony!)."
+  },
+  {
+    "term": "Jevons Paradox",
+    "mishearings": [
+      "Dżewonsa",
+      "Jevonsa",
+      "jevons paradox",
+      "Jewons"
+    ],
+    "observed": [],
+    "projects": [
+      "projects-WorthInheriting"
+    ],
+    "category": "other",
+    "scope": "project:projects-WorthInheriting",
+    "note": "5x correct (Jevons Paradox, there's a rebound effect — AI layoffs discussion). Polish inflection likely."
+  },
+  {
+    "term": "Chesterton",
+    "mishearings": [
+      "Chestertona",
+      "czesterton",
+      "Chesterton's fence"
+    ],
+    "observed": [],
+    "projects": [
+      "projects-WorthInheriting"
+    ],
+    "category": "other",
+    "scope": "project:projects-WorthInheriting",
+    "note": "G.K. Chesterton, 9x correct (story by Chesterton; płot Chestertona / Chesterton fence 2x — user drops possessive; canonical Chesterton's fence)."
+  },
+  {
+    "term": "Deutsch",
+    "mishearings": [
+      "Dojcza",
+      "Doycza",
+      "Deutscha",
+      "Dutch"
+    ],
+    "observed": [],
+    "projects": [
+      "projects-WorthInheriting"
+    ],
+    "category": "other",
+    "scope": "project:projects-WorthInheriting",
+    "note": "David Deutsch (18x: full 11x + standalone 7x, all correct; film reference with Henrich). 18/18 correct but German name at risk in Polish speech (Dojcza) + Dutch confusion."
+  },
+  {
+    "term": "Watts",
+    "mishearings": [
+      "Wattsa",
+      "łatsa",
+      "uotsa"
+    ],
+    "observed": [],
+    "projects": [
+      "projects-WorthInheriting"
+    ],
+    "category": "other",
+    "scope": "project:projects-WorthInheriting",
+    "note": "Peter Watts (SF author; 9x Watts + Peter Watts 1x; przez Watts w trylogii Świetlików… scramblery). Disambiguate from megawatts (unit 1x). Firefall/Echopraxia/Blindsight single-correct, skipped."
+  },
+  {
+    "term": "Stanowski",
+    "mishearings": [
+      "Ustanowski",
+      "Stanowskiego",
+      "Stanoskiego"
+    ],
+    "observed": [
+      "Ustanowski (projects-WorthInheriting)"
+    ],
+    "projects": [
+      "projects-WorthInheriting"
+    ],
+    "category": "other",
+    "scope": "project:projects-WorthInheriting",
+    "note": "Krzysztof Stanowski (Kanał Zero) — UNCERTAIN: Dukaj said something about the UE at Ustanowski in 2026 (then hunts YouTube transcript). Likely Polish u Stanowskiego run together; could be surname Ustanowski. Single mention."
+  },
+  {
+    "term": "Fleischer",
+    "mishearings": [
+      "Fleisher",
+      "Fleischerra",
+      "Fleischera",
+      "Flajszera"
+    ],
+    "observed": [
+      "Fleisher (projects-WorthInheriting)",
+      "Fleischerra (projects-WorthInheriting)"
+    ],
+    "projects": [
+      "projects-WorthInheriting"
+    ],
+    "category": "other",
+    "scope": "project:projects-WorthInheriting",
+    "note": "User's professor (design/visual communication; book Wprowadzenie do komunikacji). Fleischer 9x (profesora Fleischerra — double-r typo?); lens-list Fleisher 1x (missing c). Distinct from Richard Fleischer (Trapped director, pasted lists) and BU Fleischers."
+  },
+  {
+    "term": "WI-001",
+    "mishearings": [
+      "VI-001",
+      "double-u ai 001",
+      "VY-001",
+      "wi 001"
+    ],
+    "observed": [
+      "VI-001 (projects-WorthInheriting)"
+    ],
+    "projects": [
+      "projects-WorthInheriting"
+    ],
+    "category": "project-specific",
+    "scope": "project:projects-WorthInheriting",
+    "note": "Film ID: WI-001 Golden Record (We Put Beethoven on a Rocket). Correct 3x; VI-001 1x (wejść do VI-001-Golden-Record — double-u ai heard as vee eye)."
+  },
+  {
+    "term": "WI-002",
+    "mishearings": [
+      "VI-002",
+      "double-u ai 002"
+    ],
+    "observed": [],
+    "projects": [
+      "projects-WorthInheriting"
+    ],
+    "category": "project-specific",
+    "scope": "project:projects-WorthInheriting",
+    "note": "Film ID: WI-002 Nothing Extraordinary. 3x correct; same risk class as WI-001 (no error observed yet)."
+  },
+  {
+    "term": "Day of Two Noons",
+    "mishearings": [
+      "day of two nuns",
+      "day of two noon",
+      "the day noon happened twice",
+      "Day Noon Happened Twice"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "creative",
+    "scope": "project:projects-WorthInheriting",
+    "note": "ZERO corpus evidence (test Short The Day Noon Happened Twice commissioned 2026-09-30, first under BP-H034, SuperCollider pipeline). Included per plausibly-will-say; weakest entry."
+  },
+  {
+    "term": "aut-engineering",
+    "mishearings": [
+      "out engineering",
+      "oat engineering",
+      "alt engineering",
+      "aut-engineer"
+    ],
+    "observed": [],
+    "projects": [
+      "projects-WorthInheriting"
+    ],
+    "category": "work",
+    "scope": "project:projects-WorthInheriting",
+    "note": "User's coinage (autistic engineering): nazwałbym aut-engineering, a może aut-engineer (1x each, correct). Must keep aut- spelling."
+  },
+  {
+    "term": "Tarantino",
+    "mishearings": [
+      "Tarantina",
+      "Tarantinem",
+      "tarantino"
+    ],
+    "observed": [],
+    "projects": [
+      "projects-stockroom"
+    ],
+    "category": "creative",
+    "scope": "project:projects-stockroom",
+    "note": "Quentin Tarantino. 2x spoken ST (make a review of Tarantino; search all Tarantino — stockroom reviews feature, with Kubrick/2001). Polish inflection likely."
+  },
+  {
+    "term": "Bloody Ramen",
+    "mishearings": [
+      "BloodyRamen",
+      "bloody ramen",
+      "blady ramen"
+    ],
+    "observed": [
+      "BloodyRamen (projects-BloodyRamen)"
+    ],
+    "projects": [
+      "projects-BloodyRamen"
+    ],
+    "category": "creative",
+    "scope": "project:projects-BloodyRamen",
+    "note": "Sumi-e true-crime channel (black ink, blood red, washi). Joined BloodyRamen 5x; NEVER with space (0x). README canonical has space."
+  },
+  {
+    "term": "Ensō",
+    "mishearings": [
+      "enso",
+      "Enso",
+      "ENSO",
+      "en so"
+    ],
+    "observed": [
+      "enso (projects-BloodyRamen)",
+      "Enso (projects-BloodyRamen)",
+      "ENSO (projects-BloodyRamen)"
+    ],
+    "projects": [
+      "projects-BloodyRamen"
+    ],
+    "category": "creative",
+    "scope": "project:projects-BloodyRamen",
+    "note": "Canonical with macron (CONTEXT.md); never appears (0x). Observed enso 19x + Enso 4x + ENSO 2x across 14 chunks (your rendering of enso). Zen circle + ramen-bowl rim (channel mark). WI/ST/BU/randy/pie enso = Polish sens* (different)."
+  },
+  {
+    "term": "Sumi",
+    "mishearings": [
+      "sumi",
+      "suni"
+    ],
+    "observed": [
+      "sumi (projects-BloodyRamen)"
+    ],
+    "projects": [
+      "projects-BloodyRamen"
+    ],
+    "category": "creative",
+    "scope": "project:projects-BloodyRamen",
+    "note": "The black ink (capital S). Lowercase sumi 5x (Blood sumi contrast, WET sumi — pasted-chunk + materials dirs); Sumi 0x. WI/ST sumie = Polish w sumie filler (don't touch)."
+  },
+  {
+    "term": "sumi-e",
+    "mishearings": [
+      "sumie",
+      "su mi e"
+    ],
+    "observed": [],
+    "projects": [
+      "projects-BloodyRamen"
+    ],
+    "category": "creative",
+    "scope": "project:projects-BloodyRamen",
+    "note": "Japanese ink wash (channel's whole look). 1x SPOKEN correct (sumi-e is more about the paper). Likely hyphen-drop sumie; confounder Polish w sumie (13x WI)."
+  },
+  {
+    "term": "Washi",
+    "mishearings": [
+      "washi",
+      "łasi",
+      "wasi",
+      "washy"
+    ],
+    "observed": [
+      "washi (projects-BloodyRamen)"
+    ],
+    "projects": [
+      "projects-BloodyRamen"
+    ],
+    "category": "creative",
+    "scope": "project:projects-BloodyRamen",
+    "note": "Japanese paper (warm, never pure white). Lowercase washi 2x (rough washi — single pasted mention + materials dirs); Washi 0x."
+  },
+  {
+    "term": "kasure",
+    "mishearings": [
+      "kasuré",
+      "kaszure",
+      "kazure"
+    ],
+    "observed": [],
+    "projects": [
+      "projects-BloodyRamen"
+    ],
+    "category": "creative",
+    "scope": "project:projects-BloodyRamen",
+    "note": "Dry-brush technique (Dry kasure (hakuboku) on rough washi). Single pasted mention + materials dir dry-kasure-rough-washi; no spoken evidence (weak)."
+  },
+  {
+    "term": "nijimi",
+    "mishearings": [
+      "nijimi",
+      "nidżimi",
+      "nijim"
+    ],
+    "observed": [],
+    "projects": [
+      "projects-BloodyRamen"
+    ],
+    "category": "creative",
+    "scope": "project:projects-BloodyRamen",
+    "note": "Bleed bloom (wet-on-wet nijimi bloom). Single pasted mention + materials dir; no spoken evidence (weak)."
+  },
+  {
+    "term": "fude",
+    "mishearings": [
+      "fude",
+      "fudé"
+    ],
+    "observed": [],
+    "projects": [
+      "projects-BloodyRamen"
+    ],
+    "category": "creative",
+    "scope": "project:projects-BloodyRamen",
+    "note": "Brush (tilt-sweep, fude no sori). Single pasted mention + materials dir tilt-sweep-fude-no-sori; no spoken evidence (weak). Careful: Polish chude (thin) is different."
+  },
+  {
+    "term": "hanko",
+    "mishearings": [
+      "hanko",
+      "han ko",
+      "anko",
+      "hanco"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "creative",
+    "scope": "project:projects-BloodyRamen",
+    "note": "ZERO corpus evidence. Red seal stamp (血 blood kanji) that slams the intro. Core channel vocabulary; weakest entry, included per plausibly-will-say."
+  },
+  {
+    "term": "WebGL",
+    "mishearings": [
+      "WEBGL",
+      "webgl",
+      "web ge el",
+      "WebGL2"
+    ],
+    "observed": [
+      "WEBGL (projects-BloodyRamen)"
+    ],
+    "projects": [
+      "projects-BloodyRamen"
+    ],
+    "category": "tooling",
+    "scope": "project:projects-BloodyRamen",
+    "note": "3x (should be used in WEBGL — spoken). Ink engine needs local hardware WebGL2 (Remotion/Chromium). CamelCase canonical."
+  }
+]

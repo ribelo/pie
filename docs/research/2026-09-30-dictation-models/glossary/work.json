@@ -1,0 +1,933 @@
+[
+  {
+    "term": "Wiser",
+    "mishearings": [
+      "Wizer",
+      "Wyzer",
+      "Wyser",
+      "visor",
+      "wizer",
+      "weiser"
+    ],
+    "observed": [
+      "Wizer (projects-shareablee-wiser, many)",
+      "Wyzer (projects-shareablee-wiser, 'password for Wyzer')",
+      "Wyser (projects-shareablee-wiser, 'have Wyser open in Chrome')",
+      "visor (projects-shareablee-csai, 'switch the visor to develop')"
+    ],
+    "projects": [
+      "projects-shareablee-wiser",
+      "projects-shareablee-csai",
+      "projects-ribelo-dsh",
+      "projects-ribelo-leash",
+      "projects-WorthInheriting"
+    ],
+    "category": "company",
+    "scope": "global",
+    "note": "Private cloud computer + agent, one per employee. Portmanteau of Wise (predecessor service) + robots ('Wise robots'); STT renders -ser as -zer. Related: WiserGate, Wiser Robots."
+  },
+  {
+    "term": "CSAI",
+    "mishearings": [
+      "cs-ai",
+      "CS AI",
+      "CS-AI",
+      "cs ai",
+      "cesai",
+      "kzai"
+    ],
+    "observed": [
+      "cs-ai (projects-shareablee-wiser)",
+      "CS AI (projects-shareablee-wiser, projects-shareablee-ai-team-iced)",
+      "CS-AI (projects-shareablee-csai, 'Focus on CS-AI')"
+    ],
+    "projects": [
+      "projects-shareablee-wiser",
+      "projects-shareablee-csai",
+      "projects-shareablee-ai-team-iced",
+      "projects-WorthInheriting",
+      "projects-ribelo-pie",
+      ".dotfiles-skills"
+    ],
+    "category": "company",
+    "scope": "global",
+    "note": "Internal AI platform: `csai` CLI / Claude plugin with facades (skills: airflow, bitbucket, confluence, grafana, jenkins, jira, m365, monday, snowflake, superset, tempo, trino, zoom, service-desk, ticketing...). 'csai session login' (Okta ceremony)."
+  },
+  {
+    "term": "ICED",
+    "mishearings": [
+      "iced",
+      "IC",
+      "ice"
+    ],
+    "observed": [
+      "IC (projects-shareablee-ai-team-iced, user shorthand: 'Karen lands on IC', 'IC value', 'IC UI')",
+      "iced (projects-shareablee-ai-team-iced, lowercase in URLs/paths: iced.csaisandbox, ai-team/iced, iced-core v3)"
+    ],
+    "projects": [
+      "projects-shareablee-ai-team-iced",
+      "projects-WorthInheriting",
+      "projects-ribelo-leash"
+    ],
+    "category": "company",
+    "scope": "global",
+    "note": "(AI) Creative Element Detection PoC: classifies ad videos against 23 creative elements (Vertex Gemini + deterministic derivation). Spoken only in iced corpus; elsewhere paths/URLs/pasted prompts."
+  },
+  {
+    "term": "comScore",
+    "mishearings": [
+      "Comscore",
+      "comscore",
+      "COMSCOR",
+      "Compscore",
+      "ConsCore",
+      "CodeScore",
+      "comscora",
+      "komskora",
+      "com score"
+    ],
+    "observed": [
+      "COMSCOR Workhorse (projects-shareablee-wiser, 2x)",
+      "Compscore Workhorse (projects-ribelo-dsh)",
+      "ConsCore employees (projects-shareablee-wiser)",
+      "CodeScore Workhorse (-, possibly intentional — uncertain)",
+      "comscora (projects-retailic-randy, typed Polish inflection 'dla comscora'; pattern user will speak)"
+    ],
+    "projects": [
+      "projects-shareablee-wiser",
+      "projects-shareablee-csai",
+      "projects-ribelo-dsh",
+      "projects-retailic-hourglass",
+      "projects-retailic-randy",
+      "projects-WorthInheriting",
+      "projects-ribelo-pie"
+    ],
+    "category": "company",
+    "scope": "global",
+    "note": "Official spelling camelCase comScore (per csai README); corpus overwhelmingly writes 'Comscore'. -a ending = Polish inflection (dla comScore'a)."
+  },
+  {
+    "term": "Shareablee",
+    "mishearings": [
+      "shareablee",
+      "SHAREABLEE",
+      "shareably",
+      "share a lee",
+      "sharablee"
+    ],
+    "observed": [
+      "SHAREABLEE (projects-shareablee-csai, Bitbucket project URLs)"
+    ],
+    "projects": [
+      "projects-shareablee-csai",
+      "projects-shareablee-ai-team-iced",
+      "projects-ribelo-dsh",
+      "projects-ribelo-leash",
+      "projects-WorthInheriting"
+    ],
+    "category": "company",
+    "scope": "global",
+    "note": "Parent org of CSAI repos. Never clearly spoken — only paths/URLs — but user will say it; STT-risky."
+  },
+  {
+    "term": "Comscore Workhorse",
+    "mishearings": [
+      "COMSCOR Workhorse",
+      "comscore workhouse",
+      "comscore warhorses",
+      "Compscore Workhorse",
+      "CodeScore Workhorse",
+      "Core Workhorse",
+      "comscore workhorse",
+      "workhorse"
+    ],
+    "observed": [
+      "COMSCOR Workhorse (projects-shareablee-wiser, 2x)",
+      "comscore workhouse (projects-shareablee-csai)",
+      "comscore warhorses (projects-shareablee-wiser)",
+      "Compscore Workhorse (projects-ribelo-dsh)",
+      "CodeScore Workhorse (-, uncertain)",
+      "Core Workhorse accounts (projects-shareablee-wiser, likely dropped 'Coms' — uncertain)"
+    ],
+    "projects": [
+      "projects-shareablee-wiser",
+      "projects-shareablee-csai",
+      "projects-ribelo-dsh",
+      "projects-ribelo-leash"
+    ],
+    "category": "company",
+    "scope": "global",
+    "note": "DSH subagent (subagent_comscore_workhorse) on Comscore Gateway/Opus, pay-as-you-go ($400/day soft limit). Also 'Comscore Agent' once (loose reference?) and 'coms or workhorses' (clipped, uncertain). leash occurrence is a typed tool name."
+  },
+  {
+    "term": "comScore Gateway",
+    "mishearings": [
+      "Comscore Gateway",
+      "Comscore gateway",
+      "comscore gateway"
+    ],
+    "observed": [
+      "Comscore Gateway (projects-ribelo-dsh, spoken: 'use Comscore Gateway and Opus 5')",
+      "Comscore gateway (projects-shareablee-wiser, pasted handoff)"
+    ],
+    "projects": [
+      "projects-ribelo-dsh",
+      "projects-shareablee-wiser"
+    ],
+    "category": "company",
+    "scope": "global",
+    "note": "Internal model gateway; also 'comScore Claude apps gateway' (claude login via managed-settings.json)."
+  },
+  {
+    "term": "WiserGate",
+    "mishearings": [
+      "wiser gate",
+      "wisergate",
+      "Wizergate",
+      "wiser-gate"
+    ],
+    "observed": [],
+    "projects": [
+      "projects-shareablee-wiser"
+    ],
+    "category": "project-specific",
+    "scope": "project:projects-shareablee-wiser",
+    "note": "Wiser component: tools robots shouldn't access go through WiserGate. Spelled correctly in corpus; split/case variants likely."
+  },
+  {
+    "term": "Grok Bot",
+    "mishearings": [
+      "GroqBot",
+      "Groq Bot",
+      "grokbot",
+      "grok bot"
+    ],
+    "observed": [
+      "GroqBot (projects-shareablee-wiser, user-corrected inline: 'GroqBot = GrokBot' + 'I'm using speechtotext... mistranslated')"
+    ],
+    "projects": [
+      "projects-shareablee-wiser"
+    ],
+    "category": "ai-models",
+    "scope": "global",
+    "note": "xAI agent-with-computer product Wiser imitates (Wiser Robots modeled on Grok Bots). WARNING: Groq (LPU inference provider) is a different company the user also says (dsh smart-router talk) — don't merge."
+  },
+  {
+    "term": "Gemini Flash",
+    "mishearings": [
+      "gemini flash",
+      "Gemini 3.8 Flash",
+      "gemini-3.7-flash",
+      "Jemini"
+    ],
+    "observed": [],
+    "projects": [
+      "projects-shareablee-ai-team-iced"
+    ],
+    "category": "ai-models",
+    "scope": "global",
+    "note": "ICED classifier model (spoken 'Gemini 3.8 Flash'; 'gemini-3.7-flash' in user's typed Slack). Model IDs also in pasted benchmark tables (-, dsh). May overlap ai-models share."
+  },
+  {
+    "term": "Okta",
+    "mishearings": [
+      "okta",
+      "octa",
+      "ockta"
+    ],
+    "observed": [
+      "okta (projects-shareablee-wiser, lowercase: 'okta cookies')"
+    ],
+    "projects": [
+      "projects-shareablee-wiser"
+    ],
+    "category": "work",
+    "scope": "global",
+    "note": "Canonical comScore IdP (comscore.okta.com). 'Okta cookies' stolen/solved for service logins; 'csai session login' uses stored Okta credentials (rkrzywaznia)."
+  },
+  {
+    "term": "SAML",
+    "mishearings": [
+      "saml",
+      "sam l",
+      "S A M L"
+    ],
+    "observed": [
+      "saml (projects-shareablee-wiser, lowercase in 'fragile saml solving walking' — 'solving walking' itself is uncertain, possibly 'solving working')"
+    ],
+    "projects": [
+      "projects-shareablee-wiser"
+    ],
+    "category": "work",
+    "scope": "global",
+    "note": "'Fragile SAML solving' + Okta cookies = auth mechanism user refuses to change."
+  },
+  {
+    "term": "SSO",
+    "mishearings": [
+      "sso",
+      "S S O"
+    ],
+    "observed": [],
+    "projects": [
+      "projects-shareablee-ai-team-iced"
+    ],
+    "category": "work",
+    "scope": "global",
+    "note": "'no problem with SSO'; 'aws sso login --profile devops-csaisandbox' (pasted)."
+  },
+  {
+    "term": "TOTP",
+    "mishearings": [
+      "totp",
+      "T O T P"
+    ],
+    "observed": [],
+    "projects": [
+      "projects-shareablee-wiser"
+    ],
+    "category": "work",
+    "scope": "global",
+    "note": "'enter any TOTP or password for Wyzer' (spoken)."
+  },
+  {
+    "term": "VPN",
+    "mishearings": [
+      "vpn",
+      "V P N"
+    ],
+    "observed": [],
+    "projects": [
+      "projects-shareablee-wiser",
+      "projects-shareablee-ai-team-iced",
+      "projects-retailic-randy",
+      "projects-retailic-hourglass",
+      "-"
+    ],
+    "category": "work",
+    "scope": "global",
+    "note": "Spoken everywhere: 'I forgot to connect to the VPN', 'can't connect to the VPN', 'VPN connected', 'I'm using a VPN ... through nixos config'."
+  },
+  {
+    "term": "M365",
+    "mishearings": [
+      "m 365",
+      "365",
+      "microsoft 365",
+      "M365s"
+    ],
+    "observed": [
+      "365 (projects-shareablee-wiser, 'It was supposed to work the way it did in 365' — M dropped for M365)"
+    ],
+    "projects": [
+      "projects-shareablee-wiser",
+      "projects-shareablee-ai-team-iced"
+    ],
+    "category": "work",
+    "scope": "global",
+    "note": "User shorthand for Microsoft 365 (csai m365 skill; 'M365 token cache'; 'run M365'). Full form 'Microsoft 365' in pasted login logs."
+  },
+  {
+    "term": "SharePoint",
+    "mishearings": [
+      "sharepoint",
+      "share point",
+      "share-point"
+    ],
+    "observed": [],
+    "projects": [
+      "projects-shareablee-ai-team-iced"
+    ],
+    "category": "work",
+    "scope": "global",
+    "note": "'Jeremy sent us something somewhere on SharePoint'; Round 3/4 test data location. Spelled correctly in corpus; split variants likely."
+  },
+  {
+    "term": "OneDrive",
+    "mishearings": [
+      "onedrive",
+      "one drive",
+      "one-drive"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "work",
+    "scope": "global",
+    "note": "No corpus evidence; M365 file storage, will say in Slack/browser. Listed for completeness."
+  },
+  {
+    "term": "Entra",
+    "mishearings": [
+      "entra",
+      "entra id",
+      "Entra ID"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "work",
+    "scope": "global",
+    "note": "No corpus evidence — every grep hit was 'central/concentrate/entrance'. Microsoft Entra ID (M365 identity side; Okta is the primary IdP)."
+  },
+  {
+    "term": "Microsoft Graph",
+    "mishearings": [
+      "microsoft graph",
+      "graph api",
+      "MS Graph",
+      "ms graph"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "work",
+    "scope": "global",
+    "note": "No corpus evidence ('graph' hits were all agent-graph concepts). M365 API surface."
+  },
+  {
+    "term": "Slack",
+    "mishearings": [
+      "slack",
+      "slag",
+      "slak"
+    ],
+    "observed": [],
+    "projects": [
+      "projects-shareablee-wiser",
+      "projects-shareablee-csai",
+      "projects-ribelo-pie",
+      "projects-retailic-randy"
+    ],
+    "category": "work",
+    "scope": "global",
+    "note": "Constantly spoken ('M365 or Slack', 'slack-facade', 'done for Slack', release messages). randy occurrences are pasted Slack logs. Slack Canvas links pasted (comscore.enterprise.slack.com)."
+  },
+  {
+    "term": "Zoom",
+    "mishearings": [
+      "zoom",
+      "zooma",
+      "zuma"
+    ],
+    "observed": [
+      "zooma (projects-retailic-randy, typed Polish inflection 'na zooma' by a colleague — pattern the user will speak when dictating Polish)"
+    ],
+    "projects": [
+      "projects-retailic-randy"
+    ],
+    "category": "work",
+    "scope": "global",
+    "note": "csai zoom skill exists. No dictated evidence yet (dsh 'Zoom in' was camera direction; WorthInheriting 'zoom in' was film talk)."
+  },
+  {
+    "term": "Jira",
+    "mishearings": [
+      "jira",
+      "dżira",
+      "JIRA"
+    ],
+    "observed": [],
+    "projects": [
+      "projects-shareablee-wiser",
+      "projects-shareablee-csai",
+      "projects-shareablee-ai-team-iced",
+      "projects-ribelo-pie"
+    ],
+    "category": "work",
+    "scope": "global",
+    "note": "User explicitly named it glossary-worthy ('stuff like jira, bitbucket'). Spoken: 'same applies to Jira', 'close the ticket on Jira', 'anywhere near Jira'. csai jira skill (+jira.tempo)."
+  },
+  {
+    "term": "Bitbucket",
+    "mishearings": [
+      "bitbucket",
+      "bit bucket",
+      "bit-bucket"
+    ],
+    "observed": [],
+    "projects": [
+      "projects-shareablee-wiser",
+      "projects-ribelo-pie"
+    ],
+    "category": "work",
+    "scope": "global",
+    "note": "User-named glossary-worthy ('stuff like jira, bitbucket'). Spoken: 'connect Bitbucket to the bot'. Repos at git.office.comscore.com (pasted PR URLs)."
+  },
+  {
+    "term": "Confluence",
+    "mishearings": [
+      "confluence",
+      "confluance"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "work",
+    "scope": "global",
+    "note": "No corpus evidence; csai skill exists and DocuSync publishes to Confluence."
+  },
+  {
+    "term": "Tempo",
+    "mishearings": [
+      "tempo"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "work",
+    "scope": "global",
+    "note": "Atlassian time tracking (csai skill jira.tempo; worklogs + Type of Work attrs). Corpus 'tempo' hits were Polish 'pace' (film talk) and 'temporarily' — beware false friends."
+  },
+  {
+    "term": "monday.com",
+    "mishearings": [
+      "monday",
+      "Monday"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "work",
+    "scope": "global",
+    "note": "Product is lowercase 'monday' (csai skill). Day-of-week homonym ('before Monday', 'OOO Friday and Monday') — apply only in tool context. No corpus evidence."
+  },
+  {
+    "term": "Service Desk",
+    "mishearings": [
+      "service desk",
+      "servicedesk",
+      "service-desk"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "work",
+    "scope": "global",
+    "note": "Jira Service Management portal (csai skill service-desk; access/provisioning requests). No corpus evidence."
+  },
+  {
+    "term": "Airflow",
+    "mishearings": [
+      "airflow",
+      "air flow",
+      "air-flow"
+    ],
+    "observed": [],
+    "projects": [
+      "projects-shareablee-wiser"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": "csai skill; example Okta-cookie login target ('log in to something like Airflow or Grafana')."
+  },
+  {
+    "term": "DAG",
+    "mishearings": [
+      "dag",
+      "duck",
+      "deck"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "tooling",
+    "scope": "global",
+    "note": "Airflow DAG, spoken 'dag'. No corpus evidence."
+  },
+  {
+    "term": "Grafana",
+    "mishearings": [
+      "grafana",
+      "graphana"
+    ],
+    "observed": [],
+    "projects": [
+      "projects-shareablee-wiser"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": "csai skill; observability target ('sending things to Loki and Grafana', 'make dashboards in Grafana')."
+  },
+  {
+    "term": "Loki",
+    "mishearings": [
+      "loki",
+      "lockey",
+      "low key"
+    ],
+    "observed": [],
+    "projects": [
+      "projects-shareablee-wiser"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": "Log backend for Wiser observability ('basic Loki setup')."
+  },
+  {
+    "term": "LogQL",
+    "mishearings": [
+      "logql",
+      "log ql",
+      "log QL"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "tooling",
+    "scope": "global",
+    "note": "Loki query language. No corpus evidence."
+  },
+  {
+    "term": "PromQL",
+    "mishearings": [
+      "promql",
+      "prom ql",
+      "prom QL"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "tooling",
+    "scope": "global",
+    "note": "Prometheus query language (Grafana). No corpus evidence."
+  },
+  {
+    "term": "Jenkins",
+    "mishearings": [
+      "jenkins"
+    ],
+    "observed": [],
+    "projects": [
+      "projects-retailic-randy"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": "Only in pasted Polish email-spec ('wiadomości TeamCity/Jenkins'). csai jenkins skill exists (PR pipelines)."
+  },
+  {
+    "term": "Snowflake",
+    "mishearings": [
+      "snowflake",
+      "snow flake",
+      "snow-flake"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "tooling",
+    "scope": "global",
+    "note": "No corpus evidence; csai snowflake skill + repo dir."
+  },
+  {
+    "term": "Trino",
+    "mishearings": [
+      "trino"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "tooling",
+    "scope": "global",
+    "note": "No corpus evidence; csai trino skill + repo dir."
+  },
+  {
+    "term": "Superset",
+    "mishearings": [
+      "superset",
+      "super set",
+      "super-set"
+    ],
+    "observed": [],
+    "projects": [
+      "projects-shareablee-wiser"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": "Spoken: 'dashboard in Superset', 'use csai and superset to check usage' (Workhorse spend dashboard). csai skill."
+  },
+  {
+    "term": "SQL Lab",
+    "mishearings": [
+      "sql lab",
+      "sequel lab",
+      "SQLab",
+      "sql-lab"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "tooling",
+    "scope": "global",
+    "note": "Superset SQL Lab. No corpus evidence; 'sequel lab' likely if user says 'sequel'."
+  },
+  {
+    "term": "Kafka",
+    "mishearings": [
+      "kafka"
+    ],
+    "observed": [],
+    "projects": [
+      "projects-shareablee-ai-team-iced"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": "Spoken: 'doesn't have Kafka, but it treats S3 catalogs as a queue'."
+  },
+  {
+    "term": "AWS",
+    "mishearings": [
+      "aws",
+      "A W S"
+    ],
+    "observed": [],
+    "projects": [
+      "projects-shareablee-wiser",
+      "projects-shareablee-ai-team-iced",
+      "projects-retailic-hourglass",
+      "projects-WorthInheriting",
+      "projects-retailic-randy",
+      "-"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": "Spoken: 'potentially on AWS', 'access both AWS and GCS', 'default AWS profile is for Comscore' (Polish context in WorthInheriting: 'taki AWS to je stawia jak domki z kart'). randy occurrences are pasted doc URLs. Incl. 'AWS CLI', 'AWS secrets'."
+  },
+  {
+    "term": "S3",
+    "mishearings": [
+      "s3",
+      "s 3",
+      "ess three"
+    ],
+    "observed": [],
+    "projects": [
+      "projects-shareablee-wiser",
+      "projects-shareablee-ai-team-iced"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": "Spoken: 'delete ... from S3', 'save it to some S3', 'S3 catalogs as a queue', webhooks 'stored in S3 with a TTL'."
+  },
+  {
+    "term": "AgentCore",
+    "mishearings": [
+      "agent-core",
+      "agent core",
+      "agentcore"
+    ],
+    "observed": [
+      "agent-core (projects-shareablee-wiser: 'agent-core identity', 'agent-core browser', 'agent-core stack')",
+      "Agent Core (projects-shareablee-wiser: 'Agent Core Identity')"
+    ],
+    "projects": [
+      "projects-shareablee-wiser"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": "AWS AgentCore: Browser (CDP over WebSocket, invoke_browser, live view) + Identity. STT hyphenates/splits; canonical one word."
+  },
+  {
+    "term": "Bedrock",
+    "mishearings": [
+      "bedrock"
+    ],
+    "observed": [],
+    "projects": [
+      "projects-retailic-randy"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": "Amazon Bedrock; only in pasted AWS docs URLs. claude-desktop-bedrock repo exists."
+  },
+  {
+    "term": "EC2",
+    "mishearings": [
+      "ec2",
+      "e c 2",
+      "EC 2"
+    ],
+    "observed": [],
+    "projects": [
+      "projects-retailic-hourglass"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": "Spoken: 'no idea where the idea came from that EC2 could exist' (there is only Kubernetes)."
+  },
+  {
+    "term": "GCS",
+    "mishearings": [
+      "gcs",
+      "G C S"
+    ],
+    "observed": [],
+    "projects": [
+      "projects-shareablee-ai-team-iced"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": "Spoken: 'uploaded to GCS, to Google Cloud Storage, or whatever it's called'; 'access both AWS and GCS'."
+  },
+  {
+    "term": "GCP",
+    "mishearings": [
+      "gcp",
+      "G C P"
+    ],
+    "observed": [],
+    "projects": [
+      "projects-shareablee-ai-team-iced"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": "Spoken: 'if the GCP service account doesn't work'. csaidev GCP project in pasted prompts."
+  },
+  {
+    "term": "Kubernetes",
+    "mishearings": [
+      "kubernetes",
+      "kubernetis"
+    ],
+    "observed": [],
+    "projects": [
+      "projects-retailic-randy",
+      "projects-retailic-hourglass",
+      "-"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": "Spoken: 'can't connect to the VPN ... Kubernetes', 'There's Kubernetes. There's nothing else', 'What AWS? What Kubernetes?'. Wiser = one K8s pod per user."
+  },
+  {
+    "term": "Chrome CDP",
+    "mishearings": [
+      "chrome cdp",
+      "chrome-cdp",
+      "Chrome CDP"
+    ],
+    "observed": [
+      "Chrome CDP (projects-shareablee-wiser: 'test it using Chrome CDP')",
+      "chrome-cdp (projects-shareablee-wiser, projects-shareablee-ai-team-iced: '/chrome-cdp' skill invocations)"
+    ],
+    "projects": [
+      "projects-shareablee-wiser",
+      "projects-shareablee-ai-team-iced"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": "Constantly spoken in work ('CDP over WebSocket', 'using CDP'). Also across personal corpora — may overlap devtools share."
+  },
+  {
+    "term": "staging",
+    "mishearings": [
+      "stagin",
+      "stageing"
+    ],
+    "observed": [
+      "stagin (projects-shareablee-wiser: 'open tab with wiser stagin'; -ing reduction, cf. 'runnin')"
+    ],
+    "projects": [
+      "projects-shareablee-wiser",
+      "projects-shareablee-ai-team-iced"
+    ],
+    "category": "tooling",
+    "scope": "global",
+    "note": "'deploy to staging', wiser-staging / iced-staging environments. Generic accent pattern, included on real evidence."
+  },
+  {
+    "term": "PR",
+    "mishearings": [
+      "pr",
+      "pull request",
+      "peer"
+    ],
+    "observed": [
+      "pr (projects-shareablee-csai, lowercase: 'make pr with piotr as reviewer')"
+    ],
+    "projects": [
+      "projects-shareablee-csai",
+      "projects-shareablee-wiser"
+    ],
+    "category": "work",
+    "scope": "global",
+    "note": "Spoken: 'prepare a PR', 'make pr with piotr as reviewer', 'merged'. wiser occurrence is pasted X content ('hundreds of PRs'). Also spoken as 'pull request'."
+  },
+  {
+    "term": "Aipaca",
+    "mishearings": [
+      "aipaca",
+      "alpaca",
+      "ajpaka"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "company",
+    "scope": "global",
+    "note": "Internal Comscore Python agent framework (hierarchical agents, multi-turn dialogue). Repo-only; no corpus evidence — but THE odd internal name most likely to be STT-mangled ('alpaca')."
+  },
+  {
+    "term": "DocuSync",
+    "mishearings": [
+      "docusync",
+      "docu sync",
+      "docu-sync"
+    ],
+    "observed": [],
+    "projects": [],
+    "category": "company",
+    "scope": "global",
+    "note": "Deterministic repo→Confluence docs publisher (independent tool in csai repo). No corpus evidence."
+  },
+  {
+    "term": "Zeus",
+    "mishearings": [
+      "zeus"
+    ],
+    "observed": [],
+    "projects": [
+      "projects-shareablee-ai-team-iced"
+    ],
+    "category": "company",
+    "scope": "project:projects-shareablee-ai-team-iced",
+    "note": "System ICED compares against ('aligns with Zeus', 'Zeus coding'); ZEUS dev/integration contact Eric Strehl. Only in pasted Slack — user will say it when planning integration."
+  },
+  {
+    "term": "Wiktor",
+    "mishearings": [
+      "wiktor",
+      "Wiktork",
+      "Victor",
+      "viktor"
+    ],
+    "observed": [
+      "Wiktork (projects-shareablee-csai: 'a comment from Wiktork')"
+    ],
+    "projects": [
+      "projects-shareablee-csai",
+      "projects-shareablee-ai-team-iced",
+      "projects-shareablee-wiser"
+    ],
+    "category": "company",
+    "scope": "global",
+    "note": "Wiktor Gancarz (surname from pasted Slack; AI-team colleague). Polish Wiktor vs English Victor — cf. 'Victor' in videos-bureau. iced/wiser occurrences are pasted Slack."
+  },
+  {
+    "term": "Jeremy Alexander",
+    "mishearings": [
+      "Jeremy Aleksander",
+      "jeremy alexander"
+    ],
+    "observed": [
+      "Jeremy Aleksander (projects-shareablee-ai-team-iced, Polish spelling: 'Write a message to Jeremy Aleksander')"
+    ],
+    "projects": [
+      "projects-shareablee-ai-team-iced"
+    ],
+    "category": "company",
+    "scope": "project:projects-shareablee-ai-team-iced",
+    "note": "Client-side ICED collaborator (batch data, coding rules); the 'Jeremy test' persona (non-developer, ~40). Correct surname Alexander per pasted Slack."
+  },
+  {
+    "term": "Piotr",
+    "mishearings": [
+      "piotr",
+      "Peter",
+      "pjotr"
+    ],
+    "observed": [],
+    "projects": [
+      "projects-shareablee-csai"
+    ],
+    "category": "company",
+    "scope": "project:projects-shareablee-csai",
+    "note": "PR reviewer ('make pr with piotr as reviewer'). Surname unknown. Polish Piotr easily STT'd as 'Peter'."
+  }
+]
