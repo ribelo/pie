@@ -260,9 +260,4 @@ U1 + U2 + U3 + U4 + closed gaps ----------------------------+--> U5 final gates
 U5 integration acceptance is evidence-based, not a deployment. The final pass
 
 ## Master rebuild swap (2026-09-29)
-
-## ox row 55 swap (2026-09-29 23:54)
-
-- `~/.cache/opam/5.4.0+ox/bin/pie` is now built from Pie master 355de96 against ox 08e9d0bb (`pie-opam-install`), sha256 7e2dd08e2b123725…, 12787536 bytes; it carries the Door's posix wake-up ticker (journal: `posix wakeup`, backend posix, 50 ms).
-- Previous binary (the Eta-master rebuild swapped in at 10:32, sha256 4c8e28e29b9a44c1…) kept as `~/.cache/opam/5.4.0+ox/bin/pie.pre-ox55-20260929`; roll back by copying it over `bin/pie` and restarting.
-- One `systemctl --user restart pie.service`: active, NRestarts 0, Result=success, control socket present, `pie msg status` armed, Stopped/Started with no failure, the AGS bar's `pie msg subscribe` survived. Prepared-text stress on this code: 50/50 (was 29/50).
+- PTT through the ox row 55 binary (2026-09-30 08:05): captures started and stopped, Codex Realtime answered (stt first token), and the text was delivered via wtype. `bin/pie` on disk has the same sha256 as the running process (7e2dd08e…); a later ox install restored it as a new file, so /proc shows the old inode as deleted.
