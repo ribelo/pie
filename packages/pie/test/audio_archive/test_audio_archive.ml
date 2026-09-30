@@ -149,7 +149,7 @@ let test_opus_fake_ffmpeg_on_path () =
       let args = read_file log in
       List.iter
         (fun needle -> Alcotest.(check bool) needle true (contains args needle))
-        [ "s16le"; "16000"; "libopus"; "24k"; "voip"; "pipe:0" ])
+        [ "s16le"; "16000"; "libopus"; "24k"; "voip"; "pipe:0"; "ogg" ])
 
 let test_encoder_failure_writes_wav () =
   with_root (fun root ->

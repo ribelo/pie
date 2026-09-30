@@ -152,6 +152,10 @@ let opus_args output =
     "24k";
     "-application";
     "voip";
+    (* The temporary name ends in .partial, so ffmpeg cannot infer the
+       container from the extension. *)
+    "-f";
+    "ogg";
     output;
   ]
 
