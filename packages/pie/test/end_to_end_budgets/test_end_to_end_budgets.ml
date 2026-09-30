@@ -31,7 +31,9 @@ let base_config () : Pie.Config.Stt.t =
       "Translate from {{source_language}} to {{target_language}}.";
     newline_rules = [];
     text_entry_rules = [];
-    two_pass = false;
+    pipeline = Legacy;
+    openrouter_provider_order = None;
+    one_pass_timeout_seconds = 30.;
     streaming = false;
     correction = None;
     (* This plateau counts fds at attempt idle. Archive encode runs after

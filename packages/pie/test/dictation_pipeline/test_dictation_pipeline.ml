@@ -23,7 +23,9 @@ let base_config ?(provider = Pie.Config.Stt.Openrouter)
       "Translate from {{source_language}} to {{target_language}}.";
     newline_rules = [];
     text_entry_rules = [];
-    two_pass = false;
+    pipeline = Legacy;
+    openrouter_provider_order = None;
+    one_pass_timeout_seconds = 30.;
     streaming =
       (match provider with
       | Pie.Config.Stt.Codex_realtime -> true
@@ -68,7 +70,9 @@ let binding ?(mode = C.Transcribe) ?(correct = true) ?(keysym = 65478) () :
 let config binding =
   {
     (base_config ()) with
-    two_pass = true;
+    pipeline = Two_pass;
+    openrouter_provider_order = None;
+    one_pass_timeout_seconds = 30.;
     bindings = [ binding ];
     translation_model = "openrouter/WRONG-TRANSLATION";
     transcription_language = "Polish";
@@ -116,7 +120,9 @@ let fixture () =
 let push f name = f.trace <- f.trace @ [ name ]
 
 let dependencies ?(history_error = false) ?(pass1 = Ok "  surowy tekst  ")
-    ?(pass2 = Ok "  corrected  ") f : D.dependencies =
+    ?(pass2 = Ok "  corrected  ")
+    ?(one_pass = fun _ _ _ _ -> Alcotest.fail "two-pass must not call one-pass")
+    f : D.dependencies =
   let history_result () =
     if history_error then Error (`History "read-only") else Ok ()
   in
@@ -165,6 +171,14 @@ let dependencies ?(history_error = false) ?(pass1 = Ok "  surowy tekst  ")
             Alcotest.(check (float 0.001)) "timeout" 4.5 c.timeout_seconds;
             Alcotest.(check (float 0.001)) "temperature" 0.3 c.temperature);
         pass2);
+    one_pass =
+      (fun cfg b glossary pcm ->
+        push f "one-pass";
+        f.time <- f.time +. 0.25;
+        Alcotest.(check string) "full PCM" "PCM" (Bytes.to_string pcm);
+        Alcotest.(check string)
+          "press glossary" "PROJECT TERM" glossary.Pie.Glossary.text;
+        one_pass cfg b glossary pcm);
     append_transcribed =
       (fun raw ->
         push f "raw-history";
@@ -177,6 +191,7 @@ let dependencies ?(history_error = false) ?(pass1 = Ok "  surowy tekst  ")
         history_result ());
     warn = (fun _ -> f.warnings <- f.warnings + 1);
     notify_correction_failure = (fun _ -> f.notices <- f.notices + 1);
+    notify_request_failure = (fun _ -> f.notices <- f.notices + 1);
     fresh_id = (fun () -> "attempt-id");
     now = (fun () -> f.time);
     log_pass =
@@ -434,6 +449,96 @@ let test_mod5_binding () =
         "Mod5 chooses first current transcribe" true (actual = first)
   | _ -> Alcotest.fail "synthetic binding press"
 
+let make_one_pass ?(mode = C.Transcribe) ?(correct = true)
+    ?(prompt = C.default_one_pass_prompt) ?(result = Ok "heard text") () =
+  let f = fixture () in
+  let b =
+    {
+      (binding ~mode ~correct ()) with
+      prompt;
+      prompt_file =
+        (if mode = C.Translate then C.default_one_pass_translate_prompt_file
+         else if correct then C.default_one_pass_prompt_file
+         else C.default_one_pass_verbatim_prompt_file);
+    }
+  in
+  let cfg =
+    {
+      (config b) with
+      pipeline = One_pass;
+      transcription_model = "openrouter/google/gemini-3.8-flash";
+      translation_model = "openrouter/google/gemini-translate";
+    }
+  in
+  let seen = ref "" in
+  let t =
+    D.create
+      (dependencies
+         ~one_pass:(fun _cfg binding _glossary _pcm ->
+           seen := binding.C.prompt;
+           result)
+         f)
+      ~config:cfg ~binding:b
+  in
+  (f, t, seen)
+
+let test_one_pass_success mode () =
+  let f, t, _ = make_one_pass ~mode () in
+  ok (execute f t);
+  outcome f H.Delivered;
+  Alcotest.(check (list string))
+    "one request then deliver"
+    [ "one-pass"; "raw-history"; "deliver"; "finished-history" ]
+    f.trace;
+  Alcotest.(check (list string)) "delivered output" [ "heard text" ] f.delivered;
+  Alcotest.(check bool) "pass 2 not run" false (List.mem "pass2" f.trace);
+  Alcotest.(check bool) "pass 1 not run" false (List.mem "pass1" f.trace);
+  let expected_model =
+    match mode with
+    | C.Transcribe -> "openrouter/google/gemini-3.8-flash"
+    | Translate -> "openrouter/google/gemini-translate"
+  in
+  (match f.raw with
+  | [ event ] ->
+      Alcotest.(check string)
+        "raw is the one-pass output" "heard text" event.H.raw_text;
+      Alcotest.(check string)
+        "pass-1 model is the one-pass model" expected_model event.pass1_model
+  | _ -> Alcotest.fail "one transcribed event required");
+  (match f.finished with
+  | [ event ] ->
+      Alcotest.(check (option string))
+        "final" (Some "heard text") event.H.final_text;
+      Alcotest.(check (option string)) "no pass 2 model" None event.pass2_model
+  | _ -> Alcotest.fail "one finished event required");
+  match f.passes with
+  | [ (D.One_pass, model, ms) ] ->
+      Alcotest.(check string) "logged model" expected_model model;
+      Alcotest.(check bool) "logged latency" true (ms >= 249 && ms <= 251)
+  | _ -> Alcotest.fail "one-pass latency required"
+
+let test_one_pass_failure () =
+  let f, t, _ = make_one_pass ~result:(Error Pie.Stt.Correction.Timeout) () in
+  failed (execute f t);
+  outcome f H.Failed;
+  Alcotest.(check int) "audio retained" 1 f.audios;
+  Alcotest.(check int) "notified" 1 f.notices;
+  Alcotest.(check (list string)) "nothing typed" [] f.delivered;
+  Alcotest.(check int) "no raw history" 0 (List.length f.raw);
+  match f.finished with
+  | [ event ] ->
+      Alcotest.(check (option string))
+        "diagnostic" (Some "timeout") event.H.diagnostic
+  | _ -> Alcotest.fail "one finished event required"
+
+let test_one_pass_verbatim_prompt () =
+  let prompt = C.default_one_pass_verbatim_prompt in
+  let f, t, seen = make_one_pass ~correct:false ~prompt () in
+  ok (execute f t);
+  Alcotest.(check string) "verbatim prompt" prompt !seen;
+  Alcotest.(check bool) "no pass 2" false (List.mem "pass2" f.trace);
+  outcome f H.Delivered
+
 let () =
   let case name f = Alcotest.test_case name `Quick f in
   let failures =
@@ -488,6 +593,13 @@ let () =
             test_cli_preserves_bindings;
           case "dict-wrbh CLI collision rejected" test_cli_collision;
           case "dict-wrbh Mod5 uses first current binding" test_mod5_binding;
+          case "dict-dq3o/msdh/oagf one-pass success"
+            (test_one_pass_success C.Transcribe);
+          case "dict-dq3o/msdh one-pass translate model"
+            (test_one_pass_success C.Translate);
+          case "dict-pna4 one-pass failure keeps audio" test_one_pass_failure;
+          case "dict-gi5u correct=false uses verbatim prompt"
+            test_one_pass_verbatim_prompt;
         ]
         @ variants );
     ]

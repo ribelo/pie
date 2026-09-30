@@ -336,7 +336,9 @@ let service_config ~retention () : Pie.Config.Stt.t =
       "Translate from {{source_language}} to {{target_language}}.";
     newline_rules = [];
     text_entry_rules = [];
-    two_pass = true;
+    pipeline = Two_pass;
+    openrouter_provider_order = None;
+    one_pass_timeout_seconds = 30.;
     streaming = false;
     correction = None;
     audio_retention_hours = retention;
@@ -410,6 +412,8 @@ let run_attempt ~env ~dir ~retention ~pass1 ~deliver ~during =
           Pie.History.append_finished ~caps ~path:history_path event);
       warn = ignore;
       notify_correction_failure = ignore;
+      notify_request_failure = ignore;
+      one_pass = (fun _ _ _ _ -> Error Pie.Stt.Correction.Blank);
       fresh_id = (fun () -> "live-attempt");
       now = (fun () -> Unix.gettimeofday ());
       log_pass = (fun _ ~model:_ ~duration_ms:_ -> ());

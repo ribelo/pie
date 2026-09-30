@@ -1,9 +1,14 @@
 (** Speech-to-text configuration.
 
-    [two_pass = false], the default, is today's single pass: the same models,
+    [pipeline = Legacy], the default, is today's single pass: the same models,
     keys, audio prompts and prompt files as before the two-pass keys existed.
-    [streaming] is still checked, then ignored. Pass-2 prompt files are not
-    read.
+    [streaming] is still checked, then ignored. Pass-2 and one-pass prompt files
+    are not read.
+
+    [One_pass] sends the recording, the binding's prompt and the glossary to one
+    OpenRouter audio model. [Two_pass] is pass 1 then optional pass 2.
+    [streaming = true] is rejected with [One_pass]. One-pass models must use the
+    [openrouter] provider.
 
     [[bindings]] is authoritative when present. Without it, [bindings] is the
     two keys derived from [ptt_transcribe_keysym] / [ptt_transcribe_shift] and
@@ -14,6 +19,7 @@
     fields keep compiling; new code should use [bindings]. *)
 
 type provider = Codex_realtime | Openrouter
+type pipeline = Legacy | One_pass | Two_pass
 
 type newline_action = Input.Text_injection.newline_action =
   | Collapse_to_space
@@ -37,8 +43,9 @@ type text_entry_rule = Input.Text_injection.text_entry_rule = {
 type mode =
   | Transcribe
   | Translate
-      (** A binding's pass-1 mode. With [two_pass], translation is a pass-2
-          prompt, not a second recognizer. *)
+      (** A binding's recording mode. With [Two_pass], translation is a pass-2
+          prompt, not a second recognizer. With [One_pass], a translate binding
+          uses [translation_model] and the translate prompt. *)
 
 type correction = {
   model : string;
@@ -50,22 +57,26 @@ type correction = {
   timeout_seconds : float;
   temperature : float;
 }
-(** Pass 2. Absent on {!t} when [correction_model] is not set. *)
+(** Pass 2. Absent on {!t} when [correction_model] is not set. Not used by
+    [One_pass]. *)
 
 type binding = {
   keysym : int;
   shift : bool;
   mode : mode;
   correct : bool;
-      (** Whether pass 2 runs. Defaults to true when [correction_model] is set,
-          otherwise false. *)
+      (** Whether pass 2 runs, when [pipeline] is [Two_pass]. Defaults to true
+          when [correction_model] is set, otherwise false. With [One_pass],
+          [false] on a transcribe binding selects the verbatim prompt; it does
+          not skip the request. *)
   prompt_named : bool;
       (** The binding set [prompt]. A missing named file is an error. A missing
           default file falls back to the embedded prompt. *)
   prompt_file : string;  (** File name inside the prompts directory. *)
   prompt : string;
-      (** Resolved pass-2 prompt text. The pipeline sends this as the
-          instructions and the transcript as the user message. *)
+      (** Resolved prompt text. Pass 2 and one pass send this as the
+          instructions. The transcript, or a short cue plus the recording, is
+          the user message. *)
 }
 
 type t = {
@@ -82,22 +93,31 @@ type t = {
   ptt_transcribe_shift : bool;
   ptt_translate_shift : bool;
   thinking_effort : string option;
+      (** One-pass reasoning effort. Pass 2 uses [correction.reasoning_effort].
+      *)
   transcription_prompt : string;
   translation_prompt : string;
   newline_rules : newline_rule list;
   text_entry_rules : text_entry_rule list;
-  two_pass : bool;
+  pipeline : pipeline;
   streaming : bool;
       (** Stream pass-1 audio while the key is held. Defaults to true when the
           resolved pass-1 provider is [codex-realtime], and false for
-          [openrouter]. [true] with an openrouter pass-1 model is rejected, even
-          when [two_pass] is false. Meaningful only when [two_pass]. *)
+          [openrouter]. [true] with an openrouter pass-1 model is rejected.
+          [true] with [One_pass] is rejected. Meaningful only for [Legacy] Codex
+          realtime and [Two_pass] Codex realtime. *)
   correction : correction option;
   bindings : binding list;
   audio_retention_hours : float;
       (** How long settled audio stays in the archive. Default 24. [0] disables
           archiving of new attempts and deletes nothing. Negative values are
           rejected. *)
+  openrouter_provider_order : string list option;
+      (** OpenRouter [provider.order] for one-pass and pass-2 requests. Absent
+          omits the field. Fallbacks stay allowed. *)
+  one_pass_timeout_seconds : float;
+      (** Bounds the one-pass Responses call. [correction_timeout_seconds] does
+          not apply. Default {!default_one_pass_timeout_seconds}. *)
 }
 
 exception Config_error of string
@@ -106,6 +126,7 @@ type resolved_model = { provider : provider; model : string }
 
 val provider_of_string : string -> provider
 val string_of_provider : provider -> string
+val string_of_pipeline : pipeline -> string
 val string_of_mode : mode -> string
 
 val resolve_model_provider :
@@ -119,6 +140,15 @@ val default_audio_retention_hours : float
 val default_correction_timeout_seconds : float
 (** [8.]. *)
 
+val default_one_pass_timeout_seconds : float
+(** [30.].
+
+    Measured one-pass tails were about 5 s at p90 and about 11 s at worst on
+    16-46 s clips (docs/research/2026-09-30-dictation-models). 30 seconds covers
+    that with room for a longer utterance. Raise the key for a very long
+    recording; a timeout keeps the audio for [pie retry]. The 120 s OpenRouter
+    transcription deadline is not used here. *)
+
 val default_correction_temperature : float
 (** [0.2]. *)
 
@@ -128,8 +158,20 @@ val default_correction_prompt_file : string
 val default_correction_translate_prompt_file : string
 (** ["correction-translate.md"]. *)
 
+val default_one_pass_prompt_file : string
+(** ["one-pass.md"]. *)
+
+val default_one_pass_verbatim_prompt_file : string
+(** ["one-pass-verbatim.md"]. *)
+
+val default_one_pass_translate_prompt_file : string
+(** ["one-pass-translate.md"]. *)
+
 val default_correction_prompt : string
 val default_correction_translate_prompt : string
+val default_one_pass_prompt : string
+val default_one_pass_verbatim_prompt : string
+val default_one_pass_translate_prompt : string
 val newline_action_of_string : string -> newline_action
 val string_of_newline_action : newline_action -> string
 val entry_method_of_string : string -> entry_method

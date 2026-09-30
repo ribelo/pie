@@ -396,7 +396,12 @@ let startup_config_json ~caps ?config_path ~(config : Config.Stt.t)
       ("newline_rules", `List (List.mapi newline_rule_json config.newline_rules));
       ( "text_entry_rules",
         `List (List.mapi text_entry_rule_json config.text_entry_rules) );
-      ("two_pass", `Bool config.two_pass);
+      ("pipeline", `String (Config.Stt.string_of_pipeline config.pipeline));
+      ( "openrouter_provider_order",
+        option_json
+          (fun names -> `List (List.map (fun name -> `String name) names))
+          config.openrouter_provider_order );
+      ("one_pass_timeout_seconds", `Float config.one_pass_timeout_seconds);
       ("streaming", `Bool config.streaming);
       ("audio_retention_hours", `Float config.audio_retention_hours);
       ( "correction_model",
@@ -899,8 +904,46 @@ let production_pipeline ~caps ~sw ~net ~clock ~logger ~process_mgr =
               ~source_language:config.translation_source_language
               ~target_language:config.translation_target_language ~transcript
               ~glossary:glossary.Glossary.text
+              ?provider_order:config.openrouter_provider_order
               ?reasoning_effort:correction.reasoning_effort
               ~temperature:correction.temperature ());
+    one_pass =
+      (fun config binding glossary pcm ->
+        let configured =
+          match binding.Config.Stt.mode with
+          | Transcribe -> config.transcription_model
+          | Translate -> config.translation_model
+        in
+        match
+          try
+            Ok
+              (Config.Stt.resolve_model_provider
+                 ~default_provider:config.provider configured)
+          with Config.Stt.Config_error _ ->
+            Error (Stt.Correction.Provider Stt.Correction.Invalid_request)
+        with
+        | Error _ as error -> error
+        | Ok resolved ->
+            let pcm = normalize_for_stt config pcm in
+            let header =
+              Audio.Pcm.build_pcm_wav_header ~data_length:(Bytes.length pcm)
+                ~sample_rate:16000
+            in
+            let wav = Bytes.create (Bytes.length header + Bytes.length pcm) in
+            Bytes.blit header 0 wav 0 (Bytes.length header);
+            Bytes.blit pcm 0 wav (Bytes.length header) (Bytes.length pcm);
+            Stt.Correction.run ~caps ~sw ~net ~clock ~logger
+              ~model:resolved.model ~prompt_template:binding.prompt
+              ~transcript:Stt.Correction.audio_cue ~audio:wav
+              ?provider_order:config.openrouter_provider_order
+              ~glossary:glossary.Glossary.text
+              ~language:config.transcription_language
+              ~source_language:config.translation_source_language
+              ~target_language:config.translation_target_language
+              ?reasoning_effort:config.thinking_effort
+              ~temperature:Stt.Correction.default_temperature
+              ~timeout:(Ox.Duration.of_seconds config.one_pass_timeout_seconds)
+              ());
     append_transcribed =
       (fun event ->
         History.append_transcribed ~caps ~path:(Lazy.force history_path) event);
@@ -915,6 +958,13 @@ let production_pipeline ~caps ~sw ~net ~clock ~logger ~process_mgr =
         ignore
           (Desktop.Notification.notify_warning ~caps ~process_mgr
              "Pie correction skipped" diagnostic));
+    notify_request_failure =
+      (fun failure ->
+        let diagnostic = Stt.Correction.diagnostic failure in
+        warn ("One-pass request failed: " ^ diagnostic);
+        ignore
+          (Desktop.Notification.notify_warning ~caps ~process_mgr
+             "Pie dictation failed" diagnostic));
     fresh_id = History.fresh_id ~caps;
     now = (fun () -> Eio.Time.now clock);
     log_pass =
@@ -923,6 +973,7 @@ let production_pipeline ~caps ~sw ~net ~clock ~logger ~process_mgr =
           match pass with
           | Dictation.Pass1 -> "stt.pass1"
           | Pass2 -> "stt.pass2"
+          | One_pass -> "stt.one_pass"
         in
         ignore
           (Ox_observability.Logger.info logger "Dictation pass completed"
@@ -944,18 +995,24 @@ let first_binding (config : Config.Stt.t) mode =
     config.bindings
 
 let create_dictation ~config ?binding pipeline mode =
-  if not config.Config.Stt.two_pass then Ok None
-  else
-    match
-      ( pipeline,
-        match binding with
-        | Some binding -> Some binding
-        | None -> first_binding config mode )
-    with
-    | Some deps, Some binding ->
-        Ok (Some (Dictation.create deps ~config ~binding))
-    | None, _ -> Error (`Ptt_error "stt:two-pass-pipeline-missing")
-    | _, None -> Error (`Ptt_error "stt:no-binding-for-mode")
+  match config.Config.Stt.pipeline with
+  | Legacy -> Ok None
+  | One_pass | Two_pass -> (
+      match
+        ( pipeline,
+          match binding with
+          | Some binding -> Some binding
+          | None -> first_binding config mode )
+      with
+      | Some deps, Some binding ->
+          Ok (Some (Dictation.create deps ~config ~binding))
+      | None, _ ->
+          Error
+            (`Ptt_error
+               (match config.pipeline with
+               | One_pass -> "stt:one-pass-pipeline-missing"
+               | Two_pass | Legacy -> "stt:two-pass-pipeline-missing"))
+      | _, None -> Error (`Ptt_error "stt:no-binding-for-mode"))
 
 let make_clip_handle ~owner ~stt ~deliver ~config mode =
   {
@@ -1081,24 +1138,37 @@ let make_streaming_handle ~caps ~sw ~net ~clock ~logger ~owner ~config ~stt
 
 let acquire_and_run ~caps ~sw ~net ~clock ~logger ~owner ~config ~stt ~deliver
     mode use =
+  let model_mode =
+    match config.Config.Stt.pipeline with
+    | Two_pass -> Transcribe
+    | One_pass | Legacy -> mode
+  in
   match
-    try
-      Ok
-        (resolved_model_for_mode config
-           (if config.Config.Stt.two_pass then Transcribe else mode))
+    try Ok (resolved_model_for_mode config model_mode)
     with Config.Stt.Config_error _ -> Error (`Ptt_error "config:model")
   with
   | Error _ as error -> error
   | Ok resolved -> (
+      let buffered () =
+        Ptt_loop.Handle
+          (attempt_handle owner
+             (make_clip_handle ~owner ~stt ~deliver ~config mode))
+      in
+      let streaming () =
+        make_streaming_handle ~caps ~sw ~net ~clock ~logger ~owner ~config ~stt
+          ~deliver mode
+      in
       let handle =
-        match resolved.provider with
-        | Codex_realtime when (not config.two_pass) || config.streaming ->
-            make_streaming_handle ~caps ~sw ~net ~clock ~logger ~owner ~config
-              ~stt ~deliver mode
-        | Codex_realtime | Openrouter ->
-            Ptt_loop.Handle
-              (attempt_handle owner
-                 (make_clip_handle ~owner ~stt ~deliver ~config mode))
+        match config.pipeline with
+        | One_pass -> buffered ()
+        | Legacy -> (
+            match resolved.provider with
+            | Codex_realtime -> streaming ()
+            | Openrouter -> buffered ())
+        | Two_pass -> (
+            match resolved.provider with
+            | Codex_realtime when config.streaming -> streaming ()
+            | Codex_realtime | Openrouter -> buffered ())
       in
       match handle with
       | Ptt_loop.Scoped run -> run use

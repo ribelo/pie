@@ -273,7 +273,7 @@ let test_streaming_switch () =
       expect_error ~needle:"openrouter" (load env path))
     [
       "provider = \"openrouter\"\nstreaming = true\n";
-      "two_pass = false\nprovider = \"openrouter\"\nstreaming = true\n";
+      "pipeline = \"legacy\"\nprovider = \"openrouter\"\nstreaming = true\n";
       "transcription_model = \"openrouter/microsoft/mai-transcribe-2\"\n\
        streaming = true\n";
     ]
@@ -284,7 +284,7 @@ let test_correction_settings () =
   Eio_main.run @@ fun env ->
   let path = Filename.concat dir "stt.toml" in
   write path
-    "two_pass = true\n\
+    "pipeline = \"two-pass\"\n\
      correction_model = \"openrouter/google/gemini-3.8-flash\"\n\
      correction_reasoning_effort = \"low\"\n\
      correction_timeout_seconds = 3\n\
@@ -300,7 +300,7 @@ let test_correction_settings () =
       Alcotest.(check (float 0.00001)) "timeout" 3. correction.timeout_seconds;
       Alcotest.(check (float 0.00001)) "temperature" 0. correction.temperature);
   write path
-    "two_pass = true\n\
+    "pipeline = \"two-pass\"\n\
      correction_model = \"google/gemini-3.8-flash\"\n\
      correction_reasoning_effort = \"none\"\n\
      correction_temperature = 2\n";
@@ -331,7 +331,8 @@ let test_correction_settings () =
       ("correction_timeout_seconds = -1\n", "positive");
       ("correction_temperature = 2.1\n", "0.0-2.0");
       ("correction_temperature = -0.1\n", "0.0-2.0");
-      ("two_pass = \"yes\"\n", "bool");
+      ("pipeline = \"yes\"\n", "pipeline");
+      ("two_pass = true\n", "replaced");
     ]
 
 let test_legacy_keys_become_bindings () =
@@ -366,7 +367,7 @@ let test_bindings () =
   Unix.mkdir prompts 0o700;
   write (Filename.concat prompts "raw.md") "Raw {{glossary}}";
   write path
-    "two_pass = true\n\
+    "pipeline = \"two-pass\"\n\
      correction_model = \"google/gemini-3.8-flash\"\n\
      ptt_transcribe_keysym = 99\n\
      ptt_translate_keysym = 98\n\
@@ -431,18 +432,21 @@ let test_bindings () =
       ( "[[bindings]]\nkeysym = 11\nmode = \"transcribe\"\nprompt = \"..\"\n",
         "file name" );
       ("bindings = \"no\"\n", "array of tables");
-      ( "two_pass = true\n[[bindings]]\nkeysym = 11\nmode = \"translate\"\n",
+      ( "pipeline = \"two-pass\"\n\
+         [[bindings]]\n\
+         keysym = 11\n\
+         mode = \"translate\"\n",
         "correction_model" );
-      ( "two_pass = true\n\
+      ( "pipeline = \"two-pass\"\n\
          [[bindings]]\n\
          keysym = 11\n\
          mode = \"transcribe\"\n\
          correct = true\n",
         "correction_model" );
-      ("two_pass = true\n", "correction_model");
+      ("pipeline = \"two-pass\"\n", "correction_model");
     ];
   write path
-    "two_pass = true\n\
+    "pipeline = \"two-pass\"\n\
      [[bindings]]\n\
      keysym = 11\n\
      mode = \"transcribe\"\n\
@@ -451,7 +455,7 @@ let test_bindings () =
   Alcotest.(check bool)
     "raw transcribe needs no model" false (transcribe_binding config).correct;
   write path
-    "two_pass = false\n[[bindings]]\nkeysym = 11\nmode = \"translate\"\n";
+    "pipeline = \"legacy\"\n[[bindings]]\nkeysym = 11\nmode = \"translate\"\n";
   ignore (expect_ok (load env path))
 
 let test_pass2_prompts () =
@@ -459,7 +463,8 @@ let test_pass2_prompts () =
   with_sandbox @@ fun dir ->
   Eio_main.run @@ fun env ->
   let path = Filename.concat dir "stt.toml" in
-  write path "two_pass = true\ncorrection_model = \"google/gemini-3.8-flash\"\n";
+  write path
+    "pipeline = \"two-pass\"\ncorrection_model = \"google/gemini-3.8-flash\"\n";
   let config = expect_ok (load env path) in
   let transcribe = transcribe_binding config in
   let translate = translate_binding config in
@@ -503,7 +508,7 @@ let test_pass2_prompts () =
     "Custom glossary {{glossary}}.";
   write (Filename.concat prompts "named.md") "Named {{glossary}}";
   write path
-    "two_pass = true\n\
+    "pipeline = \"two-pass\"\n\
      correction_model = \"google/gemini-3.8-flash\"\n\
      [[bindings]]\n\
      keysym = 11\n\
@@ -513,7 +518,7 @@ let test_pass2_prompts () =
   Alcotest.(check string)
     "named prompt" "Named {{glossary}}" (transcribe_binding config).prompt;
   write path
-    "two_pass = true\n\
+    "pipeline = \"two-pass\"\n\
      correction_model = \"google/gemini-3.8-flash\"\n\
      [[bindings]]\n\
      keysym = 11\n\
@@ -523,7 +528,8 @@ let test_pass2_prompts () =
   write
     (Filename.concat prompts "correction-translate.md")
     "missing a placeholder {{glossary}}";
-  write path "two_pass = true\ncorrection_model = \"google/gemini-3.8-flash\"\n";
+  write path
+    "pipeline = \"two-pass\"\ncorrection_model = \"google/gemini-3.8-flash\"\n";
   expect_error ~needle:"{{source_language}}" (load env path)
 
 let test_two_pass_off_is_legacy () =
@@ -544,7 +550,9 @@ let test_two_pass_off_is_legacy () =
     "invalid pass-2 prompt that must not be read";
   write path "provider = \"codex-realtime\"\n";
   let config = expect_ok (load env path) in
-  Alcotest.(check bool) "two_pass default" false config.two_pass;
+  Alcotest.(check string)
+    "pipeline default" "legacy"
+    (Config.string_of_pipeline config.pipeline);
   Alcotest.(check string)
     "legacy model" "gpt-realtime-2.1" config.transcription_model;
   Alcotest.(check string)
@@ -573,7 +581,7 @@ let test_status_json_fields () =
   Eio_main.run @@ fun env ->
   let path = Filename.concat dir "stt.toml" in
   write path
-    "two_pass = true\n\
+    "pipeline = \"two-pass\"\n\
      streaming = true\n\
      correction_model = \"google/gemini-3.8-flash\"\n\
      correction_reasoning_effort = \"minimal\"\n\
@@ -594,7 +602,10 @@ let test_status_json_fields () =
     | `Null -> Alcotest.failf "missing %s" name
     | value -> value
   in
-  Alcotest.(check bool) "two_pass" true (member "two_pass" = `Bool true);
+  Alcotest.(check bool) "pipeline" true (member "pipeline" = `String "two-pass");
+  Alcotest.(check bool)
+    "provider order absent" true
+    (Yojson.Safe.Util.member "openrouter_provider_order" json = `Null);
   Alcotest.(check bool) "streaming" true (member "streaming" = `Bool true);
   Alcotest.(check bool)
     "model" true
@@ -623,6 +634,124 @@ let test_status_json_fields () =
         "prompt file" true
         (Yojson.Safe.Util.member "prompt_file" binding = `String "correction.md")
   | _ -> Alcotest.fail "expected one binding"
+
+let test_one_pass_config () =
+  (* dict-rtdw dict-gi5u dict-4y4r dict-dq3o *)
+  with_sandbox @@ fun dir ->
+  Eio_main.run @@ fun env ->
+  let path = Filename.concat dir "stt.toml" in
+  let prompts = Filename.concat dir "prompts" in
+  Unix.mkdir prompts 0o700;
+  write path
+    "pipeline = \"one-pass\"\n\
+     transcription_model = \"openrouter/google/gemini-3.8-flash\"\n\
+     translation_model = \"openrouter/google/gemini-3.8-flash\"\n\
+     thinking_effort = \"low\"\n\
+     openrouter_provider_order = [\"Google AI Studio\", \"Google\"]\n\
+     one_pass_timeout_seconds = 45\n\
+     [[bindings]]\n\
+     keysym = 11\n\
+     shift = true\n\
+     mode = \"transcribe\"\n\
+     correct = true\n\
+     [[bindings]]\n\
+     keysym = 11\n\
+     mode = \"transcribe\"\n\
+     correct = false\n\
+     [[bindings]]\n\
+     keysym = 12\n\
+     mode = \"translate\"\n";
+  let config = expect_ok (load env path) in
+  Alcotest.(check string)
+    "pipeline" "one-pass"
+    (Config.string_of_pipeline config.pipeline);
+  Alcotest.(check (option (list string)))
+    "provider order"
+    (Some [ "Google AI Studio"; "Google" ])
+    config.openrouter_provider_order;
+  Alcotest.(check (float 0.00001)) "timeout" 45. config.one_pass_timeout_seconds;
+  Alcotest.(check (option string)) "effort" (Some "low") config.thinking_effort;
+  let tidy = List.find (fun (b : Config.binding) -> b.shift) config.bindings in
+  let raw =
+    List.find
+      (fun (b : Config.binding) -> (not b.shift) && b.mode = Config.Transcribe)
+      config.bindings
+  in
+  let translate = translate_binding config in
+  Alcotest.(check string)
+    "tidy file" Config.default_one_pass_prompt_file tidy.prompt_file;
+  Alcotest.(check string)
+    "tidy prompt" Config.default_one_pass_prompt tidy.prompt;
+  Alcotest.(check string)
+    "verbatim file" Config.default_one_pass_verbatim_prompt_file raw.prompt_file;
+  Alcotest.(check string)
+    "verbatim prompt" Config.default_one_pass_verbatim_prompt raw.prompt;
+  Alcotest.(check string)
+    "translate file" Config.default_one_pass_translate_prompt_file
+    translate.prompt_file;
+  Alcotest.(check string)
+    "translate prompt" Config.default_one_pass_translate_prompt translate.prompt;
+  Alcotest.(check bool)
+    "verbatim has glossary" true
+    (contains "{{glossary}}" Config.default_one_pass_verbatim_prompt);
+  write (Filename.concat prompts "one-pass-verbatim.md") "no placeholders";
+  expect_error ~needle:"{{glossary}}" (load env path);
+  write
+    (Filename.concat prompts "named.md")
+    "Named {{glossary}} {{source_language}} {{target_language}}";
+  write path
+    "pipeline = \"one-pass\"\n\
+     transcription_model = \"openrouter/google/gemini-3.8-flash\"\n\
+     translation_model = \"openrouter/google/gemini-3.8-flash\"\n\
+     [[bindings]]\n\
+     keysym = 11\n\
+     mode = \"transcribe\"\n\
+     correct = false\n\
+     prompt = \"named.md\"\n";
+  let config = expect_ok (load env path) in
+  Alcotest.(check string)
+    "named override"
+    "Named {{glossary}} {{source_language}} {{target_language}}"
+    (transcribe_binding config).prompt;
+  Unix.unlink (Filename.concat prompts "one-pass-verbatim.md");
+  write path
+    "pipeline = \"one-pass\"\n\
+     transcription_model = \"openrouter/google/gemini-3.8-flash\"\n\
+     translation_model = \"openrouter/google/gemini-3.8-flash\"\n";
+  let config = expect_ok (load env path) in
+  Alcotest.(check (float 0.00001))
+    "default timeout" Config.default_one_pass_timeout_seconds
+    config.one_pass_timeout_seconds;
+  Alcotest.(check bool)
+    "order absent" true
+    (config.openrouter_provider_order = None);
+  let json = Config.door_spec.yojson_of_t config in
+  Alcotest.(check bool)
+    "status pipeline" true
+    (Yojson.Safe.Util.member "pipeline" json = `String "one-pass");
+  List.iter
+    (fun (text, needle) ->
+      write path text;
+      expect_error ~needle (load env path))
+    [
+      ( "pipeline = \"one-pass\"\n\
+         transcription_model = \"codex-realtime/gpt-live-transcribe\"\n",
+        "codex-realtime" );
+      ( "pipeline = \"one-pass\"\n\
+         transcription_model = \"openrouter/google/gemini-3.8-flash\"\n\
+         translation_model = \"gpt-realtime-2.1\"\n\
+         provider = \"codex-realtime\"\n",
+        "translation_model" );
+      ( "pipeline = \"one-pass\"\n\
+         transcription_model = \"openrouter/google/gemini-3.8-flash\"\n\
+         translation_model = \"openrouter/google/gemini-3.8-flash\"\n\
+         streaming = true\n",
+        "one-pass" );
+      ("openrouter_provider_order = \"Google\"\n", "array of strings");
+      ("openrouter_provider_order = [\"\"]\n", "must not be empty");
+      ("one_pass_timeout_seconds = 0\n", "positive");
+      ("pipeline = \"both\"\n", "pipeline");
+    ]
 
 let () =
   Alcotest.run "config_boundary"
@@ -661,5 +790,7 @@ let () =
             test_two_pass_off_is_legacy;
           Alcotest.test_case "dict-oagf status JSON fields" `Quick
             test_status_json_fields;
+          Alcotest.test_case "dict-rtdw/gi5u/4y4r/dq3o one-pass config" `Quick
+            test_one_pass_config;
         ] );
     ]

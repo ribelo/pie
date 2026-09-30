@@ -20,6 +20,7 @@ type text_entry_rule = Input.Text_injection.text_entry_rule = {
 }
 
 type mode = Transcribe | Translate
+type pipeline = Legacy | One_pass | Two_pass
 
 type correction = {
   model : string;
@@ -56,11 +57,13 @@ type t = {
   translation_prompt : string;
   newline_rules : newline_rule list;
   text_entry_rules : text_entry_rule list;
-  two_pass : bool;
+  pipeline : pipeline;
   streaming : bool;
   correction : correction option;
   bindings : binding list;
   audio_retention_hours : float;
+  openrouter_provider_order : string list option;
+  one_pass_timeout_seconds : float;
 }
 
 exception Config_error of string
@@ -79,6 +82,21 @@ let string_of_provider = function
 let string_of_mode = function
   | Transcribe -> "transcribe"
   | Translate -> "translate"
+
+let string_of_pipeline = function
+  | Legacy -> "legacy"
+  | One_pass -> "one-pass"
+  | Two_pass -> "two-pass"
+
+let pipeline_of_string = function
+  | "legacy" -> Legacy
+  | "one-pass" -> One_pass
+  | "two-pass" -> Two_pass
+  | other ->
+      raise
+        (Config_error
+           (Printf.sprintf
+              "pipeline must be legacy, one-pass, or two-pass; got %s" other))
 
 let split_first_slash value =
   match String.index_opt value '/' with
@@ -126,11 +144,18 @@ let string_of_entry_method = function Type -> "type" | Paste -> "paste"
 let max_config_file_bytes = 1024 * 1024
 let default_audio_retention_hours = 24.
 let default_correction_timeout_seconds = 8.
+let default_one_pass_timeout_seconds = 30.
 let default_correction_temperature = 0.2
 let default_correction_prompt_file = "correction.md"
 let default_correction_translate_prompt_file = "correction-translate.md"
+let default_one_pass_prompt_file = "one-pass.md"
+let default_one_pass_verbatim_prompt_file = "one-pass-verbatim.md"
+let default_one_pass_translate_prompt_file = "one-pass-translate.md"
 let default_correction_prompt = Embedded_prompts.correction
 let default_correction_translate_prompt = Embedded_prompts.correction_translate
+let default_one_pass_prompt = Embedded_prompts.one_pass
+let default_one_pass_verbatim_prompt = Embedded_prompts.one_pass_verbatim
+let default_one_pass_translate_prompt = Embedded_prompts.one_pass_translate
 let default_transcribe_keysym = 65478
 let default_translate_keysym = 65479
 
@@ -309,13 +334,22 @@ let parse_correction_model table =
                   (string_of_provider resolved.provider))))
   | Some _ -> type_error "correction_model" "a string"
 
-let default_prompt_file = function
-  | Transcribe -> default_correction_prompt_file
-  | Translate -> default_correction_translate_prompt_file
+let default_prompt_file pipeline ~mode ~correct =
+  match (pipeline, mode, correct) with
+  | One_pass, Translate, _ -> default_one_pass_translate_prompt_file
+  | One_pass, Transcribe, false -> default_one_pass_verbatim_prompt_file
+  | One_pass, Transcribe, true -> default_one_pass_prompt_file
+  | (Legacy | Two_pass), Transcribe, _ -> default_correction_prompt_file
+  | (Legacy | Two_pass), Translate, _ ->
+      default_correction_translate_prompt_file
 
-let embedded_prompt = function
-  | Transcribe -> default_correction_prompt
-  | Translate -> default_correction_translate_prompt
+let embedded_prompt pipeline ~mode ~correct =
+  match (pipeline, mode, correct) with
+  | One_pass, Translate, _ -> default_one_pass_translate_prompt
+  | One_pass, Transcribe, false -> default_one_pass_verbatim_prompt
+  | One_pass, Transcribe, true -> default_one_pass_prompt
+  | (Legacy | Two_pass), Transcribe, _ -> default_correction_prompt
+  | (Legacy | Two_pass), Translate, _ -> default_correction_translate_prompt
 
 let validate_prompt_file_name ~where name =
   let name = String.trim name in
@@ -355,7 +389,7 @@ let validate_pass2_prompt mode file content =
                  {{target_language}}"
                 file))
 
-let parse_binding index ~correct_default table =
+let parse_binding index ~pipeline ~correct_default table =
   let where field = Printf.sprintf "bindings[%d].%s" index field in
   let keysym =
     match toml_find table "keysym" with
@@ -400,7 +434,7 @@ let parse_binding index ~correct_default table =
         | Some (`String value) ->
             (false, validate_prompt_file_name ~where:(where "prompt_file") value)
         | Some _ -> type_error (where "prompt_file") "a string"
-        | None -> (false, default_prompt_file mode))
+        | None -> (false, default_prompt_file pipeline ~mode ~correct))
     | Some _ -> type_error (where "prompt") "a string"
   in
   {
@@ -410,7 +444,7 @@ let parse_binding index ~correct_default table =
     correct;
     prompt_named;
     prompt_file;
-    prompt = embedded_prompt mode;
+    prompt = embedded_prompt pipeline ~mode ~correct;
   }
 
 let check_duplicate_bindings bindings =
@@ -427,15 +461,15 @@ let check_duplicate_bindings bindings =
   in
   loop [] bindings
 
-let derived_binding ~keysym ~shift ~mode ~correct =
+let derived_binding ~pipeline ~keysym ~shift ~mode ~correct =
   {
     keysym;
     shift;
     mode;
     correct;
     prompt_named = false;
-    prompt_file = default_prompt_file mode;
-    prompt = embedded_prompt mode;
+    prompt_file = default_prompt_file pipeline ~mode ~correct;
+    prompt = embedded_prompt pipeline ~mode ~correct;
   }
 
 let first_of mode bindings =
@@ -446,26 +480,28 @@ let legacy_key mode ~default_keysym ~default_shift bindings =
   | Some binding -> (binding.keysym, binding.shift)
   | None -> (default_keysym, default_shift)
 
-let require_pass2 ~two_pass ~has_model bindings =
-  if (not two_pass) || has_model then ()
-  else
-    List.iteri
-      (fun index binding ->
-        if binding.mode = Translate then
-          raise
-            (Config_error
-               (Printf.sprintf
-                  "bindings[%d]: translate binding requires \
-                   correction_model                    when two_pass is true"
-                  index));
-        if binding.correct then
-          raise
-            (Config_error
-               (Printf.sprintf
-                  "bindings[%d]: correct = true requires correction_model \
-                   when                    two_pass is true"
-                  index)))
-      bindings
+let require_pass2 ~pipeline ~has_model bindings =
+  match pipeline with
+  | Legacy | One_pass -> ()
+  | Two_pass when has_model -> ()
+  | Two_pass ->
+      List.iteri
+        (fun index binding ->
+          if binding.mode = Translate then
+            raise
+              (Config_error
+                 (Printf.sprintf
+                    "bindings[%d]: translate binding requires correction_model \
+                     when pipeline is two-pass"
+                    index));
+          if binding.correct then
+            raise
+              (Config_error
+                 (Printf.sprintf
+                    "bindings[%d]: correct = true requires correction_model \
+                     when pipeline is two-pass"
+                    index)))
+        bindings
 
 let validate_title_regex section index = function
   | None -> ()
@@ -547,21 +583,84 @@ let reject_unsupported_wakeword table =
   | None -> ()
   | Some _ -> raise (Config_error "unsupported wakeword table")
 
-let parse_bindings table ~correct_default =
+let parse_bindings table ~pipeline ~correct_default =
   match toml_find table "bindings" with
   | None -> None
   | Some (`List rules)
     when List.for_all (function `Assoc _ -> true | _ -> false) rules ->
-      let bindings = List.mapi (parse_binding ~correct_default) rules in
+      let bindings =
+        List.mapi (parse_binding ~pipeline ~correct_default) rules
+      in
       check_duplicate_bindings bindings;
       Some bindings
   | Some _ -> raise (Config_error "bindings must be an array of tables")
+
+let reject_replaced_two_pass table =
+  match toml_find table "two_pass" with
+  | None -> ()
+  | Some _ ->
+      raise
+        (Config_error
+           "two_pass was replaced by pipeline; use pipeline = \"legacy\", \
+            \"one-pass\", or \"two-pass\"")
+
+let parse_pipeline table =
+  match toml_find table "pipeline" with
+  | None | Some `Null -> Legacy
+  | Some (`String value) -> pipeline_of_string (String.trim value)
+  | Some _ -> type_error "pipeline" "a string"
+
+let parse_provider_order table =
+  match toml_find table "openrouter_provider_order" with
+  | None | Some `Null -> None
+  | Some (`List items) ->
+      let names =
+        List.mapi
+          (fun index item ->
+            match item with
+            | `String value ->
+                let value = String.trim value in
+                if value = "" then
+                  raise
+                    (Config_error
+                       (Printf.sprintf
+                          "openrouter_provider_order[%d] must not be empty"
+                          index))
+                else value
+            | _ -> type_error "openrouter_provider_order" "an array of strings")
+          items
+      in
+      Some names
+  | Some _ -> type_error "openrouter_provider_order" "an array of strings"
+
+let parse_one_pass_timeout table =
+  match optional_number table "one_pass_timeout_seconds" with
+  | None -> default_one_pass_timeout_seconds
+  | Some value ->
+      if (not (Float.is_finite value)) || value <= 0. then
+        raise
+          (Config_error
+             "one_pass_timeout_seconds must be a positive finite number");
+      value
+
+let require_openrouter_model ~provider ~where model =
+  let resolved = resolve_model_provider ~default_provider:provider model in
+  match resolved.provider with
+  | Openrouter -> ()
+  | Codex_realtime ->
+      raise
+        (Config_error
+           (Printf.sprintf
+              "%s must use the openrouter provider for pipeline one-pass; %s \
+               resolves to codex-realtime"
+              where model))
 
 let of_json table : t =
   (match table with
   | `Assoc _ -> ()
   | _ -> raise (Config_error "STT config must be an object"));
   reject_unsupported_wakeword table;
+  reject_replaced_two_pass table;
   let provider =
     provider_of_string (get_string table "provider" "codex-realtime")
   in
@@ -582,12 +681,24 @@ let of_json table : t =
     match pass1.provider with Codex_realtime -> true | Openrouter -> false
   in
   let streaming = get_bool table "streaming" streaming_default in
-  if streaming && pass1.provider <> Codex_realtime then
-    raise
-      (Config_error
-         (Printf.sprintf "streaming is not supported for provider %s"
-            (string_of_provider pass1.provider)));
-  let two_pass = get_bool table "two_pass" false in
+  let pipeline = parse_pipeline table in
+  (match pipeline with
+  | One_pass ->
+      require_openrouter_model ~provider ~where:"transcription_model"
+        transcription_model;
+      require_openrouter_model ~provider ~where:"translation_model"
+        translation_model;
+      if streaming then
+        raise
+          (Config_error
+             "streaming is not supported for pipeline one-pass; the recording \
+              is sent after release")
+  | Legacy | Two_pass ->
+      if streaming && pass1.provider <> Codex_realtime then
+        raise
+          (Config_error
+             (Printf.sprintf "streaming is not supported for provider %s"
+                (string_of_provider pass1.provider))));
   let correction_model = parse_correction_model table in
   let reasoning_effort = parse_correction_reasoning table in
   let timeout_seconds = parse_correction_timeout table in
@@ -627,7 +738,7 @@ let of_json table : t =
         ptt_translate_keysym,
         ptt_translate_shift,
         bindings ) =
-    match parse_bindings table ~correct_default with
+    match parse_bindings table ~pipeline ~correct_default with
     | None ->
         let ( ptt_transcribe_keysym,
               ptt_transcribe_shift,
@@ -637,10 +748,10 @@ let of_json table : t =
         in
         let bindings =
           [
-            derived_binding ~keysym:ptt_transcribe_keysym
+            derived_binding ~pipeline ~keysym:ptt_transcribe_keysym
               ~shift:ptt_transcribe_shift ~mode:Transcribe
               ~correct:correct_default;
-            derived_binding ~keysym:ptt_translate_keysym
+            derived_binding ~pipeline ~keysym:ptt_translate_keysym
               ~shift:ptt_translate_shift ~mode:Translate
               ~correct:correct_default;
           ]
@@ -665,7 +776,7 @@ let of_json table : t =
           ptt_translate_shift,
           bindings )
   in
-  require_pass2 ~two_pass ~has_model:(correction_model <> None) bindings;
+  require_pass2 ~pipeline ~has_model:(correction_model <> None) bindings;
   let transcription_prompt =
     get_string table "transcription_prompt"
       "Transcribe the following audio in {{language}}."
@@ -705,11 +816,13 @@ let of_json table : t =
     translation_prompt;
     newline_rules = parse_newline_rules table;
     text_entry_rules = parse_text_entry_rules table;
-    two_pass;
+    pipeline;
     streaming;
     correction;
     bindings;
     audio_retention_hours = parse_audio_retention table;
+    openrouter_provider_order = parse_provider_order table;
+    one_pass_timeout_seconds = parse_one_pass_timeout table;
   }
 
 let decode_json json =
@@ -778,7 +891,7 @@ let yojson_of_t (config : t) =
       ( "newline_rules",
         `List (List.map (fun r -> rule r.action r) config.newline_rules) );
       ("text_entry_rules", `List (List.map entry config.text_entry_rules));
-      ("two_pass", `Bool config.two_pass);
+      ("pipeline", string (string_of_pipeline config.pipeline));
       ("streaming", `Bool config.streaming);
       correction_field "correction_model" (fun correction ->
           string correction.model);
@@ -790,6 +903,11 @@ let yojson_of_t (config : t) =
           `Float correction.temperature);
       ("bindings", `List (List.map binding_json config.bindings));
       ("audio_retention_hours", `Float config.audio_retention_hours);
+      ( "openrouter_provider_order",
+        match config.openrouter_provider_order with
+        | None -> `Null
+        | Some names -> `List (List.map string names) );
+      ("one_pass_timeout_seconds", `Float config.one_pass_timeout_seconds);
     ]
 
 let door_spec : t Ox_app.Config.t =
@@ -806,27 +924,29 @@ let default_source ~caps () =
 let source_path : Ox_app.Config.source -> string = function
   | `Default path | `Explicit path -> path
 
-let resolve_pass2_prompts ~read ~prompts_dir config =
-  if not config.two_pass then config
-  else
-    let bindings =
-      List.map
-        (fun binding ->
-          let path = Filename.concat prompts_dir binding.prompt_file in
-          let content =
-            match read path with
-            | Ok content -> content
-            | Error `Missing when not binding.prompt_named ->
-                embedded_prompt binding.mode
-            | Error `Missing -> raise (Config_error (path ^ ": no such file"))
-            | Error (`Unreadable reason) ->
-                raise (Config_error (path ^ ": " ^ reason))
-          in
-          validate_pass2_prompt binding.mode binding.prompt_file content;
-          { binding with prompt = content })
-        config.bindings
-    in
-    { config with bindings }
+let resolve_binding_prompts ~read ~prompts_dir config =
+  match config.pipeline with
+  | Legacy -> config
+  | One_pass | Two_pass ->
+      let bindings =
+        List.map
+          (fun binding ->
+            let path = Filename.concat prompts_dir binding.prompt_file in
+            let content =
+              match read path with
+              | Ok content -> content
+              | Error `Missing when not binding.prompt_named ->
+                  embedded_prompt config.pipeline ~mode:binding.mode
+                    ~correct:binding.correct
+              | Error `Missing -> raise (Config_error (path ^ ": no such file"))
+              | Error (`Unreadable reason) ->
+                  raise (Config_error (path ^ ": " ^ reason))
+            in
+            validate_pass2_prompt binding.mode binding.prompt_file content;
+            { binding with prompt = content })
+          config.bindings
+      in
+      { config with bindings }
 
 let load ~caps ~fs ?source ?read () =
   let source = Option.value source ~default:(default_source ~caps ()) in
@@ -876,7 +996,7 @@ let load ~caps ~fs ?source ?read () =
   match
     validate_transcription_prompt transcription_prompt;
     validate_translation_prompt translation_prompt;
-    resolve_pass2_prompts ~read ~prompts_dir
+    resolve_binding_prompts ~read ~prompts_dir
       { config with transcription_prompt; translation_prompt }
   with
   | config -> Ok config

@@ -1,8 +1,9 @@
-# Proposed two-pass configuration for ~/.config/pie/stt.toml (2026-09-30).
+# Two-pass configuration for ~/.config/pie/stt.toml (2026-09-30).
 # Not installed. Keep your existing text_entry_rules / newline_rules below it.
 # Numbers come from docs/research/2026-09-30-dictation-models.
+# The recommended configuration is stt.one-pass.toml.
 
-two_pass = true
+pipeline = "two-pass"
 
 # Pass 1: literal speech to text. gpt-live-transcribe through the Codex login is
 # free and answers about 0.6 s after release when streaming.

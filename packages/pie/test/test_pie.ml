@@ -1828,7 +1828,9 @@ let openrouter_clip_config () : Pie.Config.Stt.t =
       "Translate from {{source_language}} to {{target_language}}.";
     newline_rules = [];
     text_entry_rules = [];
-    two_pass = false;
+    pipeline = Legacy;
+    openrouter_provider_order = None;
+    one_pass_timeout_seconds = 30.;
     streaming = false;
     correction = None;
     audio_retention_hours = 24.;
@@ -2662,7 +2664,9 @@ let test_assistant_startup_config_json () =
             method_ = Pie.Input.Text_injection.Paste;
           };
         ];
-      two_pass = true;
+      pipeline = Two_pass;
+      openrouter_provider_order = None;
+      one_pass_timeout_seconds = 30.;
       streaming = false;
       correction =
         Some
@@ -2728,10 +2732,11 @@ let test_assistant_startup_config_json () =
   Alcotest.(check string)
     "resolved model" "google/gemini-3.1-flash-lite"
     (json_string "model" resolved);
-  (* dict-oagf: startup config JSON carries the two-pass fields. *)
+  (* dict-oagf dict-rtdw: startup config JSON carries the pipeline. *)
+  Alcotest.(check string) "pipeline" "two-pass" (json_string "pipeline" json);
   Alcotest.(check bool)
-    "two_pass" true
-    (json_member "two_pass" json = `Bool true);
+    "provider order absent" true
+    (json_member "openrouter_provider_order" json = `Null);
   Alcotest.(check bool)
     "streaming" true
     (json_member "streaming" json = `Bool false);

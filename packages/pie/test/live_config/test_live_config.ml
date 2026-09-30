@@ -30,7 +30,9 @@ let base_config ?(transcribe = transcribe_keysym)
       "Translate from {{source_language}} to {{target_language}}.";
     newline_rules = [];
     text_entry_rules = [];
-    two_pass = false;
+    pipeline = Legacy;
+    openrouter_provider_order = None;
+    one_pass_timeout_seconds = 30.;
     streaming = false;
     correction = None;
     audio_retention_hours = 24.;
@@ -695,9 +697,11 @@ let test_cli_override_applied_to_published_record () =
     published.ptt_transcribe_keysym;
   Alcotest.(check int)
     "file translate unchanged" translate_keysym published.ptt_translate_keysym;
-  (* dict-26tm: a reload that raises Config_error, including a bad new key,
-     keeps the last good record. two_pass stays with that record. *)
-  Alcotest.(check bool) "two_pass survives override" false published.two_pass
+  (* dict-26tm dict-rtdw: a reload that raises Config_error, including a bad
+     new key, keeps the last good record. pipeline stays with that record. *)
+  Alcotest.(check string)
+    "pipeline survives override" "legacy"
+    (Pie.Config.Stt.string_of_pipeline published.pipeline)
 
 let () =
   Alcotest.run "live-config"

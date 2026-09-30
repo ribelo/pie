@@ -30,6 +30,7 @@ type failure =
   | Over_budget
 
 let default_temperature = 0.2
+let audio_cue = "The recording follows."
 
 let diagnostic = function
   | Timeout -> "timeout"
@@ -86,10 +87,32 @@ let max_response_bytes = Dictation_limits.result_utf8_bytes + 65_536
 let obj = Ox_json.object_
 let s value = Some (Ox_json.string value)
 
-let encode ~model ~instructions ~transcript ~temperature ~reasoning_effort =
-  let text = obj [ ("type", s "input_text"); ("text", s transcript) ] in
+let audio_part wav =
+  obj
+    [
+      ("type", s "input_audio");
+      ( "input_audio",
+        Some
+          (obj
+             [ ("data", s (Openrouter.base64_encode wav)); ("format", s "wav") ])
+      );
+    ]
+
+let provider_field = function
+  | None | Some [] -> None
+  | Some names ->
+      Some
+        (obj
+           [ ("order", Some (Ox_json.array (List.map Ox_json.string names))) ])
+
+let encode ~model ~instructions ~input_text ?audio ?provider_order ~temperature
+    ~reasoning_effort () =
+  let text = obj [ ("type", s "input_text"); ("text", s input_text) ] in
+  let parts =
+    match audio with None -> [ text ] | Some wav -> [ text; audio_part wav ]
+  in
   let message =
-    obj [ ("role", s "user"); ("content", Some (Ox_json.array [ text ])) ]
+    obj [ ("role", s "user"); ("content", Some (Ox_json.array parts)) ]
   in
   obj
     [
@@ -101,7 +124,12 @@ let encode ~model ~instructions ~transcript ~temperature ~reasoning_effort =
       ( "reasoning",
         Option.map (fun effort -> obj [ ("effort", s effort) ]) reasoning_effort
       );
+      ("provider", provider_field provider_order);
     ]
+
+(* A WAV is the capture plus a 44-byte header. Anything larger cannot be a
+   recording this process admitted. *)
+let max_audio_bytes = Dictation_limits.capture_pcm_bytes + 44
 
 let parse_body bytes =
   match Ox_json.parse (Bytes.to_string bytes) with
@@ -116,12 +144,17 @@ let accept_text raw =
     Error Over_budget
   else Ok text
 
-let run ~caps ~sw ~net ~clock ~logger ~model ~prompt_template ~transcript
-    ?(glossary = "") ?(language = "") ?(source_language = "")
+let run ~caps ~sw ~net ~clock ~logger ~model ~prompt_template ~transcript ?audio
+    ?provider_order ?(glossary = "") ?(language = "") ?(source_language = "")
     ?(target_language = "") ?(temperature = default_temperature)
     ?reasoning_effort ~timeout () =
   if String.trim model = "" || not (Float.is_finite temperature) then
     Error (Provider Invalid_request)
+  else if
+    Option.fold ~none:false
+      ~some:(fun wav -> Bytes.length wav > max_audio_bytes)
+      audio
+  then Error (Provider Input_too_large)
   else
     match Openrouter.resolve_api_key ~caps () with
     | None -> Error (Provider Missing_api_key)
@@ -132,8 +165,8 @@ let run ~caps ~sw ~net ~clock ~logger ~model ~prompt_template ~transcript
         in
         let body =
           Ox_ai.Transport.bytes_of_json
-            (encode ~model ~instructions ~transcript ~temperature
-               ~reasoning_effort)
+            (encode ~model ~instructions ~input_text:transcript ?audio
+               ?provider_order ~temperature ~reasoning_effort ())
         in
         let http = Process.make_http ~sw ~net ~clock in
         match

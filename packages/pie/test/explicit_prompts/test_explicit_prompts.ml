@@ -59,7 +59,9 @@ let config ~transcription_prompt ~translation_prompt ~transcription_model
     translation_prompt;
     newline_rules = [];
     text_entry_rules = [];
-    two_pass = false;
+    pipeline = Legacy;
+    openrouter_provider_order = None;
+    one_pass_timeout_seconds = 30.;
     streaming = false;
     correction = None;
     audio_retention_hours = 24.;

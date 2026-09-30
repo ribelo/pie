@@ -33,7 +33,9 @@ let base_config ?(provider = Pie.Config.Stt.Openrouter)
       "Translate from {{source_language}} to {{target_language}}.";
     newline_rules = [];
     text_entry_rules = [];
-    two_pass = false;
+    pipeline = Legacy;
+    openrouter_provider_order = None;
+    one_pass_timeout_seconds = 30.;
     streaming =
       (match provider with
       | Pie.Config.Stt.Codex_realtime -> true
@@ -818,7 +820,8 @@ let run_stream_child () =
           base_config ~provider:Pie.Config.Stt.Codex_realtime
             ~model:"gpt-realtime-2" ()
         in
-        ({ config with two_pass }, stamp ())
+        ( { config with pipeline = (if two_pass then Two_pass else Legacy) },
+          stamp () )
       in
       let stt config mode bytes =
         (Pie.Assistant.Service.production_stt ~caps ~sw ~net ~clock
@@ -1806,7 +1809,9 @@ let test_two_pass_retry kind () =
         ref
           {
             (base_config ()) with
-            two_pass = true;
+            pipeline = Two_pass;
+            openrouter_provider_order = None;
+            one_pass_timeout_seconds = 30.;
             streaming = false;
             bindings = [ b ];
             correction =
@@ -1865,6 +1870,9 @@ let test_two_pass_retry kind () =
               Ok ());
           warn = ignore;
           notify_correction_failure = ignore;
+          notify_request_failure = ignore;
+          one_pass =
+            (fun _ _ _ _ -> Alcotest.fail "two-pass must not call one-pass");
           fresh_id = (fun () -> Printf.sprintf "attempt-%d" !glossary_n);
           now = (fun () -> Eio.Time.now clock);
           log_pass = (fun _ ~model:_ ~duration_ms:_ -> ());
@@ -1937,6 +1945,119 @@ let test_two_pass_retry kind () =
             "audio retry has new outcome"
             (if kind = "provider" then 2 else 1)
             (List.length !finished_history)))
+
+let test_one_pass_retry () =
+  (* dict-dq3o dict-msdh dict-pna4 dict-gi5u dict-ynad *)
+  Pie_test_runtime.run @@ fun env ->
+  with_dir (fun dir ->
+      Eio.Switch.run @@ fun sw ->
+      let clock = Eio.Stdenv.clock env in
+      let calls = ref 0 and notices = ref 0 and glossary_n = ref 0 in
+      let prompts = ref [] and delivered = ref [] and finished = ref [] in
+      let verbatim = Pie.Config.Stt.default_one_pass_verbatim_prompt in
+      let b : Pie.Config.Stt.binding =
+        {
+          keysym = transcribe_keysym;
+          shift = false;
+          mode = Transcribe;
+          correct = false;
+          prompt_named = false;
+          prompt_file = Pie.Config.Stt.default_one_pass_verbatim_prompt_file;
+          prompt = verbatim;
+        }
+      in
+      let config =
+        {
+          (base_config ()) with
+          pipeline = One_pass;
+          bindings = [ b ];
+          transcription_model = "openrouter/google/gemini-3.8-flash";
+          translation_model = "openrouter/google/gemini-3.8-flash";
+          openrouter_provider_order = Some [ "Google AI Studio" ];
+        }
+      in
+      let stamp () = [ Some (1, 1, 0, 0.) ] in
+      let load _ = (config, stamp ()) in
+      let pipeline : Pie.Assistant.Dictation.dependencies =
+        {
+          resolve_glossary =
+            (fun () ->
+              incr glossary_n;
+              ( {
+                  Pie.Glossary.text = "press glossary";
+                  paths = [];
+                  warnings = [];
+                  cwd = None;
+                },
+                None ));
+          pass1 = (fun _ _ _ _ -> Alcotest.fail "one-pass must not call pass 1");
+          pass2 = (fun _ _ _ _ -> Alcotest.fail "one-pass must not call pass 2");
+          one_pass =
+            (fun cfg binding glossary pcm ->
+              incr calls;
+              prompts := binding.prompt :: !prompts;
+              Alcotest.(check string)
+                "glossary" "press glossary" glossary.Pie.Glossary.text;
+              Alcotest.(check string)
+                "model" "openrouter/google/gemini-3.8-flash"
+                cfg.transcription_model;
+              Alcotest.(check bool) "pcm" true (Bytes.length pcm > 0);
+              if !calls = 1 then Error Pie.Stt.Correction.Timeout
+              else Ok "one-pass-final");
+          append_transcribed = (fun _ -> Ok ());
+          append_finished =
+            (fun event ->
+              finished := event.outcome :: !finished;
+              Ok ());
+          warn = ignore;
+          notify_correction_failure =
+            (fun _ -> Alcotest.fail "one-pass must not notify correction skip");
+          notify_request_failure = (fun _ -> incr notices);
+          fresh_id = (fun () -> Printf.sprintf "one-%d" !glossary_n);
+          now = (fun () -> Eio.Time.now clock);
+          log_pass = (fun _ ~model:_ ~duration_ms:_ -> ());
+        }
+      in
+      let stt _ _ _ =
+        Alcotest.fail "one-pass must not use the legacy provider"
+      in
+      let deliver _ _ text =
+        delivered := text :: !delivered;
+        Ok ()
+      in
+      let keyboard = Pie.Keyboard.Monitor.create () in
+      let audio_q, audio = make_audio () in
+      let socket_path, retry_dir, workflow =
+        owner_workflow_with_pipeline ~pipeline:(Some pipeline)
+          ~logger:(test_logger env) ~env ~sw ~net:(Eio.Stdenv.net env)
+          ~process_mgr:(Eio.Stdenv.process_mgr env)
+          ~mono_clock:(Eio.Stdenv.mono_clock env)
+          ~dir ~config_control:{ stamp; load } ~stt ~deliver ~keyboard ~audio
+      in
+      with_workflow_background ~sw ~clock workflow (fun () ->
+          Eio.Time.sleep clock 0.2;
+          Pie.Keyboard.Monitor.emit keyboard (key ~released:false);
+          wait_for_recorded_pcm ~clock ~audio_q ~retry_dir;
+          Pie.Keyboard.Monitor.emit keyboard (key ~released:true);
+          wait_until ~clock (fun () -> peek_kind retry_dir = Some "audio");
+          Alcotest.(check int) "first request failed" 1 !calls;
+          Alcotest.(check int) "notified" 1 !notices;
+          Alcotest.(check int) "glossary at press" 1 !glossary_n;
+          ignore
+            (rpc ~net:(Eio.Stdenv.net env) ~sw socket_path
+               {|{"method":"Action","action":"retry"}|});
+          wait_until ~clock (fun () -> List.length !delivered >= 1);
+          Alcotest.(check int) "retry uses one-pass" 2 !calls;
+          Alcotest.(check int) "glossary again" 2 !glossary_n;
+          Alcotest.(check (list string))
+            "verbatim prompt both times" [ verbatim; verbatim ]
+            (List.rev !prompts);
+          Alcotest.(check (list string))
+            "delivered" [ "one-pass-final" ] !delivered;
+          Alcotest.(check bool)
+            "failed then delivered" true
+            (!finished = [ Pie.History.Delivered; Pie.History.Failed ]
+            || !finished = [ Pie.History.Failed; Pie.History.Delivered ])))
 
 let test_startup_text_retry_skips_provider () =
   Pie_test_runtime.run @@ fun env ->
@@ -2658,6 +2779,10 @@ let () =
                  delivery-only retry"
                 `Quick
                 (test_two_pass_retry "translation");
+              Alcotest.test_case
+                "dict-dq3o/msdh/pna4/gi5u/ynad one-pass failure retries \
+                 one-pass"
+                `Quick test_one_pass_retry;
               Alcotest.test_case "startup text retry skips provider" `Quick
                 test_startup_text_retry_skips_provider;
               Alcotest.test_case "successive failures keep latest only" `Quick

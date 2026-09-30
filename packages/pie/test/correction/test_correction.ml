@@ -246,14 +246,15 @@ let expect_failure expected result =
         (Pie.Stt.Correction.diagnostic expected)
         diagnostic
 
-let call ~sw ~net ~clock ~logger ?temperature ?reasoning_effort
-    ?(prompt_template = prompt_sentinel ^ " {{glossary}}")
+let call ~sw ~net ~clock ~logger ?temperature ?reasoning_effort ?audio
+    ?provider_order ?(prompt_template = prompt_sentinel ^ " {{glossary}}")
     ?(glossary = glossary_sentinel) ?(language = "pl") ?(source_language = "pl")
     ?(target_language = "en") ?(transcript = transcript_sentinel)
     ?(timeout = Ox.Duration.seconds 5) () =
   Pie.Stt.Correction.run ~caps ~sw ~net ~clock ~logger ~model:"test-model"
     ~prompt_template ~transcript ~glossary ~language ~source_language
-    ~target_language ?temperature ?reasoning_effort ~timeout ()
+    ~target_language ?audio ?provider_order ?temperature ?reasoning_effort
+    ~timeout ()
 
 let fields = function
   | `Assoc items -> items
@@ -325,6 +326,9 @@ let assert_request ~temperature ~reasoning head body =
   (match field "stream" json with
   | `Bool false -> ()
   | other -> Alcotest.failf "stream: %s" (Yojson.Safe.to_string other));
+  Alcotest.(check bool)
+    "provider omitted" true
+    (List.assoc_opt "provider" (fields json) = None);
   match reasoning with
   | None ->
       Alcotest.(check bool)
@@ -504,6 +508,71 @@ let spawn_case name ~with_key =
 
 module C = Pie.Stt.Correction
 
+let child_audio () =
+  let wav = Bytes.of_string "RIFF-wav" in
+  let order = [ "Google AI Studio"; "Google" ] in
+  let result, hits, captured =
+    with_fixture
+      ~reply:(Json (completed "heard"))
+      (fun ~sw ~net ~clock ~logger ->
+        call ~sw ~net ~clock ~logger ~audio:wav ~provider_order:order
+          ~transcript:Pie.Stt.Correction.audio_cue ~reasoning_effort:"low" ())
+  in
+  Alcotest.(check int) "one request" 1 hits;
+  (match result with
+  | Ok "heard" -> ()
+  | Ok text -> Alcotest.failf "unexpected text %s" text
+  | Error failure ->
+      Alcotest.failf "request failed: %s"
+        (Pie.Stt.Correction.diagnostic failure));
+  match captured with
+  | None -> Alcotest.fail "fixture saw no request"
+  | Some (head, body) ->
+      if not (String.starts_with ~prefix:"POST /api/v1/responses " head) then
+        Alcotest.fail "request line was not POST /api/v1/responses";
+      let json = Yojson.Safe.from_string body in
+      let input =
+        match field "input" json with
+        | `List [ message ] -> message
+        | _ -> Alcotest.fail "input was not one message"
+      in
+      let text_part, audio_part =
+        match field "content" input with
+        | `List [ text_part; audio_part ] -> (text_part, audio_part)
+        | _ -> Alcotest.fail "user content was not text plus audio"
+      in
+      Alcotest.(check string)
+        "text type" "input_text"
+        (string_field "type" text_part);
+      Alcotest.(check string)
+        "cue" Pie.Stt.Correction.audio_cue
+        (string_field "text" text_part);
+      Alcotest.(check string)
+        "audio type" "input_audio"
+        (string_field "type" audio_part);
+      let audio = field "input_audio" audio_part in
+      Alcotest.(check string) "format" "wav" (string_field "format" audio);
+      Alcotest.(check string)
+        "wav base64"
+        (Pie.Stt.Openrouter.base64_encode wav)
+        (string_field "data" audio);
+      let provider = field "provider" json in
+      let names =
+        match field "order" provider with
+        | `List items ->
+            List.map
+              (function
+                | `String name -> name
+                | other ->
+                    Alcotest.failf "order item %s" (Yojson.Safe.to_string other))
+              items
+        | _ -> Alcotest.fail "provider.order was not a list"
+      in
+      Alcotest.(check (list string)) "provider.order" order names;
+      Alcotest.(check bool)
+        "fallbacks allowed" true
+        (List.assoc_opt "allow_fallbacks" (fields provider) = None)
+
 let child_main name =
   match name with
   | "request" -> child_request () (* dict-ldo9 dict-l4zp dict-g52m *)
@@ -542,6 +611,7 @@ let child_main name =
       (* dict-bpuh dict-swyn *)
   | "timeout" -> child_timeout () (* dict-l4zp dict-bpuh *)
   | "missing-key" -> child_missing_key () (* dict-bpuh *)
+  | "audio" -> child_audio () (* dict-dq3o dict-4y4r *)
   | other -> Alcotest.failf "unknown child case %s" other
 
 let () =
@@ -572,5 +642,6 @@ let () =
               case "transport" "dict-bpuh dict-swyn" ~with_key:true;
               case "timeout" "dict-l4zp dict-bpuh" ~with_key:true;
               case "missing-key" "dict-bpuh" ~with_key:false;
+              case "audio" "dict-dq3o dict-4y4r" ~with_key:true;
             ] );
         ]

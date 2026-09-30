@@ -1,0 +1,49 @@
+# Recommended configuration for ~/.config/pie/stt.toml (2026-09-30).
+# Not installed. Keep your existing text_entry_rules / newline_rules below it.
+# One pass: Gemini hears the audio, the prompt and the glossary together.
+# Measured against two passes in docs/research/2026-09-30-dictation-models:
+# 7 of 8 hard spots right, p50 about 2.2 s when pinned to Google AI Studio.
+
+pipeline = "one-pass"
+provider = "openrouter"
+
+transcription_model = "openrouter/google/gemini-3.8-flash"
+translation_model = "openrouter/google/gemini-3.8-flash"
+thinking_effort = "low"
+
+# Route OpenRouter to Google AI Studio first. Fallbacks stay allowed.
+openrouter_provider_order = ["Google AI Studio"]
+
+# Bounds the one Responses call. correction_timeout_seconds does not apply.
+# 30 s covers the measured tail (p90 about 5 s) with room for a longer
+# utterance. Raise it for a very long recording; a timeout keeps the audio
+# for pie retry.
+one_pass_timeout_seconds = 30
+
+transcription_language = "Polish"
+translation_source_language = "Polish"
+translation_target_language = "English"
+
+# One pass is buffered. streaming = true is rejected.
+audio_retention_hours = 24
+
+# F9 (65478) with Shift: tidy transcription (prompts/one-pass.md).
+[[bindings]]
+keysym = 65478
+shift = true
+mode = "transcribe"
+correct = true
+
+# F9 without Shift: literal transcript (prompts/one-pass-verbatim.md).
+[[bindings]]
+keysym = 65478
+shift = false
+mode = "transcribe"
+correct = false
+
+# F10: translate Polish to English (prompts/one-pass-translate.md).
+[[bindings]]
+keysym = 65479
+shift = false
+mode = "translate"
+
