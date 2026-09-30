@@ -14,6 +14,7 @@ consumer: pie
 - `~/.config/pie/stt.toml` is docs/examples/stt.one-pass.toml plus the user's existing newline and text-entry rules; the previous file is `stt.toml.pre-one-pass-20260930`. A starter global glossary was created at `~/.config/pie/glossary.md`.
 - Roll back: copy both `.pre-*` files back over `pie` and `stt.toml`, then `systemctl --user restart pie.service`.
 - After one restart: active, NRestarts 0, Result success, startup config shows pipeline one-pass with Google AI Studio first, `pie msg status` armed.
+- Two defects found on the first real dictation and fixed the same hour: every one-pass reply was rejected as "unsupported output" because Gemini adds a `reasoning` output item (fixed in the adapter, binary reinstalled, sha256 93e7ca4239dc4164…); and the installed config had taken the examples' F9/F10 bindings instead of the user's Right Ctrl (65508) with Shift for transcription and Right Ctrl alone for translation (restored; examples corrected). The failed attempt's audio is in the archive.
 
 Implemented on master (2026-09-30); every suite passes except session_ownership, which fails on the Ox TLS buffer race recorded in docs/issues/session-ownership-wss-flake. Not installed: the running service still uses the previous binary and the user's legacy configuration. A proposed configuration is in docs/examples/stt.two-pass.toml. Streaming pass 1 still dies after about 11 minutes until Ox fixes its consecutive-ping limit (docs/issues/long-recording-cutoff); the recording then falls back to buffered pass 1 instead of being lost.
 

@@ -27,23 +27,20 @@ translation_target_language = "English"
 # One pass is buffered. streaming = true is rejected.
 audio_retention_hours = 24
 
-# F9 (65478) with Shift: tidy transcription (prompts/one-pass.md).
+# Right Ctrl (65508) with Shift: tidy transcription (prompts/one-pass.md).
+# Mod5 + Right Shift latches transcription.
 [[bindings]]
-keysym = 65478
+keysym = 65508
 shift = true
 mode = "transcribe"
 correct = true
 
-# F9 without Shift: literal transcript (prompts/one-pass-verbatim.md).
+# Right Ctrl alone: translate Polish to English (prompts/one-pass-translate.md).
+# Mod5 + Right Ctrl latches translation.
 [[bindings]]
-keysym = 65478
-shift = false
-mode = "transcribe"
-correct = false
-
-# F10: translate Polish to English (prompts/one-pass-translate.md).
-[[bindings]]
-keysym = 65479
+keysym = 65508
 shift = false
 mode = "translate"
 
+# A raw transcript (correct = false, prompts/one-pass-verbatim.md) needs a key of its own; add
+# another [[bindings]] entry with a free keysym to get one.

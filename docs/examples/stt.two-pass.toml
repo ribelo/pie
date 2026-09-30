@@ -28,22 +28,20 @@ correction_timeout_seconds = 8
 # service PATH or PIE_FFMPEG is set, WAV otherwise).
 audio_retention_hours = 24
 
-# F9 (65478) with Shift: transcribe and tidy (prompts/correction.md).
+# Right Ctrl (65508) with Shift: tidy transcription (prompts/correction.md).
+# Mod5 + Right Shift latches transcription.
 [[bindings]]
-keysym = 65478
+keysym = 65508
 shift = true
 mode = "transcribe"
 correct = true
 
-# F9 without Shift: raw transcript, no pass 2.
+# Right Ctrl alone: translate Polish to English (prompts/correction-translate.md).
+# Mod5 + Right Ctrl latches translation.
 [[bindings]]
-keysym = 65478
-shift = false
-mode = "transcribe"
-correct = false
-
-# F10: translate Polish to English (prompts/correction-translate.md).
-[[bindings]]
-keysym = 65479
+keysym = 65508
 shift = false
 mode = "translate"
+
+# A raw transcript (correct = false, prompts/no pass 2) needs a key of its own; add
+# another [[bindings]] entry with a free keysym to get one.
