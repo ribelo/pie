@@ -2,8 +2,8 @@
    Invalid_response.got can contain credentials, prompts or transcripts.
    Diagnostics are fixed phrases. See the comment in stt/openrouter.ml.
 
-   Ox_ai_openrouter.Responses encodes only audio requests. The text request
-   below is local until Ox grows one; see docs/missing-ox-api.md. *)
+   Requests are encoded by Ox_ai_openrouter.Responses (text-only or audio,
+   WAV or MP3); only OpenRouter provider routing is added locally. *)
 
 type provider =
   | Missing_api_key
@@ -84,74 +84,73 @@ let responses_endpoint ~caps =
    classified as [Over_budget]. A larger body is refused by the transport as
    an invalid response, which is still a pass-2 failure. *)
 let max_response_bytes = Dictation_limits.result_utf8_bytes + 65_536
-let obj = Ox_json.object_
-let s value = Some (Ox_json.string value)
 
-(* A request with [reasoning.effort] gets a [reasoning] output item next to the
-   message (seen from Gemini through OpenRouter on 2026-09-30). It carries no
-   deliverable text and is not a tool call or refusal, so it is dropped before
-   the delivery verdict; every other kind still disqualifies the reply. *)
-let without_reasoning (response : Ox_ai_openrouter.Responses.response) =
-  {
-    response with
-    output =
-      List.filter
-        (function
-          | Ox_ai_openrouter.Responses.Other "reasoning" -> false | _ -> true)
-        response.output;
-  }
+module Responses = Ox_ai_openrouter.Responses
 
-let audio_part ~format audio =
-  obj
-    [
-      ("type", s "input_audio");
-      ( "input_audio",
-        Some
-          (obj
-             [
-               ("data", s (Openrouter.base64_encode audio)); ("format", s format);
-             ]) );
-    ]
+(* OpenRouter provider routing ("provider": {"order": [...]}) is not part of
+   Ox's Responses request yet, so it is added to the JSON Ox encodes; see
+   docs/missing-ox-api.md. Everything else (framing, audio format, reasoning
+   items in the delivery verdict) is Ox's. *)
+let with_provider_order json = function
+  | None | Some [] -> json
+  | Some names -> (
+      match json with
+      | `Assoc fields ->
+          `Assoc
+            (fields
+            @ [
+                ( "provider",
+                  `Assoc
+                    [ ("order", `List (List.map (fun n -> `String n) names)) ]
+                );
+              ])
+      | other -> other)
 
-let provider_field = function
-  | None | Some [] -> None
-  | Some names ->
-      Some
-        (obj
-           [ ("order", Some (Ox_json.array (List.map Ox_json.string names))) ])
+let audio_format_of_string = function
+  | "wav" -> Some Responses.Wav
+  | "mp3" -> Some Responses.Mp3
+  | _ -> None
 
 let encode ~model ~instructions ~input_text ?audio ?(audio_format = "wav")
     ?provider_order ~temperature ~reasoning_effort () =
-  let text = obj [ ("type", s "input_text"); ("text", s input_text) ] in
-  let parts =
+  let json =
     match audio with
-    | None -> [ text ]
-    | Some audio -> [ text; audio_part ~format:audio_format audio ]
+    | None ->
+        Ok
+          (Responses.encode_text
+             {
+               model;
+               instructions;
+               input = input_text;
+               temperature = Some temperature;
+               text_format = None;
+               reasoning_effort;
+             })
+    | Some audio -> (
+        match audio_format_of_string audio_format with
+        | None -> Error (Provider Invalid_request)
+        | Some format ->
+            Ok
+              (Responses.encode ~audio_format:format ~instructions
+                 {
+                   model;
+                   prompt = input_text;
+                   wav = audio;
+                   temperature = Some temperature;
+                   text_format = None;
+                   reasoning_effort;
+                 }))
   in
-  let message =
-    obj [ ("role", s "user"); ("content", Some (Ox_json.array parts)) ]
-  in
-  obj
-    [
-      ("model", s model);
-      ("instructions", s instructions);
-      ("input", Some (Ox_json.array [ message ]));
-      ("stream", Some (Ox_json.bool false));
-      ("temperature", Ox_json.float temperature);
-      ( "reasoning",
-        Option.map (fun effort -> obj [ ("effort", s effort) ]) reasoning_effort
-      );
-      ("provider", provider_field provider_order);
-    ]
+  Result.map (fun json -> with_provider_order json provider_order) json
 
 (* A WAV is the capture plus a 44-byte header. Anything larger cannot be a
    recording this process admitted. *)
 let max_audio_bytes = Dictation_limits.capture_pcm_bytes + 44
 
-(* Ox's transport refuses bodies over 4 MiB by default, which a WAV of about
-   90 seconds already exceeds (2026-09-30: a 4-minute dictation failed locally
-   with "input too large"). Allow the largest admitted audio, base64-encoded,
-   plus the prompt and glossary. *)
+(* Ox's transport default is 4 MiB, which a WAV of about 90 seconds already
+   exceeds (2026-09-30: a 4-minute dictation failed locally with "input too
+   large"). Allow the largest admitted audio, base64-encoded, plus the prompt
+   and glossary. *)
 let max_request_bytes = (max_audio_bytes / 3 * 4) + (4 * 1024 * 1024)
 
 let parse_body bytes =
@@ -186,31 +185,30 @@ let run ~caps ~sw ~net ~clock ~logger ~model ~prompt_template ~transcript ?audio
           render ~glossary ~language ~source_language ~target_language
             prompt_template
         in
-        let body =
-          Ox_ai.Transport.bytes_of_json
-            (encode ~model ~instructions ~input_text:transcript ?audio
-               ?audio_format ?provider_order ~temperature ~reasoning_effort ())
-        in
-        let http = Process.make_http ~sw ~net ~clock in
         match
-          Ox_ai.Transport.post_json ~http ~clock ~logger ~timeout
-            ~max_request_bytes ~max_response_bytes
-            ~endpoint:(responses_endpoint ~caps)
-            ~authorization:(Ox_ai.Bearer.header ~api_key)
-            ~body ~deadline:timeout ()
+          encode ~model ~instructions ~input_text:transcript ?audio
+            ?audio_format ?provider_order ~temperature ~reasoning_effort ()
         with
-        | Error error -> Error (failure_of_ai error)
-        | Ok response -> (
-            match parse_body response.body with
-            | Error _ as error -> error
-            | Ok json -> (
-                match Ox_ai_openrouter.Responses.decode json with
-                | Error error -> Error (failure_of_ai error)
-                | Ok decoded -> (
-                    match
-                      Ox_ai_openrouter.Responses.deliverable
-                        (without_reasoning decoded)
-                    with
-                    | Error rejection ->
-                        Error (Rejected (outcome_of_rejection rejection))
-                    | Ok raw -> accept_text raw))))
+        | Error _ as error -> error
+        | Ok json -> (
+            let body = Ox_ai.Transport.bytes_of_json json in
+            let http = Process.make_http ~sw ~net ~clock in
+            match
+              Ox_ai.Transport.post_json ~http ~clock ~logger ~timeout
+                ~max_request_bytes ~max_response_bytes
+                ~endpoint:(responses_endpoint ~caps)
+                ~authorization:(Ox_ai.Bearer.header ~api_key)
+                ~body ~deadline:timeout ()
+            with
+            | Error error -> Error (failure_of_ai error)
+            | Ok response -> (
+                match parse_body response.body with
+                | Error _ as error -> error
+                | Ok json -> (
+                    match Responses.decode json with
+                    | Error error -> Error (failure_of_ai error)
+                    | Ok decoded -> (
+                        match Responses.deliverable decoded with
+                        | Error rejection ->
+                            Error (Rejected (outcome_of_rejection rejection))
+                        | Ok raw -> accept_text raw)))))

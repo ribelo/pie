@@ -31,5 +31,9 @@
  (libraries ox_test pie eio_main ox))
 
 (executable
+ (name live_one_pass)
+ (libraries ox_test pie eio_main ox))
+
+(executable
  (name ws_settlement_probe)
  (libraries ox_test pie eio_main ox ox_http))

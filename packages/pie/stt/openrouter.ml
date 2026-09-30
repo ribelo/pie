@@ -161,6 +161,7 @@ let run_audio_responses ~caps ~sw ~net ~clock ~logger ~model ~prompt
         match
           Responses.create ~http ~clock ~logger ~api_key
             ?endpoint:(endpoint ~caps "/api/v1/responses")
+            ~timeout:response_operation_timeout
             ~deadline:response_operation_timeout request
         with
         | Error error -> Error (stt_error_of_ai error)
