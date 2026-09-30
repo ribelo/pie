@@ -8,6 +8,8 @@ consumer: pie
 
 ## Status
 
+2026-09-30 afternoon: one pass (dict-dq3o and following) was added after a comparison showed Gemini hearing the audio got 7 of 8 hard spots right against 2 of 8 for two passes, at similar p50 latency (docs/research/2026-09-30-dictation-models). One pass through OpenRouter with Google AI Studio first becomes the recommended configuration; two passes stay available.
+
 Implemented on master (2026-09-30); every suite passes except session_ownership, which fails on the Ox TLS buffer race recorded in docs/issues/session-ownership-wss-flake. Not installed: the running service still uses the previous binary and the user's legacy configuration. A proposed configuration is in docs/examples/stt.two-pass.toml. Streaming pass 1 still dies after about 11 minutes until Ox fixes its consecutive-ping limit (docs/issues/long-recording-cutoff); the recording then falls back to buffered pass 1 instead of being lost.
 
 ## Problem Statement
@@ -94,6 +96,15 @@ Nothing changes until I opt in: an existing configuration keeps today's single-p
 43. As a dictation user, I want the captured audio retained for `pie retry` after any failure, including a pass-1 stream that closed during capture, so that speech is never discarded. ^dict-u5xj
 44. As a dictation user, I want expired audio removed at service start and at each new attempt, so that the archive never grows past the retention window. ^dict-g3ap
 
+### One pass
+
+45. As a dictation user, I want a one-pass mode in which an audio-capable model through OpenRouter hears the recording and receives my prompt and the glossary in one request, so that the words it is unsure of are resolved from the audio rather than guessed from text. ^dict-dq3o
+46. As a dictation user, I want the configuration to choose between the legacy single pass, one pass and two passes with one `pipeline` key, so that I can switch approaches without losing the others. ^dict-rtdw
+47. As a dictation user, I want one-pass prompts of my own for tidy transcription, raw transcription and translation, with the same placeholders as pass 2, so that a key without correction still gets a literal transcript with my spellings. ^dict-gi5u
+48. As a dictation user, I want to set the OpenRouter provider order (for example Google AI Studio first), so that I can pick the route with the best latency. ^dict-4y4r
+49. As a dictation user, I want one-pass attempts written to the history and the audio archive like two-pass attempts, so that nothing I say is lost whichever mode I use. ^dict-msdh
+50. As a dictation user, I want a failed one-pass request to keep the audio for `pie retry` and notify me, so that a provider error never costs me the dictation. ^dict-pna4
+
 ### Prompts, vocabulary and diagnostics
 
 36. As a dictation user, I want default pass-2 prompts for correction and translation shipped with Pie, and no prompt that claims context is appended when it is not, so that the documentation matches the behavior. ^dict-4faf
@@ -113,6 +124,10 @@ Nothing changes until I opt in: an existing configuration keeps today's single-p
 - **CLI.** `pie history [--limit N] [--json]` lists entries newest first; `pie history show [ID|last] [--raw] [--json]` prints one entry's final (or raw) text. `pie skill install [PATH] [--force] [--dry-run] [--no-input]` follows Nema's skill-installation contract (targets `~/.claude/skills`, `~/.codex/skills`, `~/.pi/agent/skills`, `~/.agents/skills` when their roots exist; one JSON result per target). The skill tree is compiled into the binary with a Dune generator, as Nema does.
 - **Audio archive.** Every attempt's captured PCM (the recovery draft Pie already writes while recording) is copied at settlement to `$XDG_DATA_HOME/pie/audio/<attempt-id>.opus`, encoded with `ffmpeg` (found on PATH or through `PIE_FFMPEG`) at speech bitrate, or `.wav` when no encoder is available. Encoding runs after delivery and never delays or fails the attempt. `audio_retention_hours` (default 24) bounds the archive. `0` disables archiving of new attempts and does not delete existing files. A positive value deletes expired regular archive files at service start and when an attempt starts; symbolic links are not followed. History entries carry the audio path; `pie retry ID` decodes it (through the same encoder) and reruns pass 1 and pass 2 with the current configuration.
 - **Stream failure during capture.** A pass-1 streaming failure no longer ends the capture: the attempt keeps appending to its draft until release, then runs buffered pass 1 on the whole draft (Codex through the websocket, OpenRouter through its endpoint). Only if that also fails does the attempt end as a pass-1 failure, and the sealed audio is published for `pie retry` as today. This applies to the legacy single-pass path too, because the draft is shared.
+- **Pipeline switch.** `pipeline = "legacy" | "one-pass" | "two-pass"` (default legacy) replaces the `two_pass` flag, which was never deployed. One pass uses `transcription_model` (OpenRouter provider, audio-capable model) for transcribe bindings and `translation_model` for translate bindings, with `thinking_effort` as its reasoning effort; it is buffered (no audio streaming) and `streaming = true` is rejected with it.
+- **One-pass request.** One OpenRouter Responses call: `instructions` = the rendered one-pass prompt, input = one user message with a short text part and the WAV as `input_audio`; optional `provider.order` from `openrouter_provider_order` (list of provider names, fallbacks allowed). Same bounds, typed failures and sanitized diagnostics as the pass-2 adapter, which it shares. Measured: Responses and chat completions have the same latency (p50 about 3.0 s, p90 about 5.5-5.9 s in an interleaved run of 30 each).
+- **One-pass prompts.** `one-pass.md` (transcribe bindings with correction), `one-pass-verbatim.md` (transcribe bindings with `correct = false`) and `one-pass-translate.md` (translate bindings), embedded defaults, binding `prompt` override; required placeholders as for pass 2.
+- **One-pass history.** The result is recorded as the attempt's final text, and the `transcribed` event carries the same text with the one-pass model as its model, so `pie history show --raw` still prints what the model heard. A failure publishes the audio for `pie retry`, notifies, and records outcome `failed`.
 - **Bindings in the keyboard path.** The recognizer maps key events to a binding instead of to one of two modes; the recording mode stays transcribe or translate, and the binding travels with the attempt to the pipeline and history.
 - **Status.** The status JSON and `pie status` include the pass-1 model, streaming flag, pass-2 model and bindings; the per-pass durations are logged with the existing structured logger.
 
