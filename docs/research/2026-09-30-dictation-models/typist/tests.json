@@ -38,5 +38,29 @@
   "id": "t8-codeblock",
   "say": "Odpal komendę systemctl, spacja, minus minus user, spacja, restart, spacja, pie kropka service. Wrzuć to w blok kodu.",
   "expect": "code block containing `systemctl --user restart pie.service`"
+ },
+ {
+  "id": "m1-marker-bullets",
+  "say": "Dobra, to mamy trzy rzeczy do zrobienia na jutro. Hej Paj, w punktach. Po pierwsze, trzeba ogarnąć debugging tego serwisu, bo logi są puste. Po drugie, odpalić testy na CI. Po trzecie, zrobić code review tego pull requesta od Marka."
+ },
+ {
+  "id": "m2-agent-imperatives",
+  "say": "Zrób z tego listę i dodaj nagłówek, a potem odpal testy i napisz mi w punktach, co się wysypało. Nie commituj jeszcze."
+ },
+ {
+  "id": "m3-marker-formal",
+  "say": "Hej, słuchaj, wczoraj deployowałem nową wersję i coś się wysypało na stagingu. Zrobiłem rollback, ale dalej nie wiem, co jest root causem. Hej Paj, napisz to bardziej formalnie."
+ },
+ {
+  "id": "m4-unmarked-formal",
+  "say": "Przepisz ten dokument bardziej formalnie i wrzuć komendy w bloki kodu, bo teraz to wygląda jak notatka na kolanie."
+ },
+ {
+  "id": "m5-marker-codeblock",
+  "say": "Odpal komendę systemctl, spacja, minus minus user, spacja, restart, spacja, pie kropka service. Hej Paj, to w blok kodu."
+ },
+ {
+  "id": "m6-pie-as-topic",
+  "say": "Pie powinien sam znaleźć glosariusz w katalogu projektu, a jak jestem w przeglądarce, to bierze tylko globalny. Sprawdź, czy tak jest."
  }
 ]
