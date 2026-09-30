@@ -6,6 +6,15 @@ val response_operation_timeout : Ox.Duration.t
 val resolve_api_key :
   caps:< Ox_caps.Cap.env ; .. > -> unit -> Ox_observability.Redact.t option
 
+val endpoint : caps:< Ox_caps.Cap.env ; .. > -> string -> string option
+(** [endpoint caps path] is [OPENROUTER_BASE_URL] joined with [path], or [None]
+    when that variable is unset or blank. Trailing slashes on the base are
+    stripped. *)
+
+val render_template : string -> (string * string) list -> string
+(** Replace every [{{key}}] placeholder. Unknown placeholders are left as
+    written. *)
+
 val base64_encode : bytes -> string
 val decode_structured_output : string -> (string, error) result
 
