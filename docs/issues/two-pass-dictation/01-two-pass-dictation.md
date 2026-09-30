@@ -1,10 +1,14 @@
 ---
-status: ready-for-agent
+status: completed
 package: pie
 consumer: pie
 ---
 
 # Two-pass dictation with glossary, history and correction switch
+
+## Status
+
+Implemented on master (2026-09-30); every suite passes except session_ownership, which fails on the Ox TLS buffer race recorded in docs/issues/session-ownership-wss-flake. Not installed: the running service still uses the previous binary and the user's legacy configuration. A proposed configuration is in docs/examples/stt.two-pass.toml. Streaming pass 1 still dies after about 11 minutes until Ox fixes its consecutive-ping limit (docs/issues/long-recording-cutoff); the recording then falls back to buffered pass 1 instead of being lost.
 
 ## Problem Statement
 

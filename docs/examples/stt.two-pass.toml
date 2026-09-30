@@ -1,0 +1,48 @@
+# Proposed two-pass configuration for ~/.config/pie/stt.toml (2026-09-30).
+# Not installed. Keep your existing text_entry_rules / newline_rules below it.
+# Numbers come from docs/research/2026-09-30-dictation-models.
+
+two_pass = true
+
+# Pass 1: literal speech to text. gpt-live-transcribe through the Codex login is
+# free and answers about 0.6 s after release when streaming.
+# Alternative (more accurate, ~1.0 s p50 buffered, paid):
+#   transcription_model = "openrouter/microsoft/mai-transcribe-2"
+#   streaming = false
+transcription_model = "codex-realtime/gpt-live-transcribe"
+translation_model = "codex-realtime/gpt-live-transcribe"
+streaming = true
+
+transcription_language = "Polish"
+translation_source_language = "Polish"
+translation_target_language = "English"
+
+# Pass 2: your choice. gemini-3.8-flash at low effort was the most accurate
+# (~1.8-2.0 s p50, <3 s p90); gemini-3.1-flash-lite is ~1.0 s p50 / 1.4 s p90.
+correction_model = "openrouter/google/gemini-3.8-flash"
+correction_reasoning_effort = "low"
+correction_timeout_seconds = 8
+
+# Keep the audio of every attempt for a day (Opus when ffmpeg is on the
+# service PATH or PIE_FFMPEG is set, WAV otherwise).
+audio_retention_hours = 24
+
+# F9 (65478) with Shift: transcribe and tidy (prompts/correction.md).
+[[bindings]]
+keysym = 65478
+shift = true
+mode = "transcribe"
+correct = true
+
+# F9 without Shift: raw transcript, no pass 2.
+[[bindings]]
+keysym = 65478
+shift = false
+mode = "transcribe"
+correct = false
+
+# F10: translate Polish to English (prompts/correction-translate.md).
+[[bindings]]
+keysym = 65479
+shift = false
+mode = "translate"
