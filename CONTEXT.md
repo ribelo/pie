@@ -10,9 +10,6 @@ Pie is an OCaml voice assistant. It listens for push-to-talk keys and wake words
 The long-running Pie process that hosts the RPC server and all audio and input pipelines.
 _Avoid_: daemon
 
-**Project context**:
-The project that a voice command applies to, found through the `.pie/context.md` file of an ancestor directory.
-_Avoid_: context (unqualified)
 
 ### Component runtime
 
@@ -66,6 +63,33 @@ The assistant is attempting to enter the resulting text into the target applicat
 
 **Busy**:
 One attempt still owns the operation, including setup, recording, processing, delivery and cleanup. A second attempt is not admitted until the first has settled. Busy does not mean recording.
+
+**Pass 1**:
+Speech to text: a dedicated recognition model turns the captured audio into a literal transcript, streaming audio during recording when configured.
+_Avoid_: STT pass (unqualified), realtime
+
+**Pass 2**:
+The optional text step after pass 1: a text model rewrites the raw transcript with the user's prompt and the glossary. Correction and translation are both pass-2 prompts.
+_Avoid_: post-processing, fixer
+
+**Raw transcript**:
+The text pass 1 returned, before pass 2. It is kept in the history and typed when pass 2 fails on a transcription binding.
+
+**Glossary**:
+The words the user dictates and how recognition mishears them, rendered from the global glossary and the project glossary and given to both passes.
+_Avoid_: context, project context, vocabulary
+
+**Global glossary**:
+The glossary file in Pie's configuration directory, or the file named by `PIE_GLOSSARY`.
+
+**Project glossary**:
+The `.pie/glossary.md` file of the nearest ancestor of the focused window's working directory at key press.
+
+**Binding**:
+One push-to-talk key: a keysym, a shift flag, a mode (transcribe or translate), whether pass 2 runs, and which pass-2 prompt it uses.
+
+**History**:
+The append-only local record of every attempt's raw transcript, final text and outcome, read with `pie history`.
 
 **Low-volume warning**:
 An advisory that nonzero microphone audio has remained too quiet for a sustained interval. It does not stop recording and is distinct from the existing digital-silence warning.
