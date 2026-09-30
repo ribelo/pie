@@ -183,3 +183,50 @@ val translate_with_prompt :
   ?sample_rate:int ->
   bytes ->
   (string, error) result
+
+val build_pass1_session_update :
+  ?language:string -> ?context:string -> model:string -> unit -> Ox_json.t
+(** [build_pass1_session_update ?language ?context ~model ()] is the
+    transcription [session.update] for a dedicated speech-to-text model.
+
+    [model] is sent as [audio.input.transcription.model]. [?language] is an
+    ISO-639-1 code from [Stt.Language.iso639_1] and is sent as [languages], the
+    field [gpt-live-transcribe] and [gpt-transcribe] accept; the singular
+    [language] field is not sent. [?context] is the rendered glossary and is
+    sent as [prompt]. Absent options omit those fields. [turn_detection] is
+    null: these models do not support voice activity detection, and Pie commits
+    the buffer on key release. *)
+
+val with_pass1_stream :
+  caps:< Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.time ; .. > ->
+  sw:Eio.Switch.t ->
+  net:_ Eio.Net.t ->
+  clock:_ Eio.Time.clock ->
+  logger:Ox_observability.Logger.t ->
+  model:string ->
+  ?language:string ->
+  ?context:string ->
+  ?sample_rate:int ->
+  (stream_handle -> ('a, error) result) ->
+  ('a, error) result
+(** Streaming pass 1 on the transcription session
+    ([wss .../v1/realtime?intent=transcription]).
+
+    Offer audio on the handle while the key is held. [finish_stream] commits the
+    buffer and returns the completed transcript. This is not the
+    conversation-model session used by {!with_transcription_stream}. *)
+
+val transcribe_pass1 :
+  caps:< Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.time ; .. > ->
+  sw:Eio.Switch.t ->
+  net:_ Eio.Net.t ->
+  clock:_ Eio.Time.clock ->
+  model:string ->
+  ?language:string ->
+  ?context:string ->
+  ?sample_rate:int ->
+  bytes ->
+  (string, error) result
+(** Buffered pass 1. The sealed PCM is sent on the same transcription websocket
+    after release, then committed. The Codex login is refused by
+    [/v1/audio/transcriptions], so this does not use that endpoint. *)

@@ -32,19 +32,22 @@ let read_http_request flow =
             else None)
           lines
   in
-  (match content_length with
-  | None | Some 0 -> ()
-  | Some n ->
-      let body = Cstruct.create n in
-      let rec loop off =
-        if off < n then
-          match Eio.Flow.single_read flow (Cstruct.sub body off (n - off)) with
-          | 0 -> raise End_of_file
-          | k -> loop (off + k)
-          | exception End_of_file -> raise End_of_file
-      in
-      loop 0);
-  head
+  let body =
+    match content_length with
+    | None | Some 0 -> ""
+    | Some n ->
+        let raw = Cstruct.create n in
+        let rec loop off =
+          if off < n then
+            match Eio.Flow.single_read flow (Cstruct.sub raw off (n - off)) with
+            | 0 -> raise End_of_file
+            | k -> loop (off + k)
+            | exception End_of_file -> raise End_of_file
+        in
+        loop 0;
+        Cstruct.to_string raw
+  in
+  (head, body)
 
 let write_http_json flow body =
   let response =
@@ -216,6 +219,70 @@ let spawn_case name =
   | Unix.WSIGNALED s -> Alcotest.failf "outcome child %s signaled %d" name s
   | Unix.WSTOPPED s -> Alcotest.failf "outcome child %s stopped %d" name s
 
+let contains hay needle =
+  let hlen = String.length hay in
+  let nlen = String.length needle in
+  let rec loop i =
+    i <= hlen - nlen && (String.sub hay i nlen = needle || loop (i + 1))
+  in
+  nlen = 0 || loop 0
+
+let request_target head =
+  match String.split_on_char '\n' head with
+  | line :: _ -> (
+      let line =
+        let len = String.length line in
+        if len > 0 && line.[len - 1] = '\r' then String.sub line 0 (len - 1)
+        else line
+      in
+      match String.split_on_char ' ' line with
+      | _method :: target :: _ -> target
+      | _ -> "")
+  | [] -> ""
+
+let part_present name value body =
+  contains body ("name=\"" ^ name ^ "\"\r\n\r\n" ^ value ^ "\r\n")
+
+let assert_part name value body =
+  if not (part_present name value body) then
+    Alcotest.failf "missing %s part" name
+
+let assert_part_absent name body =
+  if contains body ("name=\"" ^ name ^ "\"") then
+    Alcotest.failf "unexpected %s part" name
+
+(* dict-m2xr dict-wha3: buffered OpenRouter pass 1 sends language and the
+   glossary prompt, and omits either field when it is absent. *)
+let run_multipart ?language ?prompt () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let net = Eio.Stdenv.net env in
+  let socket =
+    Eio.Net.listen ~sw ~reuse_addr:true ~backlog:1 net
+      (`Tcp (Eio.Net.Ipaddr.V4.loopback, 0))
+  in
+  let port =
+    match Eio.Net.listening_addr socket with
+    | `Tcp (_, port) -> port
+    | `Unix _ -> Alcotest.fail "expected TCP listener"
+  in
+  Unix.putenv "OPENROUTER_BASE_URL" (Printf.sprintf "http://127.0.0.1:%d" port);
+  let captured = ref ("", "") in
+  Eio.Fiber.fork ~sw (fun () ->
+      Eio.Switch.run (fun conn_sw ->
+          let flow, _ = Eio.Net.accept ~sw:conn_sw socket in
+          let head, body = read_http_request flow in
+          captured := (request_target head, body);
+          write_http_json flow
+            (Yojson.Safe.to_string (`Assoc [ ("text", `String "hello-pass1") ]))));
+  let result =
+    Pie.Stt.Openrouter.transcribe ~caps ~sw ~net ~clock:(Eio.Stdenv.clock env)
+      ~api_key:(Ox_observability.Redact.make "synthetic-or-outcome")
+      ~model:"microsoft/mai-transcribe-2" ?language ?prompt pcm
+  in
+  let target, body = !captured in
+  (result, target, body)
+
 let child_main name =
   match name with
   | "completed-transcribe" ->
@@ -246,6 +313,22 @@ let child_main name =
   | "failed" ->
       expect_reject "OpenRouter request failed:"
         (run_public ~body:failed_body ~op:Transcribe ())
+  | "multipart-both" ->
+      let result, target, body =
+        run_multipart ~language:"pl" ~prompt:"Nema\nPie" ()
+      in
+      expect_ok "hello-pass1" result;
+      if not (contains target "/api/v1/audio/transcriptions") then
+        Alcotest.failf "unexpected target %s" target;
+      assert_part "language" "pl" body;
+      assert_part "prompt" "Nema\nPie" body
+  | "multipart-neither" ->
+      let result, target, body = run_multipart () in
+      expect_ok "hello-pass1" result;
+      if not (contains target "/api/v1/audio/transcriptions") then
+        Alcotest.failf "unexpected target %s" target;
+      assert_part_absent "language" body;
+      assert_part_absent "prompt" body
   | other -> Alcotest.failf "unknown child case %s" other
 
 let () =
@@ -272,5 +355,11 @@ let () =
                   spawn_case "malformed");
               Alcotest.test_case "failed provider error retained" `Quick
                 (fun () -> spawn_case "failed");
+              Alcotest.test_case
+                "multipart carries language and prompt (dict-m2xr dict-wha3)"
+                `Quick (fun () -> spawn_case "multipart-both");
+              Alcotest.test_case
+                "multipart omits language and prompt when absent (dict-wha3)"
+                `Quick (fun () -> spawn_case "multipart-neither");
             ] );
         ]

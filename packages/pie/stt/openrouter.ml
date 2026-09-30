@@ -174,10 +174,16 @@ let run_audio_responses ~caps ~sw ~net ~clock ~logger ~model ~prompt
             | Ok raw -> decode_structured_output raw))
 
 (* A 64 MiB admitted PCM capture has a 44-byte WAV header and bounded multipart
-   framing. The extra 8 KiB covers the model/language and transport field names. *)
-let max_audio_request_bytes = Dictation_limits.capture_pcm_bytes + 44 + 8192
+   framing. The extra 8 KiB covers the model, language and transport field
+   names. The prompt length is added so a glossary is not refused locally. *)
+let audio_request_bound ~language ~prompt =
+  let extra =
+    (match language with None -> 0 | Some text -> String.length text)
+    + match prompt with None -> 0 | Some text -> String.length text
+  in
+  Dictation_limits.capture_pcm_bytes + 44 + 8192 + extra
 
-let transcribe ~caps ~sw ~net ~clock ~api_key ~model ~language
+let transcribe ~caps ~sw ~net ~clock ~api_key ~model ?language ?prompt
     ?(sample_rate = 16000) pcm_bytes =
   if Bytes.length pcm_bytes > Dictation_limits.capture_pcm_bytes then
     Error (`Stt_error "OpenRouter captured audio budget exceeded")
@@ -188,15 +194,15 @@ let transcribe ~caps ~sw ~net ~clock ~api_key ~model ~language
         model;
         filename = "pie.wav";
         wav = wav_bytes ~sample_rate pcm_bytes;
-        language = Some language;
-        prompt = None;
+        language;
+        prompt;
         temperature = Some 0.0;
       }
     in
     match
       Openrouter_audio.create ~http ~api_key
         ?endpoint:(endpoint ~caps "/api/v1/audio/transcriptions")
-        ~max_request_bytes:max_audio_request_bytes
+        ~max_request_bytes:(audio_request_bound ~language ~prompt)
         ~deadline:direct_transcription_timeout request
     with
     | Error error -> Error (stt_error_of_ai error)

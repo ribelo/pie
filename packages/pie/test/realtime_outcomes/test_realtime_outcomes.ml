@@ -517,6 +517,364 @@ let test_tls_peer_close peer_close diagnostic () =
       Alcotest.(check bool)
         "closed before readiness sends no audio" false saw_audio)
 
+(* dict-dl3q dict-m2xr dict-q6xd dict-wha3: dedicated transcription session.
+   Language is the ISO-639-1 code; the wire field is [languages], which
+   gpt-live-transcribe and gpt-transcribe accept. The glossary is [prompt]. *)
+let ( let* ) = Result.bind
+
+let frame_type payload =
+  try
+    match Yojson.Safe.from_string payload with
+    | `Assoc fields -> (
+        match List.assoc_opt "type" fields with
+        | Some (`String name) -> Some name
+        | _ -> None)
+    | _ -> None
+  with Yojson.Json_error _ -> None
+
+let request_line head =
+  match String.split_on_char '\n' head with
+  | line :: _ ->
+      let len = String.length line in
+      if len > 0 && line.[len - 1] = '\r' then String.sub line 0 (len - 1)
+      else line
+  | [] -> ""
+
+let json_member path payload =
+  let rec loop value = function
+    | [] -> Some value
+    | key :: rest -> (
+        match value with
+        | `Assoc fields -> (
+            match List.assoc_opt key fields with
+            | Some next -> loop next rest
+            | None -> None)
+        | _ -> None)
+  in
+  match Yojson.Safe.from_string payload with
+  | exception Yojson.Json_error _ -> None
+  | value -> loop value path
+
+let string_at path payload =
+  match json_member path payload with
+  | Some (`String value) -> Some value
+  | _ -> None
+
+let transcription_path = [ "session"; "audio"; "input"; "transcription" ]
+
+let session_update_payload frames =
+  match
+    List.filter
+      (fun payload -> frame_type payload = Some "session.update")
+      frames
+  with
+  | [ payload ] -> payload
+  | found ->
+      Alcotest.failf "expected one session.update, got %d" (List.length found)
+
+let frame_types frames = List.filter_map frame_type frames
+
+let assert_commit_after_audio frames =
+  let rec loop saw_audio = function
+    | [] -> Alcotest.fail "missing input_audio_buffer.commit"
+    | "input_audio_buffer.commit" :: rest ->
+        Alcotest.(check bool) "audio before commit" true saw_audio;
+        Alcotest.(check bool)
+          "no audio after commit" false
+          (List.exists is_audio_append rest)
+    | name :: rest -> loop (saw_audio || is_audio_append name) rest
+  in
+  loop false (frame_types frames)
+
+type peer_terminal = On_commit | On_response_create
+
+let serve_recording ~terminal ~frames ~request flow =
+  let head = read_http_head flow in
+  request := request_line head;
+  let key =
+    match header_value "Sec-WebSocket-Key" head with
+    | Some key -> key
+    | None -> Alcotest.fail "missing Sec-WebSocket-Key"
+  in
+  write_ws_switching_response flow key;
+  write_ws_text flow created;
+  let rec loop () =
+    match read_ws_frame flow with
+    | exception End_of_file -> ()
+    | Close -> ()
+    | Other -> loop ()
+    | Text payload ->
+        frames := payload :: !frames;
+        (match (frame_type payload, terminal) with
+        | Some "session.update", _ -> write_ws_text flow updated
+        | Some "input_audio_buffer.commit", On_commit ->
+            write_ws_text flow tx_final
+        | Some "response.create", On_response_create ->
+            write_ws_text flow delta;
+            write_ws_text flow (done_status "completed")
+        | _ -> ());
+        loop ()
+  in
+  try loop () with _ -> ()
+
+let with_saved_env pairs f =
+  let saved = List.map (fun (key, _) -> (key, Sys.getenv_opt key)) pairs in
+  List.iter (fun (key, value) -> Unix.putenv key value) pairs;
+  Fun.protect
+    ~finally:(fun () ->
+      List.iter
+        (fun (key, previous) ->
+          Unix.putenv key (Option.value previous ~default:""))
+        saved)
+    f
+
+let run_peer ~terminal client =
+  let frames = ref [] in
+  let request = ref "" in
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let net = Eio.Stdenv.net env in
+  let clock = Eio.Stdenv.clock env in
+  let socket =
+    Eio.Net.listen ~sw ~reuse_addr:true ~backlog:1 net
+      (`Tcp (Eio.Net.Ipaddr.V4.loopback, 0))
+  in
+  let port = tcp_port (Eio.Net.listening_addr socket) in
+  Eio.Fiber.fork ~sw (fun () ->
+      try
+        let flow, _ = Eio.Net.accept ~sw socket in
+        serve_recording ~terminal ~frames ~request flow
+      with _ -> ());
+  let result =
+    with_saved_env
+      [
+        ( "CODEX_REALTIME_BASE_URL_OVERRIDE",
+          Printf.sprintf "ws://127.0.0.1:%d" port );
+        ("OPENAI_API_KEY", "synthetic-pass1");
+      ]
+      (fun () ->
+        try
+          Eio.Time.with_timeout_exn clock 3.0 (fun () ->
+              client env sw net clock)
+        with Eio.Time.Timeout -> Error (`Stt_error "timeout"))
+  in
+  (result, !request, List.rev !frames)
+
+let expect_transcript expected result =
+  match result with
+  | Ok text -> Alcotest.(check string) "completed transcript" expected text
+  | Error (`Stt_error message) ->
+      Alcotest.failf "expected transcript: %s" message
+
+let pass1_logger env clock =
+  Ox_observability.Logger.create ~service:"pie-pass1" ~clock
+    ~mono_clock:(Eio.Stdenv.mono_clock env)
+    ~reporter:
+      (Ox_observability.Logger.Memory.reporter
+         (Ox_observability.Logger.Memory.create ()))
+    ()
+
+let test_language_codes () =
+  let check input expected =
+    Alcotest.(check (option string))
+      input expected
+      (Pie.Stt.Language.iso639_1 input)
+  in
+  List.iter
+    (fun (name, code) -> check name (Some code))
+    [
+      ("Polish", "pl");
+      ("english", "en");
+      ("GERMAN", "de");
+      (" French ", "fr");
+      ("Spanish", "es");
+      ("Italian", "it");
+      ("Portuguese", "pt");
+      ("Ukrainian", "uk");
+      ("Russian", "ru");
+      ("Czech", "cs");
+      ("Dutch", "nl");
+      ("Japanese", "ja");
+      ("Chinese", "zh");
+      ("PL", "pl");
+      ("en", "en");
+      ("  zh  ", "zh");
+    ];
+  List.iter
+    (fun name -> check name None)
+    [ "Klingon"; "pol"; "eng"; "zh-cn"; ""; "  "; "e"; "Polish." ]
+
+let test_pass1_update_fields () =
+  let with_context =
+    Codex.build_pass1_session_update ~model:"gpt-live-transcribe" ~language:"pl"
+      ~context:"Nema\nPie" ()
+  in
+  let rendered = Yojson.Safe.to_string with_context in
+  Alcotest.(check (option string))
+    "model" (Some "gpt-live-transcribe")
+    (string_at (transcription_path @ [ "model" ]) rendered);
+  (match json_member (transcription_path @ [ "languages" ]) rendered with
+  | Some (`List [ `String "pl" ]) -> ()
+  | _ -> Alcotest.fail "languages should be the ISO-639-1 code");
+  Alcotest.(check (option string))
+    "glossary prompt" (Some "Nema\nPie")
+    (string_at (transcription_path @ [ "prompt" ]) rendered);
+  Alcotest.(check bool)
+    "singular language is not sent" false
+    (json_member (transcription_path @ [ "language" ]) rendered <> None);
+  Alcotest.(check bool)
+    "manual commit" true
+    (json_member [ "session"; "audio"; "input"; "turn_detection" ] rendered
+    = Some `Null);
+  let bare =
+    Yojson.Safe.to_string
+      (Codex.build_pass1_session_update ~model:"gpt-transcribe" ())
+  in
+  match json_member transcription_path bare with
+  | Some (`Assoc fields) ->
+      Alcotest.(check bool)
+        "no languages" false
+        (List.mem_assoc "languages" fields);
+      Alcotest.(check bool)
+        "no language" false
+        (List.mem_assoc "language" fields);
+      Alcotest.(check bool) "no prompt" false (List.mem_assoc "prompt" fields)
+  | _ -> Alcotest.fail "missing transcription object"
+
+let test_pass1_stream_commits () =
+  let result, request, frames =
+    run_peer ~terminal:On_commit (fun env sw net clock ->
+        let logger = pass1_logger env clock in
+        Codex.with_pass1_stream ~caps ~sw ~net ~clock ~logger
+          ~model:"gpt-live-transcribe" ~language:"pl" ~context:"Nema\nPie"
+          (fun handle ->
+            let* () = handle.offer_chunk pcm in
+            let* () = handle.offer_chunk pcm in
+            handle.finish_stream ()))
+  in
+  expect_transcript "hello" result;
+  Alcotest.(check bool)
+    "transcription intent" true
+    (contains request "intent=transcription");
+  Alcotest.(check bool)
+    "model stays out of the url" false
+    (contains request "model=");
+  let update = session_update_payload frames in
+  let expected =
+    Yojson.Safe.to_string
+      (Codex.build_pass1_session_update ~model:"gpt-live-transcribe"
+         ~language:"pl" ~context:"Nema\nPie" ())
+  in
+  Alcotest.(check string) "session.update on the wire" expected update;
+  assert_commit_after_audio frames;
+  Alcotest.(check bool)
+    "no conversation response.create" false
+    (List.mem "response.create" (frame_types frames))
+
+let test_pass1_buffered_sends_all_audio () =
+  let result, request, frames =
+    run_peer ~terminal:On_commit (fun _env sw net clock ->
+        Codex.transcribe_pass1 ~caps ~sw ~net ~clock ~model:"gpt-transcribe" pcm)
+  in
+  expect_transcript "hello" result;
+  Alcotest.(check bool)
+    "transcription intent" true
+    (contains request "intent=transcription");
+  let update = session_update_payload frames in
+  (match json_member transcription_path update with
+  | Some (`Assoc fields) ->
+      Alcotest.(check (option string))
+        "model" (Some "gpt-transcribe")
+        (match List.assoc_opt "model" fields with
+        | Some (`String value) -> Some value
+        | _ -> None);
+      Alcotest.(check bool)
+        "no languages" false
+        (List.mem_assoc "languages" fields);
+      Alcotest.(check bool)
+        "no language" false
+        (List.mem_assoc "language" fields);
+      Alcotest.(check bool) "no prompt" false (List.mem_assoc "prompt" fields)
+  | _ -> Alcotest.fail "missing transcription object");
+  let audio =
+    frames
+    |> List.filter (fun payload ->
+        match frame_type payload with
+        | Some name -> is_audio_append name
+        | None -> false)
+    |> List.filter_map (fun payload ->
+        match json_member [ "audio" ] payload with
+        | Some (`String value) -> Some value
+        | _ -> None)
+  in
+  let expected =
+    Pie.Stt.Openrouter.base64_encode
+      (Codex.resample_s16le_mono ~from_rate:16000 ~to_rate:24000 pcm)
+  in
+  Alcotest.(check (list string))
+    "all resampled audio before commit" [ expected ] audio;
+  assert_commit_after_audio frames
+
+let legacy_conversation_update =
+  "{\"type\":\"session.update\",\"session\":{\"type\":\"realtime\",\"model\":\"gpt-realtime-2.1\",\"output_modalities\":[\"text\"],\"instructions\":\"legacy-prompt\",\"audio\":{\"input\":{\"format\":{\"type\":\"audio/pcm\",\"rate\":24000},\"turn_detection\":null}}}}"
+
+let legacy_response_create =
+  "{\"type\":\"response.create\",\"response\":{\"output_modalities\":[\"text\"],\"instructions\":\"legacy-prompt\"}}"
+
+let legacy_transcription_update =
+  "{\"type\":\"session.update\",\"session\":{\"type\":\"transcription\",\"audio\":{\"input\":{\"format\":{\"type\":\"audio/pcm\",\"rate\":24000},\"transcription\":{\"model\":\"gpt-4o-mini-transcribe\",\"prompt\":\"Hear \
+   Polish\"}}}}}"
+
+let test_legacy_conversation_frames () =
+  let result, request, frames =
+    run_peer ~terminal:On_response_create (fun _env sw net clock ->
+        Codex.transcribe_with_prompt ~caps ~sw ~net ~clock
+          ~model:"gpt-realtime-2.1" ~language:"English"
+          ~prompt_template:"legacy-prompt" pcm)
+  in
+  expect_transcript "hel" result;
+  Alcotest.(check bool)
+    "conversation model query" true
+    (contains request "model=gpt-realtime-2.1");
+  Alcotest.(check bool)
+    "not a transcription intent" false
+    (contains request "intent=transcription");
+  Alcotest.(check string)
+    "legacy conversation session.update" legacy_conversation_update
+    (session_update_payload frames);
+  let creates =
+    List.filter
+      (fun payload -> frame_type payload = Some "response.create")
+      frames
+  in
+  match creates with
+  | [ payload ] ->
+      Alcotest.(check string)
+        "legacy response.create" legacy_response_create payload
+  | found ->
+      Alcotest.failf "expected one response.create, got %d" (List.length found)
+
+let test_legacy_transcription_frames () =
+  let result, request, frames =
+    run_peer ~terminal:On_commit (fun _env sw net clock ->
+        Codex.transcribe_with_prompt ~caps ~sw ~net ~clock
+          ~model:"gpt-4o-mini-transcribe" ~language:"Polish"
+          ~prompt_template:"Hear {{language}}" pcm)
+  in
+  expect_transcript "hello" result;
+  Alcotest.(check bool)
+    "legacy transcription intent" true
+    (contains request "intent=transcription");
+  let update = session_update_payload frames in
+  Alcotest.(check string)
+    "legacy transcription session.update" legacy_transcription_update update;
+  Alcotest.(check bool)
+    "legacy builder unchanged" true
+    (update
+    = Yojson.Safe.to_string
+        (Codex.build_transcription_session_update
+           ~model:"gpt-4o-mini-transcribe" ~prompt:"Hear Polish" ()))
+
 let () =
   Alcotest.run "realtime-outcomes"
     [
@@ -562,5 +920,24 @@ let () =
             test_conversation_ignores_transcription_final;
           Alcotest.test_case "translation ignores response.done" `Quick
             test_translation_ignores_response_done;
+        ] );
+      ( "pass 1 (dict-dl3q dict-m2xr dict-q6xd dict-wha3)",
+        [
+          Alcotest.test_case "configured language names and codes (dict-wha3)"
+            `Quick test_language_codes;
+          Alcotest.test_case
+            "session.update carries model, languages and prompt (dict-dl3q \
+             dict-wha3)"
+            `Quick test_pass1_update_fields;
+          Alcotest.test_case
+            "stream commits and returns the transcript (dict-q6xd dict-dl3q)"
+            `Quick test_pass1_stream_commits;
+          Alcotest.test_case
+            "buffered sends all audio then commits (dict-q6xd dict-m2xr)" `Quick
+            test_pass1_buffered_sends_all_audio;
+          Alcotest.test_case "legacy conversation frames unchanged" `Quick
+            test_legacy_conversation_frames;
+          Alcotest.test_case "legacy transcription frames unchanged" `Quick
+            test_legacy_transcription_frames;
         ] );
     ]

@@ -1025,6 +1025,65 @@ let transcribe_with_prompt ~caps ~sw ~net ~clock ~model ~language
       ~session_update:(build_transcription_session_update ~model ~prompt ())
       ~input_sample_rate:sample_rate pcm_bytes
 
+(* gpt-live-transcribe and gpt-transcribe take [languages], not the singular
+   [language] field; sending both is rejected. The rendered glossary is
+   [prompt]. [turn_detection] is null because these models do not support VAD
+   and Pie commits on key release. *)
+let build_pass1_session_update ?language ?context ~model () =
+  let transcription_fields =
+    [ ("model", `String model) ]
+    @ (match context with
+      | None -> []
+      | Some text -> [ ("prompt", `String text) ])
+    @
+    match language with
+    | None -> []
+    | Some code -> [ ("languages", `List [ `String code ]) ]
+  in
+  `Assoc
+    [
+      ("type", `String "session.update");
+      ( "session",
+        `Assoc
+          [
+            ("type", `String "transcription");
+            ( "audio",
+              `Assoc
+                [
+                  ( "input",
+                    `Assoc
+                      [
+                        ( "format",
+                          `Assoc
+                            [
+                              ("type", `String "audio/pcm");
+                              ("rate", `Int realtime_sample_rate);
+                            ] );
+                        ("transcription", `Assoc transcription_fields);
+                        ("turn_detection", `Null);
+                      ] );
+                ] );
+          ] );
+    ]
+
+let with_pass1_stream ~caps ~sw ~net ~clock ~logger ~model ?language ?context
+    ?(sample_rate = 16000) use =
+  let* access_token = realtime_access_token ~caps ~client:() () in
+  with_stream_session ~caps ~sw ~net ~clock ~logger
+    ~url:(build_realtime_url ~caps ~mode:Transcription ~model ())
+    ~access_token ~mode:Transcription ~operation:"transcribe" ~model
+    ~session_update:(build_pass1_session_update ?language ?context ~model ())
+    ~sample_rate ~cancel_message:"Codex realtime transcription cancelled" use
+
+let transcribe_pass1 ~caps ~sw ~net ~clock ~model ?language ?context
+    ?(sample_rate = 16000) pcm_bytes =
+  let* access_token = realtime_access_token ~caps ~client:() () in
+  run_realtime_session ~caps ~sw ~net ~clock
+    ~url:(build_realtime_url ~caps ~mode:Transcription ~model ())
+    ~access_token ~mode:Transcription
+    ~session_update:(build_pass1_session_update ?language ?context ~model ())
+    ~input_sample_rate:sample_rate pcm_bytes
+
 let translate_with_prompt ~caps ~sw ~net ~clock ~model ~source_language
     ~target_language ~prompt_template ?(sample_rate = 16000) pcm_bytes =
   let* access_token = realtime_access_token ~caps ~client:() () in

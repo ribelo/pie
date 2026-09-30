@@ -25,10 +25,16 @@ val transcribe :
   clock:_ Eio.Time.clock ->
   api_key:Ox_observability.Redact.t ->
   model:string ->
-  language:string ->
+  ?language:string ->
+  ?prompt:string ->
   ?sample_rate:int ->
   bytes ->
   (string, error) result
+(** Buffered pass 1 on [POST /api/v1/audio/transcriptions].
+
+    [?language] is an ISO-639-1 code and is sent as the [language] part.
+    [?prompt] is the rendered glossary and is sent as the [prompt] part. An
+    absent option omits that part. There is no streaming call. *)
 
 val transcribe_with_prompt :
   caps:< Ox_caps.Cap.env ; .. > ->
