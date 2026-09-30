@@ -8,7 +8,7 @@ consumer: pie
 
 ## Status
 
-2026-09-30 afternoon: one pass (dict-dq3o and following) was added after a comparison showed Gemini hearing the audio got 7 of 8 hard spots right against 2 of 8 for two passes, at similar p50 latency (docs/research/2026-09-30-dictation-models). One pass through OpenRouter with Google AI Studio first becomes the recommended configuration; two passes stay available.
+2026-09-30 afternoon: one pass (dict-dq3o and following) was added after a comparison showed Gemini hearing the audio got 7 of 8 hard spots right against 2 of 8 for two passes, at similar p50 latency (docs/research/2026-09-30-dictation-models). One pass through OpenRouter with Google AI Studio first becomes the recommended configuration (docs/examples/stt.one-pass.toml); two passes stay available. One pass is implemented on master; all suites pass except session_ownership (Ox TLS race). Still not installed.
 
 Implemented on master (2026-09-30); every suite passes except session_ownership, which fails on the Ox TLS buffer race recorded in docs/issues/session-ownership-wss-flake. Not installed: the running service still uses the previous binary and the user's legacy configuration. A proposed configuration is in docs/examples/stt.two-pass.toml. Streaming pass 1 still dies after about 11 minutes until Ox fixes its consecutive-ping limit (docs/issues/long-recording-cutoff); the recording then falls back to buffered pass 1 instead of being lost.
 
