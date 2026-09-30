@@ -8,7 +8,12 @@ consumer: pie
 
 ## Status
 
-2026-09-30 afternoon: one pass (dict-dq3o and following) was added after a comparison showed Gemini hearing the audio got 7 of 8 hard spots right against 2 of 8 for two passes, at similar p50 latency (docs/research/2026-09-30-dictation-models). One pass through OpenRouter with Google AI Studio first becomes the recommended configuration (docs/examples/stt.one-pass.toml); two passes stay available. One pass is implemented on master; all suites pass except session_ownership (Ox TLS race). Still not installed.
+2026-09-30 afternoon: one pass (dict-dq3o and following) was added after a comparison showed Gemini hearing the audio got 7 of 8 hard spots right against 2 of 8 for two passes, at similar p50 latency (docs/research/2026-09-30-dictation-models). One pass through OpenRouter with Google AI Studio first becomes the recommended configuration (docs/examples/stt.one-pass.toml); two passes stay available. One pass is implemented on master; all suites pass except session_ownership (Ox TLS race). Installed 2026-09-30 16:18 at the user's request:
+
+- `~/.cache/opam/5.4.0+ox/bin/pie` is built from master 90af250 against Ox 76d2596d (the `_dev/ox-install` the suites ran on), release profile, sha256 843370d7d0263ed7…, 13202176 bytes. Previous binary (sha256 7e2dd08e2b123725…) kept as `pie.pre-dict-20260930` beside it.
+- `~/.config/pie/stt.toml` is docs/examples/stt.one-pass.toml plus the user's existing newline and text-entry rules; the previous file is `stt.toml.pre-one-pass-20260930`. A starter global glossary was created at `~/.config/pie/glossary.md`.
+- Roll back: copy both `.pre-*` files back over `pie` and `stt.toml`, then `systemctl --user restart pie.service`.
+- After one restart: active, NRestarts 0, Result success, startup config shows pipeline one-pass with Google AI Studio first, `pie msg status` armed.
 
 Implemented on master (2026-09-30); every suite passes except session_ownership, which fails on the Ox TLS buffer race recorded in docs/issues/session-ownership-wss-flake. Not installed: the running service still uses the previous binary and the user's legacy configuration. A proposed configuration is in docs/examples/stt.two-pass.toml. Streaming pass 1 still dies after about 11 minutes until Ox fixes its consecutive-ping limit (docs/issues/long-recording-cutoff); the recording then falls back to buffered pass 1 instead of being lost.
 
