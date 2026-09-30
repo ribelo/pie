@@ -39,3 +39,17 @@ Pie encodes that request in `Stt.Correction` and posts it with
 caller's `Ox.Duration` deadline). The reply is still decoded with
 `Responses.decode` and accepted with `Responses.deliverable`. A future Ox
 text request should replace the local encoder. (`dict-ldo9`)
+## OpenRouter Responses: audio format, request size, reasoning items
+
+Found on 2026-09-30 with one-pass dictation (Gemini 3.8 Flash through OpenRouter):
+
+- `Ox_ai_openrouter.Responses.request` fixes the audio part to `format: "wav"`. Pie now uploads MP3 (a 4-minute WAV is 7.7 MB, the MP3 under 1 MB; OpenRouter's Responses API accepts wav and mp3 but rejects ogg). Ox should take the format with the bytes. (`dict-dq3o`)
+- `Responses.create` does not expose `max_request_bytes`, and `Ox_ai.Transport.post_json` defaults it to 4 MiB, so any audio request over about 90 seconds of WAV is refused locally as `Input_too_large`. Pie's local request passes a limit sized to its capture budget. (`dict-dq3o`)
+- `Responses.deliverable` rejects a reply that carries a `reasoning` output item as `Other "reasoning"`. With `reasoning.effort` set, Gemini through OpenRouter always adds one next to the message, so every such reply was refused. A reasoning item holds no deliverable text and is not a tool call or refusal; `deliverable` should ignore it. Pie filters it before calling `deliverable`. (`dict-ldo9`)
+
+Pie keeps its local text-and-audio request in `Stt.Correction` until Ox's Responses module covers these three points; then the local encoder and the reasoning filter should be deleted.
+
+## Transport defects that belong in Ox
+
+- `Ox_http.Ws_client.receive` fails after 32 consecutive pings, which cuts every Codex realtime session at about 11 minutes. See docs/issues/long-recording-cutoff.
+- `Tls_flow` shares one ciphertext buffer between a concurrent reader and writer, which corrupts records (bad record MAC, reported as closed 1000). See docs/issues/session-ownership-wss-flake.
