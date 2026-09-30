@@ -88,4 +88,8 @@ val run :
     [Input_too_large]. The request may be as large as that audio base64-encoded
     plus 4 MiB, above Ox's 4 MiB transport default. [?provider_order] is omitted
     when absent or empty. The returned text is trimmed. Blank text and text
-    longer than {!Dictation_limits.result_utf8_bytes} are failures. *)
+    longer than {!Dictation_limits.result_utf8_bytes} are failures. The request
+    requires a strict JSON object with exactly one string field [text]; only
+    that field is returned, as Markdown. Unframed, malformed, truncated or
+    extra-field replies are rejected, never pasted verbatim. Reasoning is
+    excluded when a reasoning effort is configured. *)

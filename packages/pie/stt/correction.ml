@@ -83,9 +83,43 @@ let responses_endpoint ~caps =
 (* Framing headroom so a result just over the UTF-8 budget is decoded and
    classified as [Over_budget]. A larger body is refused by the transport as
    an invalid response, which is still a pass-2 failure. *)
-let max_response_bytes = Dictation_limits.result_utf8_bytes + 65_536
+(* The message contains a JSON string inside the response JSON. A control
+   character can require six bytes in the inner string and double escaping
+   outside it. The user-text budget is checked after decoding both layers. *)
+let max_response_bytes = (12 * Dictation_limits.result_utf8_bytes) + 65_536
 
 module Responses = Ox_ai_openrouter.Responses
+
+(* Protocol framing, not writing instructions: arbitrary free-form model
+   output (including its analysis) must never be pasted into the destination.
+   The user's prompt controls the Markdown inside the text field. *)
+let final_text_format =
+  Responses.Json_schema
+    {
+      name = "dictation";
+      strict = Some true;
+      schema =
+        `Assoc
+          [
+            ("type", `String "object");
+            ( "properties",
+              `Assoc [ ("text", `Assoc [ ("type", `String "string") ]) ] );
+            ("required", `List [ `String "text" ]);
+            ("additionalProperties", `Bool false);
+          ];
+    }
+
+let exclude_reasoning json =
+  match json with
+  | `Assoc fields ->
+      `Assoc
+        (List.map
+           (function
+             | "reasoning", `Assoc reasoning ->
+                 ("reasoning", `Assoc (reasoning @ [ ("exclude", `Bool true) ]))
+             | field -> field)
+           fields)
+  | other -> other
 
 (* OpenRouter provider routing ("provider": {"order": [...]}) is not part of
    Ox's Responses request yet, so it is added to the JSON Ox encodes; see
@@ -123,7 +157,7 @@ let encode ~model ~instructions ~input_text ?audio ?(audio_format = "wav")
                instructions;
                input = input_text;
                temperature = Some temperature;
-               text_format = None;
+               text_format = Some final_text_format;
                reasoning_effort;
              })
     | Some audio -> (
@@ -137,11 +171,13 @@ let encode ~model ~instructions ~input_text ?audio ?(audio_format = "wav")
                    prompt = input_text;
                    wav = audio;
                    temperature = Some temperature;
-                   text_format = None;
+                   text_format = Some final_text_format;
                    reasoning_effort;
                  }))
   in
-  Result.map (fun json -> with_provider_order json provider_order) json
+  Result.map
+    (fun json -> with_provider_order (exclude_reasoning json) provider_order)
+    json
 
 (* A WAV is the capture plus a 44-byte header. Anything larger cannot be a
    recording this process admitted. *)
@@ -159,12 +195,45 @@ let parse_body bytes =
   | Error (`Malformed _) -> Error (Provider Invalid_response)
   | Error (`Too_large _) -> Error (Provider Input_too_large)
 
+(* Yojson accepts JSON comments. Outside the two quoted strings of our
+   envelope, allow only object punctuation and JSON whitespace. Comments or
+   other prose must be rejected, not silently skipped by the JSON parser. *)
+let envelope_tokens raw =
+  let rec scan i quoted escaped =
+    if i = String.length raw then not quoted
+    else
+      let c = raw.[i] in
+      if quoted then
+        if escaped then
+          match c with
+          | '"' | '\\' | '/' | 'b' | 'f' | 'n' | 'r' | 't' | 'u' ->
+              scan (i + 1) true false
+          | _ -> false
+        else if c = '"' then scan (i + 1) false false
+        else if c = '\\' then scan (i + 1) true true
+        else if Char.code c < 32 then false
+        else scan (i + 1) true false
+      else
+        match c with
+        | '"' -> scan (i + 1) true false
+        | '{' | '}' | ':' | ',' | ' ' | '\t' | '\r' | '\n' ->
+            scan (i + 1) false false
+        | _ -> false
+  in
+  scan 0 false false
+
 let accept_text raw =
-  let text = String.trim raw in
-  if text = "" then Error Blank
-  else if String.length text > Dictation_limits.result_utf8_bytes then
-    Error Over_budget
-  else Ok text
+  if not (envelope_tokens raw) then Error (Provider Invalid_response)
+  else
+    match Ox_json.parse raw with
+    | Ok (`Assoc [ ("text", `String value) ]) ->
+        let text = String.trim value in
+        if text = "" then Error Blank
+        else if String.length text > Dictation_limits.result_utf8_bytes then
+          Error Over_budget
+        else Ok text
+    | Ok _ | Error (`Malformed _) -> Error (Provider Invalid_response)
+    | Error (`Too_large _) -> Error Over_budget
 
 let run ~caps ~sw ~net ~clock ~logger ~model ~prompt_template ~transcript ?audio
     ?audio_format ?provider_order ?(glossary = "") ?(language = "")

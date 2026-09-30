@@ -95,12 +95,15 @@ let output_text text =
       );
     ]
 
-let completed text =
+let completed_raw text =
   Yojson.Safe.to_string
     (`Assoc
        [
          ("status", `String "completed"); ("output", `List [ output_text text ]);
        ])
+
+let answer_json text = Yojson.Safe.to_string (`Assoc [ ("text", `String text) ])
+let completed text = completed_raw (answer_json text)
 
 let status_body status text =
   Yojson.Safe.to_string
@@ -141,7 +144,7 @@ let reasoning_body text =
          ( "output",
            `List
              [
-               output_text text;
+               output_text (answer_json text);
                `Assoc [ ("type", `String "reasoning"); ("summary", `List []) ];
              ] );
        ])
@@ -311,6 +314,16 @@ let assert_request ~temperature ~reasoning head body =
     "bearer authorization" true
     (contains "authorization: bearer " lower);
   let json = Yojson.Safe.from_string body in
+  let format = field "format" (field "text" json) in
+  Alcotest.(check string)
+    "final-answer schema" "json_schema"
+    (string_field "type" format);
+  Alcotest.(check bool)
+    "strict answer schema" true
+    (field "strict" format = `Bool true);
+  Alcotest.(check bool)
+    "no extra output fields" true
+    (field "additionalProperties" (field "schema" format) = `Bool false);
   Alcotest.(check string) "model" "test-model" (string_field "model" json);
   let expected_instructions =
     prompt_sentinel ^ "\n" ^ glossary_sentinel
@@ -353,7 +366,10 @@ let assert_request ~temperature ~reasoning head body =
   | Some effort ->
       Alcotest.(check string)
         "reasoning effort" effort
-        (string_field "effort" (field "reasoning" json))
+        (string_field "effort" (field "reasoning" json));
+      Alcotest.(check bool)
+        "reasoning excluded" true
+        (field "exclude" (field "reasoning" json) = `Bool true)
 
 let child_request () =
   let result, hits, captured =
@@ -395,6 +411,67 @@ let child_reasoning_item () =
   | Error failure ->
       Alcotest.failf "reasoning item must not reject: %s"
         (Pie.Stt.Correction.diagnostic failure)
+
+(* dict-dq3o/dict-ldo9: delivery consumes the final-text envelope, not the
+   model's free-form message (the real incident contained repeated analysis). *)
+let child_answer_envelope () =
+  let answer =
+    "# Plan\n\n\
+     - debugging Eio\n\
+     - \u{017c}aden commit\n\n\
+     Kod: `/* comment */`. URL: https://example.test/a"
+  in
+  let envelope = Yojson.Safe.to_string (`Assoc [ ("text", `String answer) ]) in
+  let result, _, _ =
+    with_fixture
+      ~reply:(Json (completed_raw envelope))
+      (fun ~sw ~net ~clock ~logger -> call ~sw ~net ~clock ~logger ())
+  in
+  match result with
+  | Ok got -> Alcotest.(check string) "only the Markdown answer" answer got
+  | Error failure ->
+      Alcotest.failf "envelope failed: %s"
+        (Pie.Stt.Correction.diagnostic failure)
+
+let child_invalid_envelopes () =
+  List.iter
+    (fun raw ->
+      let result, _, _ =
+        with_fixture
+          ~reply:(Json (completed_raw raw))
+          (fun ~sw ~net ~clock ~logger -> call ~sw ~net ~clock ~logger ())
+      in
+      expect_failure
+        (Pie.Stt.Correction.Provider Pie.Stt.Correction.Invalid_response) result)
+    [
+      "plain but plausible transcript";
+      "{\"text\":\"truncated";
+      "[]";
+      "{\"text\":null}";
+      "{\"text\":1}";
+      "{\"answer\":\"wrong field\"}";
+      "{\"text\":\"final\",\"analysis\":\"Wait, let's think\"}";
+      "{\"text\":\"first\",\"text\":\"second\"}";
+      "Analysis before {\"text\":\"final\"}";
+      "{\"text\":\"final\"} Analysis after";
+      "/* model analysis */ {\"text\":\"final\"}";
+      "// model analysis\n{\"text\":\"final\"}";
+      "{\"text\":\"final\"} /* analysis */";
+      "{\"text\":/* analysis */\"final\"}";
+      "{\"text\":\"unescaped\nnewline\"}";
+    ]
+
+let child_unframed_analysis () =
+  let result, _, _ =
+    with_fixture
+      ~reply:
+        (Json
+           (completed_raw
+              "The speaker says: ... Wait, let's listen again. Final text."))
+      (fun ~sw ~net ~clock ~logger -> call ~sw ~net ~clock ~logger ())
+  in
+  expect_failure
+    (Pie.Stt.Correction.Provider Pie.Stt.Correction.Invalid_response) result
 
 let child_success () =
   let result, hits, captured =
@@ -643,6 +720,9 @@ let child_main name =
   match name with
   | "request" -> child_request () (* dict-ldo9 dict-l4zp dict-g52m *)
   | "success" -> child_success () (* dict-ldo9 dict-g52m *)
+  | "answer-envelope" -> child_answer_envelope ()
+  | "unframed-analysis" -> child_unframed_analysis ()
+  | "invalid-envelopes" -> child_invalid_envelopes ()
   | "reasoning-item" -> child_reasoning_item () (* dict-dq3o dict-ldo9 *)
   | "blank" -> child_blank () (* dict-bpuh *)
   | "at-budget" -> child_at_budget () (* dict-fk8i *)
@@ -698,6 +778,9 @@ let () =
             [
               case "request" "dict-ldo9 dict-l4zp dict-g52m" ~with_key:true;
               case "success" "dict-ldo9 dict-g52m" ~with_key:true;
+              case "answer-envelope" "dict-dq3o dict-ldo9" ~with_key:true;
+              case "unframed-analysis" "dict-dq3o dict-ldo9" ~with_key:true;
+              case "invalid-envelopes" "dict-dq3o dict-ldo9" ~with_key:true;
               case "reasoning-item" "dict-dq3o dict-ldo9" ~with_key:true;
               case "blank" "dict-bpuh" ~with_key:true;
               case "at-budget" "dict-fk8i" ~with_key:true;
