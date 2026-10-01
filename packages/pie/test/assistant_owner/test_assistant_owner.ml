@@ -161,6 +161,14 @@ let pcm_files dir =
         else None)
   with Sys_error _ -> []
 
+let rpc_line ~net ~sw socket_path body =
+  let socket = Eio.Net.connect ~sw net (`Unix socket_path) in
+  Fun.protect
+    ~finally:(fun () -> Eio.Flow.close socket)
+    (fun () ->
+      Eio.Flow.copy_string (body ^ "\n") socket;
+      Eio.Buf_read.of_flow ~max_size:65536 socket |> Eio.Buf_read.line)
+
 let status_bool ~net ~sw socket_path key =
   let socket = Eio.Net.connect ~sw net (`Unix socket_path) in
   Fun.protect
@@ -176,6 +184,25 @@ let status_bool ~net ~sw socket_path key =
           | Some (`Bool b) -> b
           | _ -> false)
       | _ -> false)
+
+let processing_count ~net ~sw socket_path =
+  match
+    Yojson.Safe.from_string
+      (rpc_line ~net ~sw socket_path "{\"method\":\"Status\"}")
+  with
+  | `Assoc fields -> (
+      match List.assoc_opt "processing" fields with
+      | Some (`Int n) -> n
+      | _ -> Alcotest.fail "missing processing count")
+  | _ -> Alcotest.fail "status is not an object"
+
+let wait_for_capture_handoff ~clock ~env ~sw ~socket_path ~recognition_started =
+  (* Physical sealing follows capture ownership release. Synchronize the
+     real recognizer entry within the existing six-second lifecycle bound;
+     publication still has its separate, unchanged two-second wait. *)
+  wait_until ~steps:120 ~clock (fun () ->
+      recognition_started ()
+      && not (status_bool ~net:(Eio.Stdenv.net env) ~sw socket_path "active"))
 
 let status_last_error ~net ~sw socket_path =
   let socket = Eio.Net.connect ~sw net (`Unix socket_path) in
@@ -233,12 +260,25 @@ let with_workflow_background ~sw ~clock:_ workflow assertions =
 (* A slot can exist before the audio consumer is connected. For successful
    recordings, wait for bytes in the draft rather than just slot creation. *)
 let wait_for_recorded_pcm ~clock ~audio_q ~retry_dir =
+  (* Sealed overlapping attempts retain draft.pcm too. An old nonempty draft
+     is not evidence that this new capture consumed the PCM we just offered. *)
+  let before =
+    List.filter_map
+      (fun path ->
+        try Some (path, (Unix.stat path).st_size)
+        with Unix.Unix_error _ -> None)
+      (pcm_files retry_dir)
+  in
   wait_until ~clock (fun () ->
       offer_pcm audio_q;
       List.exists
         (fun path ->
           Filename.basename path = "draft.pcm"
-          && try (Unix.stat path).st_size > 0 with Unix.Unix_error _ -> false)
+          &&
+            try
+              (Unix.stat path).st_size
+              > Option.value ~default:0 (List.assoc_opt path before)
+            with Unix.Unix_error _ -> false)
         (pcm_files retry_dir))
 
 let press_cycle ~clock ~keyboard ~audio_q ~retry_dir ~delivered =
@@ -1366,14 +1406,6 @@ let json_accepted line =
       | _ -> Alcotest.fail "missing accepted")
   | _ -> Alcotest.fail "expected object"
 
-let rpc_line ~net ~sw socket_path body =
-  let socket = Eio.Net.connect ~sw net (`Unix socket_path) in
-  Fun.protect
-    ~finally:(fun () -> Eio.Flow.close socket)
-    (fun () ->
-      Eio.Flow.copy_string (body ^ "\n") socket;
-      Eio.Buf_read.of_flow ~max_size:65536 socket |> Eio.Buf_read.line)
-
 let test_service_pre_handle_failure_then_fresh_press () =
   Pie_test_runtime.run @@ fun env ->
   with_dir (fun dir ->
@@ -1666,6 +1698,8 @@ let test_provider_failure_publishes_audio_then_retries_provider () =
           Pie.Keyboard.Monitor.emit keyboard (key ~released:false);
           wait_for_recorded_pcm ~clock ~audio_q ~retry_dir;
           Pie.Keyboard.Monitor.emit keyboard (key ~released:true);
+          wait_for_capture_handoff ~clock ~env ~sw ~socket_path
+            ~recognition_started:(fun () -> Atomic.get stt_n >= 1);
           wait_until ~clock (fun () -> peek_kind retry_dir = Some "audio");
           Alcotest.(check int) "provider called once" 1 (Atomic.get stt_n);
           Alcotest.(check int) "no delivery" 0 (Atomic.get deliver_n);
@@ -1709,6 +1743,8 @@ let test_delivery_failure_publishes_text_retry_skips_provider () =
           Pie.Keyboard.Monitor.emit keyboard (key ~released:false);
           wait_for_recorded_pcm ~clock ~audio_q ~retry_dir;
           Pie.Keyboard.Monitor.emit keyboard (key ~released:true);
+          wait_for_capture_handoff ~clock ~env ~sw ~socket_path
+            ~recognition_started:(fun () -> Atomic.get stt_n >= 1);
           wait_until ~clock (fun () ->
               peek_kind retry_dir = Some "text-uncertain");
           Alcotest.(check int) "provider once" 1 (Atomic.get stt_n);
@@ -1774,7 +1810,7 @@ let test_blank_transcript_publishes_audio_without_inject () =
       let audio_q, audio = make_audio () in
       let stamp () = [ Some (1, 1, 0, 0.) ] in
       let load _ = (base_config (), stamp ()) in
-      let _socket, retry_dir, workflow =
+      let socket_path, retry_dir, workflow =
         owner_workflow ~logger:(test_logger env) ~env ~sw
           ~net:(Eio.Stdenv.net env)
           ~process_mgr:(Eio.Stdenv.process_mgr env)
@@ -1786,6 +1822,8 @@ let test_blank_transcript_publishes_audio_without_inject () =
           Pie.Keyboard.Monitor.emit keyboard (key ~released:false);
           wait_for_recorded_pcm ~clock ~audio_q ~retry_dir;
           Pie.Keyboard.Monitor.emit keyboard (key ~released:true);
+          wait_for_capture_handoff ~clock ~env ~sw ~socket_path
+            ~recognition_started:(fun () -> Atomic.get stt_n >= 1);
           wait_until ~clock (fun () -> Atomic.get stt_n >= 1);
           Alcotest.(check int) "blank skips inject" 0 (Atomic.get deliver_n);
           wait_until ~clock (fun () -> peek_kind retry_dir = Some "audio")))
@@ -1952,6 +1990,8 @@ let test_two_pass_retry kind () =
           wait_for_recorded_pcm ~clock ~audio_q ~retry_dir;
           Pie.Keyboard.Monitor.emit keyboard
             { (key ~released:true) with keysym; keycode = keysym };
+          wait_for_capture_handoff ~clock ~env ~sw ~socket_path
+            ~recognition_started:(fun () -> !source_n >= 1);
           let expected =
             if kind = "provider" then "audio"
             else if kind = "delivery" then "text-uncertain"
@@ -2093,6 +2133,8 @@ let test_one_pass_retry () =
           Pie.Keyboard.Monitor.emit keyboard (key ~released:false);
           wait_for_recorded_pcm ~clock ~audio_q ~retry_dir;
           Pie.Keyboard.Monitor.emit keyboard (key ~released:true);
+          wait_for_capture_handoff ~clock ~env ~sw ~socket_path
+            ~recognition_started:(fun () -> !calls >= 1);
           wait_until ~clock (fun () -> peek_kind retry_dir = Some "audio");
           Alcotest.(check int) "first request failed" 1 !calls;
           Alcotest.(check int) "no notice before automatic retry" 0 !notices;
@@ -2142,7 +2184,7 @@ let test_startup_text_retry_skips_provider () =
           ~dir ~config_control:{ stamp; load } ~stt ~deliver ~keyboard ~audio
       in
       with_workflow_background ~sw ~clock workflow (fun () ->
-          Eio.Time.sleep clock 0.2;
+          wait_until ~steps:120 ~clock (fun () -> Sys.file_exists socket_path);
           ignore
             (rpc ~net:(Eio.Stdenv.net env) ~sw socket_path
                {|{"method":"Action","action":"retry"}|});
@@ -2152,6 +2194,9 @@ let test_startup_text_retry_skips_provider () =
           Alcotest.(check (list string))
             "startup text delivered" [ "startup-retained" ]
             (List.rev !delivered);
+          (* Delivery precedes physically completed retained-store clearing. *)
+          wait_until ~steps:120 ~clock (fun () ->
+              processing_count ~net:(Eio.Stdenv.net env) ~sw socket_path = 0);
           Alcotest.(check (option string))
             "successful text retry clears candidate" None (peek_kind retry_dir)))
 
@@ -2170,7 +2215,7 @@ let test_successive_failures_keep_latest_only () =
       let audio_q, audio = make_audio () in
       let stamp () = [ Some (1, 1, 0, 0.) ] in
       let load _ = (base_config (), stamp ()) in
-      let _socket, retry_dir, workflow =
+      let socket_path, retry_dir, workflow =
         owner_workflow ~logger:(test_logger env) ~env ~sw
           ~net:(Eio.Stdenv.net env)
           ~process_mgr:(Eio.Stdenv.process_mgr env)
@@ -2179,9 +2224,12 @@ let test_successive_failures_keep_latest_only () =
       in
       with_workflow_background ~sw ~clock workflow (fun () ->
           let cycle () =
+            let before = Atomic.get n in
             Pie.Keyboard.Monitor.emit keyboard (key ~released:false);
             wait_for_recorded_pcm ~clock ~audio_q ~retry_dir;
-            Pie.Keyboard.Monitor.emit keyboard (key ~released:true)
+            Pie.Keyboard.Monitor.emit keyboard (key ~released:true);
+            wait_for_capture_handoff ~clock ~env ~sw ~socket_path
+              ~recognition_started:(fun () -> Atomic.get n > before)
           in
           Eio.Time.sleep clock 0.2;
           cycle ();
@@ -2221,7 +2269,7 @@ let test_busy_and_disabled_retry_does_not_load_payload () =
           ~dir ~config_control:{ stamp; load } ~stt ~deliver ~keyboard ~audio
       in
       with_workflow_background ~sw ~clock workflow (fun () ->
-          Eio.Time.sleep clock 0.2;
+          wait_until ~steps:120 ~clock (fun () -> Sys.file_exists socket_path);
           Pie.Keyboard.Monitor.emit keyboard (key ~released:false);
           offer_pcm audio_q;
           let busy =
@@ -2258,7 +2306,11 @@ let test_nested_missing_parent_is_private () =
       let audio_q, audio = make_audio () in
       let stamp () = [ Some (1, 1, 0, 0.) ] in
       let load _ = (base_config (), stamp ()) in
-      let stt _ _ _ = Error (`Ptt_error "stt:unavailable") in
+      let recognition_started = Atomic.make false in
+      let stt _ _ _ =
+        Atomic.set recognition_started true;
+        Error (`Ptt_error "stt:unavailable")
+      in
       let deliver _ _ _target _ = Ok Pie.History.Pasted in
       let socket_path = Filename.concat dir "control.sock" in
       (try Unix.mkdir (Filename.concat dir "recordings") 0o700
@@ -2283,6 +2335,8 @@ let test_nested_missing_parent_is_private () =
           Pie.Keyboard.Monitor.emit keyboard (key ~released:false);
           wait_for_recorded_pcm ~clock ~audio_q ~retry_dir;
           Pie.Keyboard.Monitor.emit keyboard (key ~released:true);
+          wait_for_capture_handoff ~clock ~env ~sw ~socket_path
+            ~recognition_started:(fun () -> Atomic.get recognition_started);
           wait_until ~clock (fun () -> peek_kind retry_dir = Some "audio");
           Alcotest.(check int)
             "historical parent stays 0755" 0o755 (dir_mode hist);
@@ -2321,7 +2375,11 @@ let test_success_preserves_older_candidate () =
       let retry_dir = Filename.concat dir "recordings" in
       let gen0 = seed_text retry_dir "older-candidate" in
       let deliver_n = Atomic.make 0 in
-      let stt _ _ _ = Ok "fresh-success" in
+      let recognition_started = Atomic.make false in
+      let stt _ _ _ =
+        Atomic.set recognition_started true;
+        Ok "fresh-success"
+      in
       let deliver _ _ _target _ =
         Atomic.incr deliver_n;
         Ok Pie.History.Pasted
@@ -2341,6 +2399,8 @@ let test_success_preserves_older_candidate () =
           Pie.Keyboard.Monitor.emit keyboard (key ~released:false);
           wait_for_recorded_pcm ~clock ~audio_q ~retry_dir;
           Pie.Keyboard.Monitor.emit keyboard (key ~released:true);
+          wait_for_capture_handoff ~clock ~env ~sw ~socket_path
+            ~recognition_started:(fun () -> Atomic.get recognition_started);
           wait_until ~clock (fun () -> Atomic.get deliver_n >= 1);
           wait_until ~clock (fun () ->
               not (status_bool ~net ~sw socket_path "active"));
@@ -2823,17 +2883,6 @@ let test_recover_sequential_typed_pair () =
       Alcotest.(check bool) "first retained" true (has "stt:unavailable");
       Alcotest.(check bool) "second retained" true (has "inject:failed")
 
-let processing_count ~net ~sw socket_path =
-  match
-    Yojson.Safe.from_string
-      (rpc_line ~net ~sw socket_path "{\"method\":\"Status\"}")
-  with
-  | `Assoc fields -> (
-      match List.assoc_opt "processing" fields with
-      | Some (`Int n) -> n
-      | _ -> Alcotest.fail "missing processing count")
-  | _ -> Alcotest.fail "status is not an object"
-
 let test_overlapping_attempts first_outcome =
   Pie_test_runtime.run @@ fun env ->
   with_dir (fun dir ->
@@ -2871,7 +2920,7 @@ let test_overlapping_attempts first_outcome =
           wait_for_recorded_pcm ~clock ~audio_q ~retry_dir;
           Pie.Keyboard.Monitor.emit keyboard (key ~released:true);
           Pie.Keyboard.Monitor.emit keyboard (key ~released:false);
-          wait_until ~clock (fun () -> !calls = 1);
+          wait_until ~steps:120 ~clock (fun () -> !calls = 1);
           wait_for_recorded_pcm ~clock ~audio_q ~retry_dir;
           Pie.Keyboard.Monitor.emit keyboard (key ~released:true);
           wait_until ~steps:100 ~clock (fun () -> !calls = 2);

@@ -73,7 +73,8 @@ let test_no_inspection_exact_stdin previous =
        ("touch \"" ^ inspected ^ "\"\nprintf '%s' \"" ^ previous ^ "\"\n"));
   let copy =
     write_exec dir "wl-copy"
-      ("cat > \"" ^ stdin_path ^ "\"\nwhile :; do sleep 0.05; done\n")
+      ("cat > \"" ^ stdin_path ^ ".partial\"\nmv \"" ^ stdin_path
+     ^ ".partial\" \"" ^ stdin_path ^ "\"\nwhile :; do sleep 0.05; done\n")
   in
   Pie_test_runtime.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
@@ -85,7 +86,17 @@ let test_no_inspection_exact_stdin previous =
   match Pie.Wayland.Clipboard.offer owner "offered-text" with
   | Error (`Clipboard_error msg) -> Alcotest.failf "offer failed: %s" msg
   | Ok () ->
-      Eio.Time.sleep (Eio.Stdenv.clock env) 0.1;
+      (* The final path is published only after cat has consumed all stdin.
+         Await that marker within the same former 100ms observation window. *)
+      let clock = Eio.Stdenv.clock env in
+      let deadline = Eio.Time.now clock +. 0.1 in
+      let rec await_helper () =
+        if Sys.file_exists stdin_path || Eio.Time.now clock >= deadline then ()
+        else (
+          Eio.Time.sleep clock 0.005;
+          await_helper ())
+      in
+      await_helper ();
       Alcotest.(check bool)
         "did not inspect previous" false
         (Sys.file_exists inspected);

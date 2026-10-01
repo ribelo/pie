@@ -11,6 +11,8 @@
 #
 # --private-home runs the command like the full suite does: temporary HOME and
 # XDG directories, no provider credentials, and fail-closed desktop helpers.
+# The private root defaults to /run/user/$(id -u) when writable (runtime tmpfs),
+# falls back to /tmp, and prints its selected path for reproducible fixture timing.
 set -euo pipefail
 
 pie_root="$(cd "$(dirname "$0")/.." && pwd -P)"
@@ -33,8 +35,15 @@ export CAML_LD_LIBRARY_PATH="$prefix/lib/stublibs${CAML_LD_LIBRARY_PATH:+:$CAML_
 
 if [[ "${1:-}" == --private-home ]]; then
   shift
-  tmp="$(mktemp -d /tmp/pie-dev-env.XXXXXXXX)"
-  trap 'chmod -R u+rwx -- "$tmp"; rm -rf -- "$tmp"' EXIT
+  # Keep strict wall-clock fixture assertions independent of durable-storage
+  # latency. Use the user's private runtime tmpfs when available.
+  private_root="/run/user/$(id -u)"
+  if [[ ! -d "$private_root" || ! -w "$private_root" ]]; then
+    private_root=/tmp
+  fi
+  tmp="$(mktemp -d "$private_root/pie-dev-env.XXXXXXXX")"
+  printf 'Pie private test root: %s\n' "$tmp" >&2
+  trap 'chmod -R u+rwx -- "${tmp:?}"; rm -rf -- "${tmp:?}"' EXIT
   chmod 0700 "$tmp"
   export HOME="$tmp/home" XDG_CONFIG_HOME="$tmp/config" XDG_CACHE_HOME="$tmp/cache"
   export XDG_DATA_HOME="$tmp/data" XDG_RUNTIME_DIR="$tmp/runtime" TMPDIR="$tmp/tmp"

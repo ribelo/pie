@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Build and run every registered Pie test against local Ox master, without
-# installing into or changing the shared opam switch.
+# installing into or changing the shared opam switch. Fixture roots use writable
+# /run/user/$(id -u) (runtime tmpfs), falling back to /tmp, and print the selection.
 set -euo pipefail
 
 pie_root="$(cd "$(dirname "$0")/.." && pwd -P)"
@@ -48,8 +49,15 @@ dune build --root "$pie_root" --build-dir "$build" --only-packages pie @all
 
 # Fail closed rather than accidentally using a real desktop/audio/session. Do
 # not read or copy the user's auth; fixtures run with an empty private HOME.
-tmp="$(mktemp -d /tmp/pie-local-ox.XXXXXXXX)"
-trap 'chmod -R u+rwx -- "$tmp"; rm -rf -- "$tmp"' EXIT
+# Keep strict wall-clock fixture assertions independent of durable-storage
+# latency. Use the user's private runtime tmpfs when available.
+private_root="/run/user/$(id -u)"
+if [[ ! -d "$private_root" || ! -w "$private_root" ]]; then
+  private_root=/tmp
+fi
+tmp="$(mktemp -d "$private_root/pie-local-ox.XXXXXXXX")"
+printf 'Pie private test root: %s\n' "$tmp" >&2
+trap 'chmod -R u+rwx -- "${tmp:?}"; rm -rf -- "${tmp:?}"' EXIT
 chmod 0700 "$tmp"
 export HOME="$tmp/home" XDG_CONFIG_HOME="$tmp/config" XDG_CACHE_HOME="$tmp/cache"
 export XDG_DATA_HOME="$tmp/data" XDG_RUNTIME_DIR="$tmp/runtime" TMPDIR="$tmp/tmp"
