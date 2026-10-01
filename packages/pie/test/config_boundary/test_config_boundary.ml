@@ -71,19 +71,20 @@ let test_defaults_and_models () =
   with_sandbox @@ fun dir ->
   Eio_main.run @@ fun env ->
   let path = Filename.concat dir "stt.toml" in
-  write path
-    "provider = \"openrouter\"\n\
-     translation_model = \"codex-realtime/gpt-realtime-2.1\"\n";
+  write path "";
   let config = expect_ok (load env path) in
-  Alcotest.(check bool) "provider" true (config.provider = Config.Openrouter);
-  let model =
-    Config.resolve_model_provider ~default_provider:config.provider
-      config.translation_model
-  in
   Alcotest.(check bool)
-    "model override" true
-    (model.provider = Config.Codex_realtime);
-  Alcotest.(check string) "model" "gpt-realtime-2.1" model.model
+    "default one-pass" true
+    (config.pipeline = Config.One_pass);
+  Alcotest.(check bool)
+    "default provider" true
+    (config.provider = Config.Openrouter);
+  Alcotest.(check bool) "buffered" false config.streaming;
+  write path
+    "pipeline = \"two-pass\"\ncorrection_model = \"openrouter/test-model\"\n";
+  let config = expect_ok (load env path) in
+  Alcotest.(check string)
+    "dedicated pass-1 model" "gpt-live-transcribe" config.transcription_model
 
 let test_invalid_settings () =
   with_sandbox @@ fun dir ->
@@ -122,25 +123,11 @@ let test_prompt_resolution () =
   with_sandbox @@ fun dir ->
   Eio_main.run @@ fun env ->
   let path = Filename.concat dir "stt.toml" in
-  write path "provider = \"codex-realtime\"\n";
-  let prompts = Filename.concat dir "prompts" in
-  Unix.mkdir prompts 0o700;
-  write
-    (Filename.concat prompts "transcription.md")
-    "Transcribe in {{language}}. CUSTOM";
-  write
-    (Filename.concat prompts "translation.md")
-    "Translate {{source_language}} to {{target_language}}. CUSTOM";
+  write path "";
   let config = expect_ok (load env path) in
   Alcotest.(check string)
-    "relative transcription prompt" "Transcribe in {{language}}. CUSTOM"
-    config.transcription_prompt;
-  Alcotest.(check string)
-    "relative translation prompt"
-    "Translate {{source_language}} to {{target_language}}. CUSTOM"
-    config.translation_prompt;
-  write (Filename.concat prompts "translation.md") "missing placeholders";
-  expect_error ~needle:"prompt" (load env path)
+    "embedded one-pass prompt" Config.default_one_pass_verbatim_prompt
+    (List.hd config.bindings).prompt
 
 let test_nonregular_rejected () =
   with_sandbox @@ fun dir ->
@@ -164,7 +151,7 @@ let test_byte_limits () =
   let prompts = Filename.concat dir "prompts" in
   Unix.mkdir prompts 0o700;
   write
-    (Filename.concat prompts "transcription.md")
+    (Filename.concat prompts "one-pass-verbatim.md")
     (String.make (Config.max_config_file_bytes + 1) 'x');
   expect_error ~needle:"byte limit" (load env path)
 
@@ -183,7 +170,7 @@ let test_door_spec () =
   let json = Config.door_spec.yojson_of_t config in
   Alcotest.(check bool)
     "spec serializes provider" true
-    (Yojson.Safe.Util.member "provider" json = `String "codex-realtime");
+    (Yojson.Safe.Util.member "provider" json = `String "openrouter");
   let recoded =
     expect_ok (Result.map_error (fun msg -> `Config msg) (parse json))
   in
@@ -219,6 +206,11 @@ let contains needle hay =
   loop 0
 
 let test_pass1_provider_prefix () =
+  let write path text =
+    write path
+      ("pipeline = \"two-pass\"\ncorrection_model = \"openrouter/test-model\"\n"
+     ^ text)
+  in
   (* dict-m2xr *)
   with_sandbox @@ fun dir ->
   Eio_main.run @@ fun env ->
@@ -248,6 +240,11 @@ let test_pass1_provider_prefix () =
     "openrouter model" "microsoft/mai-transcribe-2" resolved.model
 
 let test_streaming_switch () =
+  let write path text =
+    write path
+      ("pipeline = \"two-pass\"\ncorrection_model = \"openrouter/test-model\"\n"
+     ^ text)
+  in
   (* dict-q6xd dict-i28t *)
   with_sandbox @@ fun dir ->
   Eio_main.run @@ fun env ->
@@ -273,7 +270,6 @@ let test_streaming_switch () =
       expect_error ~needle:"openrouter" (load env path))
     [
       "provider = \"openrouter\"\nstreaming = true\n";
-      "pipeline = \"legacy\"\nprovider = \"openrouter\"\nstreaming = true\n";
       "transcription_model = \"openrouter/microsoft/mai-transcribe-2\"\n\
        streaming = true\n";
     ]
@@ -323,7 +319,7 @@ let test_correction_settings () =
       write path text;
       expect_error ~needle (load env path))
     [
-      ( "correction_model = \"codex-realtime/gpt-realtime-2.1\"\n",
+      ( "correction_model = \"codex-realtime/gpt-live-transcribe\"\n",
         "codex-realtime" );
       ("correction_model = \"\"\n", "empty");
       ("correction_reasoning_effort = \"ultra\"\n", "correction_reasoning");
@@ -335,8 +331,8 @@ let test_correction_settings () =
       ("two_pass = true\n", "replaced");
     ]
 
-let test_legacy_keys_become_bindings () =
-  (* dict-ezcr *)
+let test_ptt_keys_become_bindings () =
+  (* dict-r5lg: key compatibility is not a pipeline. *)
   with_sandbox @@ fun dir ->
   Eio_main.run @@ fun env ->
   let path = Filename.concat dir "stt.toml" in
@@ -383,10 +379,10 @@ let test_bindings () =
   let config = expect_ok (load env path) in
   Alcotest.(check int) "authoritative count" 2 (List.length config.bindings);
   Alcotest.(check int)
-    "legacy transcribe follows first binding" 11 config.ptt_transcribe_keysym;
-  Alcotest.(check bool) "legacy shift" true config.ptt_transcribe_shift;
+    "PTT transcribe follows first binding" 11 config.ptt_transcribe_keysym;
+  Alcotest.(check bool) "PTT shift" true config.ptt_transcribe_shift;
   Alcotest.(check int)
-    "legacy translate follows first translate" 11 config.ptt_translate_keysym;
+    "PTT translate follows first translate" 11 config.ptt_translate_keysym;
   let transcribe = transcribe_binding config in
   Alcotest.(check bool) "explicit correct" false transcribe.correct;
   Alcotest.(check bool) "named prompt" true transcribe.prompt_named;
@@ -455,8 +451,8 @@ let test_bindings () =
   Alcotest.(check bool)
     "raw transcribe needs no model" false (transcribe_binding config).correct;
   write path
-    "pipeline = \"legacy\"\n[[bindings]]\nkeysym = 11\nmode = \"translate\"\n";
-  ignore (expect_ok (load env path))
+    "pipeline = \"two-pass\"\n[[bindings]]\nkeysym = 11\nmode = \"translate\"\n";
+  expect_error ~needle:"correction_model" (load env path)
 
 let test_pass2_prompts () =
   (* dict-g52m dict-4faf *)
@@ -532,48 +528,38 @@ let test_pass2_prompts () =
     "pipeline = \"two-pass\"\ncorrection_model = \"google/gemini-3.8-flash\"\n";
   expect_error ~needle:"{{source_language}}" (load env path)
 
-let test_two_pass_off_is_legacy () =
-  (* dict-26tm *)
+let test_removed_pipeline_and_keys () =
   with_sandbox @@ fun dir ->
   Eio_main.run @@ fun env ->
   let path = Filename.concat dir "stt.toml" in
-  let prompts = Filename.concat dir "prompts" in
-  Unix.mkdir prompts 0o700;
-  write
-    (Filename.concat prompts "transcription.md")
-    "Transcribe in {{language}}. LEGACY";
-  write
-    (Filename.concat prompts "translation.md")
-    "Translate {{source_language}} to {{target_language}}. LEGACY";
-  write
-    (Filename.concat prompts "correction.md")
-    "invalid pass-2 prompt that must not be read";
-  write path "provider = \"codex-realtime\"\n";
-  let config = expect_ok (load env path) in
-  Alcotest.(check string)
-    "pipeline default" "legacy"
-    (Config.string_of_pipeline config.pipeline);
-  Alcotest.(check string)
-    "legacy model" "gpt-realtime-2.1" config.transcription_model;
-  Alcotest.(check string)
-    "legacy transcription prompt" "Transcribe in {{language}}. LEGACY"
-    config.transcription_prompt;
-  Alcotest.(check string)
-    "legacy translation prompt"
-    "Translate {{source_language}} to {{target_language}}. LEGACY"
-    config.translation_prompt;
-  Alcotest.(check int) "legacy key" 65478 config.ptt_transcribe_keysym;
-  Alcotest.(check bool)
-    "invalid correction.md ignored" true
-    ((transcribe_binding config).prompt = Config.default_correction_prompt);
-  Unix.unlink (Filename.concat prompts "transcription.md");
-  Unix.unlink (Filename.concat prompts "translation.md");
-  write path "";
-  let config = expect_ok (load env path) in
-  Alcotest.(check string)
-    "inline transcription default"
-    "Transcribe the following audio in {{language}}."
-    config.transcription_prompt
+  List.iter
+    (fun (body, key) ->
+      write path body;
+      let result = load env path in
+      expect_error ~needle:key result;
+      expect_error ~needle:"one-pass" result;
+      expect_error ~needle:"two-pass" result)
+    [
+      ("pipeline = \"legacy\"\n", "pipeline");
+      ("pipeline = \"invalid\"\n", "pipeline");
+      ("transcription_model = \"gpt-realtime-2.1\"\n", "transcription_model");
+      ( "transcription_model = \"openai/GPT-4o-Realtime-preview\"\n",
+        "transcription_model" );
+      ( "translation_model = \"gpt-4o-mini-realtime-preview\"\n",
+        "translation_model" );
+      ("two_pass = false\n", "two_pass");
+      ("two_pass = true\n", "two_pass");
+      ("provider = \"codex-realtime\"\n", "provider");
+      ( "translation_model = \"codex-realtime/gpt-realtime-2\"\n",
+        "translation_model" );
+    ];
+  List.iter
+    (fun key ->
+      write path (key ^ " = \"obsolete\"\n");
+      let result = load env path in
+      expect_error ~needle:"unknown" result;
+      expect_error ~needle:key result)
+    [ "transcription_prompt"; "translation_prompt" ]
 
 let test_status_json_fields () =
   (* dict-oagf *)
@@ -739,7 +725,7 @@ let test_one_pass_config () =
         "codex-realtime" );
       ( "pipeline = \"one-pass\"\n\
          transcription_model = \"openrouter/google/gemini-3.8-flash\"\n\
-         translation_model = \"gpt-realtime-2.1\"\n\
+         translation_model = \"gpt-live-transcribe\"\n\
          provider = \"codex-realtime\"\n",
         "translation_model" );
       ( "pipeline = \"one-pass\"\n\
@@ -1057,13 +1043,14 @@ let () =
             test_streaming_switch;
           Alcotest.test_case "dict-l4zp correction settings" `Quick
             test_correction_settings;
-          Alcotest.test_case "dict-ezcr legacy keys become bindings" `Quick
-            test_legacy_keys_become_bindings;
+          Alcotest.test_case "dict-r5lg PTT keys become bindings" `Quick
+            test_ptt_keys_become_bindings;
           Alcotest.test_case "dict-wrbh bindings" `Quick test_bindings;
           Alcotest.test_case "dict-g52m dict-4faf pass-2 prompts" `Quick
             test_pass2_prompts;
-          Alcotest.test_case "dict-26tm two_pass off is legacy" `Quick
-            test_two_pass_off_is_legacy;
+          Alcotest.test_case
+            "dict-v2qd removed pipelines and prompt keys rejected" `Quick
+            test_removed_pipeline_and_keys;
           Alcotest.test_case "dict-oagf status JSON fields" `Quick
             test_status_json_fields;
           Alcotest.test_case "dict-rtdw/gi5u/4y4r/dq3o one-pass config" `Quick

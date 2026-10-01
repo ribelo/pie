@@ -5,7 +5,6 @@ val provider_failed : Yojson.Safe.t -> bool
     errors. No provider text is extracted or included in diagnostics. *)
 
 val direct_transcription_timeout : Ox.Duration.t
-val response_operation_timeout : Ox.Duration.t
 
 val resolve_api_key :
   caps:< Ox_caps.Cap.env ; .. > -> unit -> Ox_observability.Redact.t option
@@ -20,7 +19,6 @@ val render_template : string -> (string * string) list -> string
     written. *)
 
 val base64_encode : bytes -> string
-val decode_structured_output : string -> (string, error) result
 
 val transcribe :
   caps:< Ox_caps.Cap.env ; .. > ->
@@ -39,32 +37,3 @@ val transcribe :
     [?language] is an ISO-639-1 code and is sent as the [language] part.
     [?prompt] is the rendered glossary and is sent as the [prompt] part. An
     absent option omits that part. There is no streaming call. *)
-
-val transcribe_with_prompt :
-  caps:< Ox_caps.Cap.env ; .. > ->
-  sw:Eio.Switch.t ->
-  net:_ Eio.Net.t ->
-  clock:_ Eio.Time.clock ->
-  logger:Ox_observability.Logger.t ->
-  model:string ->
-  language:string ->
-  prompt_template:string ->
-  ?thinking_effort:string ->
-  ?sample_rate:int ->
-  bytes ->
-  (string, error) result
-
-val translate_with_prompt :
-  caps:< Ox_caps.Cap.env ; .. > ->
-  sw:Eio.Switch.t ->
-  net:_ Eio.Net.t ->
-  clock:_ Eio.Time.clock ->
-  logger:Ox_observability.Logger.t ->
-  model:string ->
-  source_language:string ->
-  target_language:string ->
-  prompt_template:string ->
-  ?thinking_effort:string ->
-  ?sample_rate:int ->
-  bytes ->
-  (string, error) result

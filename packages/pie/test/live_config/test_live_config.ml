@@ -25,13 +25,10 @@ let base_config ?(transcribe = transcribe_keysym)
     ptt_transcribe_shift = transcribe_shift;
     ptt_translate_shift = false;
     thinking_effort = None;
-    transcription_prompt = "Transcribe in {{language}}.";
-    translation_prompt =
-      "Translate from {{source_language}} to {{target_language}}.";
     newline_rules = [];
     text_entry_rules = [];
     prompt_rules = [];
-    pipeline = Legacy;
+    pipeline = Two_pass;
     openrouter_provider_order = None;
     one_pass_timeout_seconds = 30.;
     streaming = false;
@@ -153,7 +150,7 @@ let run_live ~sw ~fs ~clock ~logger ~net ~process_mgr ~mono_clock ~dir
     { Pie.Assistant.Service.keyboard; audio; source_name = Some "test-source" }
   in
   fun () ->
-    Pie.Assistant.Service.run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger
+    Pie_test_runtime.Service.run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger
       ~process_mgr ~mono_clock ~inputs ~config_control ~stt ~deliver
       ~socket_path ~retry_dir ~min_duration_ms:0 ?ptt_transcribe_keysym
       ?ptt_translate_keysym ()
@@ -698,10 +695,10 @@ let test_cli_override_applied_to_published_record () =
     published.ptt_transcribe_keysym;
   Alcotest.(check int)
     "file translate unchanged" translate_keysym published.ptt_translate_keysym;
-  (* dict-26tm dict-rtdw: a reload that raises Config_error, including a bad
+  (* dict-v2qd dict-rtdw: a reload that raises Config_error, including a bad
      new key, keeps the last good record. pipeline stays with that record. *)
   Alcotest.(check string)
-    "pipeline survives override" "legacy"
+    "pipeline survives override" "two-pass"
     (Pie.Config.Stt.string_of_pipeline published.pipeline)
 
 let () =

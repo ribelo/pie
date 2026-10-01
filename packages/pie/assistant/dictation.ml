@@ -108,7 +108,7 @@ let attempt_model t =
       match t.binding.mode with
       | Config.Stt.Transcribe -> t.config.transcription_model
       | Translate -> t.config.translation_model)
-  | Legacy | Two_pass -> t.config.transcription_model
+  | Two_pass -> t.config.transcription_model
 
 let pass2_requested t =
   t.config.pipeline = Config.Stt.Two_pass && t.binding.correct

@@ -18,13 +18,10 @@ let base_config ?(provider = Pie.Config.Stt.Openrouter)
     ptt_transcribe_shift = false;
     ptt_translate_shift = false;
     thinking_effort = None;
-    transcription_prompt = "Transcribe in {{language}}.";
-    translation_prompt =
-      "Translate from {{source_language}} to {{target_language}}.";
     newline_rules = [];
     text_entry_rules = [];
     prompt_rules = [];
-    pipeline = Legacy;
+    pipeline = Two_pass;
     openrouter_provider_order = None;
     one_pass_timeout_seconds = 30.;
     streaming =

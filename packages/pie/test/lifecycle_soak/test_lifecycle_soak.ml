@@ -311,8 +311,7 @@ let handle_peer ~clock ~on_connected ~close_flow scenario flow =
 let pcm = Bytes.make 320 '\001'
 
 let session_update =
-  Pie.Stt.Codex_realtime.build_transcription_session_update
-    ~model:"gpt-realtime-2" ()
+  Pie.Stt.Codex_realtime.build_pass1_session_update ~model:"gpt-realtime-2" ()
 
 let run_buffered ~sw ~net ~clock ?ca_file ~url () =
   Pie.Stt.Codex_realtime.run_realtime_session ~caps ~sw ~net ~clock ?ca_file

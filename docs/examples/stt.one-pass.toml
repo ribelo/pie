@@ -6,6 +6,7 @@
 # Measured against two passes in docs/research/2026-09-30-dictation-models:
 # 7 of 8 hard spots right, p50 about 2.2 s when pinned to Google AI Studio.
 
+# Supported values: one-pass (also the default when omitted), two-pass.
 pipeline = "one-pass"
 provider = "openrouter"
 

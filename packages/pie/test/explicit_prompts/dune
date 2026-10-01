@@ -1,5 +1,0 @@
-(include_subdirs no)
-
-(test
- (name test_explicit_prompts)
- (libraries pie alcotest pie_test_runtime ox ox_test yojson unix cstruct))

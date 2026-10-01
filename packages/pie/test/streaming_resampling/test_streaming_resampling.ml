@@ -440,10 +440,6 @@ let serve_audio_capture ~clock flow captured commit_before_response =
                   {|{"type":"conversation.item.input_audio_transcription.completed","transcript":"ok"}|};
                 write_ws_close flow;
                 drain_until_eof ~clock flow
-            | Some (`String "response.create") ->
-                if not committed then
-                  Alcotest.fail "response.create before audio commit";
-                loop committed
             | _ -> loop committed)
         | _ -> loop committed)
   in
@@ -564,7 +560,6 @@ let test_buffered_huge_rate_is_stt_error () =
 
 let is_audio_append type_name =
   String.equal type_name "input_audio_buffer.append"
-  || String.equal type_name "session.input_audio_buffer.append"
 
 let serve_translation_capture ~clock ~expected_bytes flow captured
     tail_before_retire =
@@ -605,47 +600,6 @@ let serve_translation_capture ~clock ~expected_bytes flow captured
   in
   loop ();
   drain_until_eof ~clock flow
-
-let test_translation_tail_before_retire () =
-  let source = pcm_of_samples [| 0; 12000; -200; 400 |] in
-  let from_rate = 16000 in
-  let to_rate = 24000 in
-  let chunks = [ Bytes.sub source 0 2; Bytes.sub source 2 6 ] in
-  Eio_main.run @@ fun env ->
-  Eio.Switch.run @@ fun sw ->
-  let net = Eio.Stdenv.net env in
-  let clock = Eio.Stdenv.clock env in
-  let socket =
-    Eio.Net.listen ~sw ~reuse_addr:true ~backlog:1 net
-      (`Tcp (Eio.Net.Ipaddr.V4.loopback, 0))
-  in
-  let port = tcp_port (Eio.Net.listening_addr socket) in
-  let captured = Buffer.create 64 in
-  let tail_before_retire = ref false in
-  Eio.Fiber.fork ~sw (fun () ->
-      Eio.Switch.run @@ fun conn_sw ->
-      let flow, _ = Eio.Net.accept ~sw:conn_sw socket in
-      serve_translation_capture ~clock
-        ~expected_bytes:(Bytes.length (oracle ~from_rate ~to_rate source))
-        flow captured tail_before_retire);
-  let audio = audio_of_chunks chunks in
-  let url = Printf.sprintf "ws://127.0.0.1:%d" port in
-  let operation =
-    try
-      Eio.Time.with_timeout_exn clock 5.0 (fun () ->
-          Codex.run_realtime_stream_session ~caps ~sw ~net ~clock ~url
-            ~access_token:"synthetic-resampling-token" ~mode:Codex.Translation
-            ~translation_output_drain_ms:200 ~input_sample_rate:from_rate audio)
-    with Eio.Time.Timeout -> Error (`Stt_error "timeout")
-  in
-  match operation with
-  | Error error -> Alcotest.failf "translation sender failed: %a" pp_stt error
-  | Ok transcript ->
-      Alcotest.(check string) "provider terminal transcript" "ok" transcript;
-      Alcotest.(check bool)
-        "tail append before retirement" true !tail_before_retire;
-      check_match "translation sender" ~from_rate ~to_rate source
-        (Buffer.to_bytes captured)
 
 let test_streaming_nonpositive_rate () =
   Eio_main.run @@ fun env ->
@@ -703,7 +657,5 @@ let () =
             test_buffered_odd_is_stt_error;
           Alcotest.test_case "buffered huge rate is Stt_error not Die" `Quick
             test_buffered_huge_rate_is_stt_error;
-          Alcotest.test_case "translation terminal follows audio tail" `Quick
-            test_translation_tail_before_retire;
         ] );
     ]

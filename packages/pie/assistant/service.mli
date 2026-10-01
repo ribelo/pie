@@ -125,7 +125,13 @@ val production_deliver :
   (History.delivery, Ptt_loop.error) result
 
 val production_stt :
-  caps:< Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.time ; .. > ->
+  caps:
+    < Ox_caps.Cap.env
+    ; Ox_caps.Cap.fs_read
+    ; Ox_caps.Cap.fs_write
+    ; Ox_caps.Cap.time
+    ; Ox_caps.Cap.stderr
+    ; .. > ->
   sw:Eio.Switch.t ->
   net:[> `Generic ] Eio.Net.ty Eio.Resource.t ->
   clock:_ Eio.Time.clock ->
@@ -134,7 +140,7 @@ val production_stt :
   Config.Stt.t ->
   ptt_mode ->
   bytes ->
-  (string, [ `Ptt_error of string ]) result
+  (string, Ptt_loop.error) result
 
 val on_press :
   caps:

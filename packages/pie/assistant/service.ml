@@ -9,8 +9,6 @@ let watched_paths ~caps ?config_path () =
   let prompts_dir = Filename.concat (Filename.dirname config_path) "prompts" in
   [
     config_path;
-    Filename.concat prompts_dir "transcription.md";
-    Filename.concat prompts_dir "translation.md";
     Filename.concat prompts_dir Config.Stt.default_correction_prompt_file;
     Filename.concat prompts_dir
       Config.Stt.default_correction_translate_prompt_file;
@@ -387,7 +385,6 @@ let response_metadata (config : Config.Stt.t) =
       | None -> (None, None)
       | Some correction ->
           (correction.reasoning_effort, Some Stt.Correction.response_schema))
-  | Legacy -> (None, None)
 
 let startup_config_json ~caps ?config_path ~(config : Config.Stt.t)
     ~ptt_transcribe_keysym ~ptt_translate_keysym ~min_duration_ms () =
@@ -480,42 +477,6 @@ let startup_config_json ~caps ?config_path ~(config : Config.Stt.t)
              config.bindings) );
     ]
   |> Yojson.Safe.pretty_to_string
-
-let run_stt ~caps ~sw ~net ~clock ~logger ~process_mgr:_ (config : Config.Stt.t)
-    mode pcm_bytes =
-  let prompt_template =
-    match mode with
-    | Transcribe -> config.transcription_prompt
-    | Translate -> config.translation_prompt
-  in
-  let resolved_model = resolved_model_for_mode config mode in
-  match resolved_model.provider with
-  | Codex_realtime -> (
-      let pcm_bytes = normalize_for_stt config pcm_bytes in
-      match mode with
-      | Transcribe ->
-          Stt.Codex_realtime.transcribe_with_prompt ~caps ~sw ~net ~clock
-            ~model:resolved_model.model ~language:config.transcription_language
-            ~prompt_template pcm_bytes
-      | Translate ->
-          Stt.Codex_realtime.translate_with_prompt ~caps ~sw ~net ~clock
-            ~model:resolved_model.model
-            ~source_language:config.translation_source_language
-            ~target_language:config.translation_target_language ~prompt_template
-            pcm_bytes)
-  | Openrouter -> (
-      let pcm_bytes = normalize_for_stt config pcm_bytes in
-      match mode with
-      | Transcribe ->
-          Stt.Openrouter.transcribe_with_prompt ~caps ~sw ~net ~clock ~logger
-            ~model:resolved_model.model ~language:config.transcription_language
-            ~prompt_template ?thinking_effort:config.thinking_effort pcm_bytes
-      | Translate ->
-          Stt.Openrouter.translate_with_prompt ~caps ~sw ~net ~clock ~logger
-            ~model:resolved_model.model
-            ~source_language:config.translation_source_language
-            ~target_language:config.translation_target_language ~prompt_template
-            ?thinking_effort:config.thinking_effort pcm_bytes)
 
 let report_delivery ~notify ~target_window = function
   | Input.Text_injection.Clipboard_key_attempted -> History.Pasted
@@ -910,11 +871,6 @@ let attempt_handle owner (handle : Ptt_loop.handle) : Ptt_loop.handle =
 (* Recording is stopped by the attempt settlement, after provider and delivery
    completion, so a press received while the operation still processes is
    rejected instead of admitted as a second attempt. *)
-let production_stt ~caps ~sw ~net ~clock ~logger ~process_mgr config mode bytes
-    =
-  Result.map_error ptt_of_stt
-    (run_stt ~caps ~sw ~net ~clock ~logger ~process_mgr config mode bytes)
-
 let production_deliver ~caps ~clock ~process_mgr ?clipboard_owner
     (config : Config.Stt.t) mode (target : History.window option) text =
   inject_and_report ~caps ~clock ~process_mgr ?clipboard_owner
@@ -1095,7 +1051,6 @@ let first_binding (config : Config.Stt.t) mode =
 
 let create_dictation ~logger ~config ?binding pipeline mode =
   match config.Config.Stt.pipeline with
-  | Legacy -> Ok None
   | One_pass | Two_pass -> (
       match
         ( pipeline,
@@ -1120,8 +1075,17 @@ let create_dictation ~logger ~config ?binding pipeline mode =
             (`Ptt_error
                (match config.pipeline with
                | One_pass -> "stt:one-pass-pipeline-missing"
-               | Two_pass | Legacy -> "stt:two-pass-pipeline-missing"))
+               | Two_pass -> "stt:two-pass-pipeline-missing"))
       | _, None -> Error (`Ptt_error "stt:no-binding-for-mode"))
+
+(* Retained-audio retries use the selected supported pipeline too. *)
+let production_stt ~caps ~sw ~net ~clock ~logger ~process_mgr config mode bytes
+    =
+  let deps = production_pipeline ~caps ~sw ~net ~clock ~logger ~process_mgr in
+  match first_binding config mode with
+  | None -> Error (`Ptt_error "stt:no-binding-for-mode")
+  | Some binding ->
+      Dictation.recognize (Dictation.create deps ~config ~binding) bytes
 
 let make_clip_handle ~owner ~stt ~deliver ~config mode =
   {
@@ -1156,17 +1120,7 @@ let make_streaming_handle ~caps ~sw ~net ~clock ~logger ~owner ~config ~stt
         let context = glossary_prompt (Dictation.glossary dictation) in
         Stt.Codex_realtime.with_pass1_stream ~caps ~sw ~net ~clock ~logger
           ~model ?language ?context use
-    | None -> (
-        match mode with
-        | Transcribe ->
-            Stt.Codex_realtime.with_transcription_stream ~caps ~sw ~net ~clock
-              ~logger ~model ~language:config.transcription_language
-              ~prompt_template:config.transcription_prompt use
-        | Translate ->
-            Stt.Codex_realtime.with_translation_stream ~caps ~sw ~net ~clock
-              ~logger ~model ~source_language:config.translation_source_language
-              ~target_language:config.translation_target_language
-              ~prompt_template:config.translation_prompt use)
+    | None -> Error (`Stt_error "dictation context missing")
   in
   let warn_fallback () =
     ignore
@@ -1251,7 +1205,7 @@ let acquire_and_run ~caps ~sw ~net ~clock ~logger ~owner ~config ~stt ~deliver
   let model_mode =
     match config.Config.Stt.pipeline with
     | Two_pass -> Transcribe
-    | One_pass | Legacy -> mode
+    | One_pass -> mode
   in
   match
     try Ok (resolved_model_for_mode config model_mode)
@@ -1271,10 +1225,6 @@ let acquire_and_run ~caps ~sw ~net ~clock ~logger ~owner ~config ~stt ~deliver
       let handle =
         match config.pipeline with
         | One_pass -> buffered ()
-        | Legacy -> (
-            match resolved.provider with
-            | Codex_realtime -> streaming ()
-            | Openrouter -> buffered ())
         | Two_pass -> (
             match resolved.provider with
             | Codex_realtime when config.streaming -> streaming ()

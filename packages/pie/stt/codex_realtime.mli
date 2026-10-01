@@ -1,14 +1,11 @@
 type error = [ `Stt_error of string ]
-type mode = Transcription | Translation | Conversation
-type terminal_status = Completed | Failed | Cancelled | Incomplete | Unknown
+type mode = Transcription
 
 type event =
   | Created of string
   | Config_ack of string
   | Transcript_delta of string
-  | Transcript_done of string
   | Transcript_final of string
-  | Response_terminal of terminal_status
   | Server_error of { message : string; code : string option }
   | Other of string
 
@@ -60,16 +57,6 @@ val build_realtime_url :
   unit ->
   string
 
-val build_transcription_session_update :
-  ?prompt:string -> model:string -> unit -> Ox_json.t
-
-val build_translation_session_update :
-  ?prompt:string -> ?target_language:string -> unit -> Ox_json.t
-
-val build_conversation_session_update :
-  model:string -> prompt:string -> Ox_json.t
-
-val build_conversation_response_create : prompt:string -> Ox_json.t
 val parse_event : string -> (event, error) result
 val server_error_diagnostic : string option -> string
 val event_should_stop : mode:mode -> event -> bool
@@ -85,8 +72,6 @@ val run_realtime_session :
   access_token:string ->
   mode:mode ->
   ?session_update:Ox_json.t ->
-  ?response_create:Ox_json.t ->
-  ?translation_output_drain_ms:int ->
   input_sample_rate:int ->
   bytes ->
   (string, error) result
@@ -101,9 +86,7 @@ val run_realtime_stream_session :
   access_token:string ->
   mode:mode ->
   ?session_update:Ox_json.t ->
-  ?response_create:Ox_json.t ->
   ?on_text:(string -> unit) ->
-  ?translation_output_drain_ms:int ->
   input_sample_rate:int ->
   (unit -> (bytes option, 'audio_error) result) ->
   (string, error) result
@@ -126,63 +109,10 @@ val with_stream_session :
   operation:string ->
   model:string ->
   ?session_update:Ox_json.t ->
-  ?response_create:Ox_json.t ->
   ?sample_rate:int ->
   cancel_message:string ->
   (stream_handle -> ('a, error) result) ->
   ('a, error) result
-
-val with_transcription_stream :
-  caps:< Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.time ; .. > ->
-  sw:Eio.Switch.t ->
-  net:_ Eio.Net.t ->
-  clock:_ Eio.Time.clock ->
-  logger:Ox_observability.Logger.t ->
-  model:string ->
-  language:string ->
-  prompt_template:string ->
-  ?sample_rate:int ->
-  (stream_handle -> ('a, error) result) ->
-  ('a, error) result
-
-val with_translation_stream :
-  caps:< Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.time ; .. > ->
-  sw:Eio.Switch.t ->
-  net:_ Eio.Net.t ->
-  clock:_ Eio.Time.clock ->
-  logger:Ox_observability.Logger.t ->
-  model:string ->
-  source_language:string ->
-  target_language:string ->
-  prompt_template:string ->
-  ?sample_rate:int ->
-  (stream_handle -> ('a, error) result) ->
-  ('a, error) result
-
-val transcribe_with_prompt :
-  caps:< Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.time ; .. > ->
-  sw:Eio.Switch.t ->
-  net:_ Eio.Net.t ->
-  clock:_ Eio.Time.clock ->
-  model:string ->
-  language:string ->
-  prompt_template:string ->
-  ?sample_rate:int ->
-  bytes ->
-  (string, error) result
-
-val translate_with_prompt :
-  caps:< Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.time ; .. > ->
-  sw:Eio.Switch.t ->
-  net:_ Eio.Net.t ->
-  clock:_ Eio.Time.clock ->
-  model:string ->
-  source_language:string ->
-  target_language:string ->
-  prompt_template:string ->
-  ?sample_rate:int ->
-  bytes ->
-  (string, error) result
 
 val build_pass1_session_update :
   ?language:string -> ?context:string -> model:string -> unit -> Ox_json.t
@@ -213,8 +143,7 @@ val with_pass1_stream :
     ([wss .../v1/realtime?intent=transcription]).
 
     Offer audio on the handle while the key is held. [finish_stream] commits the
-    buffer and returns the completed transcript. This is not the
-    conversation-model session used by {!with_transcription_stream}. *)
+    buffer and returns the completed transcript. *)
 
 val transcribe_pass1 :
   caps:< Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.time ; .. > ->

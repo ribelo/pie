@@ -1,6 +1,5 @@
 type error = [ `Stt_error of string ]
 
-module Responses = Ox_ai_openrouter.Responses
 module Openrouter_audio = Ox_ai_openrouter.Audio
 module Redact = Ox_observability.Redact
 
@@ -26,7 +25,6 @@ let provider_failed json =
   | _ -> false
 
 let direct_transcription_timeout = Ox.Duration.seconds 60
-let response_operation_timeout = Ox.Duration.seconds 120
 
 let resolve_api_key ~caps () =
   match Ox_caps.Cap_sys.getenv_opt ~caps "OPENROUTER_API_KEY" with
@@ -114,87 +112,6 @@ let wav_bytes ~sample_rate pcm_bytes =
   Bytes.blit pcm_bytes 0 wav (Bytes.length header) (Bytes.length pcm_bytes);
   wav
 
-let output_text_field = "text"
-
-let structured_output task =
-  let schema =
-    `Assoc
-      [
-        ("type", `String "object");
-        ( "properties",
-          `Assoc [ (output_text_field, `Assoc [ ("type", `String "string") ]) ]
-        );
-        ("required", `List [ `String output_text_field ]);
-        ("additionalProperties", `Bool false);
-      ]
-  in
-  Responses.Json_schema
-    { name = task ^ "_response"; schema; strict = Some true }
-
-let decode_structured_output raw =
-  if String.length raw > Dictation_limits.result_utf8_bytes then
-    Error (`Stt_error "OpenRouter result budget exceeded")
-  else
-    try
-      match Yojson.Safe.from_string (String.trim raw) with
-      | `Assoc fields -> (
-          match List.assoc_opt output_text_field fields with
-          | Some (`String text) when String.trim text <> "" ->
-              let text = String.trim text in
-              if String.length text > Dictation_limits.result_utf8_bytes then
-                Error (`Stt_error "OpenRouter result budget exceeded")
-              else Ok text
-          | _ ->
-              Error (`Stt_error "OpenRouter structured response missing text"))
-      | _ ->
-          Error (`Stt_error "OpenRouter structured response must be an object")
-    with Yojson.Json_error _ ->
-      Error (`Stt_error "OpenRouter structured response was not valid JSON")
-
-let outcome_rejection = function
-  | `Not_completed "incomplete" -> "incomplete"
-  | `Not_completed "cancelled" -> "cancelled"
-  | `Not_completed _ -> "missing finish markers or non-completed status"
-  | `Tool_continuation _ -> "tool continuation"
-  | `Refusal _ -> "refusal"
-  | `Other _ -> "unsupported output"
-
-let run_audio_responses ~caps ~sw ~net ~clock ~logger ~model ~prompt
-    ~sample_rate ~task ?thinking_effort pcm_bytes =
-  if Bytes.length pcm_bytes > Dictation_limits.capture_pcm_bytes then
-    Error (`Stt_error "OpenRouter captured audio budget exceeded")
-  else
-    match resolve_api_key ~caps () with
-    | None ->
-        Error (`Stt_error "Missing OpenRouter API key. Set OPENROUTER_API_KEY.")
-    | Some api_key -> (
-        let http = Process.make_http ~sw ~net ~clock in
-        let request : Responses.request =
-          {
-            model;
-            prompt;
-            wav = wav_bytes ~sample_rate pcm_bytes;
-            temperature = Some 0.0;
-            text_format = Some (structured_output task);
-            reasoning_effort = thinking_effort;
-          }
-        in
-        match
-          Responses.create ~http ~clock ~logger ~api_key
-            ?endpoint:(endpoint ~caps "/api/v1/responses")
-            ~timeout:response_operation_timeout
-            ~deadline:response_operation_timeout request
-        with
-        | Error error -> Error (stt_error_of_ai error)
-        | Ok response -> (
-            match Responses.deliverable response with
-            | Error rejection ->
-                Error
-                  (`Stt_error
-                     ("OpenRouter outcome rejected: "
-                     ^ outcome_rejection rejection))
-            | Ok raw -> decode_structured_output raw))
-
 (* A 64 MiB admitted PCM capture has a 44-byte WAV header and bounded multipart
    framing. The extra 8 KiB covers the model, language and transport field
    names. The prompt length is added so a glossary is not refused locally. *)
@@ -232,22 +149,3 @@ let transcribe ~caps ~sw ~net ~clock ~api_key ~model ?language ?prompt
         if String.length text > Dictation_limits.result_utf8_bytes then
           Error (`Stt_error "OpenRouter result budget exceeded")
         else Ok text
-
-let transcribe_with_prompt ~caps ~sw ~net ~clock ~logger ~model ~language
-    ~prompt_template ?thinking_effort ?(sample_rate = 16000) pcm_bytes =
-  let prompt = render_template prompt_template [ ("language", language) ] in
-  run_audio_responses ~caps ~sw ~net ~clock ~logger ~model ~prompt ~sample_rate
-    ~task:"transcription" ?thinking_effort pcm_bytes
-
-let translate_with_prompt ~caps ~sw ~net ~clock ~logger ~model ~source_language
-    ~target_language ~prompt_template ?thinking_effort ?(sample_rate = 16000)
-    pcm_bytes =
-  let prompt =
-    render_template prompt_template
-      [
-        ("source_language", source_language);
-        ("target_language", target_language);
-      ]
-  in
-  run_audio_responses ~caps ~sw ~net ~clock ~logger ~model ~prompt ~sample_rate
-    ~task:"translation" ?thinking_effort pcm_bytes

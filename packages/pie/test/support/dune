@@ -1,4 +1,4 @@
 (library
  (name pie_test_runtime)
  (modules pie_test_runtime)
- (libraries eio eio.unix eio_main ox_app))
+ (libraries pie eio eio.unix eio_main ox_app))

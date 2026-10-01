@@ -127,9 +127,8 @@ let direct_close ~sw ~net ~clock ~url =
           Result.map_error (fun _ -> ()) (Ox_ai_realtime.Session.close session))
 
 let pie_buffered ~sw ~net ~clock =
-  Stt.Codex_realtime.transcribe_with_prompt ~caps ~sw ~net ~clock
-    ~model:"gpt-realtime-2" ~language:"pl"
-    ~prompt_template:"Transcribe in {{language}}." ~sample_rate:16000
+  Stt.Codex_realtime.transcribe_pass1 ~caps ~sw ~net ~clock
+    ~model:"gpt-live-transcribe" ~language:"pl" ~sample_rate:16000
     (Bytes.make 3200 '\000')
 
 let report ~clock ~label ~index ~held =
