@@ -566,7 +566,7 @@ let restore_lock retry_dir save =
 (* One workflow lifetime on its own scope: the assertions run while the workflow
    stays live on the scope's switch. Bounded, so a regression that never settles
    fails on the deadline instead of hanging the suite. *)
-let run_e2e ~dir ~stt ~deliver assertions =
+let run_e2e ?(on_stopped = fun () -> ()) ~dir ~stt ~deliver assertions =
   Pie_test_runtime.run @@ fun env ->
   let clock = Eio.Stdenv.clock env in
   match
@@ -593,6 +593,7 @@ let run_e2e ~dir ~stt ~deliver assertions =
                          true
                        with _ -> false);
                    assertions ~clock ~net ~sw ~socket_path ~retry_dir);
+               on_stopped ();
                Ok ())))
   with
   | Ok exit -> require_success exit
@@ -708,6 +709,88 @@ let test_text_retry_held_delivery_cleanup_stt_zero () =
               Alcotest.(check bool)
                 "successful text retry clears candidate" true
                 (peek_meta retry_dir = None))))
+
+let test_queued_retry_processing_only check_capture =
+  with_dir (fun dir ->
+      ignore (seed_audio (Filename.concat dir "r"));
+      let entered, entered_u = Eio.Promise.create () in
+      let never, _ = Eio.Promise.create () in
+      let calls = Atomic.make 0 in
+      let stt _ _ _ =
+        Atomic.incr calls;
+        ignore (Eio.Promise.try_resolve entered_u ());
+        Eio.Promise.await never;
+        Ok "unused"
+      in
+      let on_stopped () =
+        let state =
+          Yojson.Safe.from_file (Pie.Paths.recording_state_path ~caps)
+          |> Yojson.Safe.Util.to_assoc
+        in
+        Alcotest.(check bool)
+          "shutdown released all capture ownership" false
+          (bool_field "active" state);
+        Alcotest.(check bool)
+          "shutdown released queued processing admission" true
+          (List.assoc_opt "processing" state = Some (`Int 0))
+      in
+      run_e2e ~dir ~stt
+        ~deliver:(fun _ _ _ _ -> Alcotest.fail "held retry must not deliver")
+        ~on_stopped
+        (fun ~clock ~net ~sw ~socket_path ~retry_dir:_ ->
+          let first = assoc_of_json (rpc ~net ~sw socket_path action_retry) in
+          Alcotest.(check bool)
+            "first retry admitted" true
+            (bool_field "accepted" first);
+          wait_until ~clock (fun () -> Eio.Promise.is_resolved entered);
+          let second = assoc_of_json (rpc ~net ~sw socket_path action_retry) in
+          Alcotest.(check bool)
+            "second retry admitted while first held" true
+            (bool_field "accepted" second);
+          Alcotest.(check int)
+            "second retry remains queued" 1 (Atomic.get calls);
+          if check_capture then (
+            Alcotest.(check bool)
+              "queued retry never owns capture" false
+              (status_active ~net ~sw socket_path);
+            let state = assoc_of_json (rpc ~net ~sw socket_path status_json) in
+            Alcotest.(check bool)
+              "both retries count as processing" true
+              (List.assoc_opt "processing" state = Some (`Int 2));
+            let start =
+              assoc_of_json (rpc ~net ~sw socket_path action_ptt_start)
+            in
+            Alcotest.(check bool)
+              "fresh microphone press admitted" true
+              (bool_field "accepted" start);
+            wait_until ~clock (fun () -> status_active ~net ~sw socket_path);
+            ignore (rpc ~net ~sw socket_path action_pause);
+            wait_until ~clock (fun () ->
+                not (status_active ~net ~sw socket_path));
+            Alcotest.(check int)
+              "pause does not dequeue or cancel retries" 1 (Atomic.get calls);
+            ignore (rpc ~net ~sw socket_path action_resume);
+            for _ = 1 to 2 do
+              let retry =
+                assoc_of_json (rpc ~net ~sw socket_path action_retry)
+              in
+              Alcotest.(check bool)
+                "queued retry reserves processing capacity" true
+                (bool_field "accepted" retry)
+            done;
+            let full = assoc_of_json (rpc ~net ~sw socket_path status_json) in
+            Alcotest.(check bool)
+              "four queued/active retries fill the cap" true
+              (List.assoc_opt "processing" full = Some (`Int 4));
+            let fifth = assoc_of_json (rpc ~net ~sw socket_path action_retry) in
+            Alcotest.(check bool)
+              "fifth retry refused" false
+              (bool_field "accepted" fifth);
+            ignore (rpc ~net ~sw socket_path action_ptt_start);
+            Eio.Fiber.yield ();
+            Alcotest.(check bool)
+              "full processing cap refuses microphone capture" false
+              (status_active ~net ~sw socket_path))))
 
 (* Both failures must survive: the delivery failure stays primary and the failed
    publication stays retained as the finalizer, neither replacing the other. *)
@@ -892,6 +975,10 @@ let () =
             test_text_retry_held_delivery_cleanup_stt_zero;
           Alcotest.test_case "audio retry delivery+publish fail keeps audio"
             `Quick test_audio_retry_delivery_and_text_publish_both_causes;
+          Alcotest.test_case "dict-q7we queued retry never owns capture" `Quick
+            (fun () -> test_queued_retry_processing_only true);
+          Alcotest.test_case "dict-q7we shutdown releases queued retry" `Quick
+            (fun () -> test_queued_retry_processing_only false);
           Alcotest.test_case "delivery success clear fail preserves candidate"
             `Quick test_delivery_success_clear_fail_preserves_candidate;
         ] );

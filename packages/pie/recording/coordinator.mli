@@ -58,6 +58,11 @@ val set_phase : t -> attempt -> Phase.activity -> bool
 val try_start :
   t -> recording_mode -> ?transcript_path:string -> unit -> start_result
 
+val try_start_processing : t -> recording_mode -> unit -> start_result
+(** Admit retained or archived work directly into the processing FIFO, without
+    owning microphone capture. The same enabled, capture-busy and four-slot
+    admission checks apply. *)
+
 val release : t -> attempt -> bool
 (** Remove a known attempt's settlement slot. Stale releases return false;
     processing settlement never clears a newer capture. *)

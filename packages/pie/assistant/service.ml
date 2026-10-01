@@ -1364,8 +1364,8 @@ let split_action raw =
       in
       (command, if rest = "" then None else Some rest)
 
-let action_handler ~coordinator ~send_control ~retries ~get_store ~load_archived
-    raw_action =
+let action_handler ~sw ~coordinator ~send_control ~retries ~get_store
+    ~load_archived raw_action =
   let action, archive_id = split_action raw_action in
   let snap = Assistant_service.Server.snapshot_of_coordinator coordinator in
   let enqueue trigger message =
@@ -1448,10 +1448,28 @@ let action_handler ~coordinator ~send_control ~retries ~get_store ~load_archived
   | "retry" | "ptt-retry" -> (
       let queue mode job : Assistant_service.Contract.action_result =
         match
-          Recording.Coordinator.try_start coordinator (recording_mode mode) ()
+          Recording.Coordinator.try_start_processing coordinator
+            (recording_mode mode) ()
         with
         | Recording.Coordinator.Started attempt ->
-            Eio.Stream.add retries (job, attempt);
+            (* Register ownership before enqueueing: a queued retry may never be
+               dequeued if the service is cancelled or its active retry fails. *)
+            let hook = ref Eio.Switch.null_hook in
+            let release () =
+              Fun.protect
+                ~finally:(fun () -> Eio.Switch.remove_hook !hook)
+                (fun () ->
+                  ignore (Recording.Coordinator.release coordinator attempt);
+                  Ok ())
+            in
+            hook :=
+              Eio.Switch.on_release_cancellable sw (fun () ->
+                  ignore (release ()));
+            (match Eio.Stream.add retries (job, attempt, release) with
+            | () -> ()
+            | exception exn ->
+                ignore (release ());
+                raise exn);
             {
               action = raw_action;
               accepted = true;
@@ -1514,40 +1532,9 @@ let action_handler ~coordinator ~send_control ~retries ~get_store ~load_archived
                     message = Some "no retained recording to retry";
                     snapshot = snap;
                   }
-              | Ok (Some metadata) -> (
-                  let mode = mode_of_active_metadata metadata in
-                  match
-                    Recording.Coordinator.try_start coordinator
-                      (recording_mode mode) ()
-                  with
-                  | Recording.Coordinator.Started attempt ->
-                      Eio.Stream.add retries (Retained metadata, attempt);
-                      {
-                        action = raw_action;
-                        accepted = true;
-                        message = Some "retry queued";
-                        snapshot =
-                          Assistant_service.Server.snapshot_of_coordinator
-                            coordinator;
-                      }
-                  | Recording.Coordinator.Busy active ->
-                      {
-                        action = raw_action;
-                        accepted = false;
-                        message =
-                          Some
-                            ("cannot retry while "
-                            ^ Recording.Coordinator.string_of_mode active
-                            ^ " is active");
-                        snapshot = snap;
-                      }
-                  | Recording.Coordinator.Disabled ->
-                      {
-                        action = raw_action;
-                        accepted = false;
-                        message = Some "cannot retry while PIE is paused";
-                        snapshot = snap;
-                      }))))
+              | Ok (Some metadata) ->
+                  queue (mode_of_active_metadata metadata) (Retained metadata)))
+      )
   | _ ->
       {
         action = raw_action;
@@ -1616,7 +1603,11 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
     let last_stamp = ref initial_stamp in
     let coordinator = Recording.Coordinator.create ~caps () in
     let control : Ptt_loop.trigger Eio.Stream.t = Eio.Stream.create 1024 in
-    let retries : (retry_job * Recording.Coordinator.attempt) Eio.Stream.t =
+    let retries :
+        (retry_job
+        * Recording.Coordinator.attempt
+        * (unit -> (unit, Ptt_loop.error) result))
+        Eio.Stream.t =
       Eio.Stream.create 16
     in
     let store_cell = ref None in
@@ -1679,7 +1670,7 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
         (Assistant_service.Server.start ~caps ~sw ~net ~fs ~socket_path ~clock
            ~status_metadata:(fun () -> response_metadata !current)
            ~action_handler:
-             (action_handler ~coordinator ~send_control ~retries ~get_store
+             (action_handler ~sw ~coordinator ~send_control ~retries ~get_store
                 ~load_archived)
            coordinator)
     in
@@ -1959,7 +1950,7 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
       (* Recovery has no key-press target. Never paste into retry-time focus. *)
       let deliver config mode _window text = deliver config mode None text in
       let rec loop () =
-        let job, attempt = Eio.Stream.take retries in
+        let job, attempt, release = Eio.Stream.take retries in
         ignore
           (Recording.Coordinator.set_phase coordinator attempt
              Recording.Phase.Processing);
@@ -1980,10 +1971,6 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
             ->
               Some generation
           | Archived _ -> None
-        in
-        let release () =
-          ignore (Recording.Coordinator.release coordinator attempt);
-          Ok ()
         in
         let publish_text_slot ?(dispatch_uncertain = true) store text () =
           unless_cancelled attempt (fun () ->

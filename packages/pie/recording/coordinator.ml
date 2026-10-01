@@ -295,7 +295,7 @@ let set_phase t (attempt : attempt) phase =
         true)
       else false
 
-let try_start t mode ?transcript_path () =
+let try_admit ~capture t mode ?transcript_path () =
   let caps = t.caps in
   mutate t (fun current ->
       if not current.enabled then (Disabled, current)
@@ -307,16 +307,25 @@ let try_start t mode ?transcript_path () =
             let now = Ox_caps.Cap_unix.gettimeofday ~caps () in
             let attempt = make_attempt mode in
             t.attempts <- t.attempts @ [ attempt ];
-            ( Started attempt,
-              {
-                enabled = current.enabled;
-                mode = Some attempt;
-                phase = Some Phase.Starting;
-                started_at = Some now;
-                transcript_path;
-                last_error = None;
-                updated_at = now;
-              } ))
+            let state =
+              if capture then
+                {
+                  enabled = current.enabled;
+                  mode = Some attempt;
+                  phase = Some Phase.Starting;
+                  started_at = Some now;
+                  transcript_path;
+                  last_error = None;
+                  updated_at = now;
+                }
+              else (
+                attempt.activity <- Phase.Processing;
+                { current with last_error = None; updated_at = now })
+            in
+            (Started attempt, state))
+
+let try_start = try_admit ~capture:true
+let try_start_processing t mode () = try_admit ~capture:false t mode ()
 
 (* Settlement removes this attempt's FIFO slot without changing a newer capture.
    Persist queue-count changes even when no capture state changes. *)
