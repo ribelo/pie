@@ -8,7 +8,6 @@ Ox row 57 (e7054a73) and row 59 (ffe57e78, spec ox/docs/issues/pie-api-gaps/01-p
 - Reasoning output items: `Responses.deliverable` skips `Other "reasoning"`; Pie's local filter is gone. (`dict-ldo9`)
 - WebSocket establishment: `Ox_http.Ws_client.connect ?establishment_timeout` (10 s) was already in use; there is no total-effect wrapper left. (`etagap-utb3`, `etagap-g1ip`)
 - Transport defects: WebSocket keepalive pings are answered for the life of the connection (long streamed dictations no longer die at 11 min 6 s, docs/issues/long-recording-cutoff) and TLS reads and writes no longer share a ciphertext buffer (docs/issues/session-ownership-wss-flake; session_ownership passes).
-- The legacy audio Responses call now passes `?timeout` equal to its 120 s deadline, so the per-attempt default of 10 s no longer cuts long replies.
 
 ## Still missing
 
@@ -18,4 +17,4 @@ Ox row 57 (e7054a73) and row 59 (ffe57e78, spec ox/docs/issues/pie-api-gaps/01-p
 
 ### Response idle timeout: available, not adopted
 
-`?response_idle` exists on Responses and `Audio.create`, but Pie's calls are non-streaming: the provider sends nothing until the whole reply is ready, so an idle bound would have to be as long as the total one. Pie keeps its total deadlines (60 s direct transcription, 120 s audio Responses, `one_pass_timeout_seconds`, `correction_timeout_seconds`). (`etagap-jk25`, `etagap-3uxz`)
+`?response_idle` exists on Responses and `Audio.create`, but Pie's calls are non-streaming: the provider sends nothing until the whole reply is ready, so an idle bound would have to be as long as the total one. Pie keeps its total deadlines (60 s direct transcription, `one_pass_timeout_seconds`, `correction_timeout_seconds`). (`etagap-jk25`, `etagap-3uxz`)

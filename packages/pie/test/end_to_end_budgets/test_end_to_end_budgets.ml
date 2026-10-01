@@ -26,13 +26,10 @@ let base_config () : Pie.Config.Stt.t =
     ptt_transcribe_shift = false;
     ptt_translate_shift = false;
     thinking_effort = None;
-    transcription_prompt = "Transcribe in {{language}}.";
-    translation_prompt =
-      "Translate from {{source_language}} to {{target_language}}.";
     newline_rules = [];
     text_entry_rules = [];
     prompt_rules = [];
-    pipeline = Legacy;
+    pipeline = Two_pass;
     openrouter_provider_order = None;
     one_pass_timeout_seconds = 30.;
     streaming = false;
@@ -219,10 +216,10 @@ let owner_workflow ~logger ~env ~sw ~net ~process_mgr ~mono_clock ~dir
     { Pie.Assistant.Service.keyboard; audio; source_name = Some "e2e" }
   in
   let workflow () =
-    Pie.Assistant.Service.run_with_inputs ~caps ~sw ~net ~fs:(Eio.Stdenv.fs env)
-      ~clock:(Eio.Stdenv.clock env) ~logger ~process_mgr ~mono_clock ~inputs
-      ~config_control ~stt ~deliver ~socket_path ~retry_dir ~min_duration_ms:0
-      ()
+    Pie_test_runtime.Service.run_with_inputs ~caps ~sw ~net
+      ~fs:(Eio.Stdenv.fs env) ~clock:(Eio.Stdenv.clock env) ~logger ~process_mgr
+      ~mono_clock ~inputs ~config_control ~stt ~deliver ~socket_path ~retry_dir
+      ~min_duration_ms:0 ()
   in
   (socket_path, retry_dir, workflow)
 

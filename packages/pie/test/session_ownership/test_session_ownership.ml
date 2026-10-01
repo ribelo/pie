@@ -104,8 +104,8 @@ let upgrade flow =
 
 let session_updated = "{\"type\":\"session.updated\"}"
 
-let response_done =
-  "{\"type\":\"response.done\",\"response\":{\"status\":\"completed\"}}"
+let transcript_completed =
+  "{\"type\":\"conversation.item.input_audio_transcription.completed\",\"transcript\":\"ownership\"}"
 
 let server_error =
   "{\"type\":\"error\",\"error\":{\"message\":\"pre-ready\",\"code\":\"bad_request\"}}"
@@ -130,7 +130,7 @@ let handle_peer ~clock:_ scenario ~on_connected ~hold ~close_flow flow =
   | Normal ->
       on_connected ();
       write_ws_text flow session_updated;
-      write_ws_text flow response_done;
+      write_ws_text flow transcript_completed;
       hold_then_close ()
   | Pre_ready_error ->
       on_connected ();
@@ -155,16 +155,13 @@ let handle_peer ~clock:_ scenario ~on_connected ~hold ~close_flow flow =
 let pcm = Bytes.make 320 '\001'
 
 let session_update =
-  Pie.Stt.Codex_realtime.build_conversation_session_update
-    ~model:"gpt-realtime-2" ~prompt:"test"
-
-let response_create =
-  Pie.Stt.Codex_realtime.build_conversation_response_create ~prompt:"test"
+  Pie.Stt.Codex_realtime.build_pass1_session_update ~model:"gpt-live-transcribe"
+    ()
 
 let run_buffered ~sw ~net ~clock ?ca_file ~url () =
   Pie.Stt.Codex_realtime.run_realtime_session ~caps ~sw ~net ~clock ?ca_file
     ~url ~access_token:"synthetic-ownership-token"
-    ~mode:Pie.Stt.Codex_realtime.Conversation ~session_update ~response_create
+    ~mode:Pie.Stt.Codex_realtime.Transcription ~session_update
     ~input_sample_rate:16000 pcm
 
 let run_streaming ~sw ~net ~clock ?ca_file ~url ?on_audio_pull () =
@@ -178,7 +175,7 @@ let run_streaming ~sw ~net ~clock ?ca_file ~url ?on_audio_pull () =
   in
   Pie.Stt.Codex_realtime.run_realtime_stream_session ~caps ~sw ~net ~clock
     ?ca_file ~url ~access_token:"synthetic-ownership-token"
-    ~mode:Pie.Stt.Codex_realtime.Conversation ~session_update ~response_create
+    ~mode:Pie.Stt.Codex_realtime.Transcription ~session_update
     ~input_sample_rate:16000 audio
 
 let pp_stt ppf = function `Stt_error msg -> Format.pp_print_string ppf msg
@@ -626,7 +623,7 @@ let test_fd_identity_diagnosis () =
             upgrade flow;
             Eio.Promise.resolve job.resolve_connected ();
             write_ws_text flow session_updated;
-            write_ws_text flow response_done;
+            write_ws_text flow transcript_completed;
             Eio.Promise.await hold;
             close_peer flow));
     let result = settle ~sw ~net ~clock ~url ~job Normal false in

@@ -346,62 +346,52 @@ let run_buffered ~mode ~session_update ~script_handshake ~script_append
   operation
 
 let json_delta text =
-  Printf.sprintf {|{"type":"response.output_text.delta","delta":%S}|} text
+  Printf.sprintf
+    {|{"type":"conversation.item.input_audio_transcription.delta","delta":%S}|}
+    text
 
 let json_final text =
   Printf.sprintf
     {|{"type":"conversation.item.input_audio_transcription.completed","transcript":%S}|}
     text
 
-let conversation_update =
-  Codex.build_conversation_session_update ~model:"gpt-realtime-2.1" ~prompt:"p"
-
-let json_done_completed =
-  {|{"type":"response.done","response":{"status":"completed"}}|}
+let transcription_update =
+  Codex.build_pass1_session_update ~model:"gpt-live-transcribe" ()
 
 let delta_chunks ~n ~size fill =
   List.init n (fun _ -> json_delta (String.make size fill))
 
-let test_result_minus_one () =
-  let size = 32_768 in
-  let n = (Limits.result_utf8_bytes - 1) / size in
-  let rem = Limits.result_utf8_bytes - 1 - (n * size) in
-  let append =
-    delta_chunks ~n ~size 'a'
-    @ (if rem = 0 then [] else [ json_delta (String.make rem 'a') ])
-    @ [ json_done_completed ]
-  in
-  match
-    run_buffered ~mode:Codex.Conversation ~session_update:conversation_update
-      ~script_handshake:[ created ] ~script_append:append (pcm 320)
-  with
-  | Ok got ->
-      Alcotest.(check int)
-        "len-1"
-        (Limits.result_utf8_bytes - 1)
-        (String.length got)
-  | Error cause -> Alcotest.failf "result-1 failed: %s" (cause_text cause)
-
-let test_result_exact () =
-  let size = 32_768 in
-  let n = Limits.result_utf8_bytes / size in
-  let append = delta_chunks ~n ~size 'b' @ [ json_done_completed ] in
-  match
-    run_buffered ~mode:Codex.Conversation ~session_update:conversation_update
-      ~script_handshake:[ created ] ~script_append:append (pcm 320)
-  with
-  | Ok got ->
-      Alcotest.(check int) "exact" Limits.result_utf8_bytes (String.length got)
-  | Error cause -> Alcotest.failf "result exact failed: %s" (cause_text cause)
+(* A dedicated completion includes the JSON envelope in the bounded websocket
+   message. The former conversation terminal could return accumulated deltas
+   without sending that full final transcript. *)
+let test_final_message_budget () =
+  List.iter
+    (fun size ->
+      match
+        run_buffered ~mode:Codex.Transcription
+          ~session_update:transcription_update ~script_handshake:[ created ]
+          ~script_append:[ json_final (String.make size 'a') ]
+          (pcm 320)
+      with
+      | Ok _ -> Alcotest.fail "oversized completion frame was accepted"
+      | Error cause ->
+          Alcotest.(check bool)
+            "bounded completion frame" true
+            (contains (cause_text cause) "message too large"))
+    [ Limits.result_utf8_bytes - 1; Limits.result_utf8_bytes ]
 
 let test_result_plus_one () =
   let size = 32_768 in
   let n = Limits.result_utf8_bytes / size in
   let append =
-    delta_chunks ~n ~size 'c' @ [ json_delta "x"; json_done_completed ]
+    delta_chunks ~n ~size 'c'
+    @ [
+        json_delta "x";
+        json_final (String.make (Limits.result_utf8_bytes + 1) 'c');
+      ]
   in
   expect_budget
-    (run_buffered ~mode:Codex.Conversation ~session_update:conversation_update
+    (run_buffered ~mode:Codex.Transcription ~session_update:transcription_update
        ~script_handshake:[ created ] ~script_append:append (pcm 320))
 
 let test_final_replaces_partials () =
@@ -409,8 +399,7 @@ let test_final_replaces_partials () =
   match
     run_buffered ~mode:Codex.Transcription
       ~session_update:
-        (Codex.build_transcription_session_update
-           ~model:"gpt-4o-mini-transcribe" ())
+        (Codex.build_pass1_session_update ~model:"gpt-4o-mini-transcribe" ())
       ~script_handshake:[ created ]
       ~script_append:[ json_delta chunk; json_final chunk ]
       (pcm 320)
@@ -425,8 +414,7 @@ let test_empty_deltas_do_not_grow () =
   match
     run_buffered ~mode:Codex.Transcription
       ~session_update:
-        (Codex.build_transcription_session_update
-           ~model:"gpt-4o-mini-transcribe" ())
+        (Codex.build_pass1_session_update ~model:"gpt-4o-mini-transcribe" ())
       ~script_handshake:[ created ]
       ~script_append:(empties @ [ json_final "ok" ])
       (pcm 320)
@@ -491,8 +479,7 @@ let test_closed_after_success () =
       ~access_token:"synthetic" ~mode:Codex.Transcription ~operation:"budget"
       ~model:"gpt-4o-mini-transcribe"
       ~session_update:
-        (Codex.build_transcription_session_update
-           ~model:"gpt-4o-mini-transcribe" ())
+        (Codex.build_pass1_session_update ~model:"gpt-4o-mini-transcribe" ())
       ~cancel_message:"Codex realtime transcription cancelled" (fun handle ->
         let* () = handle.offer_chunk (pcm 320) in
         let* text = handle.finish_stream () in
@@ -560,9 +547,10 @@ let () =
         ] );
       ( "output",
         [
-          Alcotest.test_case "result minus one" `Quick test_result_minus_one;
-          Alcotest.test_case "result exact" `Quick test_result_exact;
-          Alcotest.test_case "result plus one" `Quick test_result_plus_one;
+          Alcotest.test_case "completion frame budget" `Quick
+            test_final_message_budget;
+          Alcotest.test_case "delta accumulation result budget" `Quick
+            test_result_plus_one;
           Alcotest.test_case "final replaces partials" `Quick
             test_final_replaces_partials;
           Alcotest.test_case "empty deltas do not grow" `Quick

@@ -6,7 +6,7 @@ module Logger = Ox_observability.Logger
 
 let ( let* ) = Result.bind
 
-type mode = Transcription | Translation | Conversation
+type mode = Transcription
 
 module First_token_timer = struct
   type t = { started_at_ms : int Atomic.t; emitted : bool Atomic.t }
@@ -26,10 +26,7 @@ module First_token_timer = struct
     else Some (max 0 (at_ms - started_at_ms))
 end
 
-let string_of_mode = function
-  | Transcription -> "transcription"
-  | Translation -> "translation"
-  | Conversation -> "conversation"
+let string_of_mode = function Transcription -> "transcription"
 
 let log_first_token ~clock ~logger ~timer ~operation ~model ~mode text =
   let at_ms = int_of_float (Eio.Time.now clock *. 1000.) in
@@ -46,45 +43,22 @@ let log_first_token ~clock ~logger ~timer ~operation ~model ~mode text =
             ("stt.time_to_first_token_ms", Logger.Int ttft_ms);
           ]
 
-type terminal_status = Completed | Failed | Cancelled | Incomplete | Unknown
-
 type event =
   | Created of string
   | Config_ack of string
   | Transcript_delta of string
-  | Transcript_done of string
   | Transcript_final of string
-  | Response_terminal of terminal_status
   | Server_error of { message : string; code : string option }
   | Other of string
 
 let realtime_sample_rate = 24_000
 let default_base_url = "wss://api.openai.com"
 let realtime_version = "0.0.0"
-let default_conversation_model = "gpt-realtime-2.1"
 let oauth_response_idle_timeout = Ox.Duration.seconds 30
 let websocket_establishment_timeout = Ox.Duration.seconds 10
 
-let is_conversation_model model =
-  model = "gpt-realtime-2" || model = default_conversation_model
-
 let transcription_delta_types =
-  [
-    "conversation.item.input_audio_transcription.delta";
-    "conversation.input_transcript.delta";
-    "conversation.output_transcript.delta";
-    "session.input_transcript.delta";
-    "session.output_transcript.delta";
-    "response.output_text.delta";
-    "response.output_audio_transcript.delta";
-  ]
-
-let transcript_done_types =
-  [
-    "response.output_audio_transcript.done";
-    "response.output_text.done";
-    "conversation.output_transcript.done";
-  ]
+  [ "conversation.item.input_audio_transcription.delta" ]
 
 let transcript_final_types =
   [ "conversation.item.input_audio_transcription.completed" ]
@@ -109,10 +83,6 @@ let resolve_base_url ~caps () =
       strip_trailing_slashes (String.trim value)
   | _ -> default_base_url
 
-let path_for_mode = function
-  | Translation -> "/v1/realtime/translations"
-  | Transcription | Conversation -> "/v1/realtime"
-
 let http_scheme_stand_in url =
   if String.starts_with ~prefix:"wss://" url then
     ("wss://", "https://" ^ String.sub url 6 (String.length url - 6))
@@ -126,165 +96,29 @@ let restore_scheme prefix http_url =
   | "ws://" -> "ws://" ^ String.sub http_url 7 (String.length http_url - 7)
   | _ -> http_url
 
-let build_realtime_url ~caps ?base_url ~mode ~model () =
+let build_realtime_url ~caps ?base_url ~mode:_ ~model:_ () =
   let base_url =
     strip_trailing_slashes
       (Option.value base_url ~default:(resolve_base_url ~caps ()))
   in
-  let path =
-    if is_conversation_model model then "/v1/realtime" else path_for_mode mode
-  in
+  let path = "/v1/realtime" in
   let scheme, http_base = http_scheme_stand_in base_url in
   match Ox_http.Url.parse (http_base ^ path) with
   | Error parse_error ->
       invalid_arg (Ox_http.Url.parse_error_to_string parse_error)
   | Ok url ->
-      let url =
-        if is_conversation_model model then
-          Ox_http.Url.with_query_param url "model" model
-        else
-          match mode with
-          | Transcription ->
-              Ox_http.Url.with_query_param url "intent" "transcription"
-          | Translation | Conversation ->
-              Ox_http.Url.with_query_param url "model" model
-      in
+      let url = Ox_http.Url.with_query_param url "intent" "transcription" in
       restore_scheme scheme (Ox_http.Url.to_string url)
 
-let render_template template variables =
-  List.fold_left
-    (fun acc (key, value) ->
-      let needle = "{{" ^ key ^ "}}" in
-      let needle_len = String.length needle in
-      let buf = Buffer.create (String.length acc) in
-      let rec loop start =
-        match String.index_from_opt acc start '{' with
-        | None -> Buffer.add_substring buf acc start (String.length acc - start)
-        | Some i
-          when i + needle_len <= String.length acc
-               && String.sub acc i needle_len = needle ->
-            Buffer.add_substring buf acc start (i - start);
-            Buffer.add_string buf value;
-            loop (i + needle_len)
-        | Some i ->
-            Buffer.add_substring buf acc start (i - start + 1);
-            loop (i + 1)
-      in
-      loop 0;
-      Buffer.contents buf)
-    template variables
-
-let build_audio_append ?(mode = Transcription) pcm_bytes =
-  let frame_type =
-    match mode with
-    | Translation -> "session.input_audio_buffer.append"
-    | Transcription | Conversation -> "input_audio_buffer.append"
-  in
+let build_audio_append ~mode:_ pcm_bytes =
   `Assoc
     [
-      ("type", `String frame_type);
+      ("type", `String "input_audio_buffer.append");
       ("audio", `String (Openrouter.base64_encode pcm_bytes));
     ]
 
 let build_audio_commit () =
   `Assoc [ ("type", `String "input_audio_buffer.commit") ]
-
-let build_transcription_session_update ?prompt ~model () =
-  let transcription_fields =
-    [ ("model", `String model) ]
-    @ match prompt with Some p -> [ ("prompt", `String p) ] | None -> []
-  in
-  `Assoc
-    [
-      ("type", `String "session.update");
-      ( "session",
-        `Assoc
-          [
-            ("type", `String "transcription");
-            ( "audio",
-              `Assoc
-                [
-                  ( "input",
-                    `Assoc
-                      [
-                        ( "format",
-                          `Assoc
-                            [
-                              ("type", `String "audio/pcm");
-                              ("rate", `Int realtime_sample_rate);
-                            ] );
-                        ("transcription", `Assoc transcription_fields);
-                      ] );
-                ] );
-          ] );
-    ]
-
-let build_translation_session_update ?prompt ?target_language () =
-  let instructions =
-    match prompt with
-    | Some p -> Some p
-    | None ->
-        Option.map
-          (fun lang ->
-            Printf.sprintf "Translate the spoken audio into %s." lang)
-          target_language
-  in
-  let session_fields =
-    (match instructions with
-      | Some i -> [ ("instructions", `String i) ]
-      | None -> [])
-    @
-    match target_language with
-    | None -> []
-    | Some language ->
-        [
-          ( "audio",
-            `Assoc [ ("output", `Assoc [ ("language", `String language) ]) ] );
-        ]
-  in
-  `Assoc
-    [ ("type", `String "session.update"); ("session", `Assoc session_fields) ]
-
-let build_conversation_session_update ~model ~prompt =
-  `Assoc
-    [
-      ("type", `String "session.update");
-      ( "session",
-        `Assoc
-          [
-            ("type", `String "realtime");
-            ("model", `String model);
-            ("output_modalities", `List [ `String "text" ]);
-            ("instructions", `String prompt);
-            ( "audio",
-              `Assoc
-                [
-                  ( "input",
-                    `Assoc
-                      [
-                        ( "format",
-                          `Assoc
-                            [
-                              ("type", `String "audio/pcm");
-                              ("rate", `Int realtime_sample_rate);
-                            ] );
-                        ("turn_detection", `Null);
-                      ] );
-                ] );
-          ] );
-    ]
-
-let build_conversation_response_create ~prompt =
-  `Assoc
-    [
-      ("type", `String "response.create");
-      ( "response",
-        `Assoc
-          [
-            ("output_modalities", `List [ `String "text" ]);
-            ("instructions", `String prompt);
-          ] );
-    ]
 
 let parse_event payload =
   try
@@ -331,32 +165,6 @@ let parse_event payload =
                   (`Stt_error
                      "Codex realtime transcription completed event missing text")
             )
-        | Some event_type when List.mem event_type transcript_done_types -> (
-            match
-              (string_member "transcript" fields, string_member "text" fields)
-            with
-            | Some text, _ | None, Some text -> Ok (Transcript_done text)
-            | None, None ->
-                Error
-                  (`Stt_error
-                     "Codex realtime done event missing transcript text"))
-        | Some "response.done" ->
-            let status =
-              match member "response" fields with
-              | Some (`Assoc response_fields) ->
-                  string_member "status" response_fields
-              | Some _ -> None
-              | None -> string_member "status" fields
-            in
-            let terminal =
-              match status with
-              | Some "completed" -> Completed
-              | Some "failed" -> Failed
-              | Some "cancelled" -> Cancelled
-              | Some "incomplete" -> Incomplete
-              | Some _ | None -> Unknown
-            in
-            Ok (Response_terminal terminal)
         | Some event_type when List.mem event_type created_event_types ->
             Ok (Created event_type)
         | Some event_type when List.mem event_type config_ack_event_types ->
@@ -566,24 +374,17 @@ let send_json session json =
 
 let server_error_diagnostic _code = "Codex realtime server error"
 
-let event_should_stop ~mode = function
-  | Server_error _ -> true
-  | Transcript_final _ -> mode = Transcription || mode = Translation
-  | Response_terminal _ -> mode = Conversation
-  | Created _ | Config_ack _ | Transcript_delta _ | Transcript_done _ | Other _
-    ->
-      false
+let event_should_stop ~mode:_ = function
+  | Server_error _ | Transcript_final _ -> true
+  | Created _ | Config_ack _ | Transcript_delta _ | Other _ -> false
 
 type session_result = {
   final : string option;
   deltas : string list;
-  error : string option;
-  terminal : terminal_status option;
   output_bytes : int;
 }
 
-let empty_session_result =
-  { final = None; deltas = []; error = None; terminal = None; output_bytes = 0 }
+let empty_session_result = { final = None; deltas = []; output_bytes = 0 }
 
 let receive_event session =
   match Session.receive session with
@@ -605,7 +406,7 @@ let await_session_ready session =
   in
   loop ()
 
-let receive_result ?on_text ~mode session =
+let receive_result ?on_text ~mode:_ session =
   let rec loop state =
     let* event =
       match receive_event session with
@@ -621,8 +422,7 @@ let receive_result ?on_text ~mode session =
       else (
         Option.iter (fun callback -> callback text) on_text;
         Ok
-          (if replace then
-             { state with final = Some text; deltas = []; output_bytes = n }
+          (if replace then { final = Some text; deltas = []; output_bytes = n }
            else
              {
                state with
@@ -636,18 +436,10 @@ let receive_result ?on_text ~mode session =
       | Transcript_delta text when text <> "" ->
           let* state = admit ~replace:false text in
           Ok (state, false)
-      | Transcript_done text when text <> "" ->
-          let* state = admit ~replace:true text in
-          Ok (state, false)
       | Transcript_final text ->
           let* state = admit ~replace:true text in
-          if mode = Transcription || mode = Translation then
-            Ok ({ state with terminal = Some Completed }, true)
-          else Ok (state, false)
-      | Response_terminal status when mode = Conversation ->
-          Ok ({ state with terminal = Some status }, true)
-      | Created _ | Config_ack _ | Transcript_delta _ | Transcript_done _
-      | Response_terminal _ | Other _ ->
+          Ok (state, true)
+      | Created _ | Config_ack _ | Transcript_delta _ | Other _ ->
           Ok (state, false)
     in
     if done_ then Ok state else loop state
@@ -659,18 +451,7 @@ let collected_text result =
   | Some text -> text
   | None -> result.deltas |> List.rev |> String.concat "" |> String.trim
 
-let finish_result ~mode result =
-  match result.error with
-  | Some message -> stt_error message
-  | None -> (
-      match (mode, result.terminal) with
-      | (Transcription | Conversation), Some Completed ->
-          Ok (collected_text result)
-      | Conversation, Some Failed -> stt_error "Codex realtime response failed"
-      | Conversation, Some Cancelled ->
-          stt_error "Codex realtime response cancelled"
-      | Translation, Some Completed -> Ok (collected_text result)
-      | _ -> stt_error "Codex realtime response incomplete")
+let finish_result ~mode:_ result = Ok (collected_text result)
 
 let send_audio_chunks session ~mode pcm =
   let rec send offset =
@@ -741,8 +522,7 @@ let connect ~caps ~sw ~net ~clock ?ca_file ~url ~access_token () =
       `Stt_error ("Codex realtime " ^ websocket_message error))
 
 let run_realtime_session ~caps ~sw ~net ~clock ?ca_file ~url ~access_token ~mode
-    ?session_update ?response_create ?(translation_output_drain_ms = 2_000)
-    ~input_sample_rate pcm_bytes =
+    ?session_update ~input_sample_rate pcm_bytes =
   if Bytes.length pcm_bytes > Dictation_limits.capture_pcm_bytes then
     stt_error "Codex realtime captured audio budget exceeded"
   else if input_sample_rate <= 0 then
@@ -767,30 +547,11 @@ let run_realtime_session ~caps ~sw ~net ~clock ?ca_file ~url ~access_token ~mode
         in
         let send () =
           let* () = send_audio_chunks session ~mode pcm in
-          match mode with
-          | Translation -> Ok ()
-          | Transcription | Conversation -> (
-              let* () = send_json session (build_audio_commit ()) in
-              match response_create with
-              | None -> Ok ()
-              | Some json -> send_json session json)
+          send_json session (build_audio_commit ())
         in
         let receive () = receive_result ~mode session in
-        if mode = Translation then
-          Ox.Concurrent.race_first ~sw
-            [
-              (fun () ->
-                let* result = receive () in
-                finish_result ~mode result);
-              (fun () ->
-                let* () = send_audio_chunks session ~mode pcm in
-                Eio.Time.sleep clock
-                  (float_of_int translation_output_drain_ms /. 1000.);
-                stt_error "Codex realtime response incomplete");
-            ]
-        else
-          let* result, () = Ox.Concurrent.par ~sw receive send in
-          finish_result ~mode result)
+        let* result, () = Ox.Concurrent.par ~sw receive send in
+        finish_result ~mode result)
 
 let make_pull_queue () =
   ( Queue.create (),
@@ -842,8 +603,7 @@ let queue_close (queue, mutex, changed, terminal, _) outcome =
       Eio.Condition.broadcast changed)
 
 let run_realtime_stream_session ~caps ~sw ~net ~clock ?ca_file ~url
-    ~access_token ~mode ?session_update ?response_create ?on_text
-    ?(translation_output_drain_ms = 2_000) ~input_sample_rate audio =
+    ~access_token ~mode ?session_update ?on_text ~input_sample_rate audio =
   if input_sample_rate <= 0 then
     stt_error "Codex realtime input sample rate must be positive"
   else
@@ -860,32 +620,11 @@ let run_realtime_stream_session ~caps ~sw ~net ~clock ?ca_file ~url
         in
         let send () =
           let* () = send_audio_stream session ~mode ~input_sample_rate audio in
-          match mode with
-          | Translation -> Ok ()
-          | Transcription | Conversation -> (
-              let* () = send_json session (build_audio_commit ()) in
-              match response_create with
-              | None -> Ok ()
-              | Some json -> send_json session json)
+          send_json session (build_audio_commit ())
         in
         let receive () = receive_result ?on_text ~mode session in
-        if mode = Translation then
-          Ox.Concurrent.race_first ~sw
-            [
-              (fun () ->
-                let* result = receive () in
-                finish_result ~mode result);
-              (fun () ->
-                let* () =
-                  send_audio_stream session ~mode ~input_sample_rate audio
-                in
-                Eio.Time.sleep clock
-                  (float_of_int translation_output_drain_ms /. 1000.);
-                stt_error "Codex realtime response incomplete");
-            ]
-        else
-          let* result, () = Ox.Concurrent.par ~sw receive send in
-          finish_result ~mode result)
+        let* result, () = Ox.Concurrent.par ~sw receive send in
+        finish_result ~mode result)
 
 type stream_handle = {
   offer_chunk : bytes -> (unit, error) result;
@@ -894,8 +633,8 @@ type stream_handle = {
 }
 
 let with_stream_session ~caps ~sw ~net ~clock ~logger ~url ~access_token ~mode
-    ~operation ~model ?session_update ?response_create ?(sample_rate = 16000)
-    ~cancel_message use =
+    ~operation ~model ?session_update ?(sample_rate = 16000) ~cancel_message use
+    =
   let queue = make_pull_queue () in
   let completion, complete = Eio.Promise.create () in
   let captured = ref 0 in
@@ -952,8 +691,7 @@ let with_stream_session ~caps ~sw ~net ~clock ~logger ~url ~access_token ~mode
   let background () =
     let result =
       run_realtime_stream_session ~caps ~sw ~net ~clock ~url ~access_token ~mode
-        ?session_update ?response_create ~on_text ~input_sample_rate:sample_rate
-        pull
+        ?session_update ~on_text ~input_sample_rate:sample_rate pull
     in
     Eio.Promise.resolve complete result;
     queue_close queue
@@ -963,72 +701,6 @@ let with_stream_session ~caps ~sw ~net ~clock ~logger ~url ~access_token ~mode
   Ox.Concurrent.with_background ~sw background (fun () ->
       use { offer_chunk; finish_stream; cancel_stream })
 
-let with_transcription_stream ~caps ~sw ~net ~clock ~logger ~model ~language
-    ~prompt_template ?(sample_rate = 16000) use =
-  let* access_token = realtime_access_token ~caps ~client:() () in
-  let prompt = render_template prompt_template [ ("language", language) ] in
-  if is_conversation_model model then
-    with_stream_session ~caps ~sw ~net ~clock ~logger
-      ~url:(build_realtime_url ~caps ~mode:Conversation ~model ())
-      ~access_token ~mode:Conversation ~operation:"transcribe" ~model
-      ~session_update:(build_conversation_session_update ~model ~prompt)
-      ~response_create:(build_conversation_response_create ~prompt)
-      ~sample_rate ~cancel_message:"Codex realtime transcription cancelled" use
-  else
-    with_stream_session ~caps ~sw ~net ~clock ~logger
-      ~url:(build_realtime_url ~caps ~mode:Transcription ~model ())
-      ~access_token ~mode:Transcription ~operation:"transcribe" ~model
-      ~session_update:(build_transcription_session_update ~model ~prompt ())
-      ~sample_rate ~cancel_message:"Codex realtime transcription cancelled" use
-
-let with_translation_stream ~caps ~sw ~net ~clock ~logger ~model
-    ~source_language ~target_language ~prompt_template ?(sample_rate = 16000)
-    use =
-  let* access_token = realtime_access_token ~caps ~client:() () in
-  let prompt =
-    render_template prompt_template
-      [
-        ("source_language", source_language);
-        ("target_language", target_language);
-      ]
-  in
-  if is_conversation_model model then
-    with_stream_session ~caps ~sw ~net ~clock ~logger
-      ~url:(build_realtime_url ~caps ~mode:Conversation ~model ())
-      ~access_token ~mode:Conversation ~operation:"translate" ~model
-      ~session_update:(build_conversation_session_update ~model ~prompt)
-      ~response_create:(build_conversation_response_create ~prompt)
-      ~sample_rate ~cancel_message:"Codex realtime translation cancelled" use
-  else
-    with_stream_session ~caps ~sw ~net ~clock ~logger
-      ~url:(build_realtime_url ~caps ~mode:Translation ~model ())
-      ~access_token ~mode:Translation ~operation:"translate" ~model
-      ~session_update:
-        (build_translation_session_update ~prompt ~target_language ())
-      ~sample_rate ~cancel_message:"Codex realtime translation cancelled" use
-
-let transcribe_with_prompt ~caps ~sw ~net ~clock ~model ~language
-    ~prompt_template ?(sample_rate = 16000) pcm_bytes =
-  let* access_token = realtime_access_token ~caps ~client:() () in
-  let prompt = render_template prompt_template [ ("language", language) ] in
-  if is_conversation_model model then
-    run_realtime_session ~caps ~sw ~net ~clock
-      ~url:(build_realtime_url ~caps ~mode:Conversation ~model ())
-      ~access_token ~mode:Conversation
-      ~session_update:(build_conversation_session_update ~model ~prompt)
-      ~response_create:(build_conversation_response_create ~prompt)
-      ~input_sample_rate:sample_rate pcm_bytes
-  else
-    run_realtime_session ~caps ~sw ~net ~clock
-      ~url:(build_realtime_url ~caps ~mode:Transcription ~model ())
-      ~access_token ~mode:Transcription
-      ~session_update:(build_transcription_session_update ~model ~prompt ())
-      ~input_sample_rate:sample_rate pcm_bytes
-
-(* gpt-live-transcribe and gpt-transcribe take [languages], not the singular
-   [language] field; sending both is rejected. The rendered glossary is
-   [prompt]. [turn_detection] is null because these models do not support VAD
-   and Pie commits on key release. *)
 let build_pass1_session_update ?language ?context ~model () =
   let transcription_fields =
     [ ("model", `String model) ]
@@ -1083,28 +755,3 @@ let transcribe_pass1 ~caps ~sw ~net ~clock ~model ?language ?context
     ~access_token ~mode:Transcription
     ~session_update:(build_pass1_session_update ?language ?context ~model ())
     ~input_sample_rate:sample_rate pcm_bytes
-
-let translate_with_prompt ~caps ~sw ~net ~clock ~model ~source_language
-    ~target_language ~prompt_template ?(sample_rate = 16000) pcm_bytes =
-  let* access_token = realtime_access_token ~caps ~client:() () in
-  let prompt =
-    render_template prompt_template
-      [
-        ("source_language", source_language);
-        ("target_language", target_language);
-      ]
-  in
-  if is_conversation_model model then
-    run_realtime_session ~caps ~sw ~net ~clock
-      ~url:(build_realtime_url ~caps ~mode:Conversation ~model ())
-      ~access_token ~mode:Conversation
-      ~session_update:(build_conversation_session_update ~model ~prompt)
-      ~response_create:(build_conversation_response_create ~prompt)
-      ~input_sample_rate:sample_rate pcm_bytes
-  else
-    run_realtime_session ~caps ~sw ~net ~clock
-      ~url:(build_realtime_url ~caps ~mode:Translation ~model ())
-      ~access_token ~mode:Translation
-      ~session_update:
-        (build_translation_session_update ~prompt ~target_language ())
-      ~input_sample_rate:sample_rate pcm_bytes

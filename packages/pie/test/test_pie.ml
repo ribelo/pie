@@ -1171,17 +1171,17 @@ let test_codex_realtime_url_builders () =
   let transcribe_url =
     Stt.Codex_realtime.build_realtime_url ~caps
       ~base_url:"wss://api.openai.com/" ~mode:Stt.Codex_realtime.Transcription
-      ~model:"gpt-realtime-2.1" ()
+      ~model:"gpt-live-transcribe" ()
   in
   Alcotest.(check string)
-    "transcription url"
-    "wss://api.openai.com/v1/realtime?model=gpt-realtime-2.1" transcribe_url;
+    "transcription url" "wss://api.openai.com/v1/realtime?intent=transcription"
+    transcribe_url;
   let translate_url =
     Stt.Codex_realtime.build_realtime_url ~caps ~base_url:"wss://api.openai.com"
-      ~mode:Stt.Codex_realtime.Translation ~model:"gpt-realtime-2.1" ()
+      ~mode:Stt.Codex_realtime.Transcription ~model:"gpt-live-transcribe" ()
   in
   Alcotest.(check string)
-    "translation url" "wss://api.openai.com/v1/realtime?model=gpt-realtime-2.1"
+    "translation url" "wss://api.openai.com/v1/realtime?intent=transcription"
     translate_url
 
 let test_codex_realtime_headers () =
@@ -1209,24 +1209,18 @@ let test_codex_realtime_headers () =
     (List.assoc_opt "OpenAI-Beta" headers)
 
 let test_codex_realtime_receive_stop_modes () =
-  let transcript_final = Stt.Codex_realtime.Transcript_final "text" in
   Alcotest.(check bool)
-    "transcription stops on transcript final" true
+    "transcription final stops" true
     (Stt.Codex_realtime.event_should_stop ~mode:Stt.Codex_realtime.Transcription
-       transcript_final);
+       (Stt.Codex_realtime.Transcript_final "text"));
   Alcotest.(check bool)
-    "conversation waits for response terminal" false
-    (Stt.Codex_realtime.event_should_stop ~mode:Stt.Codex_realtime.Conversation
-       transcript_final);
-  Alcotest.(check bool)
-    "conversation stops on completed terminal" true
-    (Stt.Codex_realtime.event_should_stop ~mode:Stt.Codex_realtime.Conversation
-       (Stt.Codex_realtime.Response_terminal Stt.Codex_realtime.Completed))
+    "delta does not stop" false
+    (Stt.Codex_realtime.event_should_stop ~mode:Stt.Codex_realtime.Transcription
+       (Stt.Codex_realtime.Transcript_delta "partial"))
 
 let test_codex_realtime_transcription_session_update () =
   match
-    Stt.Codex_realtime.build_transcription_session_update
-      ~model:"configured-model" ()
+    Stt.Codex_realtime.build_pass1_session_update ~model:"configured-model" ()
   with
   | `Assoc fields -> (
       Alcotest.(check (option string))
@@ -1274,15 +1268,15 @@ let test_codex_realtime_transcription_session_update () =
 let test_codex_realtime_event_parser () =
   (match
      Stt.Codex_realtime.parse_event
-       "{\"type\":\"response.output_text.delta\",\"delta\":\"he\"}"
+       "{\"type\":\"conversation.item.input_audio_transcription.delta\",\"delta\":\"he\"}"
    with
   | Ok (Stt.Codex_realtime.Transcript_delta "he") -> ()
   | _ -> Alcotest.fail "expected transcript delta");
   (match
      Stt.Codex_realtime.parse_event
-       "{\"type\":\"response.output_text.done\",\"text\":\"hello\"}"
+       "{\"type\":\"conversation.item.input_audio_transcription.completed\",\"text\":\"hello\"}"
    with
-  | Ok (Stt.Codex_realtime.Transcript_done "hello") -> ()
+  | Ok (Stt.Codex_realtime.Transcript_final "hello") -> ()
   | _ -> Alcotest.fail "expected transcript done");
   match
     Stt.Codex_realtime.parse_event
@@ -1326,10 +1320,7 @@ let test_speech_operation_deadline_policy () =
     (Ox.Duration.to_ms Stt.Codex_realtime.websocket_establishment_timeout);
   Alcotest.(check int)
     "direct transcription timeout" 60_000
-    (Ox.Duration.to_ms Stt.Openrouter.direct_transcription_timeout);
-  Alcotest.(check int)
-    "response operation timeout" 120_000
-    (Ox.Duration.to_ms Stt.Openrouter.response_operation_timeout)
+    (Ox.Duration.to_ms Stt.Openrouter.direct_transcription_timeout)
 
 (* Both calls enter the real provider boundary. The server accepts a local socket
    but sends no response, while Ox_test advances the clock used by Ox_http. *)
@@ -1369,33 +1360,6 @@ let stalled_openrouter_call ~seconds call =
           Eio.Fiber.yield ();
           Ox_test.advance env#clock (Ox.Duration.seconds seconds);
           Eio.Promise.await completed))
-
-let test_speech_operation_deadlines_are_typed () =
-  let pcm = Bytes.make 320 '\000' in
-  let direct =
-    stalled_openrouter_call ~seconds:61 (fun env sw ->
-        Stt.Openrouter.transcribe ~caps ~sw ~net:env#net ~clock:env#clock
-          ~api_key:(Ox_observability.Redact.make "pie-local-deadline-test")
-          ~model:"local-test" ~language:"en" pcm)
-  in
-  Alcotest.(check (result string string))
-    "direct STT timeout is typed" (Error "OpenRouter request failed: timeout")
-    (Result.map_error (function `Stt_error msg -> msg) direct);
-  let response =
-    stalled_openrouter_call ~seconds:121 (fun env sw ->
-        let logger =
-          Ox_observability.Logger.create ~service:"pie-deadline-test"
-            ~clock:env#clock ~mono_clock:env#mono_clock
-            ~reporter:(Ox_observability.Logger.Reporter.records (fun _ -> ()))
-            ()
-        in
-        Stt.Openrouter.transcribe_with_prompt ~caps ~sw ~net:env#net
-          ~clock:env#clock ~logger ~model:"local-test" ~language:"en"
-          ~prompt_template:"Transcribe {{language}}" pcm)
-  in
-  Alcotest.(check (result string string))
-    "response STT timeout is typed" (Error "OpenRouter request failed: timeout")
-    (Result.map_error (function `Stt_error msg -> msg) response)
 
 let tcp_port = function
   | `Tcp (_, port) -> port
@@ -1546,116 +1510,6 @@ let run_realtime_capture_session_update flow captured =
   write_ws_close flow;
   try Eio.Flow.shutdown flow `Send with _ -> ()
 
-let test_codex_realtime_transcribe_uses_conversation_prompt_e2e () =
-  run_test @@ fun env ->
-  Eio.Switch.run @@ fun sw ->
-  let socket =
-    Eio.Net.listen ~sw ~reuse_addr:true ~backlog:1 (Eio.Stdenv.net env)
-      (`Tcp (Eio.Net.Ipaddr.V4.loopback, 0))
-  in
-  let port = tcp_port (Eio.Net.listening_addr socket) in
-  let captured = ref `Null in
-  Eio.Fiber.fork ~sw (fun () ->
-      Eio.Switch.run @@ fun conn_sw ->
-      let flow, _addr = Eio.Net.accept ~sw:conn_sw socket in
-      run_realtime_capture_session_update flow captured);
-  let old_url = Sys.getenv_opt "CODEX_REALTIME_BASE_URL_OVERRIDE" in
-  Unix.putenv "CODEX_REALTIME_BASE_URL_OVERRIDE"
-    (Printf.sprintf "ws://127.0.0.1:%d" port);
-  Unix.putenv "OPENAI_API_KEY" "test-token";
-  let cleanup_env () =
-    match old_url with
-    | Some v -> Unix.putenv "CODEX_REALTIME_BASE_URL_OVERRIDE" v
-    | None -> Unix.putenv "CODEX_REALTIME_BASE_URL_OVERRIDE" ""
-  in
-  let pcm = Bytes.make 3200 '\x00' in
-  let operation () =
-    Stt.Codex_realtime.transcribe_with_prompt ~caps ~sw
-      ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env)
-      ~model:"gpt-realtime-2.1" ~language:"pl"
-      ~prompt_template:"Transcribe in {{language}}." ~sample_rate:16000 pcm
-  in
-  (match run_boundary operation with Ok _ | Error _ -> ());
-  cleanup_env ();
-  match !captured with
-  | `Null -> Alcotest.fail "did not capture session.update message"
-  | `Assoc fields -> (
-      match List.assoc_opt "session" fields with
-      | Some (`Assoc session) ->
-          let prompt =
-            match List.assoc_opt "instructions" session with
-            | Some (`String value) -> value
-            | _ ->
-                Alcotest.fail
-                  "realtime session should include the rendered prompt"
-          in
-          Alcotest.(check (option string))
-            "conversation session type" (Some "realtime")
-            (match List.assoc_opt "type" session with
-            | Some (`String value) -> Some value
-            | _ -> None);
-          Alcotest.(check bool)
-            "rendered prompt should include the configured language" true
-            (let needle = "pl" in
-             let nlen = String.length needle in
-             let plen = String.length prompt in
-             let rec scan i =
-               if i + nlen > plen then false
-               else if String.sub prompt i nlen = needle then true
-               else scan (i + 1)
-             in
-             scan 0)
-      | _ -> Alcotest.fail "expected session object")
-  | _ -> Alcotest.fail "expected JSON object"
-
-let test_codex_realtime_translate_nonconv_drops_prompt_e2e () =
-  run_test @@ fun env ->
-  Eio.Switch.run @@ fun sw ->
-  let socket =
-    Eio.Net.listen ~sw ~reuse_addr:true ~backlog:1 (Eio.Stdenv.net env)
-      (`Tcp (Eio.Net.Ipaddr.V4.loopback, 0))
-  in
-  let port = tcp_port (Eio.Net.listening_addr socket) in
-  let captured = ref `Null in
-  Eio.Fiber.fork ~sw (fun () ->
-      Eio.Switch.run @@ fun conn_sw ->
-      let flow, _addr = Eio.Net.accept ~sw:conn_sw socket in
-      run_realtime_capture_session_update flow captured);
-  let old_url = Sys.getenv_opt "CODEX_REALTIME_BASE_URL_OVERRIDE" in
-  Unix.putenv "CODEX_REALTIME_BASE_URL_OVERRIDE"
-    (Printf.sprintf "ws://127.0.0.1:%d" port);
-  Unix.putenv "OPENAI_API_KEY" "test-token";
-  let cleanup_env () =
-    match old_url with
-    | Some v -> Unix.putenv "CODEX_REALTIME_BASE_URL_OVERRIDE" v
-    | None -> Unix.putenv "CODEX_REALTIME_BASE_URL_OVERRIDE" ""
-  in
-  let pcm = Bytes.make 3200 '\x00' in
-  let operation () =
-    Stt.Codex_realtime.translate_with_prompt ~caps ~sw ~net:(Eio.Stdenv.net env)
-      ~clock:(Eio.Stdenv.clock env) ~model:"not-the-conversation-model"
-      ~source_language:"pl" ~target_language:"en"
-      ~prompt_template:
-        "Translate from {{source_language}} to {{target_language}}."
-      ~sample_rate:16000 pcm
-  in
-  (match run_boundary operation with Ok _ | Error _ -> ());
-  cleanup_env ();
-  match !captured with
-  | `Null -> Alcotest.fail "did not capture session.update"
-  | `Assoc fields -> (
-      match List.assoc_opt "session" fields with
-      | Some (`Assoc session) ->
-          (* Bug: For non-conversation translation, translate_with_prompt renders
-          the prompt template but build_translation_session_update has no
-          prompt/instructions parameter. The rendered prompt is silently
-          dropped from the session.update. *)
-          Alcotest.(check bool)
-            "non-conversation translation should include instructions" true
-            (List.mem_assoc "instructions" session)
-      | _ -> Alcotest.fail "expected session object")
-  | _ -> Alcotest.fail "expected JSON object"
-
 let run_realtime_error_ws_server ~clock flow =
   let head = read_http_head flow in
   Alcotest.(check (option string))
@@ -1686,50 +1540,6 @@ let run_realtime_error_ws_server ~clock flow =
   write_ws_text flow
     {|{"type":"error","error":{"message":"boom","code":"bad_request"}}|};
   drain_ws_until_client_eof ~clock flow
-
-let test_codex_realtime_stream_reports_server_error_e2e () =
-  run_test @@ fun env ->
-  Eio.Switch.run @@ fun sw ->
-  let socket =
-    Eio.Net.listen ~sw ~reuse_addr:true ~backlog:1 (Eio.Stdenv.net env)
-      (`Tcp (Eio.Net.Ipaddr.V4.loopback, 0))
-  in
-  let port = tcp_port (Eio.Net.listening_addr socket) in
-  Eio.Fiber.fork ~sw (fun () ->
-      Eio.Switch.run @@ fun conn_sw ->
-      let flow, _addr = Eio.Net.accept ~sw:conn_sw socket in
-      run_realtime_error_ws_server ~clock:(Eio.Stdenv.clock env) flow);
-  let url =
-    Printf.sprintf "ws://127.0.0.1:%d/v1/realtime?model=gpt-realtime-2" port
-  in
-  let open Ox.Result.Syntax in
-  let prompt = "Translate." in
-  let operation () =
-    Stt.Codex_realtime.with_stream_session ~caps ~sw ~net:(Eio.Stdenv.net env)
-      ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env) ~url
-      ~access_token:"test-token" ~mode:Stt.Codex_realtime.Conversation
-      ~operation:"translate" ~model:"gpt-realtime-2"
-      ~session_update:
-        (Stt.Codex_realtime.build_conversation_session_update
-           ~model:"gpt-realtime-2" ~prompt)
-      ~response_create:
-        (Stt.Codex_realtime.build_conversation_response_create ~prompt)
-      ~sample_rate:16000 ~cancel_message:"cancelled" (fun stream ->
-        Eio.Time.sleep (Eio.Stdenv.clock env) 0.1;
-        let* () = stream.offer_chunk (Bytes.make 32000 '\001') in
-        stream.finish_stream ())
-  in
-  let pp_stt_error fmt = function
-    | `Stt_error message -> Format.pp_print_string fmt message
-  in
-  match run_boundary operation with
-  | Error (Ox.Cause.Fail (`Stt_error message)) ->
-      Alcotest.(check string)
-        "server error" "Codex realtime server error" message
-  | Error cause ->
-      Alcotest.failf "expected server error, got cause: %a"
-        (Ox.Cause.pp pp_stt_error) cause
-  | Ok text -> Alcotest.failf "expected server error, got success: %s" text
 
 let write_file path contents =
   let oc = open_out_bin path in
@@ -1850,13 +1660,10 @@ let openrouter_clip_config () : Pie.Config.Stt.t =
     ptt_transcribe_shift = true;
     ptt_translate_shift = false;
     thinking_effort = Some "minimal";
-    transcription_prompt = "Transcribe in {{language}}.";
-    translation_prompt =
-      "Translate from {{source_language}} to {{target_language}}.";
     newline_rules = [];
     text_entry_rules = [];
     prompt_rules = [];
-    pipeline = Legacy;
+    pipeline = Two_pass;
     openrouter_provider_order = None;
     one_pass_timeout_seconds = 30.;
     streaming = false;
@@ -2071,8 +1878,8 @@ let test_buffered_clip_cancellation_settles_after_offer () =
     let exit =
       Ox.Scope.run (fun _ ->
           let* press =
-            Assistant.Service.on_press ~caps ~sw ~net:(Eio.Stdenv.net env)
-              ~clock ~logger:(test_logger env)
+            Pie_test_runtime.Service.on_press ~caps ~sw
+              ~net:(Eio.Stdenv.net env) ~clock ~logger:(test_logger env)
               ~stt:(fun _ _ _ -> Ok "synthetic transcript")
               ~deliver:(fun _ _ _ _ -> Ok Pie.History.Pasted)
               ~coordinator ~retry_dir:dir
@@ -2137,7 +1944,7 @@ let test_buffered_clip_defect_settles_after_offer () =
   let pcm_bytes = Bytes.of_string "captured-audio" in
   let operation () =
     let* press =
-      Assistant.Service.on_press ~caps ~sw ~net:(Eio.Stdenv.net env)
+      Pie_test_runtime.Service.on_press ~caps ~sw ~net:(Eio.Stdenv.net env)
         ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env)
         ~stt:(fun _ _ _ -> Ok "synthetic transcript")
         ~deliver:(fun _ _ _ _ -> Ok Pie.History.Pasted)
@@ -2189,7 +1996,7 @@ let test_on_press_construction_does_not_admit () =
     "idle before construction" false
     (Recording.Coordinator.snapshot coordinator).Recording.Coordinator.active;
   let blueprint () =
-    Assistant.Service.on_press ~caps ~sw ~net:(Eio.Stdenv.net env)
+    Pie_test_runtime.Service.on_press ~caps ~sw ~net:(Eio.Stdenv.net env)
       ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env)
       ~stt:(fun _ _ _ -> Ok "synthetic transcript")
       ~deliver:(fun _ _ _ _ -> Ok Pie.History.Pasted)
@@ -2210,7 +2017,7 @@ let test_on_press_execution_admits () =
   let persist_path = Filename.concat dir "recording-state.json" in
   let coordinator = Recording.Coordinator.create ~caps ~persist_path () in
   let blueprint () =
-    Assistant.Service.on_press ~caps ~sw ~net:(Eio.Stdenv.net env)
+    Pie_test_runtime.Service.on_press ~caps ~sw ~net:(Eio.Stdenv.net env)
       ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env)
       ~stt:(fun _ _ _ -> Ok "synthetic transcript")
       ~deliver:(fun _ _ _ _ -> Ok Pie.History.Pasted)
@@ -2243,7 +2050,8 @@ let test_on_press_busy_and_disabled_at_execution () =
   let net = Eio.Stdenv.net env in
   let clock = Eio.Stdenv.clock env in
   let press () =
-    Assistant.Service.on_press ~caps ~sw ~net ~clock ~logger:(test_logger env)
+    Pie_test_runtime.Service.on_press ~caps ~sw ~net ~clock
+      ~logger:(test_logger env)
       ~stt:(fun _ _ _ -> Ok "synthetic transcript")
       ~deliver:(fun _ _ _ _ -> Ok Pie.History.Pasted)
       ~coordinator ~retry_dir:dir
@@ -2308,7 +2116,7 @@ let test_on_press_constructor_failure_releases_without_clearing_other_attempt ()
     { (openrouter_clip_config ()) with transcription_model = "openrouter/" }
   in
   let blueprint () =
-    Assistant.Service.on_press ~caps ~sw ~net:(Eio.Stdenv.net env)
+    Pie_test_runtime.Service.on_press ~caps ~sw ~net:(Eio.Stdenv.net env)
       ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env)
       ~stt:(fun _ _ _ -> Ok "synthetic transcript")
       ~deliver:(fun _ _ _ _ -> Ok Pie.History.Pasted)
@@ -2605,26 +2413,6 @@ let test_daemon_contract_pause_rejects_non_object () =
   | Error label -> Alcotest.(check string) "not-object" "not-object" label
   | Ok _ -> Alcotest.fail "Pause scalar must be a protocol error"
 
-let test_codex_realtime_translation_ignores_prompt () =
-  let update =
-    Stt.Codex_realtime.build_translation_session_update ~target_language:"pl" ()
-  in
-  match update with
-  | `Assoc fields -> (
-      match List.assoc_opt "session" fields with
-      | Some (`Assoc session) ->
-          (* Bug: translate_with_prompt renders the prompt template into a
-          usable prompt, but the non-conversation translation path calls
-          build_translation_session_update which has no ~prompt parameter
-          and includes no instructions. The rendered prompt is silently
-          dropped. The conversation translation path does include
-          instructions via build_conversation_session_update. *)
-          Alcotest.(check bool)
-            "translation session should include instructions" true
-            (List.mem_assoc "instructions" session)
-      | _ -> Alcotest.fail "expected session object")
-  | _ -> Alcotest.fail "expected JSON object"
-
 let test_stt_config_whitespace_app_id_not_trimmed () =
   run_test @@ fun env ->
   let dir = temp_dir "pie-stt-config-whitespace" in
@@ -2676,9 +2464,6 @@ let test_assistant_startup_config_json () =
       ptt_transcribe_shift = true;
       ptt_translate_shift = false;
       thinking_effort = Some "minimal";
-      transcription_prompt = "Transcribe in {{language}}.";
-      translation_prompt =
-        "Translate from {{source_language}} to {{target_language}}.";
       newline_rules =
         [
           {
@@ -2825,20 +2610,12 @@ let load_stt_config env config_path =
 let test_stt_config_loads_toml_newline_rules () =
   run_test @@ fun env ->
   let dir = temp_dir "pie-stt-config" in
-  let prompts_dir = Filename.concat dir "prompts" in
-  Unix.mkdir prompts_dir 0o700;
-  write_file
-    (Filename.concat prompts_dir "transcription.md")
-    "Transcribe the spoken audio in {{language}}.";
-  write_file
-    (Filename.concat prompts_dir "translation.md")
-    "Translate from {{source_language}} to {{target_language}}.";
   let config_path = Filename.concat dir "stt.toml" in
   write_file config_path
     {toml|
-provider = "codex-realtime"
-transcription_model = "gpt-realtime-whisper"
-translation_model = "gpt-realtime-2"
+provider = "openrouter"
+transcription_model = "google/gemini-3.8-flash"
+translation_model = "google/gemini-3.8-flash"
 transcription_language = "Polish"
 translation_source_language = "Polish"
 translation_target_language = "English"
@@ -2899,16 +2676,18 @@ method = "paste"
         (second.action = Pie.Input.Text_injection.Shift_enter)
   | _ -> Alcotest.fail "expected two newline rules"
 
-let test_stt_config_defaults_to_gpt_realtime_2_1 () =
+let test_stt_config_defaults_to_one_pass () =
   run_test @@ fun env ->
   let dir = temp_dir "pie-stt-config-default-model" in
   let config_path = Filename.concat dir "stt.toml" in
   write_file config_path "schema_version = 2\n";
   let config = load_stt_config env config_path in
-  Alcotest.(check string)
-    "transcription model" "gpt-realtime-2.1" config.transcription_model;
-  Alcotest.(check string)
-    "translation model" "gpt-realtime-2.1" config.translation_model
+  Alcotest.(check bool)
+    "default one-pass" true
+    (config.pipeline = Pie.Config.Stt.One_pass);
+  Alcotest.(check bool)
+    "default OpenRouter" true
+    (config.provider = Pie.Config.Stt.Openrouter)
 
 let test_assistant_hot_reloads_keysyms_and_releases_original_hold () =
   let binding keysym shift : Pie.Assistant.Service.ptt_binding =
@@ -3034,35 +2813,6 @@ action = "ctrl-j"
       Alcotest.(check bool)
         "mentions title_regex" true (String.contains msg 'r')
 
-let test_stt_config_rejects_prompt_with_wrong_placeholder () =
-  run_test @@ fun env ->
-  let dir = temp_dir "pie-stt-config-prompt" in
-  let prompts_dir = Filename.concat dir "prompts" in
-  Unix.mkdir prompts_dir 0o700;
-  write_file
-    (Filename.concat prompts_dir "transcription.md")
-    "Transcribe the audio in {language}.";
-  write_file
-    (Filename.concat prompts_dir "translation.md")
-    "Translate from {{source_language}} to {{target_language}}.";
-  let config_path = Filename.concat dir "stt.toml" in
-  write_file config_path {toml|
-|toml};
-  (* Bug: validate_transcription_prompt checks for any '{' character instead
-     of the required "{{language}}" placeholder. A prompt with "{language}"
-     passes validation but render_template won't substitute it, so the
-     language variable is silently omitted from the actual API request. *)
-  match
-    Pie.Config.Stt.load ~caps ~fs:(Eio.Stdenv.fs env)
-      ~source:(`Explicit config_path) ()
-  with
-  | Error (`Config msg) ->
-      Alcotest.(check bool)
-        "mentions language placeholder" true (String.contains msg '{')
-  | _ ->
-      Alcotest.fail
-        "expected Config_error for transcription prompt missing {{language}}"
-
 let test_stt_config_resolves_provider_qualified_model () =
   let open Pie.Config.Stt in
   let openrouter =
@@ -3129,24 +2879,6 @@ let test_openrouter_responses_request_uses_text_and_audio () =
             (json_string "data" input_audio)
       | _ -> Alcotest.fail "expected one text and audio input")
   | _ -> Alcotest.fail "expected one user message with text and audio"
-
-let test_openrouter_decodes_structured_output_only () =
-  Alcotest.(check (result string reject))
-    "structured text" (Ok "hello")
-    (Pie.Stt.Openrouter.decode_structured_output "{\"text\":\"hello\"}");
-  Alcotest.(check bool)
-    "raw text rejected" true
-    (match Pie.Stt.Openrouter.decode_structured_output "hello" with
-    | Error _ -> true
-    | Ok _ -> false);
-  Alcotest.(check bool)
-    "wrong field rejected" true
-    (match
-       Pie.Stt.Openrouter.decode_structured_output
-         "{\"transcription\":\"hello\"}"
-     with
-    | Error _ -> true
-    | Ok _ -> false)
 
 let test_text_injection_newline_rule_regex () =
   let window : Pie.Niri.window_info =
@@ -5463,12 +5195,9 @@ let () =
           Alcotest.test_case "load TOML newline rules" `Quick
             test_stt_config_loads_toml_newline_rules;
           Alcotest.test_case "default GPT Realtime 2.1 models" `Quick
-            test_stt_config_defaults_to_gpt_realtime_2_1;
+            test_stt_config_defaults_to_one_pass;
           Alcotest.test_case "reject invalid title regex" `Quick
             test_stt_config_rejects_bad_title_regex;
-          Alcotest.test_case
-            "reject transcription prompt missing language placeholder" `Quick
-            test_stt_config_rejects_prompt_with_wrong_placeholder;
           Alcotest.test_case "whitespace app_id not trimmed" `Quick
             test_stt_config_whitespace_app_id_not_trimmed;
         ] );
@@ -5623,16 +5352,6 @@ let () =
           Alcotest.test_case "resample" `Quick test_codex_realtime_resample;
           Alcotest.test_case "speech operation deadline policy" `Quick
             test_speech_operation_deadline_policy;
-          Alcotest.test_case "speech operation deadlines are typed" `Quick
-            test_speech_operation_deadlines_are_typed;
-          Alcotest.test_case "stream server error e2e" `Quick
-            test_codex_realtime_stream_reports_server_error_e2e;
-          Alcotest.test_case "translation ignores prompt" `Quick
-            test_codex_realtime_translation_ignores_prompt;
-          Alcotest.test_case "transcribe uses conversation prompt e2e" `Quick
-            test_codex_realtime_transcribe_uses_conversation_prompt_e2e;
-          Alcotest.test_case "translate non-conv drops prompt e2e" `Quick
-            test_codex_realtime_translate_nonconv_drops_prompt_e2e;
         ] );
       ( "assistant_prompt",
         [
@@ -5737,8 +5456,6 @@ let () =
         [
           Alcotest.test_case "responses request uses text and audio" `Quick
             test_openrouter_responses_request_uses_text_and_audio;
-          Alcotest.test_case "structured output decoder" `Quick
-            test_openrouter_decodes_structured_output_only;
         ] );
       ( "integration",
         [

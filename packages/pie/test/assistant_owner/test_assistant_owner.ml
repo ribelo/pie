@@ -3,7 +3,7 @@ let caps = Ox_test.powerbox () (* ^pcaps-n1rg *)
 (* PIE003 owner workflow tests.
    Buffered record-to-delivery uses a fake stt callback on the Openrouter
    clip branch selected from published config. Streaming Codex goes through
-   production with_transcription_stream with a private child env and a local
+   production with_pass1_stream with a private child env and a local
    WS stand-in. *)
 
 let transcribe_keysym = 65478
@@ -28,13 +28,10 @@ let base_config ?(provider = Pie.Config.Stt.Openrouter)
     ptt_transcribe_shift = false;
     ptt_translate_shift = false;
     thinking_effort = None;
-    transcription_prompt = "Transcribe in {{language}}.";
-    translation_prompt =
-      "Translate from {{source_language}} to {{target_language}}.";
     newline_rules = [];
     text_entry_rules = [];
     prompt_rules = [];
-    pipeline = Legacy;
+    pipeline = Two_pass;
     openrouter_provider_order = None;
     one_pass_timeout_seconds = 30.;
     streaming =
@@ -195,8 +192,9 @@ let status_last_error ~net ~sw socket_path =
           | _ -> None)
       | _ -> None)
 
-let owner_workflow_with_pipeline ~pipeline ~logger ~env ~sw ~net ~process_mgr
-    ~mono_clock ~dir ~config_control ~stt ~deliver ~keyboard ~audio =
+let owner_workflow_with_pipeline ~production ~pipeline ~logger ~env ~sw ~net
+    ~process_mgr ~mono_clock ~dir ~config_control ~stt ~deliver ~keyboard ~audio
+    =
   let socket_path = Filename.concat dir "control.sock" in
   let retry_dir = Filename.concat dir "recordings" in
   (try Unix.mkdir retry_dir 0o700
@@ -205,7 +203,11 @@ let owner_workflow_with_pipeline ~pipeline ~logger ~env ~sw ~net ~process_mgr
     { Pie.Assistant.Service.keyboard; audio; source_name = Some "test-source" }
   in
   let workflow () =
-    Pie.Assistant.Service.run_with_inputs ~caps ~sw ~net ~fs:(Eio.Stdenv.fs env)
+    let run_with_inputs =
+      if production then Pie.Assistant.Service.run_with_inputs
+      else Pie_test_runtime.Service.run_with_inputs
+    in
+    run_with_inputs ~caps ~sw ~net ~fs:(Eio.Stdenv.fs env)
       ~clock:(Eio.Stdenv.clock env) ~logger ~process_mgr ~mono_clock ~inputs
       ?pipeline ~config_control ~stt ~deliver ~socket_path ~retry_dir
       ~min_duration_ms:0 ()
@@ -214,8 +216,9 @@ let owner_workflow_with_pipeline ~pipeline ~logger ~env ~sw ~net ~process_mgr
 
 let owner_workflow ~logger ~env ~sw ~net ~process_mgr ~mono_clock ~dir
     ~config_control ~stt ~deliver ~keyboard ~audio =
-  owner_workflow_with_pipeline ~pipeline:None ~logger ~env ~sw ~net ~process_mgr
-    ~mono_clock ~dir ~config_control ~stt ~deliver ~keyboard ~audio
+  owner_workflow_with_pipeline ~production:false ~pipeline:None ~logger ~env ~sw
+    ~net ~process_mgr ~mono_clock ~dir ~config_control ~stt ~deliver ~keyboard
+    ~audio
 
 let with_workflow_background ~sw ~clock:_ workflow assertions =
   match
@@ -731,30 +734,24 @@ let session_updated = {|{"type":"session.updated"}|}
 let transcript_done =
   {|{"type":"conversation.item.input_audio_transcription.completed","transcript":"synthetic-stream"}|}
 
-let response_done =
-  {|{"type":"response.done","response":{"status":"completed"}}|}
-
-(* gpt-realtime-2 is Conversation mode: await session.updated, then audio
-   append/commit, then response.create. Transcript_done does not stop receive;
-   response.done does. Dumping those frames at upgrade time is a fixture error. *)
-let serve_codex_conversation ?(drop = false) ?(transcription = false)
+let serve_codex_transcription ?(drop = false) ?(transcription = false)
     ?(audio_payloads = ref []) ~clock flow stage_dir =
   mark_stage stage_dir "tcp_accept";
   upgrade flow;
   mark_stage stage_dir "ws_upgrade";
-  let rec loop ~committed =
+  let rec loop () =
     match read_ws_frame flow with
     | exception End_of_file -> ()
     | Close -> ()
-    | Other -> loop ~committed
+    | Other -> loop ()
     | Text payload -> (
         match json_event_type payload with
         | "session.update" ->
             mark_stage stage_dir "session_update";
             write_ws_text flow session_updated;
             mark_stage stage_dir "session_ready";
-            loop ~committed
-        | "input_audio_buffer.append" | "session.input_audio_buffer.append" ->
+            loop ()
+        | "input_audio_buffer.append" ->
             mark_stage stage_dir "audio_append";
             (match Yojson.Safe.from_string payload with
             | `Assoc fields -> (
@@ -767,26 +764,16 @@ let serve_codex_conversation ?(drop = false) ?(transcription = false)
               mark_stage stage_dir "dropped";
               write_ws_close flow;
               Eio.Flow.close flow)
-            else loop ~committed
+            else loop ()
         | "input_audio_buffer.commit" ->
             mark_stage stage_dir "commit";
-            if transcription then (
-              write_ws_text flow transcript_done;
-              Eio.Time.sleep clock 0.1;
-              write_ws_close flow)
-            else loop ~committed:true
-        | "response.create" ->
-            mark_stage stage_dir "response_create";
-            if committed then (
-              write_ws_text flow transcript_done;
-              write_ws_text flow response_done;
-              mark_stage stage_dir "transcript_sent";
-              Eio.Time.sleep clock 0.2;
-              write_ws_close flow)
-            else loop ~committed
-        | _ -> loop ~committed)
+            write_ws_text flow transcript_done;
+            mark_stage stage_dir "transcript_sent";
+            Eio.Time.sleep clock (if transcription then 0.1 else 0.2);
+            write_ws_close flow
+        | _ -> loop ())
   in
-  loop ~committed:false
+  loop ()
 
 let write_synthetic_codex_home dir =
   let home = Filename.concat dir "codex" in
@@ -831,7 +818,6 @@ let run_stream_child () =
     | Some "none" -> None
     | value -> value
   in
-  let two_pass = fallback = Some "two-pass" in
   let delivered = Atomic.make [] in
   let stage_dir = Sys.getenv_opt stream_stage_env in
   let mark name =
@@ -872,10 +858,9 @@ let run_stream_child () =
       let load _ =
         let config =
           base_config ~provider:Pie.Config.Stt.Codex_realtime
-            ~model:"gpt-realtime-2" ()
+            ~model:"gpt-live-transcribe" ()
         in
-        ( { config with pipeline = (if two_pass then Two_pass else Legacy) },
-          stamp () )
+        ({ config with pipeline = Two_pass }, stamp ())
       in
       let stt config mode bytes =
         (Pie.Assistant.Service.production_stt ~caps ~sw ~net ~clock
@@ -887,9 +872,9 @@ let run_stream_child () =
         Ok Pie.History.Pasted
       in
       let _socket, _retry, workflow =
-        owner_workflow ~logger:(test_logger env) ~env ~sw ~net ~process_mgr
-          ~mono_clock ~dir ~config_control:{ stamp; load } ~stt ~deliver
-          ~keyboard ~audio
+        owner_workflow_with_pipeline ~production:true ~pipeline:None
+          ~logger:(test_logger env) ~env ~sw ~net ~process_mgr ~mono_clock ~dir
+          ~config_control:{ stamp; load } ~stt ~deliver ~keyboard ~audio
       in
       mark "workflow_started";
       with_workflow_background ~sw ~clock workflow (fun () ->
@@ -972,17 +957,16 @@ let test_dead_stream_full_buffer two_pass () =
       let served, resolve = Eio.Promise.create () in
       Eio.Fiber.fork ~sw (fun () ->
           let flow, _ = Eio.Net.accept ~sw socket in
-          serve_codex_conversation ~drop:true ~audio_payloads:first ~clock flow
+          serve_codex_transcription ~drop:true ~audio_payloads:first ~clock flow
             stage_dir;
           let flow, _ = Eio.Net.accept ~sw socket in
-          serve_codex_conversation ~transcription:two_pass
+          serve_codex_transcription ~transcription:two_pass
             ~audio_payloads:second ~clock flow stage_dir;
           Eio.Promise.resolve resolve ());
       let status =
         Eio_unix.run_in_systhread ~label:"pie.owner.stream-fallback" (fun () ->
-            spawn_stream_child
-              ~fallback:(if two_pass then "two-pass" else "legacy")
-              ~port ~codex_home ~niri_dir ~stage_dir ())
+            spawn_stream_child ~fallback:"two-pass" ~port ~codex_home ~niri_dir
+              ~stage_dir ())
       in
       (match status with
       | Unix.WEXITED 0 -> ()
@@ -1032,7 +1016,7 @@ let test_streaming_codex_private_child () =
       let served, resolve_served = Eio.Promise.create () in
       Eio.Fiber.fork ~sw (fun () ->
           let flow, _addr = Eio.Net.accept ~sw socket in
-          serve_codex_conversation ~clock flow stage_dir;
+          serve_codex_transcription ~clock flow stage_dir;
           Eio.Promise.resolve resolve_served ());
       (* Unix.waitpid must not block the Eio loop or accept never runs. *)
       let status =
@@ -1400,8 +1384,9 @@ let test_service_pre_handle_failure_then_fresh_press () =
         Pie.Recording.Coordinator.create ~caps ~persist_path ()
       in
       let bad =
-        Pie.Assistant.Service.on_press ~caps ~sw ~clock:(Eio.Stdenv.clock env)
-          ~logger:(test_logger env) ~net ~coordinator ~retry_dir:dir
+        Pie_test_runtime.Service.on_press ~caps ~sw
+          ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env) ~net
+          ~coordinator ~retry_dir:dir
           ~config:(base_config ~model:"openrouter/" ())
           ~stt:(fun _ _ _ -> Ok "unused")
           ~deliver:(fun _ _ _ _ -> Ok Pie.History.Pasted)
@@ -1425,9 +1410,10 @@ let test_service_pre_handle_failure_then_fresh_press () =
         Ok Pie.History.Pasted
       in
       let good =
-        Pie.Assistant.Service.on_press ~caps ~sw ~clock:(Eio.Stdenv.clock env)
-          ~logger:(test_logger env) ~net ~coordinator ~retry_dir:dir ~stt
-          ~deliver ~config:(base_config ()) "transcribe"
+        Pie_test_runtime.Service.on_press ~caps ~sw
+          ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env) ~net
+          ~coordinator ~retry_dir:dir ~stt ~deliver ~config:(base_config ())
+          "transcribe"
       in
       (match good with
       | Ok (Pie.Ptt_loop.Scoped use) -> (
@@ -1486,9 +1472,9 @@ let test_delayed_old_cleanup_preserves_new_same_mode_attempt () =
       in
       ignore (Pie.Recording.Coordinator.release coordinator first);
       let second =
-        Pie.Assistant.Service.on_press ~caps ~sw ~clock:(Eio.Stdenv.clock env)
-          ~logger:(test_logger env) ~net ~coordinator ~retry_dir:dir
-          ~config:(base_config ())
+        Pie_test_runtime.Service.on_press ~caps ~sw
+          ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env) ~net
+          ~coordinator ~retry_dir:dir ~config:(base_config ())
           ~stt:(fun _ _ _ -> Ok "unused")
           ~deliver:(fun _ _ _ _ -> Ok Pie.History.Pasted)
           "transcribe"
@@ -1606,7 +1592,7 @@ let test_capture_budget_sets_last_error () =
       (try Unix.mkdir retry_dir 0o700
        with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
       let workflow () =
-        Pie.Assistant.Service.run_with_inputs ~caps ~sw ~net
+        Pie_test_runtime.Service.run_with_inputs ~caps ~sw ~net
           ~fs:(Eio.Stdenv.fs env) ~clock ~logger ~process_mgr ~mono_clock
           ~inputs:
             {
@@ -1944,7 +1930,7 @@ let test_two_pass_retry kind () =
       let keyboard = Pie.Keyboard.Monitor.create () in
       let audio_q, audio = make_audio () in
       let socket_path, retry_dir, workflow =
-        owner_workflow_with_pipeline ~pipeline:(Some pipeline)
+        owner_workflow_with_pipeline ~production:false ~pipeline:(Some pipeline)
           ~logger:(test_logger env) ~env ~sw ~net:(Eio.Stdenv.net env)
           ~process_mgr:(Eio.Stdenv.process_mgr env)
           ~mono_clock:(Eio.Stdenv.mono_clock env)
@@ -2087,7 +2073,7 @@ let test_one_pass_retry () =
       let keyboard = Pie.Keyboard.Monitor.create () in
       let audio_q, audio = make_audio () in
       let socket_path, retry_dir, workflow =
-        owner_workflow_with_pipeline ~pipeline:(Some pipeline)
+        owner_workflow_with_pipeline ~production:false ~pipeline:(Some pipeline)
           ~logger:(test_logger env) ~env ~sw ~net:(Eio.Stdenv.net env)
           ~process_mgr:(Eio.Stdenv.process_mgr env)
           ~mono_clock:(Eio.Stdenv.mono_clock env)
@@ -2269,7 +2255,7 @@ let test_nested_missing_parent_is_private () =
       (try Unix.mkdir (Filename.concat dir "recordings") 0o700
        with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
       let workflow () =
-        Pie.Assistant.Service.run_with_inputs ~caps ~sw
+        Pie_test_runtime.Service.run_with_inputs ~caps ~sw
           ~net:(Eio.Stdenv.net env) ~fs:(Eio.Stdenv.fs env)
           ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env)
           ~process_mgr:(Eio.Stdenv.process_mgr env)
@@ -2309,9 +2295,10 @@ let test_blueprint_on_press_does_not_publish () =
       let stt _ _ _ = Ok "x" in
       let deliver _ _ _target _ = Ok Pie.History.Pasted in
       let _blueprint =
-        Pie.Assistant.Service.on_press ~caps ~sw ~clock:(Eio.Stdenv.clock env)
-          ~logger:(test_logger env) ~net:(Eio.Stdenv.net env) ~coordinator
-          ~retry_dir ~config:(base_config ()) ~stt ~deliver "transcribe"
+        Pie_test_runtime.Service.on_press ~caps ~sw
+          ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env)
+          ~net:(Eio.Stdenv.net env) ~coordinator ~retry_dir
+          ~config:(base_config ()) ~stt ~deliver "transcribe"
       in
       Alcotest.(check (option string))
         "constructing on_press publishes nothing" None (peek_kind retry_dir))
@@ -2443,9 +2430,10 @@ let test_publication_failure_keeps_primary () =
         ~finally:(fun () -> pub014_restore retry_dir !lock_save)
         (fun () ->
           let press =
-            Pie.Assistant.Service.on_press ~caps ~sw ~net:(Eio.Stdenv.net env)
-              ~clock ~logger:(test_logger env) ~coordinator ~store ~retry_dir
-              ~config:(base_config ()) ~stt ~deliver "transcribe"
+            Pie_test_runtime.Service.on_press ~caps ~sw
+              ~net:(Eio.Stdenv.net env) ~clock ~logger:(test_logger env)
+              ~coordinator ~store ~retry_dir ~config:(base_config ()) ~stt
+              ~deliver "transcribe"
           in
           let finish handle =
             Result.bind (handle.Pie.Ptt_loop.offer loud_pcm) (fun () ->
@@ -2886,9 +2874,6 @@ let () =
               Alcotest.test_case
                 "production Codex streaming via private child env" `Slow
                 test_streaming_codex_private_child;
-              Alcotest.test_case
-                "dict-oj7u legacy dead stream full buffered fallback" `Slow
-                (test_dead_stream_full_buffer false);
               Alcotest.test_case
                 "dict-oj7u two-pass dead stream full buffered fallback" `Slow
                 (test_dead_stream_full_buffer true);

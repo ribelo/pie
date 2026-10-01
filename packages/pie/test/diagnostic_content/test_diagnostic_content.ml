@@ -136,30 +136,7 @@ let write_http flow ~status body =
   Eio.Flow.copy_string response flow
 
 let completed_body text =
-  Yojson.Safe.to_string
-    (`Assoc
-       [
-         ("status", `String "completed");
-         ( "output",
-           `List
-             [
-               `Assoc
-                 [
-                   ("type", `String "message");
-                   ( "content",
-                     `List
-                       [
-                         `Assoc
-                           [
-                             ( "text",
-                               `String
-                                 (Yojson.Safe.to_string
-                                    (`Assoc [ ("text", `String text) ])) );
-                           ];
-                       ] );
-                 ];
-             ] );
-       ])
+  Yojson.Safe.to_string (`Assoc [ ("text", `String text) ])
 
 let pcm = Bytes.make 320 '\001'
 
@@ -203,11 +180,9 @@ let run_openrouter ~body ~status () =
     Ox.Timeout.timeout ~clock (Ox.Duration.seconds openrouter_deadline_seconds)
       (fun () ->
         match
-          Pie.Stt.Openrouter.transcribe_with_prompt ~caps ~sw ~net ~clock
-            ~logger:
-              (stderr_logger ~clock ~mono_clock:(Eio.Stdenv.mono_clock env))
-            ~model:"test-model" ~language:"en" ~prompt_template:"Transcribe."
-            pcm
+          Pie.Stt.Openrouter.transcribe ~caps ~sw ~net ~clock
+            ~api_key:(Ox_observability.Redact.make "synthetic")
+            ~model:"test-model" ~language:"en" pcm
         with
         | Ok text -> Ok text
         | Error (`Stt_error message) -> Error (`Stt_error message))

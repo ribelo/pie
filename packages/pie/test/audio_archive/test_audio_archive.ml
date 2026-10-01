@@ -447,9 +447,6 @@ let service_config ~retention () : Pie.Config.Stt.t =
     ptt_transcribe_shift = false;
     ptt_translate_shift = false;
     thinking_effort = None;
-    transcription_prompt = "Transcribe in {{language}}.";
-    translation_prompt =
-      "Translate from {{source_language}} to {{target_language}}.";
     newline_rules = [];
     text_entry_rules = [];
     prompt_rules = [];
@@ -541,8 +538,8 @@ let run_attempt ~env ~dir ~retention ~pass1 ~deliver ~during =
   in
   Eio.Switch.run @@ fun sw ->
   let workflow () =
-    Pie.Assistant.Service.run_with_inputs ~caps ~sw ~net ~fs:(Eio.Stdenv.fs env)
-      ~clock ~logger
+    Pie_test_runtime.Service.run_with_inputs ~caps ~sw ~net
+      ~fs:(Eio.Stdenv.fs env) ~clock ~logger
       ~process_mgr:(Eio.Stdenv.process_mgr env)
       ~mono_clock:(Eio.Stdenv.mono_clock env)
       ~inputs:{ keyboard; audio; source_name = Some "test-source" }

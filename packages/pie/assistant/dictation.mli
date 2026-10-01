@@ -1,5 +1,4 @@
-(** Opt-in one-pass and two-pass attempts. Legacy attempts do not create this
-    context. *)
+(** One-pass and two-pass attempts. *)
 
 type pass = Pass1 | Pass2 | One_pass
 

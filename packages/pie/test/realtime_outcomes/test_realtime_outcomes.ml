@@ -134,7 +134,6 @@ let tcp_port = function
 
 let is_audio_append type_name =
   String.equal type_name "input_audio_buffer.append"
-  || String.equal type_name "session.input_audio_buffer.append"
 
 let handshake flow =
   let head = read_http_head flow in
@@ -189,8 +188,7 @@ let serve ?(close_peer = write_ws_close) ~saw_audio script flow =
   in
   loop `Init
 
-let run_session_with ?tls ?(peer_close = `Websocket) ~mode ~script ~drain_ms ()
-    =
+let run_session_with ?tls ?(peer_close = `Websocket) ~mode ~script () =
   let saw_audio = ref false in
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
@@ -226,31 +224,19 @@ let run_session_with ?tls ?(peer_close = `Websocket) ~mode ~script ~drain_ms ()
   let ca_file = Option.map snd tls in
   let url = Printf.sprintf "%s://127.0.0.1:%d" scheme port in
   let session_update =
-    match mode with
-    | Codex.Transcription ->
-        Some
-          (Codex.build_transcription_session_update
-             ~model:"gpt-4o-mini-transcribe" ())
-    | Codex.Conversation ->
-        Some
-          (Codex.build_conversation_session_update ~model:"gpt-realtime-2.1"
-             ~prompt:"p")
-    | Codex.Translation ->
-        Some (Codex.build_translation_session_update ~prompt:"p" ())
+    Some (Codex.build_pass1_session_update ~model:"gpt-live-transcribe" ())
   in
   let result =
     try
       Eio.Time.with_timeout_exn clock 3.0 (fun () ->
           Codex.run_realtime_session ~caps ~sw ~net ~clock ?ca_file ~url
             ~access_token:"synthetic" ~mode ?session_update
-            ~translation_output_drain_ms:drain_ms ~input_sample_rate:16000 pcm)
+            ~input_sample_rate:16000 pcm)
     with Eio.Time.Timeout -> Error (`Stt_error "timeout")
   in
   (result, !saw_audio)
 
-let run_session ~mode ~script ~drain_ms =
-  run_session_with ~mode ~script ~drain_ms ()
-
+let run_session ~mode ~script = run_session_with ~mode ~script ()
 let created = {|{"type":"session.created"}|}
 let created_tx = {|{"type":"transcription_session.created"}|}
 let updated = {|{"type":"session.updated"}|}
@@ -259,16 +245,14 @@ let updated_tx = {|{"type":"transcription_session.updated"}|}
 let error_evt =
   {|{"type":"error","error":{"message":"SECRET_MARKER","code":"bad"}}|}
 
-let delta = {|{"type":"response.output_text.delta","delta":"hel"}|}
+let delta =
+  {|{"type":"conversation.item.input_audio_transcription.delta","delta":"hel"}|}
 
 let tx_final =
   {|{"type":"conversation.item.input_audio_transcription.completed","transcript":"hello"}|}
 
 let done_status status =
   Printf.sprintf {|{"type":"response.done","response":{"status":"%s"}}|} status
-
-let done_missing = {|{"type":"response.done"}|}
-let done_malformed = {|{"type":"response.done","response":"nope"}|}
 
 let expect_error needle (result, _) =
   match result with
@@ -287,7 +271,6 @@ let test_created_only_sends_no_audio () =
           after_session_update = [];
           after_audio = [];
         }
-      ~drain_ms:20
   in
   expect_error "acknowledgement" (result, saw_audio);
   Alcotest.(check bool) "no audio before ack" false saw_audio
@@ -301,7 +284,6 @@ let test_config_reject_sends_no_audio () =
           after_session_update = [ error_evt ];
           after_audio = [];
         }
-      ~drain_ms:20
   in
   expect_error "server error" (result, saw_audio);
   Alcotest.(check bool) "no audio after reject" false saw_audio
@@ -315,95 +297,11 @@ let test_delayed_ack_then_transcription_completed () =
           after_session_update = [ updated ];
           after_audio = [ tx_final ];
         }
-      ~drain_ms:20
   in
   Alcotest.(check bool) "audio after ack" true saw_audio;
   match result with
   | Ok text -> Alcotest.(check string) "final" "hello" text
   | Error cause -> Alcotest.failf "expected success: %s" (cause_text cause)
-
-let test_conversation_completed () =
-  let result, _ =
-    run_session ~mode:Codex.Conversation
-      ~script:
-        {
-          after_handshake = [ created ];
-          after_session_update = [ updated ];
-          after_audio = [ delta; done_status "completed" ];
-        }
-      ~drain_ms:20
-  in
-  match result with
-  | Ok text -> Alcotest.(check string) "delta text" "hel" text
-  | Error cause -> Alcotest.failf "expected success: %s" (cause_text cause)
-
-let test_failed_after_partial () =
-  let result, _ =
-    run_session ~mode:Codex.Conversation
-      ~script:
-        {
-          after_handshake = [ created ];
-          after_session_update = [ updated ];
-          after_audio = [ delta; done_status "failed" ];
-        }
-      ~drain_ms:20
-  in
-  expect_error "failed" (result, ());
-  match result with
-  | Ok text -> Alcotest.failf "partial injected as success: %s" text
-  | Error _ -> ()
-
-let test_cancelled_after_partial () =
-  let result, _ =
-    run_session ~mode:Codex.Conversation
-      ~script:
-        {
-          after_handshake = [ created ];
-          after_session_update = [ updated ];
-          after_audio = [ delta; done_status "cancelled" ];
-        }
-      ~drain_ms:20
-  in
-  expect_error "cancelled" (result, ())
-
-let test_incomplete_after_partial () =
-  let result, _ =
-    run_session ~mode:Codex.Conversation
-      ~script:
-        {
-          after_handshake = [ created ];
-          after_session_update = [ updated ];
-          after_audio = [ delta; done_status "incomplete" ];
-        }
-      ~drain_ms:20
-  in
-  expect_error "incomplete" (result, ())
-
-let test_missing_status_is_not_success () =
-  let result, _ =
-    run_session ~mode:Codex.Conversation
-      ~script:
-        {
-          after_handshake = [ created ];
-          after_session_update = [ updated ];
-          after_audio = [ delta; done_missing ];
-        }
-      ~drain_ms:20
-  in
-  expect_error "incomplete" (result, ())
-
-let test_malformed_terminal_is_not_success () =
-  let result, _ =
-    run_session ~mode:Codex.Conversation
-      ~script:
-        {
-          after_handshake = [ created ];
-          after_session_update = [ updated ];
-          after_audio = [ delta; done_malformed ];
-        }
-      ~drain_ms:20
-  in
-  expect_error "incomplete" (result, ())
 
 let test_wrong_ack_sends_no_audio () =
   let result, saw_audio =
@@ -414,7 +312,6 @@ let test_wrong_ack_sends_no_audio () =
           after_session_update = [ updated_tx ];
           after_audio = [ tx_final ];
         }
-      ~drain_ms:20
   in
   expect_error "acknowledgement" (result, saw_audio);
   Alcotest.(check bool) "no audio on wrong ack" false saw_audio
@@ -428,55 +325,10 @@ let test_transcription_ignores_conversation_done () =
           after_session_update = [ updated ];
           after_audio = [ delta; done_status "completed" ];
         }
-      ~drain_ms:20
   in
   Alcotest.(check bool) "audio after correct ack" true saw_audio;
   expect_error "incomplete" (result, ())
 
-let test_conversation_ignores_transcription_final () =
-  let result, _ =
-    run_session ~mode:Codex.Conversation
-      ~script:
-        {
-          after_handshake = [ created ];
-          after_session_update = [ updated ];
-          after_audio = [ tx_final ];
-        }
-      ~drain_ms:20
-  in
-  expect_error "incomplete" (result, ())
-
-let test_translation_ignores_response_done () =
-  let result, saw_audio =
-    run_session ~mode:Codex.Translation
-      ~script:
-        {
-          after_handshake = [ created ];
-          after_session_update = [ updated ];
-          after_audio = [ delta; done_status "completed" ];
-        }
-      ~drain_ms:20
-  in
-  Alcotest.(check bool) "audio after ack" true saw_audio;
-  expect_error "incomplete" (result, ())
-
-let test_translation_drain_is_incomplete () =
-  let result, saw_audio =
-    run_session ~mode:Codex.Translation
-      ~script:
-        {
-          after_handshake = [ created ];
-          after_session_update = [ updated ];
-          after_audio = [ delta ];
-        }
-      ~drain_ms:20
-  in
-  Alcotest.(check bool) "audio after ack" true saw_audio;
-  expect_error "incomplete" (result, ())
-
-(* nhttp-7pp8 nhttp-rs5p pienext-jlmd pienext-4ps6: TLS EOF must reach the
-   Codex session as a closed WebSocket, never as a spurious TLS failure or a
-   successful incomplete response. TLS close_notify alone is not a WS close. *)
 let with_tls test =
   let cert = Filename.temp_file "pie-r38-cert-" ".pem" in
   let key = Filename.temp_file "pie-r38-key-" ".pem" in
@@ -504,22 +356,19 @@ let with_tls test =
 let test_tls_peer_close peer_close diagnostic () =
   with_tls (fun tls ->
       let result, saw_audio =
-        run_session_with ~tls ~peer_close ~mode:Codex.Conversation
+        run_session_with ~tls ~peer_close ~mode:Codex.Transcription
           ~script:
             {
               after_handshake = [ created ];
               after_session_update = [];
               after_audio = [];
             }
-          ~drain_ms:20 ()
+          ()
       in
       expect_error diagnostic (result, ());
       Alcotest.(check bool)
         "closed before readiness sends no audio" false saw_audio)
 
-(* dict-dl3q dict-m2xr dict-q6xd dict-wha3: dedicated transcription session.
-   Language is the ISO-639-1 code; the wire field is [languages], which
-   gpt-live-transcribe and gpt-transcribe accept. The glossary is [prompt]. *)
 let ( let* ) = Result.bind
 
 let frame_type payload =
@@ -586,7 +435,7 @@ let assert_commit_after_audio frames =
   in
   loop false (frame_types frames)
 
-type peer_terminal = On_commit | On_response_create
+type peer_terminal = On_commit
 
 let serve_recording ~terminal ~frames ~request flow =
   let head = read_http_head flow in
@@ -609,9 +458,6 @@ let serve_recording ~terminal ~frames ~request flow =
         | Some "session.update", _ -> write_ws_text flow updated
         | Some "input_audio_buffer.commit", On_commit ->
             write_ws_text flow tx_final
-        | Some "response.create", On_response_create ->
-            write_ws_text flow delta;
-            write_ws_text flow (done_status "completed")
         | _ -> ());
         loop ()
   in
@@ -815,66 +661,6 @@ let test_pass1_buffered_sends_all_audio () =
     "all resampled audio before commit" [ expected ] audio;
   assert_commit_after_audio frames
 
-let legacy_conversation_update =
-  "{\"type\":\"session.update\",\"session\":{\"type\":\"realtime\",\"model\":\"gpt-realtime-2.1\",\"output_modalities\":[\"text\"],\"instructions\":\"legacy-prompt\",\"audio\":{\"input\":{\"format\":{\"type\":\"audio/pcm\",\"rate\":24000},\"turn_detection\":null}}}}"
-
-let legacy_response_create =
-  "{\"type\":\"response.create\",\"response\":{\"output_modalities\":[\"text\"],\"instructions\":\"legacy-prompt\"}}"
-
-let legacy_transcription_update =
-  "{\"type\":\"session.update\",\"session\":{\"type\":\"transcription\",\"audio\":{\"input\":{\"format\":{\"type\":\"audio/pcm\",\"rate\":24000},\"transcription\":{\"model\":\"gpt-4o-mini-transcribe\",\"prompt\":\"Hear \
-   Polish\"}}}}}"
-
-let test_legacy_conversation_frames () =
-  let result, request, frames =
-    run_peer ~terminal:On_response_create (fun _env sw net clock ->
-        Codex.transcribe_with_prompt ~caps ~sw ~net ~clock
-          ~model:"gpt-realtime-2.1" ~language:"English"
-          ~prompt_template:"legacy-prompt" pcm)
-  in
-  expect_transcript "hel" result;
-  Alcotest.(check bool)
-    "conversation model query" true
-    (contains request "model=gpt-realtime-2.1");
-  Alcotest.(check bool)
-    "not a transcription intent" false
-    (contains request "intent=transcription");
-  Alcotest.(check string)
-    "legacy conversation session.update" legacy_conversation_update
-    (session_update_payload frames);
-  let creates =
-    List.filter
-      (fun payload -> frame_type payload = Some "response.create")
-      frames
-  in
-  match creates with
-  | [ payload ] ->
-      Alcotest.(check string)
-        "legacy response.create" legacy_response_create payload
-  | found ->
-      Alcotest.failf "expected one response.create, got %d" (List.length found)
-
-let test_legacy_transcription_frames () =
-  let result, request, frames =
-    run_peer ~terminal:On_commit (fun _env sw net clock ->
-        Codex.transcribe_with_prompt ~caps ~sw ~net ~clock
-          ~model:"gpt-4o-mini-transcribe" ~language:"Polish"
-          ~prompt_template:"Hear {{language}}" pcm)
-  in
-  expect_transcript "hello" result;
-  Alcotest.(check bool)
-    "legacy transcription intent" true
-    (contains request "intent=transcription");
-  let update = session_update_payload frames in
-  Alcotest.(check string)
-    "legacy transcription session.update" legacy_transcription_update update;
-  Alcotest.(check bool)
-    "legacy builder unchanged" true
-    (update
-    = Yojson.Safe.to_string
-        (Codex.build_transcription_session_update
-           ~model:"gpt-4o-mini-transcribe" ~prompt:"Hear Polish" ()))
-
 let () =
   Alcotest.run "realtime-outcomes"
     [
@@ -900,26 +686,8 @@ let () =
         ] );
       ( "terminal",
         [
-          Alcotest.test_case "conversation completed" `Quick
-            test_conversation_completed;
-          Alcotest.test_case "failed after partial is not success" `Quick
-            test_failed_after_partial;
-          Alcotest.test_case "cancelled after partial" `Quick
-            test_cancelled_after_partial;
-          Alcotest.test_case "incomplete after partial" `Quick
-            test_incomplete_after_partial;
-          Alcotest.test_case "missing status is not success" `Quick
-            test_missing_status_is_not_success;
-          Alcotest.test_case "malformed terminal is not success" `Quick
-            test_malformed_terminal_is_not_success;
-          Alcotest.test_case "translation drain is incomplete" `Quick
-            test_translation_drain_is_incomplete;
           Alcotest.test_case "transcription ignores conversation response.done"
             `Quick test_transcription_ignores_conversation_done;
-          Alcotest.test_case "conversation ignores transcription final" `Quick
-            test_conversation_ignores_transcription_final;
-          Alcotest.test_case "translation ignores response.done" `Quick
-            test_translation_ignores_response_done;
         ] );
       ( "pass 1 (dict-dl3q dict-m2xr dict-q6xd dict-wha3)",
         [
@@ -935,9 +703,5 @@ let () =
           Alcotest.test_case
             "buffered sends all audio then commits (dict-q6xd dict-m2xr)" `Quick
             test_pass1_buffered_sends_all_audio;
-          Alcotest.test_case "legacy conversation frames unchanged" `Quick
-            test_legacy_conversation_frames;
-          Alcotest.test_case "legacy transcription frames unchanged" `Quick
-            test_legacy_transcription_frames;
         ] );
     ]

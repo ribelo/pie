@@ -1,25 +1,20 @@
 (** Speech-to-text configuration.
 
-    [pipeline = Legacy], the default, is today's single pass: the same models,
-    keys, audio prompts and prompt files as before the two-pass keys existed.
-    [streaming] is still checked, then ignored. Pass-2 and one-pass prompt files
-    are not read.
-
-    [One_pass] sends the recording, the binding's prompt and the glossary to one
-    OpenRouter audio model. [Two_pass] is pass 1 then optional pass 2.
-    [streaming = true] is rejected with [One_pass]. One-pass models must use the
-    [openrouter] provider.
+    [One_pass], the default when [pipeline] is absent, sends the recording, the
+    binding's prompt and the glossary to one OpenRouter audio model. [Two_pass]
+    is pass 1 then optional pass 2. [streaming = true] is rejected with
+    [One_pass]. One-pass models must use the [openrouter] provider.
 
     [[bindings]] is authoritative when present. Without it, [bindings] is the
     two keys derived from [ptt_transcribe_keysym] / [ptt_transcribe_shift] and
-    [ptt_translate_keysym] / [ptt_translate_shift]. With it, those legacy fields
+    [ptt_translate_keysym] / [ptt_translate_shift]. With it, those PTT fields
     are only a compatibility view: the first binding of each mode, or the
     built-in default (65478 or 65479, shift false) when that mode is absent.
-    Those defaults are not extra bindings. Callers that still read the legacy
+    Those defaults are not extra bindings. Callers that still read the PTT
     fields keep compiling; new code should use [bindings]. *)
 
 type provider = Codex_realtime | Openrouter
-type pipeline = Legacy | One_pass | Two_pass
+type pipeline = One_pass | Two_pass
 
 type newline_action = Input.Text_injection.newline_action =
   | Collapse_to_space
@@ -106,8 +101,6 @@ type t = {
   thinking_effort : string option;
       (** One-pass reasoning effort. Pass 2 uses [correction.reasoning_effort].
       *)
-  transcription_prompt : string;
-  translation_prompt : string;
   newline_rules : newline_rule list;
   prompt_rules : prompt_rule list;
   text_entry_rules : text_entry_rule list;
@@ -120,8 +113,8 @@ type t = {
       (** Stream pass-1 audio while the key is held. Defaults to true when the
           resolved pass-1 provider is [codex-realtime], and false for
           [openrouter]. [true] with an openrouter pass-1 model is rejected.
-          [true] with [One_pass] is rejected. Meaningful only for [Legacy] Codex
-          realtime and [Two_pass] Codex realtime. *)
+          [true] with [One_pass] is rejected. Meaningful only for [Two_pass]
+          Codex realtime. *)
   correction : correction option;
   bindings : binding list;
   audio_retention_hours : float;

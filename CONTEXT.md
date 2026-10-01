@@ -64,6 +64,15 @@ The assistant offers the resulting text to the clipboard. It pastes only when th
 **Busy**:
 One attempt still owns the operation, including setup, recording, processing, delivery and cleanup. A second attempt is not admitted until the first has settled. Busy does not mean recording.
 
+**Dictation pipeline**:
+The configured audio-to-text flow: `one-pass` (the default when `pipeline` is absent) or `two-pass`. Removed pipeline values and conversational-model configurations fail loading rather than falling back.
+
+**One pass**:
+One buffered OpenRouter audio Responses request combines the audio, the selected prompt and the glossary. Transcription and translation use their configured audio-capable models. There is no raw transcript or streaming pass 1.
+
+**Two passes**:
+Dedicated speech recognition produces the raw transcript; an optional text request corrects or translates it. Codex uses a transcription session, not a conversation; OpenRouter uses multipart audio transcription. Only Codex pass 1 can stream.
+
 **Pass 1**:
 Speech to text: a dedicated recognition model turns the captured audio into a literal transcript, streaming audio during recording when configured.
 _Avoid_: STT pass (unqualified), realtime
@@ -86,7 +95,7 @@ The only glossary file Pie resolves: `glossary.md` in Pie's XDG configuration di
 The former per-project `.pie/glossary.md` source discovered from the focused process tree. Pie no longer discovers or reads it; project terms belong in the global glossary. Its bundled agent skill and `pie skill install` are retired too.
 
 **Binding**:
-One push-to-talk key: a keysym, a shift flag, a mode (transcribe or translate), whether pass 2 runs, and which pass-2 prompt it uses.
+One push-to-talk key: a keysym, a shift flag, a mode (transcribe or translate), a correction choice, and which pipeline prompt it uses. Existing `ptt_*` keys still supply two default bindings when `[[bindings]]` is absent; they do not select a pipeline.
 
 **History**:
 The append-only local record of every attempt's raw transcript, final text and outcome, read with `pie history`.
