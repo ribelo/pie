@@ -8,6 +8,8 @@ consumer: pie
 
 ## Status
 
+2026-10-01: default prompts now remove incidental profanity, dict-x9pf.
+
 2026-10-01 glossary revision: one global glossary now serves every application, replacing process-tree/project discovery (used 0 times in 87 attempts). `pie glossary` reports the file and documents maintenance; the bundled agent skill and `pie skill install` are retired. This work does not install the binary, restart the service, or replace the active glossary.
 
 2026-10-01: incident 3808-30 returned HTTP 200 with a choice-level provider error (`finish_reason: error`, native `OTHER`, code 500, `unmapped`) and truncated content. HTTP success is not dictation success. Controlled replay reproduced the error with WAV at low reasoning effort but not at medium, so the single automatic retry uses WAV and at least medium reasoning. MP3 remains 32 kbit/s mono with Xing and ID3v2 headers disabled. Full provider bodies now remain private beside audio for seven days by default; history names the bodies and records sanitized diagnostics plus retry format and effort. This change is verified on the upload worktree only; the live service and user configuration have not been changed. A non-delivering replay through the new encoder and adapter succeeded on the first MP3/low request in 6.869 s (bundled prompt, empty glossary); this does not establish transcript quality or the cause of the earlier failure. Existing response-size bounds remain: no complete body can be retained when transport fails before returning one.

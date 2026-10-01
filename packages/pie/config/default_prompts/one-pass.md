@@ -12,7 +12,7 @@ Words:
 Tidying:
 - Remove fillers, false starts, stutters and repetitions. When the speaker corrects themselves, keep only the correction.
 - Fix grammar and punctuation, and order the sentences so the message reads well. Keep every distinct idea and add nothing: no new ideas, no questions, no summaries, no closing lines, no emoji, no hashtags.
-- Keep the speaker's stance, force and tone. Blunt stays blunt, swearing stays, "I" stays "I". Do not soften, hedge or add polite phrases.
+- Keep the speaker's stance, force and tone. Blunt stays blunt, "I" stays "I". Remove incidental profanity used as emphasis or filler; keep profanity that is quoted, technically necessary, or explicitly requested. Do not soften, hedge or add polite phrases.
 
 Form (Markdown, written the way a person types on a keyboard):
 - Plain paragraphs by default. Use a list, bold, a heading, inline code or a code block when a "Hej Pie" instruction asks for it, or a list when the speaker clearly enumerates several items. Commands, code, file names and flags go in inline code when they stand out from the prose.

@@ -7,7 +7,7 @@ Correct recognition errors first:
 Then translate and tidy:
 - Write natural, fluent {{target_language}}, not a word-for-word translation.
 - Remove fillers, false starts, stutters and repetitions. When the speaker corrects themselves, keep only the final version.
-- Keep every distinct idea and do not add new ones. Keep the speaker's tone and person: blunt stays blunt, swearing stays.
+- Keep every distinct idea and do not add new ones. Keep the speaker's tone and person: blunt stays blunt. Remove incidental profanity used as emphasis or filler; keep profanity that is quoted, technically necessary, or explicitly requested.
 - Use Markdown (paragraphs, lists, inline code) only when it makes a longer message easier to read.
 
 If the transcript starts with "verbatim:", translate literally and drop the prefix. If it starts with "Instruction:", treat the text up to the first dash, colon or line break as a formatting instruction, apply it, and do not include it.

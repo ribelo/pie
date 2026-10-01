@@ -23,6 +23,7 @@ let base_config ?(provider = Pie.Config.Stt.Openrouter)
       "Translate from {{source_language}} to {{target_language}}.";
     newline_rules = [];
     text_entry_rules = [];
+    prompt_rules = [];
     pipeline = Legacy;
     openrouter_provider_order = None;
     one_pass_timeout_seconds = 30.;
@@ -624,7 +625,11 @@ let test_response_history ~one_pass ~archive_error ~retention () =
         "first diagnostic" "unavailable" retry.first_diagnostic;
       Alcotest.(check string) "final diagnostic" "stt:ok" retry.final_diagnostic;
       Alcotest.(check (option string))
-        "effort" (Some "medium") retry.reasoning_effort
+        "effort" (Some "medium") retry.reasoning_effort;
+      Alcotest.(check (option string))
+        "actual final effort" (Some "medium") event.reasoning_effort;
+      Alcotest.(check (option string))
+        "schema" (Some "dictation/text-v1") event.response_schema
   | _ -> Alcotest.fail "missing finished retry event"
 
 let test_target_delivery ?(pipeline = C.Two_pass) focus expected_paste () =
@@ -707,6 +712,65 @@ let test_target_delivery ?(pipeline = C.Two_pass) focus expected_paste () =
         (Option.bind event.window (fun window -> window.H.id))
   | _ -> Alcotest.fail "one raw history event required"
 
+let test_prompt_frozen_at_press () =
+  let f = fixture () in
+  let b = binding () in
+  let rule : C.prompt_rule =
+    {
+      app_id = Some "EDITOR";
+      title_regex = Some "^press";
+      mode = Some C.Transcribe;
+      prompt_file = "neutral.md";
+      prompt = "Neutral {{glossary}}";
+    }
+  in
+  let cfg =
+    {
+      (config b) with
+      pipeline = C.One_pass;
+      thinking_effort = Some "low";
+      prompt_rules = [ rule ];
+    }
+  in
+  let focus =
+    ref
+      (Some
+         { H.id = Some 42; app_id = Some "editor"; title = Some "press title" })
+  in
+  let deps =
+    {
+      (dependencies
+         ~one_pass:(fun _ chosen _ _ ->
+           Alcotest.(check string)
+             "request uses press prompt" "neutral.md" chosen.C.prompt_file;
+           Alcotest.(check string)
+             "request uses loaded content" rule.prompt chosen.prompt;
+           Ok "heard text")
+         f)
+      with
+      resolve_glossary =
+        (fun () ->
+          f.resolutions <- f.resolutions + 1;
+          ( { Pie.Glossary.text = "GLOBAL TERM"; paths = []; warnings = [] },
+            !focus ));
+    }
+  in
+  let attempt = D.create deps ~config:cfg ~binding:b in
+  focus :=
+    Some
+      { H.id = Some 43; app_id = Some "slack"; title = Some "delivery title" };
+  ok (execute f attempt);
+  Alcotest.(check int) "focus captured exactly once" 1 f.resolutions;
+  match f.finished with
+  | [ event ] ->
+      Alcotest.(check (option string))
+        "chosen prompt in history" (Some "neutral.md") event.H.prompt_file;
+      Alcotest.(check (option string))
+        "configured first effort" (Some "low") event.reasoning_effort;
+      Alcotest.(check (option string))
+        "schema identifier" (Some "dictation/text-v1") event.response_schema
+  | _ -> Alcotest.fail "one finished event required"
+
 let test_notification_title () =
   Alcotest.(check string)
     "markup and controls escaped"
@@ -757,6 +821,8 @@ let () =
     [
       ( "stories",
         [
+          case "dict-c3nt h8rd prompt frozen at press"
+            test_prompt_frozen_at_press;
           case "dict-x6e9 one-pass response history"
             (test_response_history ~one_pass:true ~archive_error:false
                ~retention:168.);
@@ -769,7 +835,6 @@ let () =
           case "dict-x6e9 disabled retention"
             (test_response_history ~one_pass:true ~archive_error:false
                ~retention:0.);
-
           case "dict-snot one-pass unchanged id pastes"
             (test_target_delivery ~pipeline:C.One_pass
                (Ok

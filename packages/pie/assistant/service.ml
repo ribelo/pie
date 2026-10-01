@@ -379,14 +379,29 @@ let text_entry_rule_json index (rule : Config.Stt.text_entry_rule) =
       ("method", `String (Config.Stt.string_of_entry_method rule.method_));
     ]
 
+let response_metadata (config : Config.Stt.t) =
+  match config.pipeline with
+  | One_pass -> (config.thinking_effort, Some Stt.Correction.response_schema)
+  | Two_pass -> (
+      match config.correction with
+      | None -> (None, None)
+      | Some correction ->
+          (correction.reasoning_effort, Some Stt.Correction.response_schema))
+  | Legacy -> (None, None)
+
 let startup_config_json ~caps ?config_path ~(config : Config.Stt.t)
     ~ptt_transcribe_keysym ~ptt_translate_keysym ~min_duration_ms () =
   let config_path =
     Option.value config_path ~default:(Paths.stt_config_path ~caps)
   in
+  let reasoning_effort, response_schema = response_metadata config in
   `Assoc
     [
       ("config_path", `String config_path);
+      ( "reasoning_effort",
+        option_json (fun value -> `String value) reasoning_effort );
+      ( "response_schema",
+        option_json (fun value -> `String value) response_schema );
       ("provider", `String (Config.Stt.string_of_provider config.provider));
       ("transcription_model", configured_model_json config Transcribe);
       ("translation_model", configured_model_json config Translate);
@@ -403,6 +418,25 @@ let startup_config_json ~caps ?config_path ~(config : Config.Stt.t)
       ("newline_rules", `List (List.mapi newline_rule_json config.newline_rules));
       ( "text_entry_rules",
         `List (List.mapi text_entry_rule_json config.text_entry_rules) );
+      ( "prompt_rules",
+        `List
+          (List.mapi
+             (fun index (rule : Config.Stt.prompt_rule) ->
+               `Assoc
+                 [
+                   ("index", `Int index);
+                   ( "app_id",
+                     option_json (fun value -> `String value) rule.app_id );
+                   ( "title_regex",
+                     option_json (fun value -> `String value) rule.title_regex
+                   );
+                   ( "mode",
+                     option_json
+                       (fun value -> `String (Config.Stt.string_of_mode value))
+                       rule.mode );
+                   ("prompt_file", `String rule.prompt_file);
+                 ])
+             config.prompt_rules) );
       ("pipeline", `String (Config.Stt.string_of_pipeline config.pipeline));
       ( "openrouter_provider_order",
         option_json
@@ -438,6 +472,10 @@ let startup_config_json ~caps ?config_path ~(config : Config.Stt.t)
                    ("mode", `String (Config.Stt.string_of_mode binding.mode));
                    ("correct", `Bool binding.correct);
                    ("prompt_file", `String binding.prompt_file);
+                   ( "reasoning_effort",
+                     option_json
+                       (fun value -> `String value)
+                       (Config.Stt.effective_reasoning_effort config binding) );
                  ])
              config.bindings) );
     ]
@@ -907,11 +945,7 @@ let production_pipeline ~caps ~sw ~net ~clock ~logger ~process_mgr =
           | Ok focused ->
               Option.map
                 (fun (w : Niri.window_info) ->
-                  {
-                    History.id = Some w.id;
-                    app_id = w.app_id;
-                    title = w.title;
-                  })
+                  { History.id = Some w.id; app_id = w.app_id; title = w.title })
                 focused
         in
         (glossary, window));
@@ -944,8 +978,12 @@ let production_pipeline ~caps ~sw ~net ~clock ~logger ~process_mgr =
               ~prompt_template:binding.prompt
               ~language:config.transcription_language
               ~source_language:config.translation_source_language
-              ~target_language:config.translation_target_language ~transcript
-              ~glossary:glossary.Glossary.text
+              ~target_language:config.translation_target_language
+              ~output_language:
+                (match binding.mode with
+                | Transcribe -> config.transcription_language
+                | Translate -> config.translation_target_language)
+              ~transcript ~glossary:glossary.Glossary.text
               ?provider_order:config.openrouter_provider_order
               ?reasoning_effort:correction.reasoning_effort
               ~temperature:correction.temperature ());
@@ -986,6 +1024,10 @@ let production_pipeline ~caps ~sw ~net ~clock ~logger ~process_mgr =
             in
             Stt.Correction.run_with_retry ~caps ~sw ~net ~clock ~logger
               ~on_response ~model:resolved.model ~prompt_template:binding.prompt
+              ~output_language:
+                (match binding.mode with
+                | Transcribe -> config.transcription_language
+                | Translate -> config.translation_target_language)
               ~transcript:Stt.Correction.audio_cue ~upload
               ?provider_order:config.openrouter_provider_order
               ~glossary:glossary.Glossary.text
@@ -1051,7 +1093,7 @@ let first_binding (config : Config.Stt.t) mode =
     (fun (binding : Config.Stt.binding) -> binding.mode = mode)
     config.bindings
 
-let create_dictation ~config ?binding pipeline mode =
+let create_dictation ~logger ~config ?binding pipeline mode =
   match config.Config.Stt.pipeline with
   | Legacy -> Ok None
   | One_pass | Two_pass -> (
@@ -1062,7 +1104,17 @@ let create_dictation ~config ?binding pipeline mode =
           | None -> first_binding config mode )
       with
       | Some deps, Some binding ->
-          Ok (Some (Dictation.create deps ~config ~binding))
+          let attempt = Dictation.create deps ~config ~binding in
+          Ox_observability.Logger.info logger "dictation prompt selected"
+            ~fields:
+              [
+                ( "attempt.id",
+                  Ox_observability.Logger.String (Dictation.id attempt) );
+                ( "prompt.file",
+                  Ox_observability.Logger.String
+                    (Dictation.binding attempt).prompt_file );
+              ];
+          Ok (Some attempt)
       | None, _ ->
           Error
             (`Ptt_error
@@ -1327,7 +1379,9 @@ let on_press ~caps ~sw ~net ~clock ~logger ~coordinator ~config ?store
           Error (ptt_of_retry error)
       | Ok store -> (
           let created =
-            let* dictation = create_dictation ~config ?binding pipeline mode in
+            let* dictation =
+              create_dictation ~logger ~config ?binding pipeline mode
+            in
             let target_window =
               match dictation with
               | Some dictation -> Dictation.window dictation
@@ -1674,6 +1728,7 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
                    | `Probe_failed -> "stale probe failed"))
                error))
         (Assistant_service.Server.start ~caps ~sw ~net ~fs ~socket_path ~clock
+           ~status_metadata:(fun () -> response_metadata !current)
            ~action_handler:
              (action_handler ~coordinator ~send_control ~retries ~get_store
                 ~load_archived)
@@ -1978,7 +2033,7 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
                   retry_result (Active.load_audio store (Option.get generation))
                 in
                 let* dictation =
-                  create_dictation ~config (Some pipeline) mode
+                  create_dictation ~logger ~config (Some pipeline) mode
                 in
                 match dictation with
                 | Some dictation ->
@@ -2018,7 +2073,7 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
                 | Error message -> Error (`Ptt_error message)
                 | Ok pcm -> (
                     let* dictation =
-                      create_dictation ~config (Some pipeline) mode
+                      create_dictation ~logger ~config (Some pipeline) mode
                     in
                     match dictation with
                     | Some dictation ->

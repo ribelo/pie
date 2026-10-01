@@ -27,5 +27,9 @@ val start :
   ?socket_path:string ->
   ?budget:budget ->
   ?action_handler:(string -> Contract.action_result) ->
+  ?status_metadata:(unit -> string option * string option) ->
   Recording.Coordinator.t ->
   (unit, error) result
+(** [status_metadata] supplies configured reasoning effort and schema
+    identifier, sampled for each status/action response so live reloads remain
+    visible. *)

@@ -93,7 +93,9 @@ module Responses = Ox_ai_openrouter.Responses
 (* Protocol framing, not writing instructions: arbitrary free-form model
    output (including its analysis) must never be pasted into the destination.
    The user's prompt controls the Markdown inside the text field. *)
-let final_text_format =
+let response_schema = "dictation/text-v1"
+
+let final_text_format ~output_language =
   Responses.Json_schema
     {
       name = "dictation";
@@ -103,7 +105,20 @@ let final_text_format =
           [
             ("type", `String "object");
             ( "properties",
-              `Assoc [ ("text", `Assoc [ ("type", `String "string") ]) ] );
+              `Assoc
+                [
+                  ( "text",
+                    `Assoc
+                      [
+                        ("type", `String "string");
+                        ( "description",
+                          `String
+                            (Printf.sprintf
+                               "The final message to type, in %s, exactly as \
+                                the instructions require. Nothing else."
+                               output_language) );
+                      ] );
+                ] );
             ("required", `List [ `String "text" ]);
             ("additionalProperties", `Bool false);
           ];
@@ -146,7 +161,7 @@ let audio_format_of_string = function
   | _ -> None
 
 let encode ~model ~instructions ~input_text ?audio ?(audio_format = "wav")
-    ?provider_order ~temperature ~reasoning_effort () =
+    ?provider_order ~output_language ~temperature ~reasoning_effort () =
   let json =
     match audio with
     | None ->
@@ -157,7 +172,7 @@ let encode ~model ~instructions ~input_text ?audio ?(audio_format = "wav")
                instructions;
                input = input_text;
                temperature = Some temperature;
-               text_format = Some final_text_format;
+               text_format = Some (final_text_format ~output_language);
                reasoning_effort;
              })
     | Some audio -> (
@@ -171,7 +186,7 @@ let encode ~model ~instructions ~input_text ?audio ?(audio_format = "wav")
                    prompt = input_text;
                    wav = audio;
                    temperature = Some temperature;
-                   text_format = Some final_text_format;
+                   text_format = Some (final_text_format ~output_language);
                    reasoning_effort;
                  }))
   in
@@ -241,7 +256,8 @@ let run ~caps ~sw ~net ~clock ~logger:_ ~model ~prompt_template ~transcript
     ?audio ?audio_format ?provider_order ?(on_response = fun _ -> ())
     ?(glossary = "") ?(language = "") ?(source_language = "")
     ?(target_language = "") ?(temperature = default_temperature)
-    ?reasoning_effort ~timeout () =
+    ?reasoning_effort ?output_language ~timeout () =
+  let output_language = Option.value output_language ~default:language in
   if String.trim model = "" || not (Float.is_finite temperature) then
     Error (Provider Invalid_request)
   else if
@@ -259,7 +275,8 @@ let run ~caps ~sw ~net ~clock ~logger:_ ~model ~prompt_template ~transcript
         in
         match
           encode ~model ~instructions ~input_text:transcript ?audio
-            ?audio_format ?provider_order ~temperature ~reasoning_effort ()
+            ?audio_format ?provider_order ~output_language ~temperature
+            ~reasoning_effort ()
         with
         | Error _ as error -> error
         | Ok json -> (
@@ -318,7 +335,7 @@ let of_result result = { result; retry = None }
 let run_with_retry ~caps ~sw ~net ~clock ~logger ~model ~prompt_template
     ~transcript ?upload ?provider_order ?(on_response = fun ~first:_ _ -> ())
     ?glossary ?language ?source_language ?target_language ?temperature
-    ?reasoning_effort ~timeout () =
+    ?reasoning_effort ?output_language ~timeout () =
   let retry_effort =
     match reasoning_effort with
     | Some ("medium" | "high" | "xhigh") -> reasoning_effort
@@ -339,7 +356,7 @@ let run_with_retry ~caps ~sw ~net ~clock ~logger ~model ~prompt_template
         ?audio ?audio_format ?provider_order
         ~on_response:(fun body -> response := Some body)
         ?glossary ?language ?source_language ?target_language ?temperature
-        ?reasoning_effort ~timeout ()
+        ?reasoning_effort ?output_language ~timeout ()
     in
     (result, !response)
   in
