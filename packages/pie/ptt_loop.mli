@@ -58,3 +58,6 @@ val run :
   ?queue_capacity:int ->
   config ->
   (unit, run_error) result
+(** Run exclusive capture with detached processing in a supervised child scope.
+    Processing survives capture handoff and pause, but cancellation or failure
+    of the loop also cancels its remaining workers. *)

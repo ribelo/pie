@@ -164,6 +164,11 @@ let run ?control ?on_press_binding ?(on_capture_failure = fun _ -> Ok ())
     ?(capture_pcm_bytes = Dictation_limits.capture_pcm_bytes)
     ?(queue_capacity = 1024 + 256) (config : config) : (unit, run_error) result
     =
+  (* Attempts may outlive capture, but not this loop. A supervised child scope
+     cancels detached workers on loop cancellation or typed failure even when
+     the caller's service switch remains open. *)
+  Ox.Scope.supervised_error ~sw @@ fun scope ->
+  let sw = Ox.Scope.switch scope in
   let origin = Eio.Time.Mono.now mono_clock in
   let now_ms () = elapsed_ms ~origin (Eio.Time.Mono.now mono_clock) in
   let keyboard_queue = Keyboard.Monitor.subscribe keyboard in
