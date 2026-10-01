@@ -2544,6 +2544,74 @@ let test_owned_cancel_cleanup_defect_preserves_older () =
             "cleanup defect classified" true (has_defect cause)
       | Ox.Exit.Success _ -> Alcotest.fail "cleanup defect must not disappear")
 
+let test_settlement_exception_releases_fifo () =
+  Pie_test_runtime.run @@ fun env ->
+  with_dir (fun dir ->
+      Eio.Switch.run @@ fun sw ->
+      let module C = Pie.Recording.Coordinator in
+      let module A = Pie.Recording.Retry_store.Active in
+      let coord =
+        C.create ~caps ~persist_path:(Filename.concat dir "recording.json") ()
+      in
+      let run =
+        match
+          Pie_test_runtime.Service.on_press ~caps ~sw ~net:(Eio.Stdenv.net env)
+            ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env)
+            ~coordinator:coord
+            ~config:{ (base_config ()) with pipeline = One_pass }
+            ~retry_dir:dir
+            ~stt:(fun _ _ _ -> Ok "unused")
+            ~deliver:(fun _ _ _ _ -> Ok Pie.History.Clipboard)
+            "transcribe"
+        with
+        | Ok (Pie.Ptt_loop.Scoped run) -> run
+        | Ok _ -> Alcotest.fail "expected scoped owner"
+        | Error error -> fail_error error
+      in
+      let first = Option.get (C.current_attempt coord) in
+      ignore (C.set_phase coord first Pie.Recording.Phase.Processing);
+      let second = start_attempt coord in
+      ignore (C.set_phase coord second Pie.Recording.Phase.Processing);
+      Fun.protect
+        ~finally:(fun () ->
+          Option.iter Unix.close (A.Test_hooks.take_reused_fd ());
+          ignore (C.release coord first);
+          ignore (C.release coord second))
+        (fun () ->
+          let exit =
+            A.Test_hooks.with_fsync_fail (fun () ->
+                A.Test_hooks.with_close_fail (fun () ->
+                    Ox.Scope.run (fun _ ->
+                        run (fun handle ->
+                            match handle.Pie.Ptt_loop.offer loud_pcm with
+                            | Ok () -> failwith "injected-body-defect"
+                            | Error error -> fail_error error))))
+          in
+          let rendered =
+            match exit with
+            | Ox.Exit.Success _ -> Alcotest.fail "lost settlement exception"
+            | Ox.Exit.Failure cause ->
+                Format.asprintf "%a"
+                  (Ox.Cause.pp (fun fmt error ->
+                       Format.pp_print_string fmt
+                         (match error with
+                         | `Ptt_error text -> text
+                         | `Ptt_cause _ -> "compound")))
+                  cause
+          in
+          let rec has_multiple i =
+            i + 8 <= String.length rendered
+            && (String.sub rendered i 8 = "Multiple" || has_multiple (i + 1))
+          in
+          Alcotest.(check bool)
+            "sync and close defects remain visible" true (has_multiple 0);
+          Alcotest.(check int)
+            "failed head released processing slot" 1
+            (C.snapshot coord).processing;
+          Alcotest.(check bool)
+            "head already removed from FIFO" false (C.release coord first);
+          C.await_delivery coord second))
+
 let test_admission_held_until_provider_finalizer () =
   Pie_test_runtime.run @@ fun env ->
   with_dir (fun dir ->
@@ -3132,6 +3200,8 @@ let () =
             [
               Alcotest.test_case "admission held until provider finalizer"
                 `Quick test_admission_held_until_provider_finalizer;
+              Alcotest.test_case "dict-b1yt settlement exception releases FIFO"
+                `Quick test_settlement_exception_releases_fifo;
             ] );
           ( "recover",
             [

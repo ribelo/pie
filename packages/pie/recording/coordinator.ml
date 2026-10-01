@@ -232,7 +232,7 @@ let snapshot t =
 
 (* The admitted attempt owns its FIFO position through delivery and settlement. *)
 let await_delivery t attempt =
-  locked t (fun () ->
+  Eio.Mutex.use_ro t.mutex (fun () ->
       let rec wait () =
         match t.attempts with
         | first :: _ when first.id = attempt.id -> ()

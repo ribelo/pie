@@ -85,6 +85,36 @@ let test_processing_settlement () =
     (persisted () = `Int 0);
   ignore (C.release t third)
 
+let test_fifo_wait_cancellation () =
+  with_coordinator @@ fun t ->
+  Eio.Switch.run @@ fun sw ->
+  let first = start t in
+  ignore (C.set_phase t first P.Processing);
+  let second = start t in
+  ignore (C.set_phase t second P.Processing);
+  let context, context_u = Eio.Promise.create () in
+  let cancelled = ref false and delivered = ref false in
+  Eio.Fiber.fork ~sw (fun () ->
+      try
+        Eio.Cancel.sub (fun cc ->
+            Eio.Promise.resolve context_u cc;
+            C.await_delivery t second;
+            delivered := true)
+      with Eio.Cancel.Cancelled _ -> cancelled := true);
+  let cc = Eio.Promise.await context in
+  Eio.Fiber.yield ();
+  Eio.Cancel.cancel cc (Failure "cancel FIFO waiter");
+  Eio.Fiber.yield ();
+  let cancelled_before_release = !cancelled in
+  (* Even the broken implementation can exit, so the red test never hangs. *)
+  ignore (C.release t first);
+  Eio.Fiber.yield ();
+  ignore (C.release t second);
+  Alcotest.(check bool)
+    "FIFO wait observes cancellation before head settlement" true
+    cancelled_before_release;
+  Alcotest.(check bool) "cancelled waiter did not deliver" false !delivered
+
 let test_stale_and_backwards_rejected () =
   with_coordinator @@ fun t ->
   let old = start t in
@@ -196,6 +226,8 @@ let () =
           Alcotest.test_case "cancellation phase sticky" `Quick
             test_cancel_phase_is_sticky;
           Alcotest.test_case "idle projection" `Quick test_idle_projection;
+          Alcotest.test_case "dict-b1yt FIFO wait is cancellable" `Quick
+            test_fifo_wait_cancellation;
         ] );
       ( "protocol",
         [ Alcotest.test_case "explicit and legacy phases" `Quick test_protocol ]

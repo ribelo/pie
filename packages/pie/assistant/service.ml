@@ -757,23 +757,23 @@ let set_attempt_phase owner phase =
   Ok ()
 
 let settle_attempt owner =
-  let* () = set_attempt_phase owner Recording.Phase.Finishing in
-  if Atomic.compare_and_set owner.settled false true then (
-    Option.iter Dictation.fail_unfinished owner.dictation;
-    let result =
-      if
-        (not owner.failed) || owner.discard_audio || owner.captured_bytes = 0
-        || Recording.Coordinator.cancel_signalled owner.attempt
-      then abort_unpublished owner
-      else
-        match !(owner.stage) with
-        | Closed -> Ok ()
-        | Capturing _ | Sealed _ ->
-            let* () = seal_writer owner in
-            publish_sealed_audio owner
-    in
-    ignore (Recording.Coordinator.release owner.coordinator owner.attempt);
-    result)
+  if Atomic.compare_and_set owner.settled false true then
+    Fun.protect
+      ~finally:(fun () ->
+        ignore (Recording.Coordinator.release owner.coordinator owner.attempt))
+      (fun () ->
+        let* () = set_attempt_phase owner Recording.Phase.Finishing in
+        Option.iter Dictation.fail_unfinished owner.dictation;
+        if
+          (not owner.failed) || owner.discard_audio || owner.captured_bytes = 0
+          || Recording.Coordinator.cancel_signalled owner.attempt
+        then abort_unpublished owner
+        else
+          match !(owner.stage) with
+          | Closed -> Ok ()
+          | Capturing _ | Sealed _ ->
+              let* () = seal_writer owner in
+              publish_sealed_audio owner)
   else Ok ()
 
 (* One recognition -> delivery stage used by live capture and RetryLatest.
