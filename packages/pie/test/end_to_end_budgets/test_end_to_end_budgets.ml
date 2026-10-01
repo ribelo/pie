@@ -115,7 +115,11 @@ let rec rm_rf path =
   | _ -> ( try Unix.unlink path with Unix.Unix_error _ -> ())
 
 let with_dir f =
-  let dir = Printf.sprintf "/tmp/pie-e2e-%d" (Unix.getpid ()) in
+  let dir =
+    Filename.concat
+      (Filename.get_temp_dir_name ())
+      (Printf.sprintf "pie-e2e-%d" (Unix.getpid ()))
+  in
   rm_rf dir;
   Unix.mkdir dir 0o700;
   Fun.protect ~finally:(fun () -> rm_rf dir) (fun () -> f dir)
@@ -310,9 +314,24 @@ let assert_settled ~label ~retry_dir ~baseline_fd ~clock ~net ~sw ~socket_path =
   if now <> baseline_fd then
     Alcotest.failf "%s fd drifted baseline=%d now=%d" label baseline_fd now
 
-let press_release ~keyboard ~audio_q =
+let wait_for_recorded_pcm ~clock ~audio_q ~retry_dir =
+  wait_until ~clock (fun () ->
+      offer_pcm audio_q;
+      List.exists
+        (fun name ->
+          let path =
+            Filename.concat
+              (Filename.concat (Filename.concat retry_dir "active") name)
+              "draft.pcm"
+          in
+          try (Unix.stat path).st_size > 0 with Unix.Unix_error _ -> false)
+        (slot_names retry_dir))
+
+let press_release ~clock ~keyboard ~audio_q ~retry_dir =
   Pie.Keyboard.Monitor.emit keyboard (key ~released:false);
-  offer_pcm audio_q;
+  (* Native writer admission can yield. An immediate release used to race
+     that admission and never proved that this attempt consumed any PCM. *)
+  wait_for_recorded_pcm ~clock ~audio_q ~retry_dir;
   Pie.Keyboard.Monitor.emit keyboard (key ~released:true)
 
 let test_100_settled_attempts () =
@@ -375,7 +394,8 @@ let test_100_settled_attempts () =
                                 Atomic.set stt_mode Stt_fail;
                                 Atomic.set deliver_mode Deliver_ok;
                                 let n = Atomic.get stt_n in
-                                press_release ~keyboard ~audio_q;
+                                press_release ~clock ~keyboard ~audio_q
+                                  ~retry_dir;
                                 wait_until ~clock (fun () ->
                                     Atomic.get stt_n > n
                                     && peek_kind retry_dir = Some "audio");
@@ -387,7 +407,8 @@ let test_100_settled_attempts () =
                                 Atomic.set stt_mode Stt_ok;
                                 Atomic.set deliver_mode Deliver_fail;
                                 let n = Atomic.get deliver_n in
-                                press_release ~keyboard ~audio_q;
+                                press_release ~clock ~keyboard ~audio_q
+                                  ~retry_dir;
                                 wait_until ~clock (fun () ->
                                     Atomic.get deliver_n > n
                                     &&
@@ -407,7 +428,8 @@ let test_100_settled_attempts () =
                                 Atomic.set deliver_mode Deliver_ok;
                                 let n = Atomic.get deliver_n in
                                 let before = peek_kind retry_dir in
-                                press_release ~keyboard ~audio_q;
+                                press_release ~clock ~keyboard ~audio_q
+                                  ~retry_dir;
                                 wait_until ~clock (fun () ->
                                     Atomic.get deliver_n > n);
                                 settle label;
@@ -418,7 +440,7 @@ let test_100_settled_attempts () =
                                 let before = peek_kind retry_dir in
                                 Pie.Keyboard.Monitor.emit keyboard
                                   (key ~released:false);
-                                offer_pcm audio_q;
+                                wait_for_recorded_pcm ~clock ~audio_q ~retry_dir;
                                 ignore (rpc ~net ~sw socket_path action_pause);
                                 wait_until ~clock (fun () ->
                                     idle ~net ~sw socket_path);

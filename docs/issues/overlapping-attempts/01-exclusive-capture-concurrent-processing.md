@@ -44,3 +44,93 @@ Releasing the push-to-talk key starts a release grace of 1 s (configurable) insi
 - The legacy held-retry budget edges now assert capture-only pause, fresh capture admission, clipboard-only retry, and full settlement (`active = false`, `processing = 0`). Assertion guards release held cleanup even on failure.
 - Existing PTT budget regressions passed after introducing the supervised child scope, including stalled finish, root cancellation, typed budget failures, and retained cleanup defects.
 - `scripts/caps-gate`, formatting checks on changed OCaml files, and `git diff --check` passed. The complete post-review matrix passed on stable artifacts without interruptions; do not rebuild binaries while tests that spawn themselves are running.
+
+## Status EOF responsiveness follow-up (2026-10-01)
+
+Native filesystem work on the Eio scheduler domain could expire the local IPC
+listener budgets (peer 1 s, ingress 300 ms, handler 400 ms, egress 300 ms) and
+close a healthy Status connection. Traces captured fsync at 418.620 ms,
+recording-state close at 328.706 ms and 525.101 ms, and archive partial-file unlink
+at 457.155 ms. Later isolated traces saw fsync at 670.782 ms, 1,545.260 ms and
+975.004 ms for retained payload, manifest and index, and recording-state close
+at 1,257.162 ms. `findmnt -T ~/.local/share/pie` and `findmnt -T /tmp` both
+identify ext4 on the same LUKS-mapped root filesystem. These are measured native
+operation latencies, not a claim about ext4 or encryption generally. No IPC
+timeout was increased and no Status retry was added.
+
+Writer, retained-publication/retry, archive and history native operations now use
+`Fs.blocking`, backed by `Ox_blocking` with a protected child scope and physical
+completion drain. Eio process/network/clock effects stay on the scheduler side.
+Retained candidates remain durable before publication is reported; archive and
+history completion and ordering guarantees are unchanged.
+
+Offloading persistence alone exposed a second dependency: Status waited on the
+coordinator mutation mutex while a native projection write was pending. The
+coordinator now publishes one coherent immutable atomic snapshot per mutation;
+Status and active-state reads do not take that mutex. A native-held persistence
+regression was red before this change and green after it.
+
+**Approved projection decision:** `recording.json` is current state, not a
+per-mutation durability contract. The service uses one serial latest-state
+worker: the first write completes synchronously and fails startup on error;
+later submissions replace one pending immutable snapshot without yielding;
+switch shutdown drains the latest state. Worker errors are logged with state
+path and exception, matching previous synchronous runtime failure reporting.
+This applies only to that projection, not retained candidates, the audio archive
+or history appends. Native-held Pause/Resume regressions verify responsiveness,
+exact writes `[1; 2; 4]`, final enabled state, asynchronous failure reporting,
+and fail-fast initial persistence.
+
+Offloading also exposed fixture assumptions hidden by synchronous stalls:
+
+- A sealed older nonempty draft does not prove a new capture consumed PCM; the
+  overlap helper requires actual draft growth. The plateau waits for recorded
+  PCM before release or Pause instead of racing native writer admission.
+- Fixed 2,000 ms post-roll and physical sealing belong to capture lifecycle,
+  not the unchanged 2 s publication allowance. Publication fixtures wait for
+  actual recognizer entry within the existing 6 s lifecycle bound, then begin
+  that publication wait. FIFO-head admission uses the same lifecycle bound.
+- Listener readiness replaces blind 200 ms startup sleeps before the two
+  immediate-RPC fixtures; the initial fail-fast state write may yield.
+- Delivery callback completion precedes asynchronous retained clearing; the
+  startup retry fixture waits for settled processing before its unchanged
+  exact candidate-cleared assertion.
+- Clipboard stdin becomes visible only when the helper atomically publishes
+  its completed file, within the original 100 ms bound; the exact stdin
+  assertion is unchanged.
+- Readiness/lifetime pipes prove the child bound and remains owner in the
+  two-process socket fixture, replacing the blind 200 ms readiness delay and
+  fixed 2 s child lifetime.
+
+The approved offline-fixture environment uses the private runtime tmpfs under
+`/run/user/$(id -u)` when writable, with `/tmp` as a fallback and the selected
+root printed. Both `scripts/dev-env.sh --private-home` and
+`scripts/test-local-ox.sh` use this documented default. The plateau fixture
+also honors `TMPDIR` rather than hard-coding `/tmp`. This does not alter
+production filesystem paths, timeouts, assertions or durability operations.
+The explicit native-held regressions prove responsiveness independently of
+filesystem speed; ext4 measurements above are separate from fixture timing.
+
+### Follow-up acceptance
+
+- Ten consecutive complete `assistant_owner` runs passed: 52 tests per run,
+  520 total, including overlap 0 and 3. Individual runs took 80.109–85.830 s
+  on the documented private tmpfs root.
+- All 42 offline executables passed, including all 100 settled plateau
+  attempts, all 25 control-socket tests and all 26 clipboard-owner tests.
+  The build-record executable is the separate opt-in build-log inspection
+  check and is not part of this 42-executable offline inventory.
+- Local-Ox `@all`, regenerated `pie.opam`, changed-file `ocamlformat --check`,
+  shell syntax and `git diff --check` passed. Capability gate passed with
+  `EIO_BACKEND=posix SEMGREP_JOBS=2 ./scripts/caps-gate` (the default backend
+  encountered an io_uring allocation failure in the scanner environment).
+- The private-home `/tmp` fallback and empty, fail-closed environment were
+  exercised separately. The local-Ox reinstall harness was syntax-checked;
+  the equivalent already-installed local-Ox build and offline executables
+  above were used for acceptance, without reinstalling during stable runs.
+
+The native-held persistence regression was confirmed red before snapshot
+publication was made lock-free, then green with the final implementation. No
+production RPC retry or timeout increase was added. No live binary, configuration
+or data was modified; `pie.service` was not restarted, and
+`packages/pie/input/text_injection.ml` was left untouched.
