@@ -462,12 +462,74 @@ let commands_with_env (env : _ Ox_app.Env.t) door_run_owned =
             $ show_id $ show_raw $ show_json);
       ]
   in
+  let glossary_man =
+    [
+      `S Manpage.s_description;
+      `P
+        "Prints the resolved global glossary path, whether the file exists, \
+         and its physical line count. The file is read in full; this command \
+         does not create or edit it. Missing or unreadable files warn and do \
+         not stop dictation.";
+      `P
+        "Pie uses one glossary for all applications: \
+         XDG_CONFIG_HOME/pie/glossary.md (default ~/.config/pie/glossary.md). \
+         PIE_GLOSSARY overrides it with another file, not an additional file. \
+         Symlinks are followed. Edits apply at the next key press, without a \
+         daemon restart; there is no size cap or project lookup.";
+      `S "FORMAT";
+      `P
+        "Write one line per term: correct spelling — how speech recognition \
+         tends to mishear it. Separate mishearing variants with commas. Use ## \
+         headings for sections; Markdown bullet prefixes are optional.";
+      `Pre "## OCaml\n- Eio — ejo, e i o\n- Dune — dun, diun";
+      `S "EXTEND FROM A PROJECT";
+      `P
+        "Ask a coding agent: Inspect this project and extend my global Pie \
+         glossary at the path printed by pie glossary. Collect names, \
+         identifiers, tools, and commands I say aloud, and how speech \
+         recognition mishears each. Use observed errors where available; \
+         review likely variants with me. Keep correct spellings, add a ## \
+         project-name section, and merge duplicate terms by unioning their \
+         mishearing variants on one line. Preserve existing terms and \
+         sections. Do not create a project glossary or restart Pie.";
+      `S Manpage.s_examples;
+      `Pre "pie glossary";
+      `Noblank;
+      `Pre "PIE_GLOSSARY=/path/to/glossary.md pie glossary";
+    ]
+  in
+  let glossary =
+    Cmd.v
+      (Cmd.info "glossary"
+         ~doc:"Inspect and maintain the global dictation glossary"
+         ~man:glossary_man)
+      Term.(
+        const (fun () ->
+            run_owned (fun _sw ->
+                let status = Pie.Glossary.status ~caps () in
+                Ox_caps.Cap_stdlib.printf ~caps
+                  "Path: %s\nExists: %s\nLines: %s\n%!" status.path
+                  (match status.exists with
+                  | Some true -> "yes"
+                  | Some false -> "no"
+                  | None -> "unknown")
+                  (match status.line_count with
+                  | Some count -> string_of_int count
+                  | None -> "unavailable");
+                List.iter
+                  (function
+                    | Pie.Glossary.Unreadable { path; message } ->
+                        Ox_caps.Cap_stdlib.eprintf ~caps "Warning: %s: %s\n%!"
+                          path message)
+                  status.warnings;
+                Ok ()))
+        $ const ())
+  in
   let msg =
     Cmd.group
       (Cmd.info "msg" ~doc:"Send a message to the running daemon")
       [ action; msg_status; subscribe ]
   in
-  let skill = Pie_cli_support.Skill_cli.command ~caps in
   [
     source;
     meter;
@@ -479,7 +541,7 @@ let commands_with_env (env : _ Ox_app.Env.t) door_run_owned =
     resume;
     retry;
     history;
-    skill;
+    glossary;
     msg;
   ]
 

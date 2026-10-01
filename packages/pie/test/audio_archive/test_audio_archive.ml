@@ -400,8 +400,7 @@ let run_attempt ~env ~dir ~retention ~pass1 ~deliver ~during =
     {
       resolve_glossary =
         (fun () ->
-          ( { Pie.Glossary.text = ""; paths = []; warnings = []; cwd = None },
-            None ));
+          ({ Pie.Glossary.text = ""; paths = []; warnings = [] }, None));
       pass1 = (fun _ _ _ pcm -> pass1 pcm);
       pass2 = (fun _ _ _ text -> Ok text);
       append_transcribed =

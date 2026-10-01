@@ -1,3 +1,5 @@
 # Glossary mining (2026-09-30)
 
+Historical mining record: on 2026-10-01 project lookup and the bundled skill were retired in favor of one global glossary. The 227-term global file plus the ten project inputs supplied for migration contain 249 distinct terms; the staged merged file preserves the global sections and adds project sections. `pie glossary --help` now documents maintenance. The research files below remain provenance, not runtime glossary sources.
+
 The global glossary (~/.config/pie/glossary.md, 227 terms) and 13 project glossaries (<project>/.pie/glossary.md) were built from the user's own dictated messages in ~/.dsh/sessions (top-level sessions only, human-authored user messages; extractor: extract.mjs). Three agents mined them by area (dev.json, work.json, creative.json: term, observed and likely mishearings, projects, category, scope). A term seen in two or more project corpora, or a general ecosystem, tool or work term, went to the global glossary; the rest to the project that uses it. global.md is the merged global file as installed.

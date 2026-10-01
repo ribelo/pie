@@ -1889,7 +1889,6 @@ let test_two_pass_retry kind () =
                   Pie.Glossary.text = "press glossary";
                   paths = [];
                   warnings = [];
-                  cwd = None;
                 },
                 None ));
           pass1 =
@@ -2040,7 +2039,6 @@ let test_one_pass_retry () =
                   Pie.Glossary.text = "press glossary";
                   paths = [];
                   warnings = [];
-                  cwd = None;
                 },
                 None ));
           pass1 = (fun _ _ _ _ -> Alcotest.fail "one-pass must not call pass 1");
