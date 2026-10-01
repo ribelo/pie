@@ -4,4 +4,4 @@
  (public_name pie)
  (name pie)
  (modules pie)
- (libraries pie cmdliner eio_main ox ox_app ox_caps))
+ (libraries pie cmdliner eio_main ox ox_app ox_caps ox_observability))

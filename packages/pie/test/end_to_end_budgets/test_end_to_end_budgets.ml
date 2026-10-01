@@ -339,10 +339,10 @@ let test_100_settled_attempts () =
                         | Stt_ok -> Ok "e2e-text"
                         | Stt_fail -> Error (`Ptt_error "stt:unavailable")
                       in
-                      let deliver _ _ _ =
+                      let deliver _ _ _target _ =
                         Atomic.incr deliver_n;
                         match Atomic.get deliver_mode with
-                        | Deliver_ok -> Ok ()
+                        | Deliver_ok -> Ok Pie.History.Pasted
                         | Deliver_fail -> Error (`Ptt_error "inject:failed")
                       in
                       let socket_path, retry_dir, workflow =
@@ -618,9 +618,9 @@ let test_audio_retry_held_cleanup_pause_busy () =
         Atomic.incr stt_n;
         held_callback cleanup_hold entered_u (fun () -> Ok "held")
       in
-      let deliver _ _ _ =
+      let deliver _ _ _target _ =
         Atomic.incr deliver_n;
-        Ok ()
+        Ok Pie.History.Pasted
       in
       Fun.protect
         ~finally:(fun () -> ignore (Eio.Promise.try_resolve cleanup_u ()))
@@ -665,9 +665,9 @@ let test_text_retry_held_delivery_cleanup_stt_zero () =
         Atomic.incr stt_n;
         Ok "should-not-run"
       in
-      let deliver _ _ _ =
+      let deliver _ _ _target _ =
         Atomic.incr deliver_n;
-        held_callback cleanup_hold entered_u (fun () -> Ok ())
+        held_callback cleanup_hold entered_u (fun () -> Ok Pie.History.Pasted)
       in
       Fun.protect
         ~finally:(fun () -> ignore (Eio.Promise.try_resolve cleanup_u ()))
@@ -725,7 +725,7 @@ let test_audio_retry_delivery_and_text_publish_both_causes () =
         Atomic.incr stt_n;
         Ok "recognized"
       in
-      let deliver _ _ _ =
+      let deliver _ _ _target _ =
         Atomic.incr deliver_n;
         lock_save := install_lock_dir retry_dir;
         Error (`Ptt_error "inject:failed")
@@ -839,10 +839,10 @@ let test_delivery_success_clear_fail_preserves_candidate () =
       let deliver_n = Atomic.make 0 in
       let lock_save = ref Created_dir in
       let stt _ _ _ = Ok "recognized" in
-      let deliver _ _ _ =
+      let deliver _ _ _target _ =
         Atomic.incr deliver_n;
         lock_save := install_lock_dir retry_dir;
-        Ok ()
+        Ok Pie.History.Pasted
       in
       Fun.protect
         ~finally:(fun () -> restore_lock retry_dir !lock_save)

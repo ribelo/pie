@@ -57,7 +57,8 @@ let transcribed ?(id = "attempt-1") ?(time = 1_700_000_000.)
     time;
     mode;
     binding;
-    window = Some { app_id = Some "firefox"; title = Some "Inbox" };
+    window =
+      Some { id = Some 42; app_id = Some "firefox"; title = Some "Inbox" };
     glossary_paths = [ "/gloss/global.md"; ".pie/glossary.md" ];
     pass1_model = "codex-realtime/gpt-live-transcribe";
     pass1_duration_ms = 600;
@@ -66,7 +67,8 @@ let transcribed ?(id = "attempt-1") ?(time = 1_700_000_000.)
 
 let finished ?(id = "attempt-1") ?(time = 1_700_000_001.5)
     ?(final_text = Some "Hello Nema") ?(outcome = Pie.History.Delivered)
-    ?(diagnostic = Some "ok") ?(pass2_duration_ms = Some 900) () =
+    ?(diagnostic = Some "ok") ?(pass2_duration_ms = Some 900)
+    ?(delivery = Some Pie.History.Pasted) () =
   {
     Pie.History.id;
     time;
@@ -74,6 +76,7 @@ let finished ?(id = "attempt-1") ?(time = 1_700_000_001.5)
     pass2_model = Some "openrouter/google/gemini";
     pass2_duration_ms;
     outcome;
+    delivery;
     diagnostic;
     audio_path = None;
     response_path = None;
@@ -393,6 +396,7 @@ let test_listing_truncation () =
         response_path = None;
         first_response_path = None;
         retry = None;
+        delivery = None;
       }
   in
   Alcotest.(check bool) "ellipsis" true (string_contains preview "...");
@@ -771,11 +775,86 @@ let test_audio_path_is_optional () =
         "show json" true
         (Yojson.Safe.Util.member "audioPath" json = `String "/a/old.wav"))
 
+let test_delivery_round_trip () =
+  List.iter
+    (fun delivery ->
+      with_root (fun root ->
+          let path = Filename.concat root "history.jsonl" in
+          fail_history
+            (Pie.History.append_transcribed ~caps ~path (transcribed ()));
+          fail_history
+            (Pie.History.append_finished ~caps ~path
+               (finished ~delivery:(Some delivery) ()));
+          match fail_history (Pie.History.read ~caps ~path) with
+          | [ entry ] ->
+              Alcotest.(check bool)
+                "delivery survives round trip" true
+                (entry.delivery = Some delivery);
+              Alcotest.(check bool)
+                "captured id survives round trip" true
+                (Option.bind entry.window (fun window -> window.id) = Some 42);
+              let json = Pie.History.json_of_entry entry in
+              Alcotest.(check string)
+                "delivery in CLI JSON"
+                (Pie.History.string_of_delivery delivery)
+                Yojson.Safe.Util.(json |> member "delivery" |> to_string);
+              Alcotest.(check int)
+                "window id in CLI JSON" 42
+                Yojson.Safe.Util.(
+                  json |> member "window" |> member "id" |> to_int)
+          | _ -> Alcotest.fail "expected one history entry"))
+    [ Pie.History.Pasted; Pie.History.Clipboard ]
+
+let test_old_delivery_fields_absent () =
+  with_root (fun root ->
+      let path = Filename.concat root "history.jsonl" in
+      fail_history (Pie.History.append_transcribed ~caps ~path (transcribed ()));
+      fail_history (Pie.History.append_finished ~caps ~path (finished ()));
+      let old_event = function
+        | `Assoc fields ->
+            `Assoc
+              (List.filter_map
+                 (fun (key, value) ->
+                   if key = "delivery" then None
+                   else if key = "window" then
+                     match value with
+                     | `Assoc fields ->
+                         Some (key, `Assoc (List.remove_assoc "id" fields))
+                     | value -> Some (key, value)
+                   else Some (key, value))
+                 fields)
+        | value -> value
+      in
+      read_file path |> String.split_on_char '\n'
+      |> List.filter (fun line -> line <> "")
+      |> List.map (fun line ->
+          Yojson.Safe.from_string line |> old_event |> Yojson.Safe.to_string)
+      |> fun lines ->
+      write_file path (String.concat "\n" lines ^ "\n");
+      match fail_history (Pie.History.read ~caps ~path) with
+      | [ entry ] ->
+          Alcotest.(check bool)
+            "old history has unknown delivery" true (entry.delivery = None);
+          Alcotest.(check bool)
+            "old history keeps title without id" true
+            (entry.window
+            = Some
+                {
+                  Pie.History.id = None;
+                  app_id = Some "firefox";
+                  title = Some "Inbox";
+                })
+      | _ -> Alcotest.fail "expected one legacy history entry")
+
 let () =
   Alcotest.run "history"
     [
       ( "store",
         [
+          Alcotest.test_case "dict-ib9n delivery and window id round trip"
+            `Quick test_delivery_round_trip;
+          Alcotest.test_case "dict-ib9n older history has no delivery or id"
+            `Quick test_old_delivery_fields_absent;
           Alcotest.test_case
             "append and read round trip dict-dozi dict-3dqh dict-s0jv" `Quick
             test_round_trip;

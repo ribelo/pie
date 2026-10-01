@@ -11,7 +11,7 @@ type newline_rule = Input.Text_injection.newline_rule = {
   action : newline_action;
 }
 
-type entry_method = Input.Text_injection.entry_method = Type | Paste
+type entry_method = Input.Text_injection.entry_method = Paste
 
 type text_entry_rule = Input.Text_injection.text_entry_rule = {
   app_id : string option;
@@ -136,11 +136,27 @@ let string_of_newline_action = function
   | Ctrl_j -> "ctrl-j"
 
 let entry_method_of_string = function
-  | "type" -> Type
-  | "paste" -> Paste
+  | "paste" | "type" -> Paste
   | s -> raise (Config_error (Printf.sprintf "unknown text entry method: %s" s))
 
-let string_of_entry_method = function Type -> "type" | Paste -> "paste"
+let string_of_entry_method = function Paste -> "paste"
+let ignore_warning (_ : string) = ()
+
+let retired_type_warning index ~app_id ~title_regex =
+  let field name = function
+    | None -> None
+    | Some value -> Some (Printf.sprintf "%s=%S" name value)
+  in
+  let matcher =
+    String.concat ", "
+      (List.filter_map Fun.id
+         [ field "app_id" app_id; field "title_regex" title_regex ])
+  in
+  Printf.sprintf
+    "text_entry_rules[%d] (%s): method %S is no longer supported; the rule \
+     pastes"
+    index matcher "type"
+
 let max_config_file_bytes = 1024 * 1024
 let default_audio_retention_hours = 168.
 let default_correction_timeout_seconds = 8.
@@ -540,12 +556,12 @@ let parse_newline_rules table =
       List.mapi parse_newline_rule rules
   | Some _ -> raise (Config_error "newline_rules must be an array of tables")
 
-let parse_text_entry_rule index table =
+let parse_text_entry_rule ~warn index table =
   let app_id = get_optional_string table "app_id" in
   let title_regex = get_optional_string table "title_regex" in
-  let method_ =
+  let method_name =
     match get_optional_string table "method" with
-    | Some method_ -> entry_method_of_string method_
+    | Some method_name -> method_name
     | None ->
         raise
           (Config_error
@@ -557,14 +573,25 @@ let parse_text_entry_rule index table =
          (Printf.sprintf "text_entry_rules[%d] must set app_id or title_regex"
             index));
   validate_title_regex "text_entry_rules" index title_regex;
+  let method_ =
+    match method_name with
+    | "type" ->
+        warn (retired_type_warning index ~app_id ~title_regex);
+        Paste
+    | other -> entry_method_of_string other
+  in
   { app_id; title_regex; method_ }
 
-let parse_text_entry_rules table =
+let parse_text_entry_rules ?(warn = ignore_warning) table =
   match toml_find table "text_entry_rules" with
   | None -> []
   | Some (`List rules)
     when List.for_all (function `Assoc _ -> true | _ -> false) rules ->
-      List.mapi parse_text_entry_rule rules
+      let pending = ref [] in
+      let collect message = pending := message :: !pending in
+      let parsed = List.mapi (parse_text_entry_rule ~warn:collect) rules in
+      List.iter warn (List.rev !pending);
+      parsed
   | Some _ -> raise (Config_error "text_entry_rules must be an array of tables")
 
 let reject_unsupported_wakeword table =
@@ -655,7 +682,7 @@ let require_openrouter_model ~provider ~where model =
                resolves to codex-realtime"
               where model))
 
-let of_json table : t =
+let of_json ?(warn = ignore_warning) table : t =
   (match table with
   | `Assoc _ -> ()
   | _ -> raise (Config_error "STT config must be an object"));
@@ -815,7 +842,7 @@ let of_json table : t =
     transcription_prompt;
     translation_prompt;
     newline_rules = parse_newline_rules table;
-    text_entry_rules = parse_text_entry_rules table;
+    text_entry_rules = parse_text_entry_rules ~warn table;
     pipeline;
     streaming;
     correction;
@@ -825,8 +852,8 @@ let of_json table : t =
     one_pass_timeout_seconds = parse_one_pass_timeout table;
   }
 
-let decode_json json =
-  match of_json json with
+let decode ?(warn = ignore_warning) json =
+  match of_json ~warn json with
   | config -> Ok config
   | exception Config_error message -> Error message
 
@@ -912,7 +939,7 @@ let yojson_of_t (config : t) =
 
 let door_spec : t Ox_app.Config.t =
   {
-    of_yojson = decode_json;
+    of_yojson = (fun json -> decode json);
     yojson_of_t;
     env = (fun ~getenv:_ config -> config);
   }
@@ -948,7 +975,7 @@ let resolve_binding_prompts ~read ~prompts_dir config =
       in
       { config with bindings }
 
-let load ~caps ~fs ?source ?read () =
+let load ~caps ~fs ?source ?read ?(warn = ignore_warning) () =
   let source = Option.value source ~default:(default_source ~caps ()) in
   let path = source_path source in
   let read =
@@ -956,8 +983,9 @@ let load ~caps ~fs ?source ?read () =
         Ox_app.Config.read_regular ~max_bytes:max_config_file_bytes
           Eio.Path.(fs / path))
   in
+  let spec = { door_spec with of_yojson = (fun json -> decode ~warn json) } in
   let result =
-    Ox_app.Config.load_with ~missing:`Required ~spec:door_spec
+    Ox_app.Config.load_with ~missing:`Required ~spec
       ~getenv:(Ox_caps.Cap_sys.getenv_opt ~caps)
       ~read ~source
   in

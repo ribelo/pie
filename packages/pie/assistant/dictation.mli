@@ -48,6 +48,7 @@ val create :
 
 val glossary : t -> Glossary.t
 val binding : t -> Config.Stt.binding
+val window : t -> History.window option
 val id : t -> string
 
 val note_audio_path : t -> string -> unit
@@ -67,7 +68,7 @@ val fail_unfinished : t -> unit
 val run :
   t ->
   recognize:(unit -> (string, Ptt_loop.error) result) ->
-  deliver:(string -> (unit, Ptt_loop.error) result) ->
+  deliver:(string -> (History.delivery, Ptt_loop.error) result) ->
   on_audio_failure:(unit -> (unit, Ptt_loop.error) result) ->
   on_text_failure:
     (string -> dispatch_uncertain:bool -> (unit, Ptt_loop.error) result) ->

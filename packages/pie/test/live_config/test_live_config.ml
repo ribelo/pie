@@ -180,9 +180,9 @@ let test_cli_override_before_and_after_reload () =
         (base_config ~transcribe:(Atomic.get file_transcribe) (), stamp ())
       in
       let stt _ _ _ = Ok "ok" in
-      let deliver _ _ text =
+      let deliver _ _ _target text =
         Atomic.set delivered (text :: Atomic.get delivered);
-        Ok ()
+        Ok Pie.History.Pasted
       in
       let workflow =
         run_live ~sw ~fs:(Eio.Stdenv.fs env) ~clock:(Eio.Stdenv.clock env)
@@ -231,9 +231,9 @@ let test_physical_release_after_binding_reload () =
         (base_config ~transcribe:(Atomic.get transcribe) (), stamp ())
       in
       let stt _ _ _ = Ok "held" in
-      let deliver _ _ text =
+      let deliver _ _ _target text =
         Atomic.set delivered [ text ];
-        Ok ()
+        Ok Pie.History.Pasted
       in
       let workflow =
         run_live ~sw ~fs:(Eio.Stdenv.fs env) ~clock:(Eio.Stdenv.clock env)
@@ -272,9 +272,9 @@ let test_modifier_reload_while_held () =
         (base_config ~transcribe_shift:(Atomic.get shift) (), stamp ())
       in
       let stt _ _ _ = Ok "shift-held" in
-      let deliver _ _ text =
+      let deliver _ _ _target text =
         Atomic.set delivered [ text ];
-        Ok ()
+        Ok Pie.History.Pasted
       in
       let workflow =
         run_live ~sw ~fs:(Eio.Stdenv.fs env) ~clock:(Eio.Stdenv.clock env)
@@ -310,9 +310,9 @@ let test_mod5_latch_survives_key_release () =
       let stamp () = [ Some (1, 1, 0, 0.) ] in
       let load _ = (base_config (), stamp ()) in
       let stt _ _ _ = Ok "latched" in
-      let deliver _ _ text =
+      let deliver _ _ _target text =
         Atomic.set delivered [ text ];
-        Ok ()
+        Ok Pie.History.Pasted
       in
       let feeding = Atomic.make true in
       Eio.Fiber.fork ~sw (fun () ->
@@ -374,9 +374,9 @@ let test_invalid_reload_keeps_last_good () =
         (base_config (), stamp ())
       in
       let stt _ _ _ = Ok "last-good" in
-      let deliver _ _ text =
+      let deliver _ _ _target text =
         Atomic.set delivered [ text ];
-        Ok ()
+        Ok Pie.History.Pasted
       in
       let workflow =
         run_live ~sw ~fs:(Eio.Stdenv.fs env) ~clock:(Eio.Stdenv.clock env)
@@ -408,9 +408,9 @@ let test_threshold_reload_does_not_change_active_attempt () =
       let stamp () = [ Some (1, 1, Atomic.get gen, 0.) ] in
       let load _ = (base_config ~peak:(Atomic.get peak) (), stamp ()) in
       let stt _ _ _ = Ok "snapshot" in
-      let deliver _ _ text =
+      let deliver _ _ _target text =
         Atomic.set delivered [ text ];
-        Ok ()
+        Ok Pie.History.Pasted
       in
       let workflow =
         run_live ~sw ~fs:(Eio.Stdenv.fs env) ~clock:(Eio.Stdenv.clock env)
@@ -480,9 +480,9 @@ let test_failed_on_press_different_key_not_stuck () =
           stamp () )
       in
       let stt _ _ _ = Ok "ok" in
-      let deliver _ _ text =
+      let deliver _ _ _target text =
         Atomic.set delivered [ text ];
-        Ok ()
+        Ok Pie.History.Pasted
       in
       let workflow =
         run_live ~sw ~fs:(Eio.Stdenv.fs env) ~clock:(Eio.Stdenv.clock env)
@@ -537,9 +537,9 @@ let test_autorepeat_press_does_not_restart_capture () =
       let stamp () = [ Some (1, 1, 0, 0.) ] in
       let load _ = (base_config (), stamp ()) in
       let stt _ _ _ = Ok "once" in
-      let deliver _ _ text =
+      let deliver _ _ _target text =
         Atomic.set delivered (text :: Atomic.get delivered);
-        Ok ()
+        Ok Pie.History.Pasted
       in
       let workflow =
         run_live ~sw ~fs:(Eio.Stdenv.fs env) ~clock:(Eio.Stdenv.clock env)
@@ -569,9 +569,9 @@ let test_busy_second_key_repeat_ignored_until_keyup () =
       let stamp () = [ Some (1, 1, 0, 0.) ] in
       let load _ = (base_config (), stamp ()) in
       let stt _ _ _ = Ok "ok" in
-      let deliver _ _ text =
+      let deliver _ _ _target text =
         Atomic.set delivered [ text ];
-        Ok ()
+        Ok Pie.History.Pasted
       in
       let workflow =
         run_live ~sw ~fs:(Eio.Stdenv.fs env) ~clock:(Eio.Stdenv.clock env)
@@ -619,9 +619,9 @@ let test_mod5_autorepeat_does_not_toggle_latch () =
       let stamp () = [ Some (1, 1, 0, 0.) ] in
       let load _ = (base_config (), stamp ()) in
       let stt _ _ _ = Ok "latched" in
-      let deliver _ _ text =
+      let deliver _ _ _target text =
         Atomic.set delivered [ text ];
-        Ok ()
+        Ok Pie.History.Pasted
       in
       let workflow =
         run_live ~sw ~fs:(Eio.Stdenv.fs env) ~clock:(Eio.Stdenv.clock env)
@@ -674,7 +674,7 @@ let test_service_cancellation_closes_listener () =
           ~mono_clock:(Eio.Stdenv.mono_clock env)
           ~dir ~config_control:{ stamp; load }
           ~stt:(fun _ _ _ -> Ok "unused")
-          ~deliver:(fun _ _ _ -> Ok ())
+          ~deliver:(fun _ _ _ _ -> Ok Pie.History.Pasted)
           ~keyboard ~audio ()
       in
       with_workflow_background ~sw ~clock

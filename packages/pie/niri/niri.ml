@@ -37,14 +37,16 @@ let focused_window ~process_mgr () =
              | Some (`String s) -> Some s
              | _ -> None
            in
-           Some
-             {
-               id = Option.value (find_int "id") ~default:0;
-               title = find_string "title";
-               app_id = find_string "app_id";
-               pid = find_int "pid";
-               workspace_id = find_int "workspace_id";
-             }
+           Option.map
+             (fun id ->
+               {
+                 id;
+                 title = find_string "title";
+                 app_id = find_string "app_id";
+                 pid = find_int "pid";
+                 workspace_id = find_int "workspace_id";
+               })
+             (find_int "id")
        | _ -> None)
   with Yojson.Json_error _ ->
     Error (`Niri_error "focused-window json invalid")

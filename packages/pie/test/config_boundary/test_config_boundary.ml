@@ -753,6 +753,119 @@ let test_one_pass_config () =
       ("pipeline = \"both\"\n", "pipeline");
     ]
 
+let load_with_warnings env path =
+  let warnings = ref [] in
+  let warn message = warnings := message :: !warnings in
+  let result =
+    Config.load ~caps ~fs:(Eio.Stdenv.fs env) ~source:(`Explicit path) ~warn ()
+  in
+  (result, List.rev !warnings)
+
+let editor_window : Pie.Niri.window_info =
+  {
+    id = 42;
+    title = Some "Editor";
+    app_id = Some "org.test";
+    pid = None;
+    workspace_id = None;
+  }
+
+let assert_paste_for window =
+  let pasted = ref false in
+  match
+    Pie.Input.Text_injection.deliver
+      ~copy:(fun _text -> Ok ())
+      ~paste:(fun () ->
+        pasted := true;
+        Ok ())
+      ~newline:(fun _action -> Ok ())
+      ~focused_window:(fun () -> Ok (Some window))
+      ~target_window:(Some window) ~newline_rules:[] "hello"
+  with
+  | Ok (_, Pie.Input.Text_injection.Clipboard_key_attempted) ->
+      Alcotest.(check bool) "paste callback ran" true !pasted
+  | Ok _ -> Alcotest.fail "deliver copied without pasting"
+  | Error _ -> Alcotest.fail "deliver failed"
+
+let test_text_entry_paste () =
+  with_sandbox @@ fun dir ->
+  Eio_main.run @@ fun env ->
+  let path = Filename.concat dir "stt.toml" in
+  write path "[[text_entry_rules]]\napp_id = \"org.test\"\nmethod = \"paste\"\n";
+  let config, warnings = load_with_warnings env path in
+  let config = expect_ok config in
+  Alcotest.(check int) "no warning" 0 (List.length warnings);
+  match config.text_entry_rules with
+  | [ rule ] -> Alcotest.(check bool) "paste" true (rule.method_ = Config.Paste)
+  | _ -> Alcotest.fail "expected one text entry rule"
+
+let test_text_entry_type_pastes () =
+  with_sandbox @@ fun dir ->
+  Eio_main.run @@ fun env ->
+  let path = Filename.concat dir "stt.toml" in
+  write path
+    "[[text_entry_rules]]\n\
+     app_id = \"org.test\"\n\
+     title_regex = \"Editor\"\n\
+     method = \"type\"\n";
+  let config, warnings = load_with_warnings env path in
+  let config = expect_ok config in
+  let expected =
+    "text_entry_rules[0] (app_id=\"org.test\", title_regex=\"Editor\"): method \
+     \"type\" is no longer supported; the rule pastes"
+  in
+  (match warnings with
+  | [ warning ] -> Alcotest.(check string) "warning" expected warning
+  | _ -> Alcotest.failf "expected one warning, got %d" (List.length warnings));
+  match config.text_entry_rules with
+  | [ rule ] ->
+      Alcotest.(check bool) "loaded as paste" true (rule.method_ = Config.Paste);
+      Alcotest.(check bool)
+        "window selects paste" true
+        (Pie.Input.Text_injection.entry_method_for_window
+           config.text_entry_rules (Some editor_window)
+        = Config.Paste);
+      assert_paste_for editor_window
+  | _ -> Alcotest.fail "expected one text entry rule"
+
+let test_text_entry_type_title_only () =
+  with_sandbox @@ fun dir ->
+  Eio_main.run @@ fun env ->
+  let path = Filename.concat dir "stt.toml" in
+  write path
+    "[[text_entry_rules]]\ntitle_regex = \"Editor\"\nmethod = \"type\"\n";
+  let config, warnings = load_with_warnings env path in
+  let config = expect_ok config in
+  let expected =
+    "text_entry_rules[0] (title_regex=\"Editor\"): method \"type\" is no \
+     longer supported; the rule pastes"
+  in
+  (match warnings with
+  | [ warning ] -> Alcotest.(check string) "title warning" expected warning
+  | _ -> Alcotest.failf "expected one warning, got %d" (List.length warnings));
+  match config.text_entry_rules with
+  | [ rule ] -> Alcotest.(check bool) "paste" true (rule.method_ = Config.Paste)
+  | _ -> Alcotest.fail "expected one text entry rule"
+
+let test_text_entry_unknown_method () =
+  with_sandbox @@ fun dir ->
+  Eio_main.run @@ fun env ->
+  let path = Filename.concat dir "stt.toml" in
+  write path "[[text_entry_rules]]\napp_id = \"org.test\"\nmethod = \"nope\"\n";
+  let result, warnings = load_with_warnings env path in
+  expect_error ~needle:"unknown text entry method" result;
+  Alcotest.(check int) "no warning on reject" 0 (List.length warnings)
+
+let test_text_entry_rules_absent () =
+  with_sandbox @@ fun dir ->
+  Eio_main.run @@ fun env ->
+  let path = Filename.concat dir "stt.toml" in
+  write path "provider = \"openrouter\"\n";
+  let config, warnings = load_with_warnings env path in
+  let config = expect_ok config in
+  Alcotest.(check int) "no rules" 0 (List.length config.text_entry_rules);
+  Alcotest.(check int) "no warning" 0 (List.length warnings)
+
 let () =
   Alcotest.run "config_boundary"
     [
@@ -792,5 +905,14 @@ let () =
             test_status_json_fields;
           Alcotest.test_case "dict-rtdw/gi5u/4y4r/dq3o one-pass config" `Quick
             test_one_pass_config;
+          Alcotest.test_case "text entry paste" `Quick test_text_entry_paste;
+          Alcotest.test_case "retired type method pastes" `Quick
+            test_text_entry_type_pastes;
+          Alcotest.test_case "retired type method names title" `Quick
+            test_text_entry_type_title_only;
+          Alcotest.test_case "unknown text entry method" `Quick
+            test_text_entry_unknown_method;
+          Alcotest.test_case "absent text entry rules" `Quick
+            test_text_entry_rules_absent;
         ] );
     ]

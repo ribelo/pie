@@ -135,7 +135,12 @@ let dependencies ?(history_error = false) ?(pass1 = Ok "  surowy tekst  ")
             paths = [ "/global" ];
             warnings = [];
           },
-          Some { H.app_id = Some "editor"; title = Some "press title" } ));
+          Some
+            {
+              H.id = Some 42;
+              app_id = Some "editor";
+              title = Some "press title";
+            } ));
     pass1 =
       (fun cfg b glossary pcm ->
         push f "pass1";
@@ -205,7 +210,7 @@ let execute ?(delivery_error = false) f t =
     ~deliver:(fun text ->
       push f "deliver";
       f.delivered <- f.delivered @ [ text ];
-      if delivery_error then Error (`Ptt_error "dispatch") else Ok ())
+      if delivery_error then Error (`Ptt_error "dispatch") else Ok H.Pasted)
     ~on_audio_failure:(fun () ->
       f.audios <- f.audios + 1;
       Ok ())
@@ -258,7 +263,12 @@ let test_success mode () =
       Alcotest.(check bool)
         "focus" true
         (r.window
-        = Some { H.app_id = Some "editor"; title = Some "press title" })
+        = Some
+            {
+              H.id = Some 42;
+              app_id = Some "editor";
+              title = Some "press title";
+            })
   | _ -> Alcotest.fail "one transcribed event required");
   match f.passes with
   | [ (D.Pass1, m1, d1); (D.Pass2, m2, d2) ] ->
@@ -617,6 +627,109 @@ let test_response_history ~one_pass ~archive_error ~retention () =
         "effort" (Some "medium") retry.reasoning_effort
   | _ -> Alcotest.fail "missing finished retry event"
 
+let test_target_delivery ?(pipeline = C.Two_pass) focus expected_paste () =
+  let f = fixture () in
+  let binding = binding ~correct:false () in
+  let config = { (config binding) with pipeline } in
+  let attempt =
+    D.create
+      (dependencies ~one_pass:(fun _ _ _ _ -> Ok "surowy tekst") f)
+      ~config ~binding
+  in
+  let copies = ref [] and keys = ref 0 and notices = ref [] in
+  let target =
+    Some
+      {
+        Pie.Niri.id = 42;
+        app_id = Some "editor";
+        title = Some "press title";
+        pid = None;
+        workspace_id = None;
+      }
+  in
+  let result =
+    D.run attempt
+      ~recognize:(fun () -> D.recognize attempt (Bytes.of_string "PCM"))
+      ~deliver:(fun text ->
+        let delivery =
+          Pie.Input.Text_injection.deliver ~target_window:target
+            ~focused_window:(fun () -> focus)
+            ~newline_rules:[]
+            ~copy:(fun text ->
+              copies := text :: !copies;
+              Ok ())
+            ~paste:(fun () ->
+              incr keys;
+              Ok ())
+            ~newline:(fun _ -> Ok ())
+            text
+        in
+        Result.map_error (fun _ -> `Ptt_error "fake delivery") delivery
+        |> Result.map (fun (_, outcome) ->
+            Pie.Assistant.Service.report_delivery
+              ~target_window:(D.window attempt) outcome
+              ~notify:(fun title message ->
+                notices := (title, message) :: !notices)))
+      ~on_audio_failure:(fun () -> Alcotest.fail "audio fallback")
+      ~on_text_failure:(fun _ ~dispatch_uncertain:_ ->
+        Alcotest.fail "text fallback")
+      ~on_success:(fun () -> Ok ())
+  in
+  Alcotest.(check bool) "delivered" true (Result.is_ok result);
+  Alcotest.(check int) "keys" (if expected_paste then 1 else 0) !keys;
+  Alcotest.(check int)
+    "one notification only for clipboard"
+    (if expected_paste then 0 else 1)
+    (List.length !notices);
+  Alcotest.(check (list string))
+    "copy recognized text" [ "surowy tekst" ] !copies;
+  (match !notices with
+  | [] -> ()
+  | [ ("Pie", message) ] ->
+      Alcotest.(check string)
+        "press title, no transcript"
+        "Pie: text for press title is in the clipboard" message
+  | _ -> Alcotest.fail "wrong notices");
+  (match f.finished with
+  | [ event ] ->
+      Alcotest.(check bool)
+        "history delivered" true
+        (event.outcome = H.Delivered);
+      Alcotest.(check bool)
+        "history destination" true
+        (event.delivery
+        = Some (if expected_paste then H.Pasted else H.Clipboard))
+  | _ -> Alcotest.fail "one finished history event required");
+  match f.raw with
+  | [ event ] ->
+      Alcotest.(check (option int))
+        "key-press window id" (Some 42)
+        (Option.bind event.window (fun window -> window.H.id))
+  | _ -> Alcotest.fail "one raw history event required"
+
+let test_notification_title () =
+  Alcotest.(check string)
+    "markup and controls escaped"
+    "Pie: text for &lt;Editor&gt; &amp; inbox is in the clipboard"
+    (Pie.Desktop.Notification.clipboard_message (Some "<Editor> & inbox\n\x1b"))
+
+let test_unknown_target_title () =
+  let notices = ref [] in
+  let target_window =
+    Some { H.id = None; app_id = Some "terminal"; title = Some "Project" }
+  in
+  let result =
+    Pie.Assistant.Service.report_delivery ~target_window
+      ~notify:(fun title message -> notices := (title, message) :: !notices)
+      Pie.Input.Text_injection.Clipboard_only
+  in
+  Alcotest.(check bool)
+    "unknown id is delivered to clipboard" true (result = H.Clipboard);
+  Alcotest.(check (list (pair string string)))
+    "one notice keeps original title"
+    [ ("Pie", "Pie: text for Project is in the clipboard") ]
+    !notices
+
 let () =
   let case name f = Alcotest.test_case name `Quick f in
   let failures =
@@ -656,6 +769,62 @@ let () =
           case "dict-x6e9 disabled retention"
             (test_response_history ~one_pass:true ~archive_error:false
                ~retention:0.);
+
+          case "dict-snot one-pass unchanged id pastes"
+            (test_target_delivery ~pipeline:C.One_pass
+               (Ok
+                  (Some
+                     {
+                       Pie.Niri.id = 42;
+                       app_id = None;
+                       title = Some "changed";
+                       pid = None;
+                       workspace_id = None;
+                     }))
+               true);
+          case "dict-ib9n one-pass changed id stays clipboard-only"
+            (test_target_delivery ~pipeline:C.One_pass
+               (Ok
+                  (Some
+                     {
+                       Pie.Niri.id = 43;
+                       app_id = Some "terminal";
+                       title = Some "Project";
+                       pid = None;
+                       workspace_id = None;
+                     }))
+               false);
+          case "dict-snot target id unchanged pastes"
+            (test_target_delivery
+               (Ok
+                  (Some
+                     {
+                       Pie.Niri.id = 42;
+                       app_id = None;
+                       title = Some "changed title";
+                       pid = None;
+                       workspace_id = None;
+                     }))
+               true);
+          case "dict-ib9n changed target id delivers to clipboard"
+            (test_target_delivery
+               (Ok
+                  (Some
+                     {
+                       Pie.Niri.id = 43;
+                       app_id = Some "editor";
+                       title = Some "press title";
+                       pid = None;
+                       workspace_id = None;
+                     }))
+               false);
+          case "no focus delivers to clipboard"
+            (test_target_delivery (Ok None) false);
+          case "niri unavailable delivers to clipboard"
+            (test_target_delivery (Error (`Niri_error "unavailable")) false);
+          case "clipboard notification sanitizes title" test_notification_title;
+          case "dict-ib9n unknown target id keeps title"
+            test_unknown_target_title;
           case "dict-dozi/3dqh/s0jv/6frx/oagf corrected transcribe"
             (test_success C.Transcribe);
           case "dict-dl3q/q6xd/vwco translate pass1 source"

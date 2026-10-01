@@ -1,5 +1,7 @@
 # Recommended configuration for ~/.config/pie/stt.toml (2026-09-30).
 # Not installed. Keep your existing text_entry_rules / newline_rules below it.
+# text_entry_rules.method is always paste. method = "type" is accepted only
+# for compatibility and warns at startup; the rule pastes.
 # One pass: Gemini hears the audio, the prompt and the glossary together.
 # Measured against two passes in docs/research/2026-09-30-dictation-models:
 # 7 of 8 hard spots right, p50 about 2.2 s when pinned to Google AI Studio.

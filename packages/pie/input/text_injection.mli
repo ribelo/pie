@@ -1,13 +1,12 @@
 type backend = Wtype | Xdotool
 type session_type = Wayland | X11
-type entry_method = Type | Paste
+type entry_method = Paste
 
 type outcome =
-  | Typed
+  | Clipboard_only
   | Clipboard_key_attempted
-      (** [Typed] is the Type path. [Clipboard_key_attempted] means the
-          configured Paste path offered text and sent Ctrl-V as a best-effort
-          key; it is not a compositor or target receipt. *)
+      (** Clipboard-only is a successful delivery with no keystroke. A paste key
+          is best-effort dispatch, not a compositor or application receipt. *)
 
 type result = {
   session_type : session_type;
@@ -50,25 +49,31 @@ val detect_session :
   unit ->
   (session_type, ([> `Injection_error of string ] as 'err)) Stdlib.result
 
-val type_text :
-  caps:< Ox_caps.Cap.env ; .. > ->
-  ?newline_action:newline_action ->
-  process_mgr:_ Eio.Process.mgr ->
-  backend:backend ->
+type injection_error =
+  [ `Clipboard_error of string
+  | `Injection_error of string
+  | `Wtype_error of string
+  | `Xdotool_error of string ]
+
+val deliver :
+  copy:(string -> (unit, injection_error) Stdlib.result) ->
+  paste:(unit -> (unit, injection_error) Stdlib.result) ->
+  newline:(newline_action -> (unit, injection_error) Stdlib.result) ->
+  focused_window:
+    (unit -> (Niri.window_info option, [ `Niri_error of string ]) Stdlib.result) ->
+  target_window:Niri.window_info option ->
+  newline_rules:newline_rule list ->
   string ->
-  ( unit,
-    ([> `Injection_error of string
-     | `Wtype_error of string
-     | `Xdotool_error of string ]
-     as
-     'err) )
-  Stdlib.result
+  (string * outcome, injection_error) Stdlib.result
+(** Effect seam for target-window delivery. Every paste follows a clipboard
+    offer. A missing target or focus lookup failure copies only. *)
 
 val inject :
   caps:< Ox_caps.Cap.env ; .. > ->
   ?clipboard_owner:Wayland.Clipboard.t ->
   ?newline_rules:newline_rule list ->
   ?text_entry_rules:text_entry_rule list ->
+  ?target_window:Niri.window_info option ->
   clock:_ Eio.Time.clock ->
   process_mgr:_ Eio.Process.mgr ->
   string ->

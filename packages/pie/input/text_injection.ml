@@ -1,7 +1,7 @@
 type backend = Wtype | Xdotool
 type session_type = Wayland | X11
-type entry_method = Type | Paste
-type outcome = Typed | Clipboard_key_attempted
+type entry_method = Paste
+type outcome = Clipboard_only | Clipboard_key_attempted
 
 type result = {
   session_type : session_type;
@@ -90,7 +90,7 @@ let newline_action_for_window rules focused_window =
 
 let entry_method_for_window rules focused_window =
   match focused_window with
-  | None -> Type
+  | None -> Paste
   | Some window -> (
       match
         List.find_opt
@@ -100,7 +100,7 @@ let entry_method_for_window rules focused_window =
           rules
       with
       | Some rule -> rule.method_
-      | None -> Type)
+      | None -> Paste)
 
 let choose_backend = function Wayland -> Wtype | X11 -> Xdotool
 
@@ -114,32 +114,6 @@ let detect_session ~caps () =
       else if Ox_caps.Cap_sys.getenv_opt ~caps "DISPLAY" <> None then Ok X11
       else Error (`Injection_error "could not detect graphical session")
 
-(* Conservative Niri session: Wayland + XDG_CURRENT_DESKTOP colon-token
-   "niri" (case-insensitive) + nonempty NIRI_SOCKET. Otherwise fail before
-   lookup/emission. No other desktop is treated as a Niri focus source. *)
-let desktop_has_niri_token ~caps () =
-  match Ox_caps.Cap_sys.getenv_opt ~caps "XDG_CURRENT_DESKTOP" with
-  | None | Some "" -> false
-  | Some value ->
-      String.split_on_char ':' value
-      |> List.exists (fun token ->
-          String.equal (String.lowercase_ascii (String.trim token)) "niri")
-
-let niri_socket_configured ~caps () =
-  match Ox_caps.Cap_sys.getenv_opt ~caps "NIRI_SOCKET" with
-  | Some value when String.trim value <> "" -> true
-  | _ -> false
-
-let niri_session_compatible ~caps = function
-  | X11 -> false
-  | Wayland ->
-      desktop_has_niri_token ~caps () && niri_socket_configured ~caps ()
-
-let unresolved_focus = `Injection_error "focus information is unavailable"
-
-let incompatible_session =
-  `Injection_error "focus rules require a Niri Wayland session"
-
 let press_newline ~caps ~process_mgr ~backend action =
   match (backend, action) with
   | _, Collapse_to_space -> Ok ()
@@ -150,57 +124,13 @@ let press_newline ~caps ~process_mgr ~backend action =
   | Xdotool, Shift_enter -> X11.Xdotool.key ~caps ~process_mgr "shift+Return"
   | Xdotool, Ctrl_j -> X11.Xdotool.key ~caps ~process_mgr "ctrl+j"
 
-let type_segment ~caps ~process_mgr ~backend segment =
-  if String.length segment = 0 then Ok ()
-  else
-    match backend with
-    | Wtype -> Wayland.Wtype.type_text ~caps ~process_mgr segment
-    | Xdotool -> X11.Xdotool.type_text ~caps ~process_mgr segment
-
-let type_lines ~caps ~process_mgr ~backend ~newline_action text =
-  let open Result.Syntax in
-  let rec loop = function
-    | [] -> Ok ()
-    | [ segment ] -> type_segment ~caps ~process_mgr ~backend segment
-    | segment :: rest ->
-        let* () = type_segment ~caps ~process_mgr ~backend segment in
-        let* () = press_newline ~caps ~process_mgr ~backend newline_action in
-        loop rest
-  in
-  loop (split_line_breaks text)
-
 let normalize_for_action action text =
   match action with
   | Collapse_to_space -> collapse_line_breaks text
   | Shift_enter | Ctrl_j -> normalize_text text
 
-let prepare_text ~method_ ~newline_action text =
-  match method_ with
-  | Type -> normalize_for_action newline_action (normalize_text text)
-  | Paste -> normalize_text text
-
-let type_text ~caps ?(newline_action = Collapse_to_space) ~process_mgr ~backend
-    text =
-  let normalized = normalize_text text in
-  if String.length normalized = 0 then
-    Error (`Injection_error "no text to inject after normalization")
-  else
-    let typed = normalize_for_action newline_action normalized in
-    if String.length typed = 0 then
-      Error (`Injection_error "no text to inject after normalization")
-    else if newline_action = Collapse_to_space then
-      type_segment ~caps ~process_mgr ~backend typed
-    else type_lines ~caps ~process_mgr ~backend ~newline_action typed
-
-let focused_window_for_rules ~caps ~process_mgr ~session ~newline_rules
-    ~text_entry_rules =
-  if newline_rules = [] && text_entry_rules = [] then Ok None
-  else if not (niri_session_compatible ~caps session) then
-    Error incompatible_session
-  else
-    match Niri.focused_window ~process_mgr () with
-    | Ok (Some window) -> Ok (Some window)
-    | Ok None | Error _ -> Error unresolved_focus
+let prepare_text ~method_:Paste ~newline_action text =
+  normalize_for_action newline_action (normalize_text text)
 
 type injection_error =
   [ `Clipboard_error of string
@@ -208,43 +138,94 @@ type injection_error =
   | `Wtype_error of string
   | `Xdotool_error of string ]
 
-let inject ~caps ?clipboard_owner ?(newline_rules = []) ?(text_entry_rules = [])
-    ~clock ~process_mgr text =
+(* The clipboard is the destination unless the key-press window is still
+   focused. This seam deliberately cannot focus a window or type characters. *)
+let deliver ~copy ~paste ~newline ~focused_window ~target_window ~newline_rules
+    text =
   let open Result.Syntax in
-  let* session = detect_session ~caps () in
-  let backend = choose_backend session in
-  let* focused_window =
-    focused_window_for_rules ~caps ~process_mgr ~session ~newline_rules
-      ~text_entry_rules
-  in
-  let newline_action = newline_action_for_window newline_rules focused_window in
-  let method_ = entry_method_for_window text_entry_rules focused_window in
-  let prepared = prepare_text ~method_ ~newline_action text in
-  if String.length prepared = 0 then
+  let text = normalize_text text in
+  if text = "" then
     Error (`Injection_error "no text to inject after normalization")
   else
-    let* () =
-      match (method_, session, clipboard_owner) with
-      | Type, _, _ ->
-          (type_text ~caps ~newline_action ~process_mgr ~backend prepared
-            :> (unit, injection_error) Stdlib.result)
-      | Paste, Wayland, Some owner ->
-          let* () =
-            (Wayland.Clipboard.offer owner prepared
-              :> (unit, injection_error) Stdlib.result)
-          in
-          (* Preserve the original helper-to-key scheduling interval. Closing
-             stdin is not a Wayland publication acknowledgement; this grace
-             period mitigates the startup race, not a receipt guarantee. *)
-          Eio.Time.sleep clock 0.025;
-          (Wayland.Wtype.key ~caps ~process_mgr ~modifiers:[ "ctrl" ] "v"
-            :> (unit, injection_error) Stdlib.result)
-      | Paste, Wayland, None ->
-          Error (`Injection_error "paste entry requires a clipboard owner")
-      | Paste, X11, _ ->
-          Error (`Injection_error "paste entry is not supported on X11")
+    let current =
+      match focused_window () with Ok window -> window | Error _ -> None
     in
-    let outcome =
-      match method_ with Type -> Typed | Paste -> Clipboard_key_attempted
+    let same_window =
+      match (target_window, current) with
+      | Some (target : Niri.window_info), Some (current : Niri.window_info) ->
+          target.id = current.id
+      | _ -> false
     in
-    Ok { session_type = session; backend; method_; text = prepared; outcome }
+    if not same_window then
+      let* () = copy text in
+      Ok (text, Clipboard_only)
+    else
+      let action = newline_action_for_window newline_rules target_window in
+      let prepared = prepare_text ~method_:Paste ~newline_action:action text in
+      let* () = copy prepared in
+      let paste_segment segment =
+        if segment = "" then Ok ()
+        else
+          let* () = copy segment in
+          paste ()
+      in
+      let rec paste_lines = function
+        | [] -> Ok ()
+        | [ segment ] -> paste_segment segment
+        | segment :: rest ->
+            let* () = paste_segment segment in
+            let* () = newline action in
+            paste_lines rest
+      in
+      let injected =
+        match action with
+        | Collapse_to_space -> paste ()
+        | Shift_enter | Ctrl_j -> paste_lines (split_line_breaks prepared)
+      in
+      (* Segment pastes temporarily change the clipboard. Restore the complete
+         delivery even when a segment paste or newline key fails. *)
+      let restored =
+        match action with
+        | Collapse_to_space -> Ok ()
+        | Shift_enter | Ctrl_j -> copy prepared
+      in
+      let* () = injected in
+      let* () = restored in
+      Ok (prepared, Clipboard_key_attempted)
+
+let inject ~caps ?clipboard_owner ?(newline_rules = []) ?(text_entry_rules = [])
+    ?(target_window = None) ~clock ~process_mgr text =
+  let open Result.Syntax in
+  let detected = detect_session ~caps () in
+  let session =
+    match detected with Ok session -> session | Error _ -> Wayland
+  in
+  let backend = choose_backend session in
+  let copy text =
+    match clipboard_owner with
+    | Some owner ->
+        (Wayland.Clipboard.offer owner text
+          :> (unit, injection_error) Stdlib.result)
+    | None -> Error (`Injection_error "paste entry requires a clipboard owner")
+  in
+  let focused_window () = Niri.focused_window ~process_mgr () in
+  let target_window =
+    match detected with Ok Wayland -> target_window | Ok X11 | Error _ -> None
+  in
+  let paste () =
+    (* stdin EOF is not a Wayland publication acknowledgement. Preserve the
+       existing helper-to-key grace interval, not a receipt guarantee. *)
+    Eio.Time.sleep clock 0.025;
+    (Wayland.Wtype.key ~caps ~process_mgr ~modifiers:[ "ctrl" ] "v"
+      :> (unit, injection_error) Stdlib.result)
+  in
+  let newline action =
+    (press_newline ~caps ~process_mgr ~backend action
+      :> (unit, injection_error) Stdlib.result)
+  in
+  let* prepared, outcome =
+    deliver ~copy ~paste ~newline ~focused_window ~target_window ~newline_rules
+      text
+  in
+  let method_ = entry_method_for_window text_entry_rules target_window in
+  Ok { session_type = session; backend; method_; text = prepared; outcome }
