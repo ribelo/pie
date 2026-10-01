@@ -1,4 +1,4 @@
-(* dict-c0yv dict-agvw dict-g3ap *)
+(* dict-1y3i dict-agvw dict-g3ap *)
 
 let caps = Ox_test.powerbox ()
 
@@ -78,6 +78,122 @@ let store ~env ~dir ~id =
   Pie.Recording.Audio_archive.store ~caps
     ~process_mgr:(Eio.Stdenv.process_mgr env_eio)
     ~dir ~id pcm
+
+(* dict-x6e9 *)
+let test_response_evidence () =
+  with_root (fun root ->
+      let dir = Filename.concat root "audio" in
+      let body = Bytes.of_string "{\"private\":\"complete provider body\"}\n" in
+      let store first =
+        fail_archive
+          (Pie.Recording.Audio_archive.store_response ~caps ~dir
+             ~id:"attempt-response" ~first body)
+      in
+      let first = store true and final = store false in
+      Alcotest.(check string)
+        "first name" "attempt-response.response-1.json"
+        (Filename.basename first);
+      Alcotest.(check string)
+        "final name" "attempt-response.response.json" (Filename.basename final);
+      List.iter
+        (fun path ->
+          Alcotest.(check int) "private response" 0o600 (perm path);
+          Alcotest.(check string)
+            "whole response" (Bytes.to_string body) (read_file path))
+        [ first; final ];
+      let now = Unix.gettimeofday () in
+      List.iter
+        (fun path ->
+          Unix.utimes path (now -. (169. *. 3600.)) (now -. (169. *. 3600.)))
+        [ first; final ];
+      Alcotest.(check int)
+        "response retention matches audio" 2
+        (fail_archive
+           (Pie.Recording.Audio_archive.prune ~caps ~dir ~retention_hours:168.
+              ~now));
+      List.iter
+        (fun path ->
+          Alcotest.(check bool)
+            "expired response gone" false (Sys.file_exists path))
+        [ first; final ];
+      match
+        Pie.Recording.Audio_archive.store_response ~caps ~dir ~id:"../escape"
+          ~first:false body
+      with
+      | Error _ -> ()
+      | Ok _ -> Alcotest.fail "unsafe response id accepted")
+
+(* dict-4c5v: actual encoder, probe and decode, not a shell fixture. *)
+let test_real_mp3 () =
+  Eio_main.run @@ fun env ->
+  let process_mgr = Eio.Stdenv.process_mgr env in
+  let source = Bytes.create 32000 in
+  for i = 0 to 15999 do
+    Bytes.set_int16_le source (i * 2)
+      (int_of_float (6000. *. sin (float_of_int i *. 0.1728)))
+  done;
+  let mp3 =
+    fail_archive
+      (Pie.Recording.Audio_archive.encode_mp3 ~caps ~process_mgr source)
+  in
+  let mp3 = Bytes.to_string mp3 in
+  Alcotest.(check bool) "no ID3v2" false (String.starts_with ~prefix:"ID3" mp3);
+  List.iter
+    (fun marker ->
+      Alcotest.(check bool) ("no " ^ marker) false (contains mp3 marker))
+    [ "Xing"; "Info" ];
+  let errors = Buffer.create 64 in
+  let probe =
+    Eio.Process.parse_out process_mgr Eio.Buf_read.take_all
+      ~stdin:(Eio.Flow.string_source mp3)
+      ~stderr:(Eio.Flow.buffer_sink errors)
+      [
+        "ffprobe";
+        "-v";
+        "error";
+        "-show_entries";
+        "stream=sample_rate,channels,bit_rate";
+        "-of";
+        "json";
+        "pipe:0";
+      ]
+  in
+  let open Yojson.Safe.Util in
+  let stream =
+    Yojson.Safe.from_string probe |> member "streams" |> to_list |> List.hd
+  in
+  Alcotest.(check string)
+    "32 kbit/s" "32000"
+    (stream |> member "bit_rate" |> to_string);
+  Alcotest.(check string)
+    "16 kHz" "16000"
+    (stream |> member "sample_rate" |> to_string);
+  Alcotest.(check int) "mono" 1 (stream |> member "channels" |> to_int);
+  let ffmpeg = Option.get (Pie.Recording.Audio_archive.resolve_ffmpeg ~caps) in
+  let decoded =
+    Eio.Process.parse_out process_mgr Eio.Buf_read.take_all ~executable:ffmpeg
+      ~stdin:(Eio.Flow.string_source mp3)
+      ~stderr:(Eio.Flow.buffer_sink errors)
+      [
+        ffmpeg;
+        "-v";
+        "error";
+        "-f";
+        "mp3";
+        "-i";
+        "pipe:0";
+        "-f";
+        "s16le";
+        "-ar";
+        "16000";
+        "-ac";
+        "1";
+        "pipe:1";
+      ]
+  in
+  Alcotest.(check bool)
+    "decodes whole source" true
+    (String.length decoded >= Bytes.length source)
 
 let test_wav_fallback_ignores_path () =
   with_root (fun root ->
@@ -265,7 +381,7 @@ let test_retention_config () =
         | Ok config -> config
       in
       Alcotest.(check (float 0.))
-        "default 24" 24.
+        "default seven days" 168.
         (loaded "provider = \"openrouter\"\n").audio_retention_hours;
       Alcotest.(check (float 0.))
         "zero" 0. (loaded "audio_retention_hours = 0\n").audio_retention_hours;
@@ -402,7 +518,10 @@ let run_attempt ~env ~dir ~retention ~pass1 ~deliver ~during =
         (fun () ->
           ({ Pie.Glossary.text = ""; paths = []; warnings = [] }, None));
       pass1 = (fun _ _ _ pcm -> pass1 pcm);
-      pass2 = (fun _ _ _ text -> Ok text);
+      pass2 =
+        (fun ~on_response:_ _ _ _ text ->
+          Pie.Stt.Correction.of_result (Ok text));
+      store_response = (fun ~id:_ ~first:_ _ -> Ok "/audio/response.json");
       append_transcribed =
         (fun event ->
           Pie.History.append_transcribed ~caps ~path:history_path event);
@@ -412,7 +531,9 @@ let run_attempt ~env ~dir ~retention ~pass1 ~deliver ~during =
       warn = ignore;
       notify_correction_failure = ignore;
       notify_request_failure = ignore;
-      one_pass = (fun _ _ _ _ -> Error Pie.Stt.Correction.Blank);
+      one_pass =
+        (fun ~on_response:_ _ _ _ _ ->
+          Pie.Stt.Correction.of_result (Error Pie.Stt.Correction.Blank));
       fresh_id = (fun () -> "live-attempt");
       now = (fun () -> Unix.gettimeofday ());
       log_pass = (fun _ ~model:_ ~duration_ms:_ -> ());
@@ -648,28 +769,31 @@ let () =
     [
       ( "archive",
         [
+          Alcotest.test_case "response evidence dict-x6e9" `Quick
+            test_response_evidence;
+          Alcotest.test_case "real MP3 dict-4c5v" `Quick test_real_mp3;
           Alcotest.test_case
-            "wav fallback when PIE_FFMPEG is missing dict-agvw dict-c0yv" `Quick
+            "wav fallback when PIE_FFMPEG is missing dict-agvw dict-1y3i" `Quick
             test_wav_fallback_ignores_path;
           Alcotest.test_case "opus via fake ffmpeg on PATH dict-agvw" `Quick
             test_opus_fake_ffmpeg_on_path;
           Alcotest.test_case "encoder failure writes wav dict-agvw" `Quick
             test_encoder_failure_writes_wav;
           Alcotest.test_case
-            "retention prune skips links and zero dict-g3ap dict-c0yv" `Quick
+            "retention prune skips links and zero dict-g3ap dict-1y3i" `Quick
             test_prune;
           Alcotest.test_case "locate unknown missing and no decoder dict-z1ax"
             `Quick test_locate_errors;
-          Alcotest.test_case "audio_retention_hours validation dict-c0yv" `Quick
+          Alcotest.test_case "audio_retention_hours validation dict-1y3i" `Quick
             test_retention_config;
           Alcotest.test_case
-            "archive after success dict-c0yv dict-agvw dict-z1ax" `Quick
+            "archive after success dict-1y3i dict-agvw dict-z1ax" `Quick
             test_archive_after_success;
-          Alcotest.test_case "archive after failure dict-c0yv dict-agvw" `Quick
+          Alcotest.test_case "archive after failure dict-1y3i dict-agvw" `Quick
             test_archive_after_failure;
-          Alcotest.test_case "no archive after cancel dict-c0yv" `Quick
+          Alcotest.test_case "no archive after cancel dict-1y3i" `Quick
             test_no_archive_after_cancel;
-          Alcotest.test_case "retention 0 archives nothing dict-c0yv" `Quick
+          Alcotest.test_case "retention 0 archives nothing dict-1y3i" `Quick
             test_retention_zero_archives_nothing;
           Alcotest.test_case "retry by history id dict-z1ax dict-ynad" `Quick
             test_retry_by_id;

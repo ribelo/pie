@@ -25,7 +25,8 @@ translation_source_language = "Polish"
 translation_target_language = "English"
 
 # One pass is buffered. streaming = true is rejected.
-audio_retention_hours = 24
+# Audio and private provider responses share a seven-day retention window.
+audio_retention_hours = 168
 
 # Right Ctrl (65508) with Shift: tidy transcription (prompts/one-pass.md).
 # Mod5 + Right Shift latches transcription.

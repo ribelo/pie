@@ -142,7 +142,7 @@ let entry_method_of_string = function
 
 let string_of_entry_method = function Type -> "type" | Paste -> "paste"
 let max_config_file_bytes = 1024 * 1024
-let default_audio_retention_hours = 24.
+let default_audio_retention_hours = 168.
 let default_correction_timeout_seconds = 8.
 let default_one_pass_timeout_seconds = 30.
 let default_correction_temperature = 0.2

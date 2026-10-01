@@ -8,9 +8,9 @@
 
     [audio_retention_hours = 0] disables new archives and does not delete
     existing files. A positive retention deletes only regular files whose names
-    match an archive id plus [.opus] or [.wav], and only when they are older
-    than the retention. Pruning is a directory scan; it does not walk out of the
-    archive directory. *)
+    match an archive id plus [.opus], [.wav], [.response.json] or
+    [.response-1.json], and only when they are older than the retention. Pruning
+    is a directory scan; it does not walk out of the archive directory. *)
 
 val sample_rate : int
 (** 16000. Captured PCM and decoded archives are 16 kHz mono s16le. *)
@@ -67,6 +67,17 @@ val store :
   (string, string) result
 (** Encode 16 kHz mono s16le PCM to Opus, or WAV when no encoder is found or
     encoding fails. Returns the path written. *)
+
+val store_response :
+  caps:< Ox_caps.Cap.fs_write ; .. > ->
+  dir:string ->
+  id:string ->
+  first:bool ->
+  bytes ->
+  (string, string) result
+(** Store private provider evidence next to audio, atomically at 0600. [first]
+    selects [.response-1.json], otherwise [.response.json]. The same retention
+    policy prunes both. Bodies are private data, never diagnostics. *)
 
 val load :
   caps:< Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; .. > ->

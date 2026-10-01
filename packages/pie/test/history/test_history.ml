@@ -76,13 +76,31 @@ let finished ?(id = "attempt-1") ?(time = 1_700_000_001.5)
     outcome;
     diagnostic;
     audio_path = None;
+    response_path = None;
+    first_response_path = None;
+    retry = None;
   }
 
 let test_round_trip () =
   with_root (fun root ->
       let path = Filename.concat root "history.jsonl" in
       let raw = transcribed ~raw_text:"hello\nnema" () in
-      let done_ = finished ~final_text:(Some "Hello\nNema") () in
+      let retry : Pie.History.retry =
+        {
+          first_diagnostic = "unavailable";
+          final_diagnostic = "stt:ok";
+          audio_format = Some "wav";
+          reasoning_effort = Some "medium";
+        }
+      in
+      let done_ =
+        {
+          (finished ~final_text:(Some "Hello\nNema") ()) with
+          response_path = Some "/audio/attempt-1.response.json";
+          first_response_path = Some "/audio/attempt-1.response-1.json";
+          retry = Some retry;
+        }
+      in
       fail_history (Pie.History.append_transcribed ~caps ~path raw);
       fail_history (Pie.History.append_finished ~caps ~path done_);
       let contents = read_file path in
@@ -98,6 +116,14 @@ let test_round_trip () =
       match entries with
       | [ entry ] ->
           Alcotest.(check string) "id" "attempt-1" entry.id;
+          Alcotest.(check (option string))
+            "response path" done_.response_path entry.response_path;
+          Alcotest.(check (option string))
+            "first response path" done_.first_response_path
+            entry.first_response_path;
+          Alcotest.(check bool)
+            "retry roundtrip dict-x6e9" true
+            (entry.retry = done_.retry);
           Alcotest.(check string)
             "time" "2023-11-14T22:13:20.000Z"
             (match
@@ -364,6 +390,9 @@ let test_listing_truncation () =
         diagnostic = None;
         finished_at = None;
         audio_path = None;
+        response_path = None;
+        first_response_path = None;
+        retry = None;
       }
   in
   Alcotest.(check bool) "ellipsis" true (string_contains preview "...");

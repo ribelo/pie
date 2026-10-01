@@ -182,7 +182,7 @@ let failed_body =
              ] );
        ])
 
-type reply = Json of string | Http of int * string | Hang
+type reply = Json of string | Http of int * string | Hang | Close
 
 let logger env =
   Ox_observability.Logger.create ~service:"pie-correction-test"
@@ -193,7 +193,7 @@ let logger env =
          (Ox_observability.Logger.Memory.create ()))
     ()
 
-let with_fixture ~reply f =
+let with_fixture ~reply ?(extra_replies = []) ?(on_request = fun _ _ -> ()) f =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let net = Eio.Stdenv.net env in
@@ -214,29 +214,34 @@ let with_fixture ~reply f =
      outer switch is cancelled can stick on accept, which hung the missing-key
      case. *)
   Eio.Fiber.fork ~sw (fun () ->
-      Eio.Switch.run (fun conn_sw ->
-          match
-            Eio.Time.with_timeout clock 2.0 (fun () ->
-                Ok (Eio.Net.accept ~sw:conn_sw socket))
-          with
-          | Error `Timeout -> ()
-          | Ok (flow, _) -> (
-              incr hits;
-              let head, body = read_http_request flow in
-              captured := Some (head, body);
-              match reply with
-              | Json payload -> write_http flow 200 payload
-              | Http (status, payload) -> write_http flow status payload
-              | Hang -> (
-                  let scratch = Cstruct.create 1 in
-                  (* The client closes on timeout; that read is end-of-file,
+      List.iter
+        (fun reply ->
+          Eio.Switch.run (fun conn_sw ->
+              match
+                Eio.Time.with_timeout clock 2.0 (fun () ->
+                    Ok (Eio.Net.accept ~sw:conn_sw socket))
+              with
+              | Error `Timeout -> ()
+              | Ok (flow, _) -> (
+                  incr hits;
+                  let head, body = read_http_request flow in
+                  captured := Some (head, body);
+                  on_request head body;
+                  match reply with
+                  | Json payload -> write_http flow 200 payload
+                  | Http (status, payload) -> write_http flow status payload
+                  | Close -> ()
+                  | Hang -> (
+                      let scratch = Cstruct.create 1 in
+                      (* The client closes on timeout; that read is end-of-file,
                      not a test failure. *)
-                  try
-                    ignore
-                      (Eio.Time.with_timeout clock 2.0 (fun () ->
-                           ignore (Eio.Flow.single_read flow scratch);
-                           Ok ()))
-                  with End_of_file | Eio.Io _ -> ()))));
+                      try
+                        ignore
+                          (Eio.Time.with_timeout clock 2.0 (fun () ->
+                               ignore (Eio.Flow.single_read flow scratch);
+                               Ok ()))
+                      with End_of_file | Eio.Io _ -> ()))))
+        (reply :: extra_replies));
   Eio.Fiber.yield ();
   let result = f ~sw ~net ~clock ~logger:(logger env) in
   (result, !hits, !captured)
@@ -472,6 +477,158 @@ let child_unframed_analysis () =
   in
   expect_failure
     (Pie.Stt.Correction.Provider Pie.Stt.Correction.Invalid_response) result
+
+let choice_error_body =
+  "{\"choices\":[{\"finish_reason\":\"error\",\"native_finish_reason\":\"OTHER\",\"error\":{\"code\":500,\"message\":\"PROVIDER_SENTINEL\",\"metadata\":{\"error_type\":\"unmapped\"}},\"message\":{\"role\":\"assistant\",\"content\":\"truncated \
+   made-up content\"}}],\"usage\":{\"total_tokens\":0}}"
+
+let child_choice_error () =
+  let result, hits, _ =
+    with_fixture ~reply:(Json choice_error_body) (fun ~sw ~net ~clock ~logger ->
+        call ~sw ~net ~clock ~logger ())
+  in
+  expect_failure (Pie.Stt.Correction.Provider Pie.Stt.Correction.Unavailable)
+    result;
+  Alcotest.(check int) "single exchange" 1 hits
+
+(* dict-6wq3 dict-x6e9 *)
+let child_retry ?(effort = "low") ?(first_diagnostic = "unavailable")
+    ?(wav = false) ~first ~second ~success ~audio () =
+  let requests = ref [] and evidence = ref [] in
+  let report, hits, _ =
+    with_fixture ~reply:first
+      ~extra_replies:[ second; Json (completed "third-forbidden") ]
+      ~on_request:(fun _ body -> requests := body :: !requests)
+      (fun ~sw ~net ~clock ~logger ->
+        Pie.Stt.Correction.run_with_retry ~caps ~sw ~net ~clock ~logger
+          ~model:"test-model" ~prompt_template:prompt_sentinel
+          ~transcript:transcript_sentinel ~reasoning_effort:effort
+          ?upload:
+            (if audio then
+               Some
+                 (if wav then Pie.Stt.Correction.Wav (Bytes.of_string "WAV")
+                  else
+                    Pie.Stt.Correction.Mp3
+                      {
+                        mp3 = Bytes.of_string "MP3";
+                        wav = Bytes.of_string "WAV";
+                      })
+             else None)
+          ~on_response:(fun ~first body ->
+            evidence := (first, Bytes.to_string body) :: !evidence)
+          ~timeout:(Ox.Duration.seconds 1) ())
+  in
+  Alcotest.(check int) "exactly two requests, never a third" 2 hits;
+  if success then
+    Alcotest.(check (result string string))
+      "delivered WAV result" (Ok "WAV recovery")
+      (Result.map_error Pie.Stt.Correction.diagnostic report.result)
+  else
+    expect_failure (Pie.Stt.Correction.Provider Pie.Stt.Correction.Unavailable)
+      report.result;
+  let retry = Option.get report.retry in
+  Alcotest.(check (option string))
+    "retry effort metadata"
+    (Some
+       (if List.mem effort [ "medium"; "high"; "xhigh" ] then effort
+        else "medium"))
+    retry.reasoning_effort;
+  Alcotest.(check (option string))
+    "retry format metadata"
+    (if audio then Some "wav" else None)
+    retry.audio_format;
+  Alcotest.(check string)
+    "request retry effort"
+    (Option.get retry.reasoning_effort)
+    (string_field "effort"
+       (field "reasoning" (Yojson.Safe.from_string (List.hd !requests))));
+  no_leak retry.first_diagnostic;
+  no_leak retry.final_diagnostic;
+  Alcotest.(check string)
+    "first failure" first_diagnostic retry.first_diagnostic;
+  Alcotest.(check string)
+    "final diagnostic"
+    (if success then "stt:ok" else "unavailable")
+    retry.final_diagnostic;
+  let payload = function
+    | Json text | Http (_, text) -> text
+    | Hang | Close -> ""
+  in
+  Alcotest.(check (list (pair bool string)))
+    "both complete private bodies"
+    (List.filter
+       (fun (_, body) -> body <> "")
+       [ (true, payload first); (false, payload second) ])
+    (List.rev !evidence);
+  if audio then (
+    let requests = List.rev !requests in
+    Alcotest.(check bool)
+      "first format" true
+      (contains
+         ("\"format\":\"" ^ (if wav then "wav" else "mp3") ^ "\"")
+         (List.nth requests 0));
+    Alcotest.(check bool)
+      "retry WAV" true
+      (contains "\"format\":\"wav\"" (List.nth requests 1));
+    Alcotest.(check bool)
+      "WAV bytes" true
+      (contains
+         (Pie.Stt.Openrouter.base64_encode (Bytes.of_string "WAV"))
+         (List.nth requests 1)))
+  else
+    let content body = Yojson.Safe.from_string body |> field "input" in
+    Alcotest.(check bool)
+      "text and prompt unchanged" true
+      (content (List.nth !requests 0) = content (List.nth !requests 1))
+
+let child_retry_success ?(cancelled = false) () =
+  let evidence = ref [] in
+  let report, hits, _ =
+    with_fixture
+      ~reply:
+        (Json
+           (if cancelled then
+              status_body "cancelled" (answer_json "never deliver")
+            else completed "first success"))
+      ~extra_replies:[ Json choice_error_body ]
+      (fun ~sw ~net ~clock ~logger ->
+        Pie.Stt.Correction.run_with_retry ~caps ~sw ~net ~clock ~logger
+          ~model:"test-model" ~prompt_template:prompt_sentinel
+          ~transcript:transcript_sentinel
+          ~on_response:(fun ~first body ->
+            evidence := (first, Bytes.to_string body) :: !evidence)
+          ~timeout:(Ox.Duration.seconds 1) ())
+  in
+  Alcotest.(check int) "success or cancellation never retries" 1 hits;
+  Alcotest.(check (result string string))
+    "terminal result"
+    (if cancelled then Error "cancelled" else Ok "first success")
+    (Result.map_error Pie.Stt.Correction.diagnostic report.result);
+  Alcotest.(check bool) "no retry metadata" true (report.retry = None);
+  Alcotest.(check (list bool))
+    "final evidence only" [ false ] (List.map fst !evidence)
+
+let child_retry_cancel () =
+  let evidence = ref [] in
+  let result, hits, _ =
+    with_fixture ~reply:(Json choice_error_body)
+      ~extra_replies:[ Hang; Json (completed "third-forbidden") ]
+      (fun ~sw ~net ~clock ~logger ->
+        Eio.Time.with_timeout clock 0.1 (fun () ->
+            Ok
+              (Pie.Stt.Correction.run_with_retry ~caps ~sw ~net ~clock ~logger
+                 ~model:"test-model" ~prompt_template:prompt_sentinel
+                 ~transcript:transcript_sentinel
+                 ~on_response:(fun ~first body ->
+                   evidence := (first, Bytes.to_string body) :: !evidence)
+                 ~timeout:(Ox.Duration.seconds 1) ())))
+  in
+  Alcotest.(check bool) "cancellation propagates" true (result = Error `Timeout);
+  Alcotest.(check int) "cancelled retry has no third call" 2 hits;
+  Alcotest.(check (list (pair bool string)))
+    "first evidence kept before cancellation"
+    [ (true, choice_error_body) ]
+    (List.rev !evidence)
 
 let child_success () =
   let result, hits, captured =
@@ -719,6 +876,60 @@ let child_audio () =
 let child_main name =
   match name with
   | "request" -> child_request () (* dict-ldo9 dict-l4zp dict-g52m *)
+  | "retry-provider-cancel" -> child_retry_success ~cancelled:true ()
+  | "retry-success" -> child_retry_success ()
+  | "retry-cancel" -> child_retry_cancel ()
+  | "retry-medium" ->
+      child_retry ~effort:"medium" ~first:(Json choice_error_body)
+        ~second:(Json (completed "WAV recovery"))
+        ~success:true ~audio:true ()
+  | "retry-high" ->
+      child_retry ~effort:"high" ~first:(Json choice_error_body)
+        ~second:(Json (completed "WAV recovery"))
+        ~success:true ~audio:true ()
+  | "retry-wav" ->
+      child_retry ~wav:true ~first:(Json choice_error_body)
+        ~second:(Json (completed "WAV recovery"))
+        ~success:true ~audio:true ()
+  | "retry-malformed" ->
+      child_retry ~first_diagnostic:"invalid response" ~first:(Json "{bad")
+        ~second:(Json (completed "WAV recovery"))
+        ~success:true ~audio:true ()
+  | "retry-timeout" ->
+      child_retry ~first_diagnostic:"timeout" ~first:Hang
+        ~second:(Json (completed "WAV recovery"))
+        ~success:true ~audio:false ()
+  | "retry-429" ->
+      child_retry
+        ~first:(Http (429, choice_error_body))
+        ~second:(Http (429, choice_error_body))
+        ~success:false ~audio:false ()
+  | "retry-close" ->
+      child_retry ~first:Close
+        ~second:(Json (completed "WAV recovery"))
+        ~success:true ~audio:false ()
+  | "retry-output" ->
+      child_retry ~first_diagnostic:"invalid response"
+        ~first:(Json (completed_raw "not JSON"))
+        ~second:(Json (completed "WAV recovery"))
+        ~success:true ~audio:false ()
+  | "retry-tool" ->
+      child_retry ~first_diagnostic:"tool continuation" ~first:(Json tool_body)
+        ~second:(Json (completed "WAV recovery"))
+        ~success:true ~audio:false ()
+  | "choice-error" -> child_choice_error ()
+  | "wav-retry" ->
+      child_retry ~first:(Json choice_error_body)
+        ~second:(Json (completed "WAV recovery"))
+        ~success:true ~audio:true ()
+  | "retry-fails" ->
+      child_retry ~first:(Json choice_error_body)
+        ~second:(Json choice_error_body) ~success:false ~audio:true ()
+  | "http-retry" ->
+      child_retry
+        ~first:(Http (500, choice_error_body))
+        ~second:(Json (completed "WAV recovery"))
+        ~success:true ~audio:false ()
   | "success" -> child_success () (* dict-ldo9 dict-g52m *)
   | "answer-envelope" -> child_answer_envelope ()
   | "unframed-analysis" -> child_unframed_analysis ()
@@ -749,7 +960,7 @@ let child_main name =
         (C.Rejected C.Not_completed) ()
       (* dict-bpuh dict-swyn *)
   | "failed" ->
-      child_reject (Json failed_body) (C.Provider C.Invalid_response) ()
+      child_reject (Json failed_body) (C.Provider C.Unavailable) ()
       (* dict-bpuh dict-swyn *)
   | "transport" ->
       child_reject
@@ -777,6 +988,22 @@ let () =
           ( "adapter",
             [
               case "request" "dict-ldo9 dict-l4zp dict-g52m" ~with_key:true;
+              case "retry-close" "dict-6wq3" ~with_key:true;
+              case "retry-output" "dict-6wq3" ~with_key:true;
+              case "retry-tool" "dict-6wq3" ~with_key:true;
+              case "retry-provider-cancel" "dict-6wq3 dict-x6e9" ~with_key:true;
+              case "retry-success" "dict-6wq3 dict-x6e9" ~with_key:true;
+              case "retry-cancel" "dict-6wq3 dict-x6e9" ~with_key:true;
+              case "retry-medium" "dict-6wq3" ~with_key:true;
+              case "retry-high" "dict-6wq3" ~with_key:true;
+              case "retry-wav" "dict-6wq3" ~with_key:true;
+              case "retry-malformed" "dict-6wq3" ~with_key:true;
+              case "retry-timeout" "dict-6wq3" ~with_key:true;
+              case "retry-429" "dict-6wq3" ~with_key:true;
+              case "choice-error" "dict-6wq3" ~with_key:true;
+              case "wav-retry" "dict-6wq3 dict-x6e9" ~with_key:true;
+              case "retry-fails" "dict-6wq3" ~with_key:true;
+              case "http-retry" "dict-6wq3 dict-x6e9" ~with_key:true;
               case "success" "dict-ldo9 dict-g52m" ~with_key:true;
               case "answer-envelope" "dict-dq3o dict-ldo9" ~with_key:true;
               case "unframed-analysis" "dict-dq3o dict-ldo9" ~with_key:true;

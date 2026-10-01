@@ -11,17 +11,20 @@ type dependencies = {
     bytes ->
     (string, Ptt_loop.error) result;
   pass2 :
+    on_response:(first:bool -> bytes -> unit) ->
     Config.Stt.t ->
     Config.Stt.binding ->
     Glossary.t ->
     string ->
-    (string, Stt.Correction.failure) result;
+    Stt.Correction.report;
   one_pass :
+    on_response:(first:bool -> bytes -> unit) ->
     Config.Stt.t ->
     Config.Stt.binding ->
     Glossary.t ->
     bytes ->
-    (string, Stt.Correction.failure) result;
+    Stt.Correction.report;
+  store_response : id:string -> first:bool -> bytes -> (string, string) result;
   append_transcribed :
     History.transcribed -> (unit, [ `History of string ]) result;
   append_finished : History.finished -> (unit, [ `History of string ]) result;
@@ -44,6 +47,9 @@ type t = {
   mutable pass2_duration : int option;
   mutable finished : bool;
   mutable audio_path : string option;
+  mutable response_path : string option;
+  mutable first_response_path : string option;
+  mutable retry : History.retry option;
   mutable one_pass_failure : Stt.Correction.failure option;
 }
 
@@ -73,6 +79,9 @@ let create deps ~config ~binding =
     pass2_duration = None;
     finished = false;
     audio_path = None;
+    response_path = None;
+    first_response_path = None;
+    retry = None;
     one_pass_failure = None;
   }
 
@@ -90,11 +99,36 @@ let attempt_model t =
 let pass2_requested t =
   t.config.pipeline = Config.Stt.Two_pass && t.binding.correct
 
+let keep_response t ~first body =
+  if t.config.audio_retention_hours > 0. then
+    match t.deps.store_response ~id:t.id ~first body with
+    | Ok path ->
+        if first then t.first_response_path <- Some path
+        else t.response_path <- Some path
+    | Error message -> t.deps.warn ("response archive write failed: " ^ message)
+
+let note_report t (report : Stt.Correction.report) =
+  t.retry <-
+    Option.map
+      (fun (retry : Stt.Correction.retry) ->
+        {
+          History.first_diagnostic = retry.first_diagnostic;
+          final_diagnostic = retry.final_diagnostic;
+          audio_format = retry.audio_format;
+          reasoning_effort = retry.reasoning_effort;
+        })
+      report.retry;
+  report.result
+
 let recognize t pcm =
   if t.pass1_started = None then begin_pass1 t;
   if not (one_pass t) then t.deps.pass1 t.config t.binding t.glossary pcm
   else
-    match t.deps.one_pass t.config t.binding t.glossary pcm with
+    match
+      note_report t
+        (t.deps.one_pass ~on_response:(keep_response t) t.config t.binding
+           t.glossary pcm)
+    with
     | Ok text -> Ok text
     | Error failure ->
         t.one_pass_failure <- Some failure;
@@ -130,6 +164,9 @@ let finish t ?final_text ?diagnostic outcome =
            outcome;
            diagnostic;
            audio_path = t.audio_path;
+           response_path = t.response_path;
+           first_response_path = t.first_response_path;
+           retry = t.retry;
          }))
 
 let fail_unfinished t = finish t ~diagnostic:"stt:attempt-failed" History.Failed
@@ -202,7 +239,11 @@ let run t ~recognize ~deliver ~on_audio_failure ~on_text_failure ~on_success =
         if not (pass2_requested t) then Ok raw
         else
           let started = t.deps.now () in
-          let result = t.deps.pass2 t.config t.binding t.glossary raw in
+          let result =
+            note_report t
+              (t.deps.pass2 ~on_response:(keep_response t) t.config t.binding
+                 t.glossary raw)
+          in
           let duration_ms = duration t started in
           t.pass2_duration <- Some duration_ms;
           let model =

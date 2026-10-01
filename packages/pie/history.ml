@@ -49,6 +49,13 @@ type transcribed = {
   raw_text : string;
 }
 
+type retry = {
+  first_diagnostic : string;
+  final_diagnostic : string;
+  audio_format : string option;
+  reasoning_effort : string option;
+}
+
 type finished = {
   id : string;
   time : float;
@@ -58,6 +65,9 @@ type finished = {
   outcome : outcome;
   diagnostic : string option;
   audio_path : string option;
+  response_path : string option;
+  first_response_path : string option;
+  retry : retry option;
 }
 
 type entry = {
@@ -77,6 +87,9 @@ type entry = {
   diagnostic : string option;
   finished_at : float option;
   audio_path : string option;
+  response_path : string option;
+  first_response_path : string option;
+  retry : retry option;
 }
 
 type audio_recorded = { id : string; time : float; path : string }
@@ -202,6 +215,17 @@ let json_window = function
           ("title", json_string_opt window.title);
         ]
 
+let json_retry = function
+  | None -> `Null
+  | Some retry ->
+      `Assoc
+        [
+          ("firstDiagnostic", `String retry.first_diagnostic);
+          ("finalDiagnostic", `String retry.final_diagnostic);
+          ("audioFormat", json_string_opt retry.audio_format);
+          ("reasoningEffort", json_string_opt retry.reasoning_effort);
+        ]
+
 let json_of_entry (entry : entry) =
   `Assoc
     [
@@ -231,6 +255,9 @@ let json_of_entry (entry : entry) =
         | None -> `Null
         | Some time -> `String (iso_of_unix time) );
       ("audioPath", json_string_opt entry.audio_path);
+      ("responsePath", json_string_opt entry.response_path);
+      ("firstResponsePath", json_string_opt entry.first_response_path);
+      ("retry", json_retry entry.retry);
     ]
 
 let json_of_entries entries = `List (List.map json_of_entry entries)
@@ -310,6 +337,21 @@ let event_json = function
           (Option.map (fun text -> `String text) event.diagnostic)
           fields
       in
+      let fields =
+        add "responsePath"
+          (Option.map (fun path -> `String path) event.response_path)
+          fields
+      in
+      let fields =
+        add "firstResponsePath"
+          (Option.map (fun path -> `String path) event.first_response_path)
+          fields
+      in
+      let fields =
+        match event.retry with
+        | None -> fields
+        | Some _ -> fields @ [ ("retry", json_retry event.retry) ]
+      in
       `Assoc
         (add "audioPath"
            (Option.map (fun path -> `String path) event.audio_path)
@@ -379,6 +421,24 @@ let string_list fields key =
   | Some _ -> Error (key ^ " is not a list of strings")
   | None -> Error ("missing " ^ key)
 
+let retry_of fields =
+  match List.assoc_opt "retry" fields with
+  | None | Some `Null -> Ok None
+  | Some (`Assoc fields) ->
+      let* first_diagnostic = require_string fields "firstDiagnostic" in
+      let* final_diagnostic = require_string fields "finalDiagnostic" in
+      let* audio_format = optional_string fields "audioFormat" in
+      let* reasoning_effort = optional_string fields "reasoningEffort" in
+      Ok
+        (Some
+           {
+             first_diagnostic;
+             final_diagnostic;
+             audio_format;
+             reasoning_effort;
+           })
+  | Some _ -> Error "retry is not an object"
+
 let window_of fields =
   match List.assoc_opt "window" fields with
   | None | Some `Null -> Ok None
@@ -444,6 +504,9 @@ let event_of_json json =
         in
         let* diagnostic = optional_string fields "diagnostic" in
         let* audio_path = optional_string fields "audioPath" in
+        let* response_path = optional_string fields "responsePath" in
+        let* first_response_path = optional_string fields "firstResponsePath" in
+        let* retry = retry_of fields in
         if Option.fold ~none:false ~some:(fun n -> n < 0) pass2_duration_ms then
           Error "pass2DurationMs is negative"
         else
@@ -458,6 +521,9 @@ let event_of_json json =
                  outcome;
                  diagnostic;
                  audio_path;
+                 response_path;
+                 first_response_path;
+                 retry;
                })
     | "audio" ->
         let* path = require_string fields "audioPath" in
@@ -532,6 +598,11 @@ let entry_of id pending =
       Option.bind finished (fun (event : finished) -> event.diagnostic);
     finished_at = Option.map (fun (event : finished) -> event.time) finished;
     audio_path = pending.audio_path;
+    response_path =
+      Option.bind finished (fun (event : finished) -> event.response_path);
+    first_response_path =
+      Option.bind finished (fun (event : finished) -> event.first_response_path);
+    retry = Option.bind finished (fun (event : finished) -> event.retry);
   }
 
 let merge events =

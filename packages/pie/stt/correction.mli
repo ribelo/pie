@@ -68,6 +68,7 @@ val run :
   ?audio:bytes ->
   ?audio_format:string ->
   ?provider_order:string list ->
+  ?on_response:(bytes -> unit) ->
   ?glossary:string ->
   ?language:string ->
   ?source_language:string ->
@@ -92,4 +93,49 @@ val run :
     requires a strict JSON object with exactly one string field [text]; only
     that field is returned, as Markdown. Unframed, malformed, truncated or
     extra-field replies are rejected, never pasted verbatim. Reasoning is
-    excluded when a reasoning effort is configured. *)
+    excluded when a reasoning effort is configured. [on_response] receives the
+    private complete body before classification, including non-2xx bodies. The
+    transport does not retry inside this single exchange. *)
+
+type upload = Wav of bytes | Mp3 of { mp3 : bytes; wav : bytes }
+
+type retry = {
+  first_diagnostic : string;
+  final_diagnostic : string;
+  audio_format : string option;
+  reasoning_effort : string option;
+}
+
+type report = { result : (string, failure) result; retry : retry option }
+
+val of_result : (string, failure) result -> report
+
+val run_with_retry :
+  caps:< Ox_caps.Cap.env ; .. > ->
+  sw:Eio.Switch.t ->
+  net:_ Eio.Net.t ->
+  clock:_ Eio.Time.clock ->
+  logger:Ox_observability.Logger.t ->
+  model:string ->
+  prompt_template:string ->
+  transcript:string ->
+  ?upload:upload ->
+  ?provider_order:string list ->
+  ?on_response:(first:bool -> bytes -> unit) ->
+  ?glossary:string ->
+  ?language:string ->
+  ?source_language:string ->
+  ?target_language:string ->
+  ?temperature:float ->
+  ?reasoning_effort:string ->
+  timeout:Ox.Duration.t ->
+  unit ->
+  report
+(** The shared one-pass/pass-2 attempt policy: any typed failure except
+    cancellation gets exactly one retry. MP3 falls back to its WAV; WAV and text
+    retain the same input. Retry reasoning is at least medium (medium, high and
+    xhigh remain unchanged). Cancellation propagates, never triggers a retry.
+    Each exchange has its own [timeout]. [on_response ~first:true] retains the
+    failed first body before retry; [~first:false] retains the final body. Never
+    log these bodies. The retry record contains only fixed, sanitized
+    diagnostics, including [stt:ok] on successful recovery. *)
