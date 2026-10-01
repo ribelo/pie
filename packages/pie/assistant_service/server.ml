@@ -28,6 +28,8 @@ let snapshot_of_coordinator coordinator =
     updated_at = Some snap.updated_at;
     transcript_path = snap.transcript_path;
     last_error = snap.last_error;
+    build_commit = Some Build_identity.commit;
+    build_time = Some Build_identity.time;
   }
 
 let rejected_action coordinator action message =

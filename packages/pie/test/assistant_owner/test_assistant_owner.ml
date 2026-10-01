@@ -1923,8 +1923,7 @@ let test_two_pass_retry kind () =
               finished_history := event :: !finished_history;
               Ok ());
           warn = ignore;
-          notify_correction_failure = ignore;
-          notify_request_failure = ignore;
+          report_notification = (fun _ _ _ -> ());
           one_pass =
             (fun ~on_response:_ _ _ _ _ ->
               Alcotest.fail "two-pass must not call one-pass");
@@ -2068,9 +2067,10 @@ let test_one_pass_retry () =
               finished := event.outcome :: !finished;
               Ok ());
           warn = ignore;
-          notify_correction_failure =
-            (fun _ -> Alcotest.fail "one-pass must not notify correction skip");
-          notify_request_failure = (fun _ -> incr notices);
+          report_notification =
+            Pie.Desktop.Notification.report
+              ~notify:(fun _ _ -> incr notices)
+              ~log:(fun _ -> ());
           fresh_id = (fun () -> Printf.sprintf "one-%d" !glossary_n);
           now = (fun () -> Eio.Time.now clock);
           log_pass = (fun _ ~model:_ ~duration_ms:_ -> ());
@@ -2099,7 +2099,7 @@ let test_one_pass_retry () =
           Pie.Keyboard.Monitor.emit keyboard (key ~released:true);
           wait_until ~clock (fun () -> peek_kind retry_dir = Some "audio");
           Alcotest.(check int) "first request failed" 1 !calls;
-          Alcotest.(check int) "notified" 1 !notices;
+          Alcotest.(check int) "no notice before automatic retry" 0 !notices;
           Alcotest.(check int) "glossary at press" 1 !glossary_n;
           ignore
             (rpc ~net:(Eio.Stdenv.net env) ~sw socket_path

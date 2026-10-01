@@ -323,6 +323,8 @@ let test_daemon_contract_action_response () =
       updated_at = Some "now";
       transcript_path = None;
       last_error = None;
+      build_commit = None;
+      build_time = None;
     }
   in
   let response =
@@ -902,6 +904,8 @@ let test_daemon_contract_response () =
       updated_at = Some "now";
       transcript_path = None;
       last_error = None;
+      build_commit = None;
+      build_time = None;
     }
   in
   let response =
@@ -1047,6 +1051,8 @@ let test_daemon_server_action_handler () =
           updated_at = Some "now";
           transcript_path = None;
           last_error = None;
+          build_commit = None;
+          build_time = None;
         };
     }
   in
@@ -5170,7 +5176,7 @@ let test_ptt_loop_accepts_quiet_speech_over_rms_threshold () =
   | Ok () ->
       Alcotest.fail "expected timeout after finish failure returns to idle"
 
-let test_ptt_loop_dead_input_cancels_active_capture () =
+let test_ptt_loop_dead_input_settles_after_release ?(recover = false) () =
   run_test @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
@@ -5180,6 +5186,7 @@ let test_ptt_loop_dead_input_cancels_active_capture () =
   let finishes = ref 0 in
   let cancels = ref 0 in
   let dead_inputs = ref 0 in
+  let ignored = ref [] in
   let key released =
     Pie.Keyboard.Monitor.emit keyboard
       { released; state = 0; keysym = 1; unichar = 0; keycode = 1 }
@@ -5192,11 +5199,19 @@ let test_ptt_loop_dead_input_cancels_active_capture () =
         Eio.Stream.add audio (Bytes.make 320 '\000')
       done;
       Eio.Time.sleep clock 0.05;
+      Alcotest.(check int) "no cancellation before release" 0 !cancels;
+      Alcotest.(check int)
+        "no ignored decision before release" 0 (List.length !ignored);
+      if recover then (
+        Eio.Stream.add audio (pcm_chunk 2048 160);
+        Eio.Time.sleep clock 0.05);
       key true);
   let handle =
     {
       Pie.Ptt_loop.offer = (fun _ -> sync (fun () -> incr offers));
-      finish = Ptt_loop.Buffered (fun _ -> sync (fun () -> incr finishes));
+      finish =
+        Ptt_loop.Streaming
+          (fun ~duration_ms:_ -> sync (fun () -> incr finishes));
       cancel = (fun () -> Ok (incr cancels));
     }
   in
@@ -5225,17 +5240,23 @@ let test_ptt_loop_dead_input_cancels_active_capture () =
     }
   in
   let operation () =
-    Pie.Ptt_loop.run ~sw ~logger:(test_logger env)
+    Pie.Ptt_loop.run
+      ~on_ignored_capture:(fun capture -> ignored := capture :: !ignored)
+      ~sw ~logger:(test_logger env)
       ~mono_clock:(Eio.Stdenv.mono_clock env)
       ~keyboard
       ~audio:(fun () -> Ok (Some (Eio.Stream.take audio)))
       config
   in
   let result = run_ptt_boundary ~clock:(Eio.Stdenv.clock env) operation in
-  Alcotest.(check int) "offers" 0 !offers;
-  Alcotest.(check int) "finishes" 0 !finishes;
-  Alcotest.(check int) "cancels" 1 !cancels;
+  Alcotest.(check int) "offers" (if recover then 5 else 0) !offers;
+  Alcotest.(check int) "finishes" (if recover then 1 else 0) !finishes;
+  Alcotest.(check int) "cancels" (if recover then 0 else 1) !cancels;
   Alcotest.(check int) "dead input callbacks" 1 !dead_inputs;
+  Alcotest.(check int)
+    "one ignored capture after release"
+    (if recover then 0 else 1)
+    (List.length !ignored);
   match result with
   | Error _ -> ()
   | Ok () ->
@@ -5683,8 +5704,11 @@ let () =
               let r = Pie.Ptt.Dead_input.process_chunk det chunk in
               Alcotest.(check bool) "warn after 4 zeros" true r.warn;
               Alcotest.(check bool) "dead after 4 zeros" true r.dead);
-          Alcotest.test_case "loop cancels flatline capture" `Quick
-            test_ptt_loop_dead_input_cancels_active_capture;
+          Alcotest.test_case "dead input settles after release" `Quick
+            (fun () -> test_ptt_loop_dead_input_settles_after_release ());
+          Alcotest.test_case "speech after flatline is offered and accepted"
+            `Quick (fun () ->
+              test_ptt_loop_dead_input_settles_after_release ~recover:true ());
         ] );
       ( "stt_openrouter",
         [

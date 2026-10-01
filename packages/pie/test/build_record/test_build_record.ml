@@ -62,7 +62,14 @@ let test_fingerprint_includes_dune_project () =
   let a = Provenance.source_fingerprint sandbox in
   write_file (Filename.concat sandbox "dune-project") "(lang dune 3.22)\n";
   let b = Provenance.source_fingerprint sandbox in
-  Alcotest.(check bool) "dune-project in fingerprint" true (a <> b)
+  Alcotest.(check bool) "dune-project in fingerprint" true (a <> b);
+  let script = Filename.concat sandbox "scripts/build-identity.sh" in
+  mkdir_p (Filename.dirname script);
+  write_file script "first generator\n";
+  let c = Provenance.source_fingerprint sandbox in
+  write_file script "changed generator\n";
+  let d = Provenance.source_fingerprint sandbox in
+  Alcotest.(check bool) "generator in fingerprint" true (c <> d)
 
 let test_mutate_during_build_refuses () =
   let sandbox = Filename.temp_file "pie-mut" "" in
@@ -123,6 +130,11 @@ let test_record_from_planted_build () =
        ~target:"packages/pie/bin/pie.exe" ~output
        ~run_build:(fun () ->
          write_file binary "FAKE-BIN\n";
+         write_file
+           (Filename.concat build_dir "default/packages/pie/build_identity.ml")
+           {|let commit = "abc123-dirty"
+let time = "2026-10-01T10:00:00Z"
+|};
          write_file (Filename.concat build_dir "log") log_line)
        ());
   let ic = open_in_bin output in
@@ -142,6 +154,12 @@ let test_record_from_planted_build () =
     "companion key" true
     (Provenance.contains "linked_companion_archives" json);
   Alcotest.(check bool) "binary hash" true (Provenance.contains bin_hash json);
+  Alcotest.(check bool)
+    "embedded commit in artifact record" true
+    (Provenance.contains "abc123-dirty" json);
+  Alcotest.(check bool)
+    "embedded build time in artifact record" true
+    (Provenance.contains "2026-10-01T10:00:00Z" json);
   Alcotest.(check bool)
     "runtime stublibs key" true
     (Provenance.contains "runtime_stublibs" json);

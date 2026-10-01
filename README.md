@@ -86,6 +86,25 @@ helpers. It never installs into the shared opam switch. Inspect
 `_dev/test-run/logs/` for test diagnostics. Set `OX_PATH` to use a different
 local Ox checkout. The script refuses a dirty or non-master Ox checkout.
 
+## Build identity
+
+Dune embeds a short Git commit, with a `-dirty` suffix when tracked or untracked
+source changes exist, and the actual UTC build time. Outside a checkout (including
+source archives and Nix sources without `.git`), the commit is `unknown`; builds still
+work. `SOURCE_DATE_EPOCH` is intentionally ignored: the timestamp describes this
+build, not a reproducible epoch.
+
+`pie status` shows the **running daemon** build. JSON uses `buildCommit` and
+`buildTime`; a differing client appears separately as `clientBuildCommit` and
+`clientBuildTime`. An older daemon has no build identity. The startup config JSON
+includes `build_commit` and `build_time`. `pie --version` shows the client build
+without loading configuration or contacting the daemon.
+
+Ignored captures are listed as `ignored`, with held duration, total capture duration,
+peak and RMS. JSON includes optional `ignoredCapture` measurements; older history
+lines remain readable. Ignored holds longer than 3000 ms notify once after release;
+quiet-input warnings, accidental taps and successful correction fallbacks only log.
+
 ## Provenance record
 
 Compile the helper **first**, in its own build directory, then invoke that
@@ -95,7 +114,7 @@ binary **directly**. Do not `dune exec` the helper against the same
 
 The helper then:
 
-1. Snapshots `packages/pie` plus `dune-project` / `dune-workspace` /
+1. Snapshots `packages/pie` plus `scripts/build-identity.sh`, `dune-project` / `dune-workspace` /
    package dune files (relative-path manifest) and Ox `*.cmxa` plus the
    TLS stub.
 2. Runs `DUNE_CACHE=disabled dune build --build-dir <fresh> packages/pie/bin/pie.exe`.
@@ -104,7 +123,7 @@ The helper then:
 4. Re-snapshots source, linked archives, and TLS stub; refuses the record if
    any changed.
 5. Atomically writes JSON beside the artifact (exclusive 0600 candidate,
-   rename). Never installs.
+   rename), including the embedded commit/time in `binary.build_identity`. Never installs.
 
 Expected TLS stublibs are recorded as **runtime** paths, not as DLLs embedded
 in the native archive.

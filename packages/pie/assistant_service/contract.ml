@@ -7,6 +7,8 @@ type recording_snapshot = {
   updated_at : string option;
   transcript_path : string option;
   last_error : string option;
+  build_commit : string option;
+  build_time : string option;
 }
 
 type request = Status | Pause | Resume | Toggle | Action of string
@@ -92,6 +94,8 @@ let snapshot_keys =
     "updatedAt";
     "transcriptPath";
     "lastError";
+    "buildCommit";
+    "buildTime";
   ]
 
 let snapshot_of_json json =
@@ -104,6 +108,8 @@ let snapshot_of_json json =
   let* updated_at = optional_string "updatedAt" fields in
   let* transcript_path = optional_string "transcriptPath" fields in
   let* last_error = optional_string "lastError" fields in
+  let* build_commit = optional_string "buildCommit" fields in
+  let* build_time = optional_string "buildTime" fields in
   let* phase =
     match List.assoc_opt "phase" fields with
     | None -> Ok (Recording.Phase.legacy ~active ~enabled ~mode ~last_error)
@@ -123,6 +129,8 @@ let snapshot_of_json json =
       updated_at;
       transcript_path;
       last_error;
+      build_commit;
+      build_time;
     }
 
 let json_of_snapshot snap =
@@ -140,6 +148,10 @@ let json_of_snapshot snap =
         match snap.transcript_path with Some s -> `String s | None -> `Null );
       ( "lastError",
         match snap.last_error with Some s -> `String s | None -> `Null );
+      ( "buildCommit",
+        match snap.build_commit with Some s -> `String s | None -> `Null );
+      ( "buildTime",
+        match snap.build_time with Some s -> `String s | None -> `Null );
     ]
 
 let json_of_action_result result =

@@ -156,8 +156,9 @@ let ptt_fields ?duration_ms ?held_duration_ms ?bytes ?rms ?peak config mode =
   |> add "ptt.peak" (fun x -> Float x) peak
 
 let run ?control ?on_press_binding ?(on_capture_failure = fun _ -> Ok ())
-    ?(on_capture_resumed = fun () -> Ok ()) ?(on_low_input = fun () -> Ok ())
-    ~sw ~mono_clock ~logger ~(keyboard : Keyboard.Monitor.t) ~audio
+    ?(on_ignored_capture = fun _ -> ()) ?(on_capture_resumed = fun () -> Ok ())
+    ?(on_low_input = fun () -> Ok ()) ~sw ~mono_clock ~logger
+    ~(keyboard : Keyboard.Monitor.t) ~audio
     ?(queue_pcm_bytes = Dictation_limits.queue_pcm_bytes)
     ?(capture_pcm_bytes = Dictation_limits.capture_pcm_bytes)
     ?(queue_capacity = 1024 + 256) (config : config) : (unit, run_error) result
@@ -268,6 +269,8 @@ let run ?control ?on_press_binding ?(on_capture_failure = fun _ -> Ok ())
                ~bytes:(Audio.Pcm.s16le_complete_bytes acc)
                ~rms ~peak config mode)
           "PTT capture ignored";
+        on_ignored_capture
+          { History.held_ms = held_duration_ms; duration_ms; rms; peak };
         handle.cancel ())
       else
         let* () = if offered then Ok () else offer_chunks handle chunks in
@@ -327,49 +330,52 @@ let run ?control ?on_press_binding ?(on_capture_failure = fun _ -> Ok ())
             if not active then loop capture_state dead_input offered chunks acc
             else
               let result = Ptt.Dead_input.process_chunk dead_input chunk in
+              (* The diagnostic is latched once per hold, not audio admission. *)
+              let has_input =
+                Bytes.length chunk > 0 && not (Ptt.Dead_input.is_flatline chunk)
+              in
               let next_low_volume, warn_low =
                 Ptt.Low_volume.process_chunk !low_volume chunk
               in
               low_volume := next_low_volume;
-              if result.dead then (
-                let* () = handle.cancel () in
-                log_info ~fields:(ptt_fields config mode)
-                  "PTT capture cancelled: no microphone input";
-                config.on_dead_input ())
-              else
-                let* () = if warn_low then on_low_input () else Ok () in
-                let n = Bytes.length chunk in
-                if n > capture_pcm_bytes - !captured then
-                  Error (`Ptt_error "pcm:capture_budget")
-                else (
-                  captured := !captured + n;
-                  let acc = Audio.Pcm.s16le_update acc chunk in
-                  let chunks = chunk :: chunks in
-                  let should_start_offering =
-                    if offered || not result.has_input then false
-                    else
-                      let held_duration_ms =
-                        held_duration_ms ~now:(now_ms ()) started_at
-                          capture_state
-                      in
-                      let rms = Audio.Pcm.s16le_rms acc in
-                      let peak = Audio.Pcm.s16le_peak acc in
-                      let min_capture_rms, min_capture_peak = thresholds in
-                      capture_is_eligible
-                        ~min_duration_ms:config.min_duration_ms ~min_capture_rms
-                        ~min_capture_peak ~held_duration_ms
-                        ~sample_count:acc.Audio.Pcm.sample_count ~rms ~peak
-                  in
-                  let* () =
-                    if not result.has_input then Ok ()
-                    else if offered then handle.offer chunk
-                    else if should_start_offering then
-                      offer_chunks handle chunks
-                    else Ok ()
-                  in
-                  loop capture_state result.detector
-                    (offered || should_start_offering)
-                    chunks acc)
+              let* () =
+                if result.warn then (
+                  log_info ~fields:(ptt_fields config mode)
+                    "PTT no microphone input detected; waiting for release";
+                  config.on_dead_input ())
+                else Ok ()
+              in
+              (* Flatlines settle after release, like all ignored captures. *)
+              let* () = if warn_low then on_low_input () else Ok () in
+              let n = Bytes.length chunk in
+              if n > capture_pcm_bytes - !captured then
+                Error (`Ptt_error "pcm:capture_budget")
+              else (
+                captured := !captured + n;
+                let acc = Audio.Pcm.s16le_update acc chunk in
+                let chunks = chunk :: chunks in
+                let should_start_offering =
+                  if offered || not has_input then false
+                  else
+                    let held_duration_ms =
+                      held_duration_ms ~now:(now_ms ()) started_at capture_state
+                    in
+                    let rms = Audio.Pcm.s16le_rms acc in
+                    let peak = Audio.Pcm.s16le_peak acc in
+                    let min_capture_rms, min_capture_peak = thresholds in
+                    capture_is_eligible ~min_duration_ms:config.min_duration_ms
+                      ~min_capture_rms ~min_capture_peak ~held_duration_ms
+                      ~sample_count:acc.Audio.Pcm.sample_count ~rms ~peak
+                in
+                let* () =
+                  if not has_input then Ok ()
+                  else if offered then handle.offer chunk
+                  else if should_start_offering then offer_chunks handle chunks
+                  else Ok ()
+                in
+                loop capture_state result.detector
+                  (offered || should_start_offering)
+                  chunks acc)
         | `Item { input = Event event; _ } -> (
             match config.recognize event with
             | Some trigger ->

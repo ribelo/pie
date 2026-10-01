@@ -10,6 +10,8 @@ let armed_snapshot : C.recording_snapshot =
     updated_at = None;
     transcript_path = None;
     last_error = None;
+    build_commit = None;
+    build_time = None;
   }
 
 let expect_ok label = function
@@ -27,6 +29,42 @@ let test_status_valid () =
       Alcotest.(check bool) "enabled" true snap.enabled;
       Alcotest.(check string) "mode" "idle" snap.mode
   | _ -> Alcotest.fail "expected Status_resp"
+
+let test_build_identity () =
+  let snapshot =
+    {
+      armed_snapshot with
+      build_commit = Some "abc123-dirty";
+      build_time = Some "2026-10-01T10:00:00Z";
+    }
+  in
+  let encoded = C.json_of_snapshot snapshot in
+  let decode json =
+    match expect_ok "status" (C.response_of_json C.Status json) with
+    | C.Status_resp snapshot -> snapshot
+    | _ -> Alcotest.fail "expected status"
+  in
+  let decoded = decode encoded in
+  Alcotest.(check (option string))
+    "commit" snapshot.build_commit decoded.build_commit;
+  Alcotest.(check (option string)) "time" snapshot.build_time decoded.build_time;
+  let fields =
+    match encoded with `Assoc fields -> fields | _ -> assert false
+  in
+  let old =
+    decode
+      (`Assoc
+         (List.filter
+            (fun (key, _) -> key <> "buildCommit" && key <> "buildTime")
+            fields))
+  in
+  Alcotest.(check (option string))
+    "old daemon commit absent" None old.build_commit;
+  Alcotest.(check (option string)) "old daemon time absent" None old.build_time;
+  expect_error "identity type is checked" C.wrong_type
+    (C.response_of_json C.Status
+       (`Assoc
+          (("buildCommit", `Int 3) :: List.remove_assoc "buildCommit" fields)))
 
 let test_status_missing_mode () =
   expect_error "missing mode" C.missing_field
@@ -262,6 +300,8 @@ let () =
       ( "decode",
         [
           Alcotest.test_case "status valid" `Quick test_status_valid;
+          Alcotest.test_case "dict-w1pe build identity and old daemon" `Quick
+            test_build_identity;
           Alcotest.test_case "status missing field" `Quick
             test_status_missing_mode;
           Alcotest.test_case "status wrong type" `Quick test_status_wrong_type;

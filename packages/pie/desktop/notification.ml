@@ -27,3 +27,14 @@ let notify_warning ~caps ~process_mgr title message =
   | Error _ ->
       Ox_caps.Cap_stdlib.eprintf ~caps "Notification failed\n%!";
       Ok ()
+
+let report ~notify ~log event title message =
+  match Notification_policy.decide event with
+  | Notify -> notify title message
+  | Log -> log (title ^ ": " ^ message)
+
+let emit ~caps ~process_mgr event title message =
+  report event title message
+    ~notify:(fun title message ->
+      ignore (notify_warning ~caps ~process_mgr title message))
+    ~log:(fun message -> Ox_caps.Cap_stdlib.eprintf ~caps "%s\n%!" message)

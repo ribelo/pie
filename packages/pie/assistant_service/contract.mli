@@ -7,6 +7,8 @@ type recording_snapshot = {
   updated_at : string option;
   transcript_path : string option;
   last_error : string option;
+  build_commit : string option;
+  build_time : string option;
 }
 
 type request = Status | Pause | Resume | Toggle | Action of string

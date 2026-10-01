@@ -49,12 +49,42 @@ let render_error = function
 
 let pp_error fmt error = Format.pp_print_string fmt (render_error error)
 
-let render_recording_status
+let render_recording_state
     (snap : Pie.Assistant_service.Contract.recording_snapshot) =
   if not snap.enabled then "paused"
   else if not snap.active then "armed"
   else if snap.mode = "idle" then "stale"
   else snap.mode
+
+let client_build_differs
+    (snap : Pie.Assistant_service.Contract.recording_snapshot) =
+  snap.build_commit <> Some Pie.Build_identity.commit
+  || snap.build_time <> Some Pie.Build_identity.time
+
+let render_recording_status
+    (snap : Pie.Assistant_service.Contract.recording_snapshot) =
+  let running =
+    Printf.sprintf "%s\nbuild: %s (%s)"
+      (render_recording_state snap)
+      (Option.value snap.build_commit ~default:"unknown")
+      (Option.value snap.build_time ~default:"unknown")
+  in
+  if client_build_differs snap then
+    running
+    ^ Printf.sprintf "\nclient build: %s (%s)" Pie.Build_identity.commit
+        Pie.Build_identity.time
+  else running
+
+let json_of_recording_status snap =
+  match Pie.Assistant_service.Contract.json_of_snapshot snap with
+  | `Assoc fields when client_build_differs snap ->
+      `Assoc
+        (fields
+        @ [
+            ("clientBuildCommit", `String Pie.Build_identity.commit);
+            ("clientBuildTime", `String Pie.Build_identity.time);
+          ])
+  | json -> json
 
 let render_action_result (result : Pie.Assistant_service.Contract.action_result)
     =
@@ -79,11 +109,22 @@ let json_of_daemon_error message =
       ("updatedAt", `Null);
       ("transcriptPath", `Null);
       ("lastError", `String message);
+      ("buildCommit", `Null);
+      ("buildTime", `Null);
+      ("clientBuildCommit", `String Pie.Build_identity.commit);
+      ("clientBuildTime", `String Pie.Build_identity.time);
     ]
 
 let command name doc term = Cmd.v (Cmd.info name ~doc) term
+let startup_config_notice = ref (fun () -> ())
 
 let commands_with_env (env : _ Ox_app.Env.t) door_run_owned =
+  (startup_config_notice :=
+     fun () ->
+       Pie.Desktop.Notification.emit ~caps:env.caps
+         ~process_mgr:(Eio.Stdenv.process_mgr env.base)
+         Config_rejected "pie: config rejected"
+         "Startup configuration was rejected. Check the config and restart Pie.");
   let run_owned operation () =
     door_run_owned (fun sw ->
         Result.map_error (fun error -> (error :> cli_error)) (operation sw))
@@ -244,8 +285,7 @@ let commands_with_env (env : _ Ox_app.Env.t) door_run_owned =
                   Pie.Assistant_service.Client.status ~caps ~net ~clock ~sw ()
                 in
                 if as_json then
-                  print_jsonl ~caps
-                    (Pie.Assistant_service.Contract.json_of_snapshot snap)
+                  print_jsonl ~caps (json_of_recording_status snap)
                 else
                   Ox_caps.Cap_stdlib.printf ~caps "%s\n%!"
                     (render_recording_status snap);
@@ -273,9 +313,7 @@ let commands_with_env (env : _ Ox_app.Env.t) door_run_owned =
                       Pie.Assistant_service.Client.status ~caps ~net ~clock ~sw
                         ()
                     with
-                    | Ok snap ->
-                        json_string
-                          (Pie.Assistant_service.Contract.json_of_snapshot snap)
+                    | Ok snap -> json_string (json_of_recording_status snap)
                     | Error error ->
                         json_string (json_of_daemon_error (render_error error))
                   in
@@ -549,6 +587,12 @@ let validate_source env source _config =
 let () =
   exit
     (Ox_app.run_with_args ~name:"pie" ~service_command:"assistant"
+       ~version:(Pie.Build_identity.commit ^ " " ^ Pie.Build_identity.time)
+       ~diagnostic:(fun ~kind ~message ->
+         (match kind with
+         | `Config | `Validation -> !startup_config_notice ()
+         | _ -> ());
+         message)
        ~config_file:"stt.toml" ~missing:`Required
        ~config:Pie.Config.Stt.door_spec ~service_args
        ~decode_with_env:(fun env json ->

@@ -57,7 +57,7 @@ export CODEX_HOME="$tmp/codex" OTEL_SDK_DISABLED=true
 mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_DATA_HOME" \
   "$XDG_RUNTIME_DIR" "$TMPDIR" "$CODEX_HOME" "$tmp/bin"
 for name in wl-copy wl-paste xclip xsel pactl pulseaudio parec curl wget \
-  busctl niri wtype ydotool xdotool; do
+  busctl niri wtype ydotool xdotool notify-send; do
   printf '#!/bin/sh\nexit 127\n' > "$tmp/bin/$name"
   chmod 0755 "$tmp/bin/$name"
 done

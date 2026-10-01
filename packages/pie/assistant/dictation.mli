@@ -31,8 +31,8 @@ type dependencies = {
     History.transcribed -> (unit, [ `History of string ]) result;
   append_finished : History.finished -> (unit, [ `History of string ]) result;
   warn : string -> unit;
-  notify_correction_failure : Stt.Correction.failure -> unit;
-  notify_request_failure : Stt.Correction.failure -> unit;
+  report_notification :
+    Desktop.Notification_policy.event -> string -> string -> unit;
       (** One-pass request failed. The attempt keeps the audio and records
           outcome failed. *)
   fresh_id : unit -> string;
@@ -61,6 +61,10 @@ val recognize : t -> bytes -> (string, Ptt_loop.error) result
 (** Two-pass calls [pass1]. One-pass calls [one_pass] and remembers a typed
     failure for {!run}. *)
 
+val ignore_capture : t -> History.ignored_capture -> unit
+(** Record ignored once before capture cancellation; report only after release.
+*)
+
 val fail_unfinished : t -> unit
 (** Append [failed] if no outcome was recorded, including failures during
     capture. *)
@@ -76,4 +80,5 @@ val run :
   (unit, Ptt_loop.error) result
 (** Two-pass: pass 1, history, optional pass 2, delivery. One-pass: one request,
     then the same text as both the transcribed event and the final text. A
-    one-pass failure notifies, publishes audio, and records [failed]. *)
+    one-pass failure publishes audio and records [failed]. Exhausted retries
+    notify only when audio is retained or the provider is unavailable. *)

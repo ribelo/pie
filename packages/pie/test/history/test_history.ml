@@ -82,6 +82,7 @@ let finished ?(id = "attempt-1") ?(time = 1_700_000_001.5)
     response_path = None;
     first_response_path = None;
     retry = None;
+    ignored_capture = None;
   }
 
 let test_round_trip () =
@@ -396,6 +397,7 @@ let test_listing_truncation () =
         response_path = None;
         first_response_path = None;
         retry = None;
+        ignored_capture = None;
         delivery = None;
       }
   in
@@ -846,11 +848,81 @@ let test_old_delivery_fields_absent () =
                 })
       | _ -> Alcotest.fail "expected one legacy history entry")
 
+let test_ignored_capture () =
+  with_root (fun root ->
+      let path = Filename.concat root "history.jsonl" in
+      let capture : Pie.History.ignored_capture =
+        { held_ms = 3001; duration_ms = 3251; peak = 0.001; rms = 0.0005 }
+      in
+      let event =
+        {
+          (finished ~id:"ignored" ~outcome:Pie.History.Ignored ()) with
+          ignored_capture = Some capture;
+        }
+      in
+      fail_history (Pie.History.append_finished ~caps ~path event);
+      fail_history
+        (Pie.History.append_finished ~caps ~path
+           (finished ~id:"legacy" ~outcome:Pie.History.Failed ()));
+      let entries = fail_history (Pie.History.read ~caps ~path) in
+      let ignored =
+        List.find (fun (e : Pie.History.entry) -> e.id = "ignored") entries
+      in
+      let legacy =
+        List.find (fun (e : Pie.History.entry) -> e.id = "legacy") entries
+      in
+      Alcotest.(check bool)
+        "ignored is not failed" true
+        (ignored.outcome = Some Pie.History.Ignored);
+      Alcotest.(check bool)
+        "measurements roundtrip" true
+        (ignored.ignored_capture = Some capture);
+      Alcotest.(check bool)
+        "old lines lack optional reason" true
+        (legacy.ignored_capture = None);
+      let json = Pie.History.json_of_entry ignored in
+      Alcotest.(check string)
+        "JSON outcome" "ignored"
+        Yojson.Safe.Util.(to_string (member "outcome" json));
+      Alcotest.(check int)
+        "JSON held key excludes postroll" 3001
+        Yojson.Safe.Util.(
+          to_int (member "heldMs" (member "ignoredCapture" json)));
+      let listing = Pie.History.format_listing_line ignored in
+      List.iter
+        (fun field ->
+          Alcotest.(check bool) field true (string_contains listing field))
+        [
+          "ignored";
+          "held=3001ms";
+          "duration=3251ms";
+          "peak=0.001";
+          "rms=0.0005";
+        ];
+      List.iter
+        (fun invalid ->
+          match
+            Pie.History.append_finished ~caps ~path
+              { event with ignored_capture = Some invalid }
+          with
+          | Error _ -> ()
+          | Ok () -> Alcotest.fail "invalid capture measurements accepted")
+        [
+          { capture with held_ms = -1 };
+          { capture with duration_ms = 3000 };
+          { capture with peak = nan };
+          { capture with rms = infinity };
+          { capture with peak = 1.1 };
+          { capture with rms = -0.1 };
+        ])
+
 let () =
   Alcotest.run "history"
     [
       ( "store",
         [
+          Alcotest.test_case "dict-t6ab ignored reason roundtrip and old lines"
+            `Quick test_ignored_capture;
           Alcotest.test_case "dict-ib9n delivery and window id round trip"
             `Quick test_delivery_round_trip;
           Alcotest.test_case "dict-ib9n older history has no delivery or id"

@@ -529,8 +529,7 @@ let run_attempt ~env ~dir ~retention ~pass1 ~deliver ~during =
         (fun event ->
           Pie.History.append_finished ~caps ~path:history_path event);
       warn = ignore;
-      notify_correction_failure = ignore;
-      notify_request_failure = ignore;
+      report_notification = (fun _ _ _ -> ());
       one_pass =
         (fun ~on_response:_ _ _ _ _ ->
           Pie.Stt.Correction.of_result (Error Pie.Stt.Correction.Blank));

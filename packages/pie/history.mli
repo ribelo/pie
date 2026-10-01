@@ -28,6 +28,7 @@ type outcome =
   | Correction_failed
   | Delivery_failed
   | Failed
+  | Ignored
 
 val string_of_outcome : outcome -> string
 val outcome_of_string : string -> outcome option
@@ -59,6 +60,13 @@ type retry = {
   reasoning_effort : string option;
 }
 
+type ignored_capture = {
+  held_ms : int;
+  duration_ms : int;
+  peak : float;
+  rms : float;
+}
+
 type finished = {
   id : string;
   time : float;
@@ -73,6 +81,7 @@ type finished = {
   response_path : string option;
   first_response_path : string option;
   retry : retry option;
+  ignored_capture : ignored_capture option;
       (** Archive file for this attempt. Absent on lines written before the
           archive existed, and until encoding has recorded a path. *)
 }
@@ -98,6 +107,7 @@ type entry = {
   response_path : string option;
   first_response_path : string option;
   retry : retry option;
+  ignored_capture : ignored_capture option;
 }
 (** Merged view of one attempt. Fields known only after pass 1 or pass 2 are
     optional, so a transcript can be recovered before the attempt finishes.
@@ -147,13 +157,15 @@ val read :
 val format_listing_line : entry -> string
 (** Local time ([YYYY-MM-DD HH:MM:SS]), mode, outcome, and the first line of
     final text, or raw text when there is no final text. The text is truncated
-    to 80 characters. A missing mode or outcome is [-]. *)
+    to 80 characters. Ignored capture measurements are appended when present. A
+    missing mode or outcome is [-]. *)
 
 val json_of_entry : entry -> Yojson.Safe.t
 (** Stable object: [id], [time] (UTC [YYYY-MM-DDTHH:MM:SS.sssZ]), [mode],
     [binding], [window] ([{id, appId, title}] or null), [glossaryPaths],
     [pass1Model], [pass1DurationMs], [rawText], [finalText], [pass2Model],
     [pass2DurationMs], [outcome], [delivery], [diagnostic], [finishedAt],
-    [audioPath]. Absent fields are null. *)
+    [audioPath], [ignoredCapture] ([{heldMs, durationMs, peak, rms}]). Absent
+    fields are null. *)
 
 val json_of_entries : entry list -> Yojson.Safe.t
