@@ -892,12 +892,12 @@ let production_pipeline ~caps ~sw ~net ~clock ~logger ~process_mgr =
                   Stt.Openrouter.transcribe ~caps ~sw ~net ~clock ~api_key
                     ~model:model.model ?language ?prompt pcm)));
     pass2 =
-      (fun config binding glossary transcript ->
+      (fun ~on_response config binding glossary transcript ->
         match config.Config.Stt.correction with
-        | None -> Error Stt.Correction.Blank
+        | None -> Stt.Correction.of_result (Error Stt.Correction.Blank)
         | Some correction ->
-            Stt.Correction.run ~caps ~sw ~net ~clock ~logger
-              ~model:correction.model
+            Stt.Correction.run_with_retry ~caps ~sw ~net ~clock ~logger
+              ~on_response ~model:correction.model
               ~timeout:(Ox.Duration.of_seconds correction.timeout_seconds)
               ~prompt_template:binding.prompt
               ~language:config.transcription_language
@@ -908,7 +908,7 @@ let production_pipeline ~caps ~sw ~net ~clock ~logger ~process_mgr =
               ?reasoning_effort:correction.reasoning_effort
               ~temperature:correction.temperature ());
     one_pass =
-      (fun config binding glossary pcm ->
+      (fun ~on_response config binding glossary pcm ->
         let configured =
           match binding.Config.Stt.mode with
           | Transcribe -> config.transcription_model
@@ -922,7 +922,7 @@ let production_pipeline ~caps ~sw ~net ~clock ~logger ~process_mgr =
           with Config.Stt.Config_error _ ->
             Error (Stt.Correction.Provider Stt.Correction.Invalid_request)
         with
-        | Error _ as error -> error
+        | Error _ as error -> Stt.Correction.of_result error
         | Ok resolved ->
             let pcm = normalize_for_stt config pcm in
             let header =
@@ -932,19 +932,19 @@ let production_pipeline ~caps ~sw ~net ~clock ~logger ~process_mgr =
             let wav = Bytes.create (Bytes.length header + Bytes.length pcm) in
             Bytes.blit header 0 wav 0 (Bytes.length header);
             Bytes.blit pcm 0 wav (Bytes.length header) (Bytes.length pcm);
-            let audio, audio_format =
+            let upload =
               match
                 Recording.Audio_archive.encode_mp3 ~caps ~process_mgr pcm
               with
-              | Ok mp3 -> (mp3, "mp3")
+              | Ok mp3 -> Stt.Correction.Mp3 { mp3; wav }
               | Error message ->
                   warn
                     ("One-pass upload as WAV: mp3 encoding failed: " ^ message);
-                  (wav, "wav")
+                  Stt.Correction.Wav wav
             in
-            Stt.Correction.run ~caps ~sw ~net ~clock ~logger
-              ~model:resolved.model ~prompt_template:binding.prompt
-              ~transcript:Stt.Correction.audio_cue ~audio ~audio_format
+            Stt.Correction.run_with_retry ~caps ~sw ~net ~clock ~logger
+              ~on_response ~model:resolved.model ~prompt_template:binding.prompt
+              ~transcript:Stt.Correction.audio_cue ~upload
               ?provider_order:config.openrouter_provider_order
               ~glossary:glossary.Glossary.text
               ~language:config.transcription_language
@@ -954,6 +954,11 @@ let production_pipeline ~caps ~sw ~net ~clock ~logger ~process_mgr =
               ~temperature:Stt.Correction.default_temperature
               ~timeout:(Ox.Duration.of_seconds config.one_pass_timeout_seconds)
               ());
+    store_response =
+      (fun ~id ~first body ->
+        Recording.Audio_archive.store_response ~caps
+          ~dir:(Recording.Audio_archive.dir ~caps)
+          ~id ~first body);
     append_transcribed =
       (fun event ->
         History.append_transcribed ~caps ~path:(Lazy.force history_path) event);

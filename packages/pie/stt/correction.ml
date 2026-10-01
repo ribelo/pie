@@ -235,10 +235,13 @@ let accept_text raw =
     | Ok _ | Error (`Malformed _) -> Error (Provider Invalid_response)
     | Error (`Too_large _) -> Error Over_budget
 
-let run ~caps ~sw ~net ~clock ~logger ~model ~prompt_template ~transcript ?audio
-    ?audio_format ?provider_order ?(glossary = "") ?(language = "")
-    ?(source_language = "") ?(target_language = "")
-    ?(temperature = default_temperature) ?reasoning_effort ~timeout () =
+(* A single HTTP exchange: Ox_ai.Transport.post_json has its own retry policy
+   and discards non-2xx bodies. Neither is suitable for attempt evidence. *)
+let run ~caps ~sw ~net ~clock ~logger:_ ~model ~prompt_template ~transcript
+    ?audio ?audio_format ?provider_order ?(on_response = fun _ -> ())
+    ?(glossary = "") ?(language = "") ?(source_language = "")
+    ?(target_language = "") ?(temperature = default_temperature)
+    ?reasoning_effort ~timeout () =
   if String.trim model = "" || not (Float.is_finite temperature) then
     Error (Provider Invalid_request)
   else if
@@ -261,23 +264,108 @@ let run ~caps ~sw ~net ~clock ~logger ~model ~prompt_template ~transcript ?audio
         | Error _ as error -> error
         | Ok json -> (
             let body = Ox_ai.Transport.bytes_of_json json in
-            let http = Process.make_http ~sw ~net ~clock in
-            match
-              Ox_ai.Transport.post_json ~http ~clock ~logger ~timeout
-                ~max_request_bytes ~max_response_bytes
-                ~endpoint:(responses_endpoint ~caps)
-                ~authorization:(Ox_ai.Bearer.header ~api_key)
-                ~body ~deadline:timeout ()
-            with
-            | Error error -> Error (failure_of_ai error)
-            | Ok response -> (
-                match parse_body response.body with
-                | Error _ as error -> error
-                | Ok json -> (
-                    match Responses.decode json with
-                    | Error error -> Error (failure_of_ai error)
-                    | Ok decoded -> (
-                        match Responses.deliverable decoded with
-                        | Error rejection ->
-                            Error (Rejected (outcome_of_rejection rejection))
-                        | Ok raw -> accept_text raw)))))
+            if Bytes.length body > max_request_bytes then
+              Error (Provider Input_too_large)
+            else
+              let http = Process.make_http ~sw ~net ~clock in
+              match
+                Ox_http.Client.request http ~method_:"POST"
+                  ~url:(responses_endpoint ~caps)
+                  ~headers:
+                    (("Content-Type", "application/json")
+                    :: Ox_ai.Bearer.header ~api_key)
+                  ~body ~deadline:timeout ~max_body_bytes:max_response_bytes ()
+              with
+              | Error (`Timeout | `Idle_timeout) -> Error Timeout
+              | Error `Body_too_large -> Error (Provider Invalid_response)
+              | Error (`Closed | `Connect _ | `Tls _ | `Protocol _) ->
+                  Error (Provider Unavailable)
+              | Ok response -> (
+                  on_response response.body;
+                  if response.status = 401 then Error (Provider Authentication)
+                  else if response.status = 413 then
+                    Error (Provider Input_too_large)
+                  else if response.status < 200 || response.status >= 300 then
+                    Error (Provider Unavailable)
+                  else
+                    match parse_body response.body with
+                    | Error _ as error -> error
+                    | Ok json when Openrouter.provider_failed json ->
+                        Error (Provider Unavailable)
+                    | Ok json -> (
+                        match Responses.decode json with
+                        | Error error -> Error (failure_of_ai error)
+                        | Ok decoded -> (
+                            match Responses.deliverable decoded with
+                            | Error rejection ->
+                                Error
+                                  (Rejected (outcome_of_rejection rejection))
+                            | Ok raw -> accept_text raw)))))
+
+type upload = Wav of bytes | Mp3 of { mp3 : bytes; wav : bytes }
+
+type retry = {
+  first_diagnostic : string;
+  final_diagnostic : string;
+  audio_format : string option;
+  reasoning_effort : string option;
+}
+
+type report = { result : (string, failure) result; retry : retry option }
+
+let of_result result = { result; retry = None }
+
+let run_with_retry ~caps ~sw ~net ~clock ~logger ~model ~prompt_template
+    ~transcript ?upload ?provider_order ?(on_response = fun ~first:_ _ -> ())
+    ?glossary ?language ?source_language ?target_language ?temperature
+    ?reasoning_effort ~timeout () =
+  let retry_effort =
+    match reasoning_effort with
+    | Some ("medium" | "high" | "xhigh") -> reasoning_effort
+    | _ -> Some "medium"
+  in
+  let call ~retry =
+    let reasoning_effort = if retry then retry_effort else reasoning_effort in
+    let audio, audio_format =
+      match upload with
+      | None -> (None, None)
+      | Some (Wav wav) -> (Some wav, Some "wav")
+      | Some (Mp3 { mp3; wav }) ->
+          if retry then (Some wav, Some "wav") else (Some mp3, Some "mp3")
+    in
+    let response = ref None in
+    let result =
+      run ~caps ~sw ~net ~clock ~logger ~model ~prompt_template ~transcript
+        ?audio ?audio_format ?provider_order
+        ~on_response:(fun body -> response := Some body)
+        ?glossary ?language ?source_language ?target_language ?temperature
+        ?reasoning_effort ~timeout ()
+    in
+    (result, !response)
+  in
+  match call ~retry:false with
+  | ((Ok _ | Error (Rejected Cancelled)) as result), response ->
+      Option.iter (on_response ~first:false) response;
+      of_result result
+  | Error failure, response ->
+      (* Store the first failed body before starting the only retry, so a
+         cancelled retry cannot lose evidence of the completed first call. *)
+      Option.iter (on_response ~first:true) response;
+      let result, response = call ~retry:true in
+      Option.iter (on_response ~first:false) response;
+      let final_diagnostic =
+        match result with
+        | Ok _ -> "stt:ok"
+        | Error failure -> diagnostic failure
+      in
+      {
+        result;
+        retry =
+          Some
+            {
+              first_diagnostic = diagnostic failure;
+              final_diagnostic;
+              audio_format = Option.map (fun _ -> "wav") upload;
+              reasoning_effort = retry_effort;
+            };
+      }

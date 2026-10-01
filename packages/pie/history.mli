@@ -46,6 +46,13 @@ type transcribed = {
   raw_text : string;
 }
 
+type retry = {
+  first_diagnostic : string;
+  final_diagnostic : string;
+  audio_format : string option;
+  reasoning_effort : string option;
+}
+
 type finished = {
   id : string;
   time : float;
@@ -56,6 +63,9 @@ type finished = {
   diagnostic : string option;
       (** Short reason. Absent when there is nothing to say. *)
   audio_path : string option;
+  response_path : string option;
+  first_response_path : string option;
+  retry : retry option;
       (** Archive file for this attempt. Absent on lines written before the
           archive existed, and until encoding has recorded a path. *)
 }
@@ -77,6 +87,9 @@ type entry = {
   diagnostic : string option;
   finished_at : float option;
   audio_path : string option;
+  response_path : string option;
+  first_response_path : string option;
+  retry : retry option;
 }
 (** Merged view of one attempt. Fields known only after pass 1 or pass 2 are
     optional, so a transcript can be recovered before the attempt finishes.

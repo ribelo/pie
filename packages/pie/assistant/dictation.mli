@@ -12,18 +12,21 @@ type dependencies = {
     bytes ->
     (string, Ptt_loop.error) result;
   pass2 :
+    on_response:(first:bool -> bytes -> unit) ->
     Config.Stt.t ->
     Config.Stt.binding ->
     Glossary.t ->
     string ->
-    (string, Stt.Correction.failure) result;
+    Stt.Correction.report;
   one_pass :
+    on_response:(first:bool -> bytes -> unit) ->
     Config.Stt.t ->
     Config.Stt.binding ->
     Glossary.t ->
     bytes ->
-    (string, Stt.Correction.failure) result;
+    Stt.Correction.report;
       (** One Responses call with the recording. Not used for two-pass. *)
+  store_response : id:string -> first:bool -> bytes -> (string, string) result;
   append_transcribed :
     History.transcribed -> (unit, [ `History of string ]) result;
   append_finished : History.finished -> (unit, [ `History of string ]) result;

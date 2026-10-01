@@ -1909,10 +1909,12 @@ let test_two_pass_retry kind () =
                     binding.Pie.Config.Stt.prompt);
                 Ok "raw-source"));
           pass2 =
-            (fun _ _ _ _ ->
+            (fun ~on_response:_ _ _ _ _ ->
               incr correction_n;
-              if kind = "translation" then Error Pie.Stt.Correction.Timeout
-              else Ok "corrected-final");
+              Pie.Stt.Correction.of_result
+                (if kind = "translation" then Error Pie.Stt.Correction.Timeout
+                 else Ok "corrected-final"));
+          store_response = (fun ~id:_ ~first:_ _ -> Ok "/audio/response.json");
           append_transcribed =
             (fun event ->
               raw_history := event :: !raw_history;
@@ -1925,7 +1927,8 @@ let test_two_pass_retry kind () =
           notify_correction_failure = ignore;
           notify_request_failure = ignore;
           one_pass =
-            (fun _ _ _ _ -> Alcotest.fail "two-pass must not call one-pass");
+            (fun ~on_response:_ _ _ _ _ ->
+              Alcotest.fail "two-pass must not call one-pass");
           fresh_id = (fun () -> Printf.sprintf "attempt-%d" !glossary_n);
           now = (fun () -> Eio.Time.now clock);
           log_pass = (fun _ ~model:_ ~duration_ms:_ -> ());
@@ -2044,9 +2047,11 @@ let test_one_pass_retry () =
                 },
                 None ));
           pass1 = (fun _ _ _ _ -> Alcotest.fail "one-pass must not call pass 1");
-          pass2 = (fun _ _ _ _ -> Alcotest.fail "one-pass must not call pass 2");
+          pass2 =
+            (fun ~on_response:_ _ _ _ _ ->
+              Alcotest.fail "one-pass must not call pass 2");
           one_pass =
-            (fun cfg binding glossary pcm ->
+            (fun ~on_response:_ cfg binding glossary pcm ->
               incr calls;
               prompts := binding.prompt :: !prompts;
               Alcotest.(check string)
@@ -2055,8 +2060,10 @@ let test_one_pass_retry () =
                 "model" "openrouter/google/gemini-3.8-flash"
                 cfg.transcription_model;
               Alcotest.(check bool) "pcm" true (Bytes.length pcm > 0);
-              if !calls = 1 then Error Pie.Stt.Correction.Timeout
-              else Ok "one-pass-final");
+              Pie.Stt.Correction.of_result
+                (if !calls = 1 then Error Pie.Stt.Correction.Timeout
+                 else Ok "one-pass-final"));
+          store_response = (fun ~id:_ ~first:_ _ -> Ok "/audio/response.json");
           append_transcribed = (fun _ -> Ok ());
           append_finished =
             (fun event ->

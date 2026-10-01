@@ -1,5 +1,9 @@
 type error = [ `Stt_error of string ]
 
+val provider_failed : Yojson.Safe.t -> bool
+(** Detect provider errors in HTTP-success envelopes, including choice-level
+    errors. No provider text is extracted or included in diagnostics. *)
+
 val direct_transcription_timeout : Ox.Duration.t
 val response_operation_timeout : Ox.Duration.t
 

@@ -154,7 +154,7 @@ let dependencies ?(history_error = false) ?(pass1 = Ok "  surowy tekst  ")
         Alcotest.(check string) "full PCM" "PCM" (Bytes.to_string pcm);
         pass1);
     pass2 =
-      (fun cfg b glossary raw ->
+      (fun ~on_response:_ cfg b glossary raw ->
         push f "pass2";
         f.time <- f.time +. 0.2;
         Alcotest.(check string) "same raw" "  surowy tekst  " raw;
@@ -170,15 +170,16 @@ let dependencies ?(history_error = false) ?(pass1 = Ok "  surowy tekst  ")
               "reasoning" (Some "high") c.reasoning_effort;
             Alcotest.(check (float 0.001)) "timeout" 4.5 c.timeout_seconds;
             Alcotest.(check (float 0.001)) "temperature" 0.3 c.temperature);
-        pass2);
+        Pie.Stt.Correction.of_result pass2);
     one_pass =
-      (fun cfg b glossary pcm ->
+      (fun ~on_response:_ cfg b glossary pcm ->
         push f "one-pass";
         f.time <- f.time +. 0.25;
         Alcotest.(check string) "full PCM" "PCM" (Bytes.to_string pcm);
         Alcotest.(check string)
           "press glossary" "PROJECT TERM" glossary.Pie.Glossary.text;
-        one_pass cfg b glossary pcm);
+        Pie.Stt.Correction.of_result (one_pass cfg b glossary pcm));
+    store_response = (fun ~id:_ ~first:_ _ -> Ok "/audio/response.json");
     append_transcribed =
       (fun raw ->
         push f "raw-history";
@@ -539,6 +540,85 @@ let test_one_pass_verbatim_prompt () =
   Alcotest.(check bool) "no pass 2" false (List.mem "pass2" f.trace);
   outcome f H.Delivered
 
+(* dict-6wq3 dict-x6e9: shared evidence seam for live attempts and retry. *)
+let test_response_history ~one_pass ~archive_error ~retention () =
+  let f = fixture () in
+  let b = binding () in
+  let cfg =
+    {
+      (config b) with
+      pipeline = (if one_pass then C.One_pass else C.Two_pass);
+      audio_retention_hours = retention;
+    }
+  in
+  let report ~on_response _ _ _ _ =
+    on_response ~first:true (Bytes.of_string "first private response");
+    on_response ~first:false (Bytes.of_string "final private response");
+    {
+      Pie.Stt.Correction.result = Ok "recovered";
+      retry =
+        Some
+          {
+            first_diagnostic = "unavailable";
+            final_diagnostic = "stt:ok";
+            audio_format = (if one_pass then Some "wav" else None);
+            reasoning_effort = Some "medium";
+          };
+    }
+  in
+  let writes = ref [] in
+  let deps =
+    {
+      (dependencies f) with
+      one_pass = report;
+      pass2 = report;
+      store_response =
+        (fun ~id ~first body ->
+          Alcotest.(check string) "attempt id" "attempt-id" id;
+          writes := (first, Bytes.to_string body) :: !writes;
+          if archive_error then Error "response directory unavailable"
+          else
+            Ok
+              (if first then "/audio/attempt-id.response-1.json"
+               else "/audio/attempt-id.response.json"));
+    }
+  in
+  let t = D.create deps ~config:cfg ~binding:b in
+  ok (execute f t);
+  Alcotest.(check (list string))
+    "only recovered text delivered" [ "recovered" ] f.delivered;
+  let retained = retention > 0. in
+  Alcotest.(check int)
+    "response writes"
+    (if retained then 2 else 0)
+    (List.length !writes);
+  Alcotest.(check int)
+    "archive failure only warns"
+    (if retained && archive_error then 2 else 0)
+    f.warnings;
+  Alcotest.(check int) "no failure notification" 0 f.notices;
+  match f.finished with
+  | [ event ] ->
+      Alcotest.(check (option string))
+        "first response path"
+        (if retained && not archive_error then
+           Some "/audio/attempt-id.response-1.json"
+         else None)
+        event.H.first_response_path;
+      Alcotest.(check (option string))
+        "final response path"
+        (if retained && not archive_error then
+           Some "/audio/attempt-id.response.json"
+         else None)
+        event.H.response_path;
+      let retry = Option.get event.H.retry in
+      Alcotest.(check string)
+        "first diagnostic" "unavailable" retry.first_diagnostic;
+      Alcotest.(check string) "final diagnostic" "stt:ok" retry.final_diagnostic;
+      Alcotest.(check (option string))
+        "effort" (Some "medium") retry.reasoning_effort
+  | _ -> Alcotest.fail "missing finished retry event"
+
 let () =
   let case name f = Alcotest.test_case name `Quick f in
   let failures =
@@ -566,6 +646,18 @@ let () =
     [
       ( "stories",
         [
+          case "dict-x6e9 one-pass response history"
+            (test_response_history ~one_pass:true ~archive_error:false
+               ~retention:168.);
+          case "dict-x6e9 pass-2 response history"
+            (test_response_history ~one_pass:false ~archive_error:false
+               ~retention:168.);
+          case "dict-x6e9 archive failure warns only"
+            (test_response_history ~one_pass:true ~archive_error:true
+               ~retention:168.);
+          case "dict-x6e9 disabled retention"
+            (test_response_history ~one_pass:true ~archive_error:false
+               ~retention:0.);
           case "dict-dozi/3dqh/s0jv/6frx/oagf corrected transcribe"
             (test_success C.Transcribe);
           case "dict-dl3q/q6xd/vwco translate pass1 source"

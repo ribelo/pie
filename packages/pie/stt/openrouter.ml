@@ -4,6 +4,27 @@ module Responses = Ox_ai_openrouter.Responses
 module Openrouter_audio = Ox_ai_openrouter.Audio
 module Redact = Ox_observability.Redact
 
+let provider_failed json =
+  let fields = function `Assoc fields -> fields | _ -> [] in
+  let has_error fields =
+    match List.assoc_opt "error" fields with
+    | None | Some `Null -> false
+    | Some _ -> true
+  in
+  let fields = fields json in
+  has_error fields
+  || List.assoc_opt "status" fields = Some (`String "failed")
+  ||
+  match List.assoc_opt "choices" fields with
+  | Some (`List choices) ->
+      List.exists
+        (fun choice ->
+          let fields = match choice with `Assoc f -> f | _ -> [] in
+          has_error fields
+          || List.assoc_opt "finish_reason" fields = Some (`String "error"))
+        choices
+  | _ -> false
+
 let direct_transcription_timeout = Ox.Duration.seconds 60
 let response_operation_timeout = Ox.Duration.seconds 120
 

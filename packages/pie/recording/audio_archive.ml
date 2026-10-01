@@ -215,6 +215,10 @@ let encode_mp3 ~caps ~process_mgr pcm =
                  "libmp3lame";
                  "-b:a";
                  "32k";
+                 "-write_xing";
+                 "0";
+                 "-id3v2_version";
+                 "0";
                  "-f";
                  "mp3";
                  "pipe:1";
@@ -239,6 +243,13 @@ let store ~caps ~process_mgr ~dir ~id pcm =
         match encode_opus ~process_mgr ~ffmpeg ~caps opus pcm with
         | Ok () -> Ok opus
         | Error _ -> write_wav ())
+
+let store_response ~caps ~dir ~id ~first body =
+  if not (is_safe_id id) then err ("unknown archive id " ^ id)
+  else
+    let* () = ensure_dir ~caps dir in
+    let suffix = if first then ".response-1.json" else ".response.json" in
+    write_private ~caps (Filename.concat dir (id ^ suffix)) body
 
 let read_file ~caps path =
   Ox_caps.Cap_stdlib.In_channel.with_open_bin ~caps path In_channel.input_all
@@ -337,7 +348,15 @@ let archive_name name =
   match id_of ".opus" with
   | Some id -> is_safe_id id
   | None -> (
-      match id_of ".wav" with Some id -> is_safe_id id | None -> false)
+      match id_of ".wav" with
+      | Some id -> is_safe_id id
+      | None -> (
+          match id_of ".response-1.json" with
+          | Some id -> is_safe_id id
+          | None -> (
+              match id_of ".response.json" with
+              | Some id -> is_safe_id id
+              | None -> false)))
 
 let prune ~caps ~dir ~retention_hours ~now =
   if (not (Float.is_finite retention_hours)) || retention_hours <= 0. then Ok 0
