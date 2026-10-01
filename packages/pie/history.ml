@@ -17,6 +17,7 @@ type outcome =
   | Correction_failed
   | Delivery_failed
   | Failed
+  | Ignored
 
 let string_of_outcome = function
   | Delivered -> "delivered"
@@ -25,6 +26,7 @@ let string_of_outcome = function
   | Correction_failed -> "correction-failed"
   | Delivery_failed -> "delivery-failed"
   | Failed -> "failed"
+  | Ignored -> "ignored"
 
 let outcome_of_string = function
   | "delivered" -> Some Delivered
@@ -33,6 +35,7 @@ let outcome_of_string = function
   | "correction-failed" -> Some Correction_failed
   | "delivery-failed" -> Some Delivery_failed
   | "failed" -> Some Failed
+  | "ignored" -> Some Ignored
   | _ -> None
 
 type delivery = Pasted | Clipboard
@@ -67,6 +70,13 @@ type retry = {
   reasoning_effort : string option;
 }
 
+type ignored_capture = {
+  held_ms : int;
+  duration_ms : int;
+  peak : float;
+  rms : float;
+}
+
 type finished = {
   id : string;
   time : float;
@@ -80,6 +90,7 @@ type finished = {
   response_path : string option;
   first_response_path : string option;
   retry : retry option;
+  ignored_capture : ignored_capture option;
   reasoning_effort : string option;
   response_schema : string option;
   prompt_file : string option;
@@ -106,6 +117,7 @@ type entry = {
   response_path : string option;
   first_response_path : string option;
   retry : retry option;
+  ignored_capture : ignored_capture option;
   reasoning_effort : string option;
   response_schema : string option;
   prompt_file : string option;
@@ -246,6 +258,17 @@ let json_retry = function
           ("reasoningEffort", json_string_opt retry.reasoning_effort);
         ]
 
+let json_ignored_capture = function
+  | None -> `Null
+  | Some (capture : ignored_capture) ->
+      `Assoc
+        [
+          ("heldMs", `Int capture.held_ms);
+          ("durationMs", `Int capture.duration_ms);
+          ("peak", `Float capture.peak);
+          ("rms", `Float capture.rms);
+        ]
+
 let json_of_entry (entry : entry) =
   `Assoc
     [
@@ -280,6 +303,7 @@ let json_of_entry (entry : entry) =
       ("responsePath", json_string_opt entry.response_path);
       ("firstResponsePath", json_string_opt entry.first_response_path);
       ("retry", json_retry entry.retry);
+      ("ignoredCapture", json_ignored_capture entry.ignored_capture);
       ("reasoningEffort", json_string_opt entry.reasoning_effort);
       ("responseSchema", json_string_opt entry.response_schema);
       ("promptFile", json_string_opt entry.prompt_file);
@@ -388,6 +412,15 @@ let event_json = function
         | Some _ -> fields @ [ ("retry", json_retry event.retry) ]
       in
       let fields =
+        let fields =
+          match event.ignored_capture with
+          | None -> fields
+          | Some _ ->
+              fields
+              @ [
+                  ("ignoredCapture", json_ignored_capture event.ignored_capture);
+                ]
+        in
         List.fold_left
           (fun fields (name, value) ->
             add name (Option.map (fun text -> `String text) value) fields)
@@ -485,6 +518,33 @@ let retry_of fields =
            })
   | Some _ -> Error "retry is not an object"
 
+let valid_ignored_capture (capture : ignored_capture) =
+  capture.held_ms >= 0
+  && capture.duration_ms >= capture.held_ms
+  && Float.is_finite capture.peak
+  && capture.peak >= 0. && capture.peak <= 1.
+  && Float.is_finite capture.rms
+  && capture.rms >= 0. && capture.rms <= 1.
+
+let ignored_capture_of fields =
+  let number fields key =
+    match List.assoc_opt key fields with
+    | Some (`Float n) -> Ok n
+    | Some (`Int n) -> Ok (float_of_int n)
+    | _ -> Error (key ^ " is not a number")
+  in
+  match List.assoc_opt "ignoredCapture" fields with
+  | None | Some `Null -> Ok None
+  | Some (`Assoc fields) ->
+      let* held_ms = require_int fields "heldMs" in
+      let* duration_ms = require_int fields "durationMs" in
+      let* peak = number fields "peak" in
+      let* rms = number fields "rms" in
+      let capture = { held_ms; duration_ms; peak; rms } in
+      if valid_ignored_capture capture then Ok (Some capture)
+      else Error "invalid ignored capture measurements"
+  | Some _ -> Error "ignoredCapture is not an object"
+
 let window_of fields =
   match List.assoc_opt "window" fields with
   | None | Some `Null -> Ok None
@@ -563,6 +623,7 @@ let event_of_json json =
         let* response_path = optional_string fields "responsePath" in
         let* first_response_path = optional_string fields "firstResponsePath" in
         let* retry = retry_of fields in
+        let* ignored_capture = ignored_capture_of fields in
         let* reasoning_effort = optional_string fields "reasoningEffort" in
         let* response_schema = optional_string fields "responseSchema" in
         let* prompt_file = optional_string fields "promptFile" in
@@ -584,6 +645,7 @@ let event_of_json json =
                  response_path;
                  first_response_path;
                  retry;
+                 ignored_capture;
                  reasoning_effort;
                  response_schema;
                  prompt_file;
@@ -667,6 +729,8 @@ let entry_of id pending =
     first_response_path =
       Option.bind finished (fun (event : finished) -> event.first_response_path);
     retry = Option.bind finished (fun (event : finished) -> event.retry);
+    ignored_capture =
+      Option.bind finished (fun (event : finished) -> event.ignored_capture);
     reasoning_effort =
       Option.bind finished (fun (event : finished) -> event.reasoning_effort);
     response_schema =
@@ -939,6 +1003,12 @@ let append_finished ~caps ~path (event : finished) =
     | None -> Ok ()
     | Some duration -> validate_duration "pass-2" duration
   in
+  let* () =
+    match event.ignored_capture with
+    | None -> Ok ()
+    | Some capture when valid_ignored_capture capture -> Ok ()
+    | Some _ -> err "invalid ignored capture measurements"
+  in
   append_event ~caps ~path (Finished event)
 
 let append_audio ~caps ~path (event : audio_recorded) =
@@ -1008,5 +1078,12 @@ let format_listing_line entry =
   in
   let head =
     Printf.sprintf "%s  %s  %s" (format_local entry.time) mode outcome
+  in
+  let head =
+    match entry.ignored_capture with
+    | None -> head
+    | Some capture ->
+        Printf.sprintf "%s  held=%dms duration=%dms peak=%.6g rms=%.6g" head
+          capture.held_ms capture.duration_ms capture.peak capture.rms
   in
   if preview = "" then head else head ^ "  " ^ preview

@@ -398,6 +398,8 @@ let startup_config_json ~caps ?config_path ~(config : Config.Stt.t)
   `Assoc
     [
       ("config_path", `String config_path);
+      ("build_commit", `String Build_identity.commit);
+      ("build_time", `String Build_identity.time);
       ( "reasoning_effort",
         option_json (fun value -> `String value) reasoning_effort );
       ( "response_schema",
@@ -531,11 +533,8 @@ let inject_and_report ~caps ~clock ~process_mgr ?clipboard_owner ~newline_rules
     ~text_entry_rules ~target_window _mode text =
   let normalized = Input.Text_injection.normalize_text text in
   if String.length normalized = 0 then (
-    ignore
-      (Desktop.Notification.notify_warning ~caps ~process_mgr
-         "pie: no transcript"
-         "Speech-to-text produced no transcript text. Try speaking louder or \
-          checking microphone input.");
+    Desktop.Notification.emit ~caps ~process_mgr No_transcript
+      "pie: no transcript" "Speech-to-text produced no transcript text.";
     Error (`Ptt_error "stt:no_transcript"))
   else
     let injection_window =
@@ -557,10 +556,9 @@ let inject_and_report ~caps ~clock ~process_mgr ?clipboard_owner ~newline_rules
         normalized
     with
     | Error error ->
-        ignore
-          (Desktop.Notification.notify_warning ~caps ~process_mgr
-             "pie: text entry failed"
-             (diagnostic_injection error));
+        Desktop.Notification.emit ~caps ~process_mgr Delivery_failed
+          "pie: text entry failed"
+          (diagnostic_injection error);
         Error (ptt_of_injection error)
     | Ok result ->
         Ox_caps.Cap_stdlib.printf ~caps "%s %d chars via %s (%s)\n%!"
@@ -574,9 +572,8 @@ let inject_and_report ~caps ~clock ~process_mgr ?clipboard_owner ~newline_rules
         Ok
           (report_delivery ~target_window result.outcome
              ~notify:(fun title message ->
-               ignore
-                 (Desktop.Notification.notify_warning ~caps ~process_mgr title
-                    message)))
+               Desktop.Notification.emit ~caps ~process_mgr Clipboard_only title
+                 message))
 
 module Active = Recording.Retry_store.Active
 
@@ -1050,20 +1047,7 @@ let production_pipeline ~caps ~sw ~net ~clock ~logger ~process_mgr =
       (fun event ->
         History.append_finished ~caps ~path:(Lazy.force history_path) event);
     warn;
-    notify_correction_failure =
-      (fun failure ->
-        let diagnostic = Stt.Correction.diagnostic failure in
-        warn ("Correction skipped: " ^ diagnostic);
-        ignore
-          (Desktop.Notification.notify_warning ~caps ~process_mgr
-             "Pie correction skipped" diagnostic));
-    notify_request_failure =
-      (fun failure ->
-        let diagnostic = Stt.Correction.diagnostic failure in
-        warn ("One-pass request failed: " ^ diagnostic);
-        ignore
-          (Desktop.Notification.notify_warning ~caps ~process_mgr
-             "Pie dictation failed" diagnostic));
+    report_notification = Desktop.Notification.emit ~caps ~process_mgr;
     fresh_id = History.fresh_id ~caps;
     now = (fun () -> Eio.Time.now clock);
     log_pass =
@@ -1646,12 +1630,19 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
       | Some pipeline -> pipeline
       | None -> production_pipeline ~caps ~sw ~net ~clock ~logger ~process_mgr
     in
+    let reject_config message =
+      Desktop.Notification.emit ~caps ~process_mgr Config_rejected
+        "pie: config rejected" message
+    in
     let load_initial () =
       match initial_config with
       | Some config -> Ok (config, config_control.stamp ())
       | None -> (
           try Ok (config_control.load 3)
           with Config.Stt.Config_error msg ->
+            reject_config
+              "Startup configuration was rejected. Check the config and \
+               restart Pie.";
             Error (`Ptt_error ("config:" ^ msg)))
     in
     let* initial_config, initial_stamp = load_initial () in
@@ -1660,7 +1651,11 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
         Ok
           (with_cli_overrides ?ptt_transcribe_keysym ?ptt_translate_keysym
              initial_config)
-      with Config.Stt.Config_error msg -> Error (`Ptt_error ("config:" ^ msg))
+      with Config.Stt.Config_error msg ->
+        reject_config
+          "Startup configuration was rejected. Check the config and restart \
+           Pie.";
+        Error (`Ptt_error ("config:" ^ msg))
     in
     let* initial_effective = initial_effective in
     let current = ref initial_effective in
@@ -1756,6 +1751,9 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
         (match result with
         | `Unchanged -> ()
         | `Failed ->
+            reject_config
+              "Reload configuration was rejected; the previous config is still \
+               active.";
             Ox_observability.Logger.error logger
               "Pie config reload failed; keeping previous config"
               ~fields:
@@ -1769,6 +1767,9 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
               with Config.Stt.Config_error _ -> Error ()
             with
             | Error () ->
+                reject_config
+                  "Reload configuration was rejected; the previous config is \
+                   still active.";
                 Ox_observability.Logger.error logger
                   "Pie config reload failed; keeping previous config"
                   ~fields:
@@ -1928,12 +1929,10 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
             (fun () -> Recording.Coordinator.is_active coordinator);
           on_dead_input =
             (fun () ->
-              Result.map_error
-                (fun _ -> `Ptt_error "notification")
-                (Desktop.Notification.notify_warning ~caps ~process_mgr
-                   "pie: no microphone input"
-                   "No input detected during push-to-talk. Your microphone may \
-                    be muted."));
+              Desktop.Notification.emit ~caps ~process_mgr Dead_input
+                "pie: no microphone input"
+                "Microphone input is a flatline; recording continues.";
+              Ok ());
         }
       in
       let publish_current_phase phase () =
@@ -1963,14 +1962,23 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
                 Option.iter (fun owner -> owner.failed <- true) !active_owner;
                 result)
           ?queue_pcm_bytes ?capture_pcm_bytes ?queue_capacity
+          ~on_ignored_capture:(fun capture ->
+            match !active_owner with
+            | Some { dictation = Some dictation; _ } ->
+                Dictation.ignore_capture dictation capture
+            | _ ->
+                Desktop.Notification.emit ~caps ~process_mgr
+                  (Capture_ignored { held_ms = capture.held_ms })
+                  "pie: capture ignored"
+                  "The recording was too short or too quiet. Please repeat the \
+                   dictation.")
           ~on_capture_resumed:(publish_current_phase Recording.Phase.Recording)
           ~on_low_input:(fun () ->
-            Result.map_error
-              (fun _ -> `Ptt_error "notification")
-              (Desktop.Notification.notify_warning ~caps ~process_mgr
-                 "pie: microphone input is very quiet"
-                 "Microphone input has stayed very quiet for 3 seconds. \
-                  Recording will continue."))
+            Desktop.Notification.emit ~caps ~process_mgr Low_input
+              "pie: microphone input is very quiet"
+              "Microphone input has stayed very quiet for 3 seconds. Recording \
+               will continue.";
+            Ok ())
           ptt_config
       in
       (match result with

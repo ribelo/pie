@@ -29,8 +29,8 @@ type dependencies = {
     History.transcribed -> (unit, [ `History of string ]) result;
   append_finished : History.finished -> (unit, [ `History of string ]) result;
   warn : string -> unit;
-  notify_correction_failure : Stt.Correction.failure -> unit;
-  notify_request_failure : Stt.Correction.failure -> unit;
+  report_notification :
+    Desktop.Notification_policy.event -> string -> string -> unit;
   fresh_id : unit -> string;
   now : unit -> float;
   log_pass : pass -> model:string -> duration_ms:int -> unit;
@@ -157,7 +157,7 @@ let history_warning t = function
   | Ok () -> ()
   | Error (`History message) -> t.deps.warn ("history write failed: " ^ message)
 
-let finish t ?final_text ?diagnostic ?delivery outcome =
+let finish t ?final_text ?diagnostic ?delivery ?ignored_capture outcome =
   if not t.finished then (
     t.finished <- true;
     let pass2_model =
@@ -182,6 +182,7 @@ let finish t ?final_text ?diagnostic ?delivery outcome =
            response_path = t.response_path;
            first_response_path = t.first_response_path;
            retry = t.retry;
+           ignored_capture;
            reasoning_effort =
              (match t.retry with
              | Some retry -> retry.reasoning_effort
@@ -192,6 +193,19 @@ let finish t ?final_text ?diagnostic ?delivery outcome =
               else None);
            prompt_file = Some t.binding.prompt_file;
          }))
+
+let ignore_capture t (capture : History.ignored_capture) =
+  if not t.finished then (
+    finish t ~ignored_capture:capture ~diagnostic:"capture:ignored"
+      History.Ignored;
+    t.deps.report_notification
+      (Capture_ignored { held_ms = capture.held_ms })
+      "pie: capture ignored"
+      "The recording was too short or too quiet. Please repeat the dictation.")
+
+let provider_outage = function
+  | Stt.Correction.Timeout | Provider Unavailable -> true
+  | _ -> false
 
 let fail_unfinished t = finish t ~diagnostic:"stt:attempt-failed" History.Failed
 
@@ -215,13 +229,25 @@ let run t ~recognize ~deliver ~on_audio_failure ~on_text_failure ~on_success =
   t.deps.log_pass
     (if one_pass t then One_pass else Pass1)
     ~model:(attempt_model t) ~duration_ms:pass1_duration_ms;
-  let fail_audio error diagnostic =
+  let fail_audio ?failure error diagnostic =
     finish t ~diagnostic History.Failed;
-    with_publication error (on_audio_failure ())
+    let published = on_audio_failure () in
+    let retry_exhausted = t.retry <> None in
+    let audio_kept = Result.is_ok published in
+    let event =
+      match failure with
+      | Some failure when provider_outage failure ->
+          Desktop.Notification_policy.Provider_outage { retry_exhausted }
+      | _ -> Attempt_failed { retry_exhausted; audio_kept }
+    in
+    t.deps.report_notification event "pie: dictation failed"
+      (if audio_kept then
+         "Dictation failed. Audio was kept; use pie retry to try again."
+       else "Dictation failed; audio could not be kept.");
+    with_publication error published
   in
   let fail_one_pass error failure =
-    t.deps.notify_request_failure failure;
-    fail_audio error (Stt.Correction.diagnostic failure)
+    fail_audio ~failure error (Stt.Correction.diagnostic failure)
   in
   match raw with
   | Error error when one_pass t ->
@@ -298,7 +324,14 @@ let run t ~recognize ~deliver ~on_audio_failure ~on_text_failure ~on_success =
       | Ok text -> deliver_final text History.Delivered None
       | Error failure -> (
           let diagnostic = Stt.Correction.diagnostic failure in
-          t.deps.notify_correction_failure failure;
+          let event =
+            if provider_outage failure then
+              Desktop.Notification_policy.Provider_outage
+                { retry_exhausted = t.retry <> None }
+            else Correction_skipped
+          in
+          t.deps.report_notification event "pie: correction skipped"
+            (Stt.Correction.diagnostic failure);
           match t.binding.mode with
           | Config.Stt.Transcribe ->
               deliver_final raw History.Delivered_raw_after_correction_failure

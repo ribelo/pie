@@ -1,5 +1,5 @@
 ---
-status: open
+status: completed
 package: pie
 consumer: pie
 ---
@@ -28,3 +28,18 @@ History records `ignored` as its own outcome with the reason (duration, peak, rm
 - Notification policy lives in one place (a small module deciding notify or log per event), tested through the pipeline seams.
 - The ignored notification threshold defaults to 3 s of held key; shorter ignored captures are only logged.
 - Build identity comes from a Dune rule that embeds the git commit (or "unknown" outside a checkout) and is part of the provenance record.
+
+## Implementation and verification (2026-10-01)
+
+- `dict-f2vx`: one pure policy controls actionable notifications. Clipboard-only delivery, rejected configuration, exhausted provider outages, and exhausted attempts with retained audio notify; low/dead input, empty transcripts, delivery failure, and ordinary correction fallback log. Startup validation and daemon reload rejection use the same policy.
+- `dict-j9sw`: ignored captures settle once after release. Only holds strictly longer than 3000 ms notify; exactly 3000 ms and shorter holds log. Digital silence does not cancel while the key is held, and later speech in the same hold can still stream.
+- `dict-t6ab`: history records `ignored`, with optional held/duration milliseconds and normalized peak/RMS. Old records remain readable; human and JSON listings expose available metrics. Ignored captures neither retain retry audio nor become unfinished failures.
+- `dict-w1pe`: builds embed a 12-character Git commit with a dirty suffix and actual UTC rule execution time. Archives without `.git` use `unknown`. `SOURCE_DATE_EPOCH` is intentionally ignored. Startup, daemon IPC/status, CLI version, and binary provenance expose this identity; a differing client build is reported separately from the daemon.
+
+Verified in the isolated worktree (no installation, live daemon restart, or provider calls):
+
+- `dune build --only-packages pie @all` and `scripts/caps-gate`.
+- Suites: `notification_policy`, `build_identity`, `build_record`, `control_protocol`, `audio_archive`, `dictation_pipeline`, `assistant_owner`, `correction`, `history`, and `config_boundary`; the full root suite also passed.
+- Follow-up root `ptt_dead_input` cases verify no pre-release ignored decision/cancellation, one ignored settlement, and recovered speech after initial flatline.
+- Private CLI smoke checks verified one notification for invalid startup configuration, preserved error diagnostics, authoritative daemon identity in human/JSON status, separate differing client identity, and compatibility with an older daemon response.
+- Private test runners stub `notify-send` as well as desktop/provider helpers to prevent accidental desktop effects.

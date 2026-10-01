@@ -7,6 +7,8 @@ type recording_snapshot = {
   updated_at : string option;
   transcript_path : string option;
   last_error : string option;
+  build_commit : string option;
+  build_time : string option;
   reasoning_effort : string option;
   response_schema : string option;
 }
@@ -94,6 +96,8 @@ let snapshot_keys =
     "updatedAt";
     "transcriptPath";
     "lastError";
+    "buildCommit";
+    "buildTime";
     "reasoningEffort";
     "responseSchema";
   ]
@@ -108,6 +112,8 @@ let snapshot_of_json json =
   let* updated_at = optional_string "updatedAt" fields in
   let* transcript_path = optional_string "transcriptPath" fields in
   let* last_error = optional_string "lastError" fields in
+  let* build_commit = optional_string "buildCommit" fields in
+  let* build_time = optional_string "buildTime" fields in
   let* reasoning_effort = optional_string "reasoningEffort" fields in
   let* response_schema = optional_string "responseSchema" fields in
   let* phase =
@@ -129,6 +135,8 @@ let snapshot_of_json json =
       updated_at;
       transcript_path;
       last_error;
+      build_commit;
+      build_time;
       reasoning_effort;
       response_schema;
     }
@@ -158,6 +166,10 @@ let json_of_snapshot snap =
           match snap.transcript_path with Some s -> `String s | None -> `Null );
         ( "lastError",
           match snap.last_error with Some s -> `String s | None -> `Null );
+        ( "buildCommit",
+          match snap.build_commit with Some s -> `String s | None -> `Null );
+        ( "buildTime",
+          match snap.build_time with Some s -> `String s | None -> `Null );
       ])
 
 let json_of_action_result result =

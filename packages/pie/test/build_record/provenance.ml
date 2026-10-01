@@ -28,6 +28,31 @@ let sha256_file path =
   | hash :: _ -> hash
   | [] -> failwith ("sha256sum failed: " ^ path)
 
+let embedded_build_identity build_dir =
+  let path =
+    Filename.concat build_dir "default/packages/pie/build_identity.ml"
+  in
+  if not (Sys.file_exists path) then `Null
+  else
+    let channel = open_in path in
+    Fun.protect
+      ~finally:(fun () -> close_in_noerr channel)
+      (fun () ->
+        let commit = ref None and time = ref None in
+        (try
+           while true do
+             let line = input_line channel in
+             if String.starts_with ~prefix:"let commit = " line then
+               commit := Some (Scanf.sscanf line "let commit = %S" Fun.id)
+             else if String.starts_with ~prefix:"let time = " line then
+               time := Some (Scanf.sscanf line "let time = %S" Fun.id)
+           done
+         with End_of_file -> ());
+        match (!commit, !time) with
+        | Some commit, Some time ->
+            `Assoc [ ("commit", `String commit); ("time", `String time) ]
+        | _ -> failwith "generated build identity is incomplete")
+
 let ocaml_version () = read_process "ocaml -version"
 let dune_version () = read_process "dune --version"
 
@@ -101,6 +126,7 @@ let fingerprint_files root paths =
 let config_inputs root =
   [
     "dune-project";
+    "scripts/build-identity.sh";
     "dune-workspace";
     "packages/pie/dune";
     "packages/pie/bin/dune";
@@ -461,6 +487,7 @@ let write_record ~root ~build_dir ~target ~output ?run_build () =
             [
               ("path", `String binary_path);
               ("sha256", `String (sha256_file binary_path));
+              ("build_identity", embedded_build_identity build_dir);
             ] );
       ]
     |> Yojson.Safe.pretty_to_string

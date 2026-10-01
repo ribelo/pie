@@ -196,8 +196,10 @@ let dependencies ?(history_error = false) ?(pass1 = Ok "  surowy tekst  ")
         f.finished <- f.finished @ [ finished ];
         history_result ());
     warn = (fun _ -> f.warnings <- f.warnings + 1);
-    notify_correction_failure = (fun _ -> f.notices <- f.notices + 1);
-    notify_request_failure = (fun _ -> f.notices <- f.notices + 1);
+    report_notification =
+      Pie.Desktop.Notification.report
+        ~notify:(fun _ _ -> f.notices <- f.notices + 1)
+        ~log:(fun _ -> ());
     fresh_id = (fun () -> "attempt-id");
     now = (fun () -> f.time);
     log_pass =
@@ -303,7 +305,7 @@ let test_correction_failure mode failure () =
       Alcotest.(check bool)
         "certain raw recovery" true
         (f.texts = [ ("  surowy tekst  ", false) ]));
-  Alcotest.(check int) "notification" 1 f.notices;
+  Alcotest.(check int) "no notification without exhausted retry" 0 f.notices;
   Alcotest.(check int) "raw before failure" 1 (List.length f.raw)
 
 let test_invalid_correction mode text () =
@@ -532,7 +534,7 @@ let test_one_pass_failure () =
   failed (execute f t);
   outcome f H.Failed;
   Alcotest.(check int) "audio retained" 1 f.audios;
-  Alcotest.(check int) "notified" 1 f.notices;
+  Alcotest.(check int) "no notice before automatic retry" 0 f.notices;
   Alcotest.(check (list string)) "nothing typed" [] f.delivered;
   Alcotest.(check int) "no raw history" 0 (List.length f.raw);
   match f.finished with
@@ -794,6 +796,61 @@ let test_unknown_target_title () =
     [ ("Pie", "Pie: text for Project is in the clipboard") ]
     !notices
 
+let test_ignored_capture held_ms () =
+  let f, t = make () in
+  let capture : H.ignored_capture =
+    { held_ms; duration_ms = held_ms + 250; peak = 0.; rms = 0. }
+  in
+  D.ignore_capture t capture;
+  D.ignore_capture t capture;
+  D.fail_unfinished t;
+  outcome f H.Ignored;
+  Alcotest.(check int) "one outcome" 1 (List.length f.finished);
+  Alcotest.(check bool)
+    "reason retained" true
+    ((List.hd f.finished).ignored_capture = Some capture);
+  Alcotest.(check int)
+    "one notification only beyond held threshold"
+    (if held_ms > 3000 then 1 else 0)
+    f.notices;
+  Alcotest.(check int)
+    "no provider or delivery" 0
+    (List.length f.raw + List.length f.delivered);
+  Alcotest.(check int) "not a retained provider failure" 0 f.audios
+
+let test_failed_retry_notice failure audio_kept expected () =
+  let f = fixture () in
+  let b = binding () in
+  let retry : Pie.Stt.Correction.retry =
+    {
+      first_diagnostic = "stt:blank";
+      final_diagnostic = Pie.Stt.Correction.diagnostic failure;
+      audio_format = Some "wav";
+      reasoning_effort = Some "medium";
+    }
+  in
+  let report : Pie.Stt.Correction.report =
+    { result = Error failure; retry = Some retry }
+  in
+  let cfg = { (config b) with pipeline = C.One_pass } in
+  let deps =
+    { (dependencies f) with one_pass = (fun ~on_response:_ _ _ _ _ -> report) }
+  in
+  let t = D.create deps ~config:cfg ~binding:b in
+  let result =
+    D.run t
+      ~recognize:(fun () -> D.recognize t (Bytes.of_string "PCM"))
+      ~deliver:(fun _ -> Alcotest.fail "failed retry must not deliver")
+      ~on_audio_failure:(fun () ->
+        if audio_kept then Ok () else Error (`Ptt_error "cannot publish audio"))
+      ~on_text_failure:(fun _ ~dispatch_uncertain:_ -> Ok ())
+      ~on_success:(fun () -> Ok ())
+  in
+  failed result;
+  outcome f H.Failed;
+  Alcotest.(check int)
+    "notice after retained retry or provider outage" expected f.notices
+
 let () =
   let case name f = Alcotest.test_case name `Quick f in
   let failures =
@@ -821,6 +878,15 @@ let () =
     [
       ( "stories",
         [
+          case "dict-t6ab ignored tap" (test_ignored_capture 160);
+          case "dict-j9sw ignored exact threshold" (test_ignored_capture 3000);
+          case "dict-j9sw ignored long hold once" (test_ignored_capture 3001);
+          case "dict-f2vx retry with audio retained"
+            (test_failed_retry_notice Pie.Stt.Correction.Blank true 1);
+          case "dict-f2vx retry audio publication failed"
+            (test_failed_retry_notice Pie.Stt.Correction.Blank false 0);
+          case "dict-f2vx exhausted provider outage"
+            (test_failed_retry_notice Pie.Stt.Correction.Timeout false 1);
           case "dict-c3nt h8rd prompt frozen at press"
             test_prompt_frozen_at_press;
           case "dict-x6e9 one-pass response history"

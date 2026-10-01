@@ -236,24 +236,92 @@ let error_status_json = {|{"error":"synthetic protocol error"}|}
 let rejected_retry_json =
   {|{"action":"retry","accepted":false,"message":"synthetic rejection","snapshot":{"active":false,"mode":"idle","enabled":true}}|}
 
+let client_identity ~runtime_dir =
+  let run = run_pie ~runtime_dir [ "--version" ] in
+  require_exited_zero run.status;
+  match String.split_on_char ' ' (String.trim run.stdout) with
+  | [ commit; time ] -> (commit, time)
+  | _ -> Alcotest.failf "unexpected build identity: %S" run.stdout
+
+let build_lines ~runtime_dir ~commit ~time =
+  let client_commit, client_time = client_identity ~runtime_dir in
+  Printf.sprintf "build: %s (%s)\n" commit time
+  ^
+  if commit = client_commit && time = client_time then ""
+  else Printf.sprintf "client build: %s (%s)\n" client_commit client_time
+
 let test_status_success () =
   with_temp_dir @@ fun runtime_dir ->
   let run = with_reply ~runtime_dir armed_status_json [ "status" ] in
   require_exited_zero run.status;
-  Alcotest.(check string) "stdout armed" "armed\n" run.stdout;
+  Alcotest.(check string)
+    "stdout armed with unknown daemon identity"
+    ("armed\n" ^ build_lines ~runtime_dir ~commit:"unknown" ~time:"unknown")
+    run.stdout;
   Alcotest.(check string) "stderr empty" "" run.stderr
 
 let test_status_response_metadata () =
   with_temp_dir @@ fun runtime_dir ->
   let json =
-    {|{"active":false,"mode":"idle","enabled":true,"reasoningEffort":"low","responseSchema":"dictation/text-v1"}|}
+    {|{"active":false,"mode":"idle","enabled":true,"reasoningEffort":"low","responseSchema":"dictation/text-v1","buildCommit":"daemon-old","buildTime":"2026-10-01T10:00:00Z"}|}
   in
   let run = with_reply ~runtime_dir json [ "status" ] in
   require_exited_zero run.status;
   Alcotest.(check string)
     "configured metadata dict-h8rd"
-    "armed\nreasoning_effort: low\nresponse_schema: dictation/text-v1\n"
+    ("armed\nreasoning_effort: low\nresponse_schema: dictation/text-v1\n"
+    ^ build_lines ~runtime_dir ~commit:"daemon-old" ~time:"2026-10-01T10:00:00Z"
+    )
     run.stdout
+
+let test_msg_status_metadata ~same_build () =
+  with_temp_dir @@ fun runtime_dir ->
+  let client_commit, client_time = client_identity ~runtime_dir in
+  let commit, time =
+    if same_build then (client_commit, client_time)
+    else ("daemon-old", "2026-10-01T10:00:00Z")
+  in
+  let json =
+    Yojson.Safe.to_string
+      (`Assoc
+         [
+           ("active", `Bool false);
+           ("mode", `String "idle");
+           ("enabled", `Bool true);
+           ("reasoningEffort", `String "low");
+           ("responseSchema", `String "dictation/text-v1");
+           ("buildCommit", `String commit);
+           ("buildTime", `String time);
+         ])
+  in
+  let run = with_reply ~runtime_dir json [ "msg"; "status"; "--json" ] in
+  require_exited_zero run.status;
+  let result = Yojson.Safe.from_string run.stdout in
+  let field name = Yojson.Safe.Util.member name result in
+  List.iter
+    (fun (name, expected) ->
+      Alcotest.(check string)
+        name expected
+        (Yojson.Safe.Util.to_string (field name)))
+    [
+      ("buildCommit", commit);
+      ("buildTime", time);
+      ("reasoningEffort", "low");
+      ("responseSchema", "dictation/text-v1");
+    ];
+  match result with
+  | `Assoc fields ->
+      Alcotest.(check bool)
+        "client identity only when different" (not same_build)
+        (List.mem_assoc "clientBuildCommit" fields);
+      if not same_build then (
+        Alcotest.(check string)
+          "client commit" client_commit
+          (Yojson.Safe.Util.to_string (field "clientBuildCommit"));
+        Alcotest.(check string)
+          "client time" client_time
+          (Yojson.Safe.Util.to_string (field "clientBuildTime")))
+  | _ -> Alcotest.fail "expected status object"
 
 let test_status_rpc_error () =
   with_temp_dir @@ fun runtime_dir ->
@@ -397,8 +465,12 @@ let () =
     [
       ( "status",
         [
-          Alcotest.test_case "status answer metadata" `Quick
+          Alcotest.test_case "status answer and build metadata" `Quick
             test_status_response_metadata;
+          Alcotest.test_case "JSON answer and differing build metadata" `Quick
+            (test_msg_status_metadata ~same_build:false);
+          Alcotest.test_case "JSON matching build omits client identity" `Quick
+            (test_msg_status_metadata ~same_build:true);
           Alcotest.test_case "valid status stdout and exit 0" `Quick
             test_status_success;
           Alcotest.test_case "rpc error nonzero stderr" `Quick

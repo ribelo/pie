@@ -43,6 +43,7 @@ val run :
   ?control:trigger Eio.Stream.t ->
   ?on_press_binding:(Config.Stt.binding -> (press_result, error) result) ->
   ?on_capture_failure:(error -> (unit, error) result) ->
+  ?on_ignored_capture:(History.ignored_capture -> unit) ->
   ?on_capture_resumed:(unit -> (unit, error) result) ->
   ?on_low_input:(unit -> (unit, error) result) ->
   sw:Eio.Switch.t ->

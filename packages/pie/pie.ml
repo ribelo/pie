@@ -1,3 +1,4 @@
+module Build_identity = Build_identity
 module Paths = Paths
 module Dictation_limits = Dictation_limits
 module Audio = Audio
