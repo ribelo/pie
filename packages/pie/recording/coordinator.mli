@@ -43,8 +43,14 @@ val create :
     ; .. > ->
   ?logger:Ox_observability.Logger.t ->
   ?persist_path:string ->
+  ?persist_io:((unit -> unit) -> unit) ->
   unit ->
   t
+(** [persist_io] receives a native-only write of an immutable snapshot, and
+    executes it synchronously by default. Eio callers can use [Fs.blocking], or
+    [State_writer.create] to coalesce the current-state projection without
+    making mutations wait for disk. Adapters must serialize writes, complete the
+    startup write before returning, and report subsequent failures. *)
 
 val snapshot : t -> snapshot
 

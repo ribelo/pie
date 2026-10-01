@@ -169,20 +169,21 @@ let encode_opus ~process_mgr ~ffmpeg ~caps path pcm =
       ~stdin:(Eio.Flow.string_source (Bytes.to_string pcm))
       ~stdout:(Sh.discarded_stderr ()) ~stderr:(Sh.discarded_stderr ())
       (ffmpeg :: opus_args tmp);
-    match Unix.lstat tmp with
-    | { Unix.st_kind = Unix.S_REG; _ } ->
-        Ox_caps.Cap_unix.chmod ~caps tmp 0o600;
-        Ox_caps.Cap_unix.rename ~caps tmp path;
-        Ok ()
-    | _ ->
-        unlink_quiet ~caps tmp;
-        err "ffmpeg did not write a regular audio file"
+    Fs.blocking (fun () ->
+        match Unix.lstat tmp with
+        | { Unix.st_kind = Unix.S_REG; _ } ->
+            Ox_caps.Cap_unix.chmod ~caps tmp 0o600;
+            Ox_caps.Cap_unix.rename ~caps tmp path;
+            Ok ()
+        | _ ->
+            unlink_quiet ~caps tmp;
+            err "ffmpeg did not write a regular audio file")
   with
   | Eio.Cancel.Cancelled _ as exn ->
-      unlink_quiet ~caps tmp;
+      Fs.blocking (fun () -> unlink_quiet ~caps tmp);
       raise exn
   | exn ->
-      unlink_quiet ~caps tmp;
+      Fs.blocking (fun () -> unlink_quiet ~caps tmp);
       err (failure_text ~ffmpeg exn)
 
 (* MP3 for provider upload: 32 kbit/s mono keeps a twelve-minute dictation
@@ -232,11 +233,12 @@ let encode_mp3 ~caps ~process_mgr pcm =
 let store ~caps ~process_mgr ~dir ~id pcm =
   if not (is_safe_id id) then err ("unknown archive id " ^ id)
   else
-    let* () = ensure_dir ~caps dir in
+    let* () = Fs.blocking (fun () -> ensure_dir ~caps dir) in
     let write_wav () =
-      write_private ~caps (destination ~dir ~id ~ext:`Wav) (wav_bytes pcm)
+      Fs.blocking (fun () ->
+          write_private ~caps (destination ~dir ~id ~ext:`Wav) (wav_bytes pcm))
     in
-    match resolve_ffmpeg ~caps with
+    match Fs.blocking (fun () -> resolve_ffmpeg ~caps) with
     | None -> write_wav ()
     | Some ffmpeg -> (
         let opus = destination ~dir ~id ~ext:`Opus in

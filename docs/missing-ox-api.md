@@ -11,6 +11,25 @@ Ox row 57 (e7054a73) and row 59 (ffe57e78, spec ox/docs/issues/pie-api-gaps/01-p
 
 ## Still missing
 
+### Protected native-operation scope and latest-state wakeup
+
+Pie uses `Ox_blocking` for native filesystem callbacks. A started callback must
+finish physically before its caller releases a writer or removes a draft.
+`Fs.blocking` therefore uses a cancellation-protected child Eio switch and an
+explicit `Pool.Drain` shutdown. Ox exposes the pool and supervised scopes, but
+not a direct-style protected child-scope combinator; `Eio.Cancel.protect` and
+`Eio.Switch.run` remain the small lifecycle bridge.
+
+Recording-state projection persistence needs one in-flight write and one pending
+latest value, with non-yielding replacement, a wakeup, and a drain at switch exit.
+Ox actors and channels offer bounded FIFO delivery, not latest-value replacement.
+`Recording.State_writer` uses `Eio.Condition`, `Eio.Fiber.fork_daemon` on its
+borrowed service switch, and a protected `Eio.Switch.on_release` drain.
+`Ox.Scope.fork_daemon` exists for an Ox supervised scope; it does not attach a
+daemon directly to this existing Eio switch. A latest-value mailbox or
+switch-owned coalescing worker would remove this bridge without changing
+retained-audio, archive or history durability.
+
 ### OpenRouter provider routing
 
 `Responses.request` and `Responses.text_request` have no field for OpenRouter's `provider` object (`{"order": [...], "allow_fallbacks": ...}`). Pie routes one-pass and pass-2 calls to Google AI Studio first (`openrouter_provider_order`, dict-4y4r), so `Stt.Correction` still adds `provider` to the JSON Ox encodes and posts it with `Ox_ai.Transport.post_json` instead of calling `Responses.create` / `create_text`. An optional `?provider:` (order, allow fallbacks) on `encode`, `encode_text`, `create` and `create_text` would let Pie call `create` / `create_text` directly.

@@ -640,7 +640,10 @@ let open_recovery_store ~caps ~root =
 
 let create_attempt_owner ?dictation ?(target_window = None) ~store ~coordinator
     ~attempt mode =
-  match Active.open_audio_writer store ~mode:(retry_mode mode) with
+  match
+    Fs.blocking (fun () ->
+        Active.open_audio_writer store ~mode:(retry_mode mode))
+  with
   | Error e -> Error (ptt_of_retry e)
   | Ok writer ->
       Ok
@@ -696,7 +699,7 @@ let maybe_archive owner =
         | Sealed writer -> (
             owner.archive_started <- true;
             try
-              match Active.load_sealed_audio writer with
+              match Fs.blocking (fun () -> Active.load_sealed_audio writer) with
               | Error (`Retry_store message) ->
                   hooks.warn ("audio archive skipped: " ^ message)
               | Ok pcm ->
@@ -720,7 +723,7 @@ let abort_unpublished owner =
   match current_writer owner with
   | None -> Ok ()
   | Some writer ->
-      let result = Active.abort_writer writer in
+      let result = Fs.blocking (fun () -> Active.abort_writer writer) in
       owner.stage := Closed;
       retry_result result
 
@@ -728,7 +731,9 @@ let seal_writer owner =
   match !(owner.stage) with
   | Closed | Sealed _ -> Ok ()
   | Capturing writer ->
-      let* () = retry_result (Active.close_writer writer) in
+      let* () =
+        retry_result (Fs.blocking (fun () -> Active.close_writer writer))
+      in
       owner.stage := Sealed writer;
       Ok ()
 
@@ -736,7 +741,10 @@ let publish_sealed_audio owner =
   maybe_archive owner;
   match !(owner.stage) with
   | Sealed writer ->
-      let* _ = retry_result (Active.publish_audio owner.store writer) in
+      let* _ =
+        retry_result
+          (Fs.blocking (fun () -> Active.publish_audio owner.store writer))
+      in
       owner.stage := Closed;
       Ok ()
   | Capturing _ | Closed -> Ok ()
@@ -745,8 +753,9 @@ let publish_recognized_text owner text ~dispatch_uncertain =
   let result = abort_unpublished owner in
   let published =
     retry_result
-      (Active.publish_text owner.store ~mode:(retry_mode owner.mode) ~text
-         ~dispatch_uncertain)
+      (Fs.blocking (fun () ->
+           Active.publish_text owner.store ~mode:(retry_mode owner.mode) ~text
+             ~dispatch_uncertain))
   in
   match (result, published) with
   | (Error _ as error), _ -> error
@@ -854,7 +863,10 @@ let attempt_handle owner (handle : Ptt_loop.handle) : Ptt_loop.handle =
         let* () =
           match !(owner.stage) with
           | Capturing writer ->
-              let* () = retry_result (Active.append_audio writer chunk) in
+              let* () =
+                retry_result
+                  (Fs.blocking (fun () -> Active.append_audio writer chunk))
+              in
               owner.captured_bytes <- owner.captured_bytes + Bytes.length chunk;
               Ok ()
           | Sealed _ | Closed -> Error (`Ptt_error "recording:writer-closed")
@@ -997,15 +1009,19 @@ let production_pipeline ~caps ~sw ~net ~clock ~logger ~process_mgr =
               ());
     store_response =
       (fun ~id ~first body ->
-        Recording.Audio_archive.store_response ~caps
-          ~dir:(Recording.Audio_archive.dir ~caps)
-          ~id ~first body);
+        Fs.blocking (fun () ->
+            Recording.Audio_archive.store_response ~caps
+              ~dir:(Recording.Audio_archive.dir ~caps)
+              ~id ~first body));
     append_transcribed =
       (fun event ->
-        History.append_transcribed ~caps ~path:(Lazy.force history_path) event);
+        Fs.blocking (fun () ->
+            History.append_transcribed ~caps ~path:(Lazy.force history_path)
+              event));
     append_finished =
       (fun event ->
-        History.append_finished ~caps ~path:(Lazy.force history_path) event);
+        Fs.blocking (fun () ->
+            History.append_finished ~caps ~path:(Lazy.force history_path) event));
     warn;
     report_notification = Desktop.Notification.emit ~caps ~process_mgr;
     fresh_id = History.fresh_id ~caps;
@@ -1120,7 +1136,9 @@ let make_streaming_handle ~caps ~sw ~net ~clock ~logger ~owner ~config ~stt
   let buffered () =
     match !(owner.stage) with
     | Sealed writer -> (
-        let* pcm = retry_result (Active.load_sealed_audio writer) in
+        let* pcm =
+          retry_result (Fs.blocking (fun () -> Active.load_sealed_audio writer))
+        in
         match owner.dictation with
         | Some dictation -> Dictation.recognize dictation pcm
         | None -> stt config mode pcm)
@@ -1601,7 +1619,22 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
     let* initial_effective = initial_effective in
     let current = ref initial_effective in
     let last_stamp = ref initial_stamp in
-    let coordinator = Recording.Coordinator.create ~caps () in
+    let persist_path = Paths.recording_state_path ~caps in
+    let persist_io =
+      Recording.State_writer.create ~sw
+        ~on_error:(fun exn ->
+          Ox_observability.Logger.error logger
+            ~fields:
+              [
+                ("path", String persist_path);
+                ("error", String (Printexc.to_string exn));
+              ]
+            "failed to write recording state")
+        ()
+    in
+    let coordinator =
+      Recording.Coordinator.create ~caps ~logger ~persist_path ~persist_io ()
+    in
     let control : Ptt_loop.trigger Eio.Stream.t = Eio.Stream.create 1024 in
     let retries :
         (retry_job
@@ -1744,8 +1777,10 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
       else
         try
           match
-            Recording.Audio_archive.prune ~caps ~dir:audio_dir
-              ~retention_hours:hours ~now:(Eio.Time.now clock)
+            let now = Eio.Time.now clock in
+            Fs.blocking (fun () ->
+                Recording.Audio_archive.prune ~caps ~dir:audio_dir
+                  ~retention_hours:hours ~now)
           with
           | Ok _ -> ()
           | Error message ->
@@ -1774,8 +1809,10 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
               | Ok (Ok path) -> (
                   if record_history then
                     match
-                      History.append_audio ~caps ~path:history_file
-                        { id; time = Eio.Time.now clock; path }
+                      let time = Eio.Time.now clock in
+                      Fs.blocking (fun () ->
+                          History.append_audio ~caps ~path:history_file
+                            { id; time; path })
                     with
                     | Ok () -> ()
                     | Error (`History message) ->
@@ -1976,8 +2013,9 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
           unless_cancelled attempt (fun () ->
               let* _ =
                 retry_result
-                  (Active.publish_text store ~mode:(retry_mode mode) ~text
-                     ~dispatch_uncertain)
+                  (Fs.blocking (fun () ->
+                       Active.publish_text store ~mode:(retry_mode mode) ~text
+                         ~dispatch_uncertain))
               in
               Ok ())
         in
@@ -1985,7 +2023,10 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
           match generation with
           | None -> Ok ()
           | Some generation -> (
-              match retry_result (Active.clear store generation) with
+              match
+                retry_result
+                  (Fs.blocking (fun () -> Active.clear store generation))
+              with
               | Ok () -> Ok ()
               | Error _ as error ->
                   Recording.Coordinator.set_error coordinator "recovery:cleanup";
@@ -1998,7 +2039,9 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
             match job with
             | Retained (Active.Audio _) -> (
                 let* pcm =
-                  retry_result (Active.load_audio store (Option.get generation))
+                  retry_result
+                    (Fs.blocking (fun () ->
+                         Active.load_audio store (Option.get generation)))
                 in
                 let* dictation =
                   create_dictation ~logger ~config (Some pipeline) mode
@@ -2029,7 +2072,9 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
                       ~on_success:(fun () -> Ok ()))
             | Retained (Active.Text _) ->
                 let* text =
-                  retry_result (Active.load_text store (Option.get generation))
+                  retry_result
+                    (Fs.blocking (fun () ->
+                         Active.load_text store (Option.get generation)))
                 in
                 deliver_retained_text
                   ~deliver:(fun t -> deliver config mode None t)

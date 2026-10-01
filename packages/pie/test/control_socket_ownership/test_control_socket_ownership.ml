@@ -105,21 +105,42 @@ let test_stale_socket_recovered () =
 let test_racing_processes () =
   with_temp_dir @@ fun dir ->
   let socket_path = socket_in dir in
+  let ready_r, ready_w = Unix.pipe () in
+  let lifetime_r, lifetime_w = Unix.pipe () in
   match Unix.fork () with
-  | 0 -> (
-      try
-        Eio_main.run @@ fun env ->
-        Eio.Switch.run @@ fun sw ->
-        start_in ~sw env ~socket_path (coordinator dir);
-        Unix.sleep 2
-      with _ -> exit 1)
+  | 0 ->
+      Unix.close ready_r;
+      Unix.close lifetime_w;
+      let code =
+        try
+          Eio_main.run (fun env ->
+              Eio.Switch.run (fun sw ->
+                  start_in ~sw env ~socket_path (coordinator dir);
+                  ignore (Unix.write ready_w (Bytes.of_string "r") 0 1);
+                  Unix.close ready_w;
+                  (* Stay owner until the parent finishes, without blocking
+                     this child's listener scheduler. *)
+                  ignore
+                    (Pie.Fs.blocking (fun () ->
+                         Unix.read lifetime_r (Bytes.create 1) 0 1))));
+          0
+        with _ -> 1
+      in
+      Unix.close lifetime_r;
+      exit code
   | child ->
+      Unix.close ready_w;
+      Unix.close lifetime_r;
       Fun.protect
         ~finally:(fun () ->
-          (try Unix.kill child Sys.sigterm with _ -> ());
+          Unix.close ready_r;
+          Unix.close lifetime_w;
           ignore (Unix.waitpid [] child))
         (fun () ->
-          Unix.sleepf 0.2;
+          (* A fixed delay proved neither successful bind nor continued
+             ownership on a slow filesystem. *)
+          if Unix.read ready_r (Bytes.create 1) 0 1 <> 1 then
+            Alcotest.fail "child failed before listener readiness";
           Eio_main.run @@ fun env ->
           Eio.Switch.run @@ fun sw ->
           match start_in ~sw env ~socket_path (coordinator dir) with
@@ -471,6 +492,166 @@ let test_symlink_lock_rejected () =
     | { st_kind = Unix.S_LNK; _ } -> true
     | _ -> false)
 
+let test_status_while_persistence_waits () =
+  with_temp_dir @@ fun dir ->
+  let socket_path = socket_in dir in
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let entered = Semaphore.Binary.make false in
+  let released = Semaphore.Binary.make false in
+  let settled, settle = Eio.Promise.create () in
+  let hold = ref false in
+  let persist_io write =
+    let wait = !hold in
+    Pie.Fs.blocking (fun () ->
+        if wait then (
+          Semaphore.Binary.release entered;
+          Semaphore.Binary.acquire released);
+        write ())
+  in
+  let c =
+    Pie.Recording.Coordinator.create ~caps ~persist_path:(persist_in dir)
+      ~persist_io ()
+  in
+  let attempt =
+    match Pie.Recording.Coordinator.try_start c Ptt_transcribe () with
+    | Started attempt -> attempt
+    | _ -> Alcotest.fail "capture admission rejected"
+  in
+  start_in ~sw env ~socket_path c;
+  hold := true;
+  Eio.Fiber.fork ~sw (fun () ->
+      ignore (Pie.Recording.Coordinator.set_phase c attempt Processing);
+      Eio.Promise.resolve settle ());
+  Pie.Fs.blocking (fun () -> Semaphore.Binary.acquire entered);
+  Fun.protect
+    ~finally:(fun () ->
+      Semaphore.Binary.release released;
+      Eio.Promise.await settled)
+    (fun () ->
+      let body = send_status ~sw env socket_path |> Yojson.Safe.from_string in
+      let open Yojson.Safe.Util in
+      Alcotest.(check int)
+        "authoritative processing while persistence waits" 1
+        (body |> member "processing" |> to_int);
+      Alcotest.(check bool)
+        "microphone already released" false
+        (body |> member "active" |> to_bool))
+
+let test_actions_while_state_writer_waits () =
+  with_temp_dir @@ fun dir ->
+  let executed = Atomic.make [] in
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run (fun sw ->
+      let entered = Semaphore.Binary.make false in
+      let released = Semaphore.Binary.make false in
+      let hold = ref false in
+      let submitted = ref 0 in
+      let buffered =
+        Pie.Recording.State_writer.create ~sw
+          ~on_error:(fun exn -> raise exn)
+          ()
+      in
+      let persist_io write =
+        incr submitted;
+        let sequence = !submitted in
+        let wait = !hold in
+        buffered (fun () ->
+            if wait then (
+              Semaphore.Binary.release entered;
+              Semaphore.Binary.acquire released);
+            write ();
+            Atomic.set executed (Atomic.get executed @ [ sequence ]))
+      in
+      let c =
+        Pie.Recording.Coordinator.create ~caps ~persist_path:(persist_in dir)
+          ~persist_io ()
+      in
+      let socket_path = socket_in dir in
+      start_in ~sw env ~socket_path c;
+      hold := true;
+      (match
+         Pie.Recording.Coordinator.try_start_processing c Ptt_transcribe ()
+       with
+      | Started _ -> ()
+      | _ -> Alcotest.fail "processing admission rejected");
+      Pie.Fs.blocking (fun () -> Semaphore.Binary.acquire entered);
+      hold := false;
+      Fun.protect
+        ~finally:(fun () -> Semaphore.Binary.release released)
+        (fun () ->
+          let action method_name =
+            let flow =
+              Eio.Net.connect ~sw (Eio.Stdenv.net env) (`Unix socket_path)
+            in
+            Fun.protect
+              ~finally:(fun () -> Eio.Flow.close flow)
+              (fun () ->
+                Eio.Flow.copy_string
+                  (Printf.sprintf "{\"method\":\"%s\"}\n" method_name)
+                  flow;
+                ignore
+                  (Eio.Buf_read.of_flow ~max_size:65536 flow
+                  |> Eio.Buf_read.line))
+          in
+          action "Pause";
+          Alcotest.(check bool)
+            "pause already authoritative" false
+            (Pie.Recording.Coordinator.snapshot c).enabled;
+          action "Resume";
+          let body =
+            send_status ~sw env socket_path |> Yojson.Safe.from_string
+          in
+          let open Yojson.Safe.Util in
+          Alcotest.(check bool)
+            "resume already authoritative" true
+            (body |> member "enabled" |> to_bool);
+          Alcotest.(check int)
+            "processing retained" 1
+            (body |> member "processing" |> to_int)));
+  Alcotest.(check (list int))
+    "bounded coalescing and shutdown drain" [ 1; 2; 4 ] (Atomic.get executed);
+  let body = In_channel.with_open_text (persist_in dir) In_channel.input_all in
+  let open Yojson.Safe.Util in
+  Alcotest.(check bool)
+    "latest projection persisted" true
+    (Yojson.Safe.from_string body |> member "enabled" |> to_bool)
+
+let test_state_writer_failure_reporting () =
+  Eio_main.run @@ fun _env ->
+  let errors = ref [] in
+  let retried = Atomic.make false in
+  Eio.Switch.run (fun sw ->
+      let failed, resolve_failed = Eio.Promise.create () in
+      let persist =
+        Pie.Recording.State_writer.create ~sw
+          ~on_error:(fun exn ->
+            errors := Printexc.to_string exn :: !errors;
+            Eio.Promise.resolve resolve_failed ())
+          ()
+      in
+      persist (fun () -> ());
+      persist (fun () -> failwith "projection write failed");
+      Eio.Promise.await failed;
+      persist (fun () -> Atomic.set retried true));
+  Alcotest.(check (list string))
+    "write failure surfaced once"
+    [ "Failure(\"projection write failed\")" ]
+    !errors;
+  Alcotest.(check bool)
+    "later projection still drains" true (Atomic.get retried);
+  match
+    Eio.Switch.run (fun sw ->
+        let persist =
+          Pie.Recording.State_writer.create ~sw
+            ~on_error:(fun _ -> Alcotest.fail "startup failure swallowed")
+            ()
+        in
+        persist (fun () -> raise Exit))
+  with
+  | () -> Alcotest.fail "startup failure swallowed"
+  | exception Exit -> ()
+
 let () =
   Alcotest.run "control_socket_ownership"
     [
@@ -517,5 +698,11 @@ let () =
             test_cleanup_continues_after_unlink_failure;
           Alcotest.test_case "cancel before peer deadline" `Quick
             test_cancel_before_peer_deadline;
+          Alcotest.test_case "status while persistence waits" `Quick
+            test_status_while_persistence_waits;
+          Alcotest.test_case "actions while state writer waits" `Quick
+            test_actions_while_state_writer_waits;
+          Alcotest.test_case "state writer failure reporting" `Quick
+            test_state_writer_failure_reporting;
         ] );
     ]

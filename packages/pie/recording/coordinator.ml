@@ -76,7 +76,9 @@ type t = {
     ; Ox_caps.Cap.time
     ; Ox_caps.Cap.stderr >;
   logger : Ox_observability.Logger.t option;
+  persist_io : (unit -> unit) -> unit;
   state : state ref;
+  published : snapshot Atomic.t;
   mutex : Eio.Mutex.t;
   changed : Eio.Condition.t;
   mutable attempts : attempt list;
@@ -159,20 +161,16 @@ let mkdir_p = Fs.mkdir_p
 
 let write_state t =
   let caps = t.caps in
-  let snapshot =
-    snapshot_of_state
-      ~processing:
-        (List.length t.attempts - if !(t.state).mode = None then 0 else 1)
-      !(t.state)
-  in
-  mkdir_p ~caps (Filename.dirname t.persist_path);
-  let oc = Ox_caps.Cap_stdlib.open_out_bin ~caps t.persist_path in
-  Fun.protect
-    ~finally:(fun () -> close_out_noerr oc)
-    (fun () ->
-      output_string oc
-        (Yojson.Safe.pretty_to_string (json_of_snapshot snapshot));
-      output_char oc '\n')
+  let snapshot = Atomic.get t.published in
+  t.persist_io (fun () ->
+      mkdir_p ~caps (Filename.dirname t.persist_path);
+      let oc = Ox_caps.Cap_stdlib.open_out_bin ~caps t.persist_path in
+      Fun.protect
+        ~finally:(fun () -> close_out_noerr oc)
+        (fun () ->
+          output_string oc
+            (Yojson.Safe.pretty_to_string (json_of_snapshot snapshot));
+          output_char oc '\n'))
 
 (* Best-effort persistence used on every state mutation: the in-memory state
    is authoritative, so a transient write failure is logged rather than
@@ -195,7 +193,8 @@ let persist t =
           "failed to write recording state (%s): %s@." t.persist_path
           (Printexc.to_string exn))
 
-let create ~caps ?logger ?persist_path () =
+let create ~caps ?logger ?persist_path ?(persist_io = fun write -> write ()) ()
+    =
   let persist_path =
     Option.value persist_path ~default:(Paths.recording_state_path ~caps)
   in
@@ -207,12 +206,15 @@ let create ~caps ?logger ?persist_path () =
          ; Ox_caps.Cap.stderr >)
   in
   let now = Ox_caps.Cap_unix.gettimeofday ~caps () in
+  let initial = initial_state now in
   let t =
     {
       persist_path;
       caps;
       logger;
-      state = ref (initial_state now);
+      persist_io;
+      state = ref initial;
+      published = Atomic.make (snapshot_of_state ~processing:0 initial);
       mutex = Eio.Mutex.create ();
       changed = Eio.Condition.create ();
       attempts = [];
@@ -226,9 +228,9 @@ let create ~caps ?logger ?persist_path () =
 let processing_count t =
   List.length t.attempts - if !(t.state).mode = None then 0 else 1
 
-let snapshot t =
-  locked t (fun () ->
-      snapshot_of_state ~processing:(processing_count t) !(t.state))
+(* Publication is complete before persistence can yield. Status reads this
+   immutable in-memory view, never the mutation/persistence lock or disk. *)
+let snapshot t = Atomic.get t.published
 
 (* The admitted attempt owns its FIFO position through delivery and settlement. *)
 let await_delivery t attempt =
@@ -243,12 +245,14 @@ let await_delivery t attempt =
       in
       wait ())
 
-let is_active t = locked t (fun () -> !(t.state).mode <> None)
+let is_active t = (snapshot t).active
 
 let mutate_unlocked t f =
   let result, next = f !(t.state) in
   if next != !(t.state) then (
     t.state := next;
+    Atomic.set t.published
+      (snapshot_of_state ~processing:(processing_count t) next);
     persist t);
   result
 

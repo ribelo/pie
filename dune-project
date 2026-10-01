@@ -19,6 +19,7 @@
   ox_ai_openrouter
   ox_ai_realtime
   ox_app
+  ox_blocking
   ox_http
   ox_ipc
   ox_json
