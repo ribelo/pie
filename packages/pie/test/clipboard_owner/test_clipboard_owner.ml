@@ -316,13 +316,17 @@ let setup_paste_path dir ~wtype_body =
   ignore (write_exec dir "wtype" wtype_body);
   (inspected, stdin_path, wtype_args, alive, copy)
 
-let run_configured_inject ~dir ~copy env sw text =
+let run_configured_inject ?read_selection ?clock ~dir ~copy env sw text =
   let owner =
     Pie.Wayland.Clipboard.create ~caps ~sw
       ~process_mgr:(Eio.Stdenv.process_mgr env)
       ~copy_program:copy ()
   in
-  Pie.Input.Text_injection.inject ~caps ~clock:(Eio.Stdenv.clock env)
+  let read_selection =
+    Option.value read_selection ~default:(fun () -> Some text)
+  in
+  let clock = Option.value clock ~default:(Eio.Stdenv.clock env) in
+  Pie.Input.Text_injection.inject ~caps ~clock ~read_selection
     ~clipboard_owner:owner ~text_entry_rules:paste_rules
     ~target_window:
       (Some
@@ -403,16 +407,7 @@ let test_inject_paste_key_fail_retains_helper () =
         (child_count () - kids_before <= 2)
   | Error _ -> Alcotest.fail "unexpected error shape"
 
-let test_paste_handoff_delay ~cancel () =
-  with_temp_dir @@ fun dir ->
-  let released = Filename.concat dir "handoff-released" in
-  let keys = Filename.concat dir "handoff-keys" in
-  let inspected, _, _, alive, copy =
-    setup_paste_path dir
-      ~wtype_body:
-        ("test -f " ^ Filename.quote released ^ " || exit 42\n"
-       ^ "printf key > " ^ Filename.quote keys ^ "\n")
-  in
+let with_wayland dir f =
   let old_path = Option.value ~default:"" (Sys.getenv_opt "PATH") in
   with_env
     [
@@ -422,17 +417,11 @@ let test_paste_handoff_delay ~cancel () =
       ("XDG_CURRENT_DESKTOP", "niri");
       ("NIRI_SOCKET", Filename.concat dir "niri.sock");
     ]
-  @@ fun () ->
-  Pie_test_runtime.run @@ fun env ->
-  Eio.Switch.run @@ fun sw ->
-  let clock = Eio.Stdenv.clock env in
-  let owner =
-    Pie.Wayland.Clipboard.create ~caps ~sw
-      ~process_mgr:(Eio.Stdenv.process_mgr env)
-      ~copy_program:copy ()
-  in
-  let waited = ref [] in
+    f
+
+let instant_clock () =
   let virtual_now = ref 0. in
+  let sleeps = ref [] in
   let module Clock = struct
     type t = unit
     type time = float
@@ -440,23 +429,294 @@ let test_paste_handoff_delay ~cancel () =
     let now () = !virtual_now
 
     let sleep_until () target =
-      let ms = int_of_float (Float.round ((target -. !virtual_now) *. 1000.)) in
-      waited := ms :: !waited;
-      Alcotest.(check bool)
-        "no key before handoff wait" false (Sys.file_exists keys);
-      Eio.Time.with_timeout_exn clock 1.0 (fun () ->
-          while not (Sys.file_exists alive) do
-            Eio.Time.sleep clock 0.001
-          done);
-      if cancel then Eio.Fiber.await_cancel ();
-      virtual_now := target;
-      Out_channel.with_open_bin released (fun out ->
-          output_string out "released")
+      sleeps := (target -. !virtual_now) :: !sleeps;
+      virtual_now := target
   end in
-  let fake_clock = Eio.Resource.T ((), Eio.Time.Pi.clock (module Clock)) in
-  let run () =
-    Pie.Input.Text_injection.inject ~caps ~clock:fake_clock
+  (Eio.Resource.T ((), Eio.Time.Pi.clock (module Clock)), sleeps)
+
+let report_outcome outcome =
+  let notices = ref [] in
+  let delivery =
+    Pie.Assistant.Service.report_delivery ~target_window:None outcome
+      ~notify:(fun title message -> notices := (title, message) :: !notices)
+  in
+  (delivery, List.rev !notices)
+
+let test_confirmed_selection_pastes () =
+  with_temp_dir @@ fun dir ->
+  let wtype_args = Filename.concat dir "wtype-args" in
+  let inspected, stdin_path, _, alive, copy =
+    setup_paste_path dir
+      ~wtype_body:("printf '%s\n' \"$*\" >> " ^ Filename.quote wtype_args ^ "\n")
+  in
+  with_wayland dir @@ fun () ->
+  Pie_test_runtime.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let polls = ref 0 in
+  let read () =
+    incr polls;
+    Some "offered-text"
+  in
+  match
+    run_configured_inject ~read_selection:read ~dir ~copy env sw "offered-text"
+  with
+  | Error _ -> Alcotest.fail "confirmed selection did not paste"
+  | Ok result ->
+      Eio.Time.sleep (Eio.Stdenv.clock env) 0.1;
+      Alcotest.(check int) "one read" 1 !polls;
+      Alcotest.(check bool)
+        "offer did not inspect" false
+        (Sys.file_exists inspected);
+      Alcotest.(check string)
+        "text left with the helper" "offered-text"
+        (In_channel.with_open_text stdin_path In_channel.input_all);
+      Alcotest.(check string)
+        "one ctrl-v" "-M ctrl -k v -m ctrl\n"
+        (In_channel.with_open_text wtype_args In_channel.input_all);
+      Alcotest.(check bool)
+        "paste key attempted" true
+        (result.outcome = Pie.Input.Text_injection.Clipboard_key_attempted);
+      Alcotest.(check bool) "helper retained" true (Sys.file_exists alive);
+      let delivery, notices = report_outcome result.outcome in
+      Alcotest.(check bool) "history pasted" true (delivery = Pie.History.Pasted);
+      Alcotest.(check (list (pair string string)))
+        "no clipboard notification" [] notices
+
+let test_unconfirmed_selection_stays_on_clipboard () =
+  with_temp_dir @@ fun dir ->
+  let wtype_args = Filename.concat dir "wtype-args" in
+  let inspected, stdin_path, _, alive, copy =
+    setup_paste_path dir
+      ~wtype_body:("printf key > " ^ Filename.quote wtype_args ^ "\n")
+  in
+  with_wayland dir @@ fun () ->
+  Pie_test_runtime.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let clock, sleeps = instant_clock () in
+  let polls = ref 0 in
+  let read () =
+    incr polls;
+    None
+  in
+  match
+    run_configured_inject ~read_selection:read ~clock ~dir ~copy env sw
+      "offered-text"
+  with
+  | Error _ -> Alcotest.fail "unconfirmed selection was reported as a failure"
+  | Ok result ->
+      Eio.Time.sleep (Eio.Stdenv.clock env) 0.1;
+      let slept = List.rev !sleeps in
+      let total = List.fold_left ( +. ) 0. slept in
+      Alcotest.(check bool) "polled through the bound" true (!polls > 1);
+      Alcotest.(check bool)
+        "poll interval is 20ms" true
+        (List.for_all (fun delay -> delay > 0. && delay <= 0.0200001) slept);
+      Alcotest.(check (float 0.001)) "bounded by 1000ms" 1.0 total;
+      Alcotest.(check bool) "no paste key" false (Sys.file_exists wtype_args);
+      Alcotest.(check bool)
+        "offer did not inspect" false
+        (Sys.file_exists inspected);
+      Alcotest.(check string)
+        "text left in the clipboard" "offered-text"
+        (In_channel.with_open_text stdin_path In_channel.input_all);
+      Alcotest.(check bool) "helper retained" true (Sys.file_exists alive);
+      Alcotest.(check bool)
+        "clipboard outcome" true
+        (result.outcome = Pie.Input.Text_injection.Clipboard_only);
+      let delivery, notices = report_outcome result.outcome in
+      Alcotest.(check bool)
+        "history delivery is clipboard" true
+        (delivery = Pie.History.Clipboard);
+      Alcotest.(check (list (pair string string)))
+        "clipboard notification"
+        [ ("Pie", "Pie: text for the original window is in the clipboard") ]
+        notices
+
+let test_selection_confirmed_after_polls_pastes () =
+  with_temp_dir @@ fun dir ->
+  let confirmed = Filename.concat dir "confirmed" in
+  let wtype_args = Filename.concat dir "wtype-args" in
+  let q = Filename.quote in
+  let _, stdin_path, _, _, copy =
+    setup_paste_path dir
+      ~wtype_body:
+        ("test -f " ^ q confirmed ^ " || exit 42\nprintf '%s\n' \"$*\" >> "
+       ^ q wtype_args ^ "\n")
+  in
+  with_wayland dir @@ fun () ->
+  Pie_test_runtime.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let clock, sleeps = instant_clock () in
+  let polls = ref 0 in
+  let read () =
+    incr polls;
+    if !polls >= 3 then (
+      Out_channel.with_open_bin confirmed (fun oc -> output_string oc "ok");
+      Some "offered-text")
+    else Some "previous selection"
+  in
+  match
+    run_configured_inject ~read_selection:read ~clock ~dir ~copy env sw
+      "offered-text"
+  with
+  | Error _ -> Alcotest.fail "late confirmation did not paste"
+  | Ok result ->
+      Eio.Time.sleep (Eio.Stdenv.clock env) 0.1;
+      Alcotest.(check int) "confirmed on the third read" 3 !polls;
+      Alcotest.(check int) "two intervals" 2 (List.length !sleeps);
+      List.iter
+        (fun delay -> Alcotest.(check (float 0.001)) "20ms poll" 0.020 delay)
+        !sleeps;
+      Alcotest.(check string)
+        "offered text" "offered-text"
+        (In_channel.with_open_text stdin_path In_channel.input_all);
+      Alcotest.(check string)
+        "one ctrl-v after confirmation" "-M ctrl -k v -m ctrl\n"
+        (In_channel.with_open_text wtype_args In_channel.input_all);
+      Alcotest.(check bool)
+        "paste key attempted" true
+        (result.outcome = Pie.Input.Text_injection.Clipboard_key_attempted)
+
+let long_selection () = String.make 200_000 'q' ^ "zażółć-end"
+
+let test_long_text_must_match_exactly () =
+  let text = long_selection () in
+  let mismatch = String.sub text 0 (String.length text - 1) ^ "X" in
+  with_temp_dir @@ fun dir ->
+  let wtype_args = Filename.concat dir "wtype-args" in
+  let _, stdin_path, _, _, copy =
+    setup_paste_path dir
+      ~wtype_body:("printf '%s\n' \"$*\" >> " ^ Filename.quote wtype_args ^ "\n")
+  in
+  with_wayland dir @@ fun () ->
+  Pie_test_runtime.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  (match
+     run_configured_inject
+       ~read_selection:(fun () -> Some text)
+       ~dir ~copy env sw text
+   with
+  | Error _ -> Alcotest.fail "exact long selection did not paste"
+  | Ok result ->
+      Alcotest.(check bool)
+        "long match pastes" true
+        (result.outcome = Pie.Input.Text_injection.Clipboard_key_attempted);
+      Alcotest.(check string)
+        "full text offered" text
+        (In_channel.with_open_text stdin_path In_channel.input_all));
+  let clock, _sleeps = instant_clock () in
+  let polls = ref 0 in
+  match
+    run_configured_inject ~clock
+      ~read_selection:(fun () ->
+        incr polls;
+        Some mismatch)
+      ~dir ~copy env sw text
+  with
+  | Error _ -> Alcotest.fail "near-miss long selection failed the offer"
+  | Ok result ->
+      Alcotest.(check bool) "near-miss was polled" true (!polls > 1);
+      Alcotest.(check bool)
+        "one-byte difference does not paste" false
+        (result.outcome = Pie.Input.Text_injection.Clipboard_key_attempted);
+      Alcotest.(check bool)
+        "clipboard outcome" true
+        (result.outcome = Pie.Input.Text_injection.Clipboard_only)
+
+let test_production_wl_paste_confirms_before_key () =
+  with_temp_dir @@ fun dir ->
+  let text = long_selection () in
+  let q = Filename.quote in
+  let selection = Filename.concat dir "selection" in
+  let paste_args = Filename.concat dir "paste-args" in
+  let stdin_path = Filename.concat dir "stdin" in
+  let wtype_args = Filename.concat dir "wtype-args" in
+  Out_channel.with_open_bin selection (fun oc -> output_string oc text);
+  ignore
+    (write_exec dir "wl-paste"
+       ("printf '%s\n' \"$@\" >> " ^ q paste_args ^ "\ncat " ^ q selection
+      ^ "\n"));
+  ignore
+    (write_exec dir "niri"
+       "printf '%s\n' '{\"id\":1,\"title\":\"t\",\"app_id\":\"app\"}'\n");
+  let copy =
+    write_exec dir "wl-copy"
+      ("cat > " ^ q stdin_path ^ "\nwhile :; do sleep 0.05; done\n")
+  in
+  ignore
+    (write_exec dir "wtype"
+       ("test -s " ^ q paste_args ^ " || exit 42\nprintf '%s\n' \"$*\" >> "
+      ^ q wtype_args ^ "\n"));
+  with_wayland dir @@ fun () ->
+  Pie_test_runtime.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let owner =
+    Pie.Wayland.Clipboard.create ~caps ~sw
+      ~process_mgr:(Eio.Stdenv.process_mgr env)
+      ~copy_program:copy ()
+  in
+  match
+    Pie.Input.Text_injection.inject ~caps ~clock:(Eio.Stdenv.clock env)
       ~clipboard_owner:owner ~text_entry_rules:paste_rules
+      ~target_window:
+        (Some
+           {
+             Pie.Niri.id = 1;
+             title = Some "t";
+             app_id = Some "app";
+             pid = None;
+             workspace_id = None;
+           })
+      ~process_mgr:(Eio.Stdenv.process_mgr env)
+      text
+  with
+  | Error _ -> Alcotest.fail "production wl-paste confirmation did not paste"
+  | Ok result ->
+      Alcotest.(check string)
+        "wl-paste arguments" "--no-newline\n--type\ntext/plain;charset=utf-8\n"
+        (In_channel.with_open_text paste_args In_channel.input_all);
+      Alcotest.(check string)
+        "full text offered" text
+        (In_channel.with_open_bin stdin_path In_channel.input_all);
+      Alcotest.(check string)
+        "one ctrl-v after wl-paste" "-M ctrl -k v -m ctrl\n"
+        (In_channel.with_open_text wtype_args In_channel.input_all);
+      Alcotest.(check bool)
+        "paste key attempted" true
+        (result.outcome = Pie.Input.Text_injection.Clipboard_key_attempted)
+
+let test_cancelled_confirmation_never_pastes () =
+  with_temp_dir @@ fun dir ->
+  let keys = Filename.concat dir "keys" in
+  let q = Filename.quote in
+  let copy =
+    write_exec dir "wl-copy" "cat > /dev/null\nwhile :; do sleep 0.05; done\n"
+  in
+  ignore
+    (write_exec dir "niri"
+       "printf '%s\n' '{\"id\":1,\"title\":\"t\",\"app_id\":\"app\"}'\n");
+  ignore (write_exec dir "wtype" ("printf key > " ^ q keys ^ "\n"));
+  with_wayland dir @@ fun () ->
+  Pie_test_runtime.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let real = Eio.Stdenv.clock env in
+  let module Clock = struct
+    type t = unit
+    type time = float
+
+    let now () = 0.
+    let sleep_until () _target = Eio.Fiber.await_cancel ()
+  end in
+  let fake = Eio.Resource.T ((), Eio.Time.Pi.clock (module Clock)) in
+  let owner =
+    Pie.Wayland.Clipboard.create ~caps ~sw
+      ~process_mgr:(Eio.Stdenv.process_mgr env)
+      ~copy_program:copy ()
+  in
+  let run () =
+    Pie.Input.Text_injection.inject ~caps ~clock:fake ~clipboard_owner:owner
+      ~read_selection:(fun () -> None)
+      ~text_entry_rules:paste_rules
       ~target_window:
         (Some
            {
@@ -469,25 +729,11 @@ let test_paste_handoff_delay ~cancel () =
       ~process_mgr:(Eio.Stdenv.process_mgr env)
       "offered-text"
   in
-  if cancel then (
-    (match Eio.Time.with_timeout_exn clock 0.1 run with
-    | exception Eio.Time.Timeout -> ()
-    | _ -> Alcotest.fail "handoff wait should be cancelled");
-    Alcotest.(check bool)
-      "cancel never sends paste key" false (Sys.file_exists keys))
-  else (
-    (match run () with
-    | Ok result ->
-        Alcotest.(check bool)
-          "receipt still unconfirmed" true
-          (result.outcome = Pie.Input.Text_injection.Clipboard_key_attempted)
-    | Error _ -> Alcotest.fail "paste key ran without the handoff interval");
-    Alcotest.(check bool) "key sent after interval" true (Sys.file_exists keys));
-  Alcotest.(check (list int))
-    "one 25ms handoff interval" [ 25 ] (List.rev !waited);
+  (match Eio.Time.with_timeout_exn real 0.1 run with
+  | exception Eio.Time.Timeout -> ()
+  | _ -> Alcotest.fail "confirmation wait should be cancelled");
   Alcotest.(check bool)
-    "no clipboard inspection" false
-    (Sys.file_exists inspected)
+    "cancel never sends paste key" false (Sys.file_exists keys)
 
 let blocking_payload () =
   let max_pipe =
@@ -634,9 +880,17 @@ let () =
               test_inject_paste_key_success "application/octet-stream");
           Alcotest.test_case "inject key fail retains helper" `Quick
             test_inject_paste_key_fail_retains_helper;
-          Alcotest.test_case "paste waits before key dispatch" `Quick
-            (test_paste_handoff_delay ~cancel:false);
-          Alcotest.test_case "cancelled handoff never sends paste" `Quick
-            (test_paste_handoff_delay ~cancel:true);
+          Alcotest.test_case "confirmed selection pastes" `Quick
+            test_confirmed_selection_pastes;
+          Alcotest.test_case "unconfirmed selection stays on the clipboard"
+            `Quick test_unconfirmed_selection_stays_on_clipboard;
+          Alcotest.test_case "selection confirmed after polls pastes" `Quick
+            test_selection_confirmed_after_polls_pastes;
+          Alcotest.test_case "long selection must match exactly" `Quick
+            test_long_text_must_match_exactly;
+          Alcotest.test_case "wl-paste confirms before the paste key" `Quick
+            test_production_wl_paste_confirms_before_key;
+          Alcotest.test_case "cancelled confirmation never sends paste" `Quick
+            test_cancelled_confirmation_never_pastes;
         ] );
     ]

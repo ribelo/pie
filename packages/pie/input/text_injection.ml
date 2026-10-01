@@ -139,9 +139,10 @@ type injection_error =
   | `Xdotool_error of string ]
 
 (* The clipboard is the destination unless the key-press window is still
-   focused. This seam deliberately cannot focus a window or type characters. *)
-let deliver ~copy ~paste ~newline ~focused_window ~target_window ~newline_rules
-    text =
+   focused and the offered text is the selection. This seam deliberately
+   cannot focus a window or type characters. *)
+let deliver ~copy ~paste ?(confirm = fun _ -> true) ~newline ~focused_window
+    ~target_window ~newline_rules text =
   let open Result.Syntax in
   let text = normalize_text text in
   if text = "" then
@@ -163,38 +164,80 @@ let deliver ~copy ~paste ~newline ~focused_window ~target_window ~newline_rules
       let action = newline_action_for_window newline_rules target_window in
       let prepared = prepare_text ~method_:Paste ~newline_action:action text in
       let* () = copy prepared in
+      let paste_if_confirmed offered =
+        if not (confirm offered) then Ok `Unconfirmed
+        else
+          let* () = paste () in
+          Ok `Pasted
+      in
       let paste_segment segment =
-        if segment = "" then Ok ()
+        if segment = "" then Ok `Pasted
         else
           let* () = copy segment in
-          paste ()
+          paste_if_confirmed segment
       in
       let rec paste_lines = function
-        | [] -> Ok ()
+        | [] -> Ok `Pasted
         | [ segment ] -> paste_segment segment
-        | segment :: rest ->
-            let* () = paste_segment segment in
-            let* () = newline action in
-            paste_lines rest
+        | segment :: rest -> (
+            let* step = paste_segment segment in
+            match step with
+            | `Unconfirmed -> Ok `Unconfirmed
+            | `Pasted ->
+                let* () = newline action in
+                paste_lines rest)
       in
       let injected =
         match action with
-        | Collapse_to_space -> paste ()
+        | Collapse_to_space -> paste_if_confirmed prepared
         | Shift_enter | Ctrl_j -> paste_lines (split_line_breaks prepared)
       in
       (* Segment pastes temporarily change the clipboard. Restore the complete
-         delivery even when a segment paste or newline key fails. *)
+         delivery even when a segment paste, confirmation, or newline fails. *)
       let restored =
         match action with
         | Collapse_to_space -> Ok ()
         | Shift_enter | Ctrl_j -> copy prepared
       in
-      let* () = injected in
+      let* step = injected in
       let* () = restored in
-      Ok (prepared, Clipboard_key_attempted)
+      match step with
+      | `Pasted -> Ok (prepared, Clipboard_key_attempted)
+      | `Unconfirmed -> Ok (prepared, Clipboard_only)
+
+(* wl-copy publishes the selection only after stdin EOF and a compositor
+   round-trip. Poll until the selection is exactly [text]. *)
+let selection_poll_interval = 0.020
+let selection_confirm_bound = 1.0
+
+let await_selection ~clock ~read text =
+  let deadline = Eio.Time.now clock +. selection_confirm_bound in
+  let rec loop () =
+    if Eio.Time.now clock >= deadline then false
+    else
+      match read () with
+      | Some got when String.equal got text -> true
+      | Some _ | None ->
+          let before = Eio.Time.now clock in
+          let remaining = deadline -. before in
+          if remaining <= 0. then false
+          else (
+            Eio.Time.sleep clock (min selection_poll_interval remaining);
+            (* A clock that does not advance must not spin. *)
+            if Eio.Time.now clock <= before then false else loop ())
+  in
+  loop ()
+
+let read_wl_paste ~process_mgr prog () =
+  match
+    Sh.run_capture ~process_mgr ~prog
+      ~args:[ "--no-newline"; "--type"; "text/plain;charset=utf-8" ]
+  with
+  | Ok text -> Some text
+  | Error _ -> None
 
 let inject ~caps ?clipboard_owner ?(newline_rules = []) ?(text_entry_rules = [])
-    ?(target_window = None) ~clock ~process_mgr text =
+    ?(target_window = None) ?read_selection ~clock ~process_mgr text =
   let open Result.Syntax in
   let detected = detect_session ~caps () in
   let session =
@@ -212,10 +255,18 @@ let inject ~caps ?clipboard_owner ?(newline_rules = []) ?(text_entry_rules = [])
   let target_window =
     match detected with Ok Wayland -> target_window | Ok X11 | Error _ -> None
   in
+  let confirm offered =
+    match read_selection with
+    | Some read -> await_selection ~clock ~read offered
+    | None -> (
+        match Sh.find_executable ~caps "wl-paste" with
+        | None -> false
+        | Some prog ->
+            await_selection ~clock
+              ~read:(read_wl_paste ~process_mgr prog)
+              offered)
+  in
   let paste () =
-    (* stdin EOF is not a Wayland publication acknowledgement. Preserve the
-       existing helper-to-key grace interval, not a receipt guarantee. *)
-    Eio.Time.sleep clock 0.025;
     (Wayland.Wtype.key ~caps ~process_mgr ~modifiers:[ "ctrl" ] "v"
       :> (unit, injection_error) Stdlib.result)
   in
@@ -224,8 +275,8 @@ let inject ~caps ?clipboard_owner ?(newline_rules = []) ?(text_entry_rules = [])
       :> (unit, injection_error) Stdlib.result)
   in
   let* prepared, outcome =
-    deliver ~copy ~paste ~newline ~focused_window ~target_window ~newline_rules
-      text
+    deliver ~copy ~paste ~confirm ~newline ~focused_window ~target_window
+      ~newline_rules text
   in
   let method_ = entry_method_for_window text_entry_rules target_window in
   Ok { session_type = session; backend; method_; text = prepared; outcome }

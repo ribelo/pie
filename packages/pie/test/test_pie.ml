@@ -3022,6 +3022,7 @@ printf '%s\n' '{"id":1,"title":"t","app_id":"app"}'
                  pid = None;
                  workspace_id = None;
                })
+          ~read_selection:(fun () -> Some "first second")
           ~clock:(Eio.Stdenv.clock env) ~text_entry_rules:paste_rules
           ~process_mgr:(Eio.Stdenv.process_mgr env)
           "first\nsecond"

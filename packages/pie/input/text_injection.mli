@@ -6,7 +6,8 @@ type outcome =
   | Clipboard_only
   | Clipboard_key_attempted
       (** Clipboard-only is a successful delivery with no keystroke. A paste key
-          is best-effort dispatch, not a compositor or application receipt. *)
+          is sent only after the offered text is the selection; the key itself
+          is not an application receipt. *)
 
 type result = {
   session_type : session_type;
@@ -63,6 +64,7 @@ type injection_error =
 val deliver :
   copy:(string -> (unit, injection_error) Stdlib.result) ->
   paste:(unit -> (unit, injection_error) Stdlib.result) ->
+  ?confirm:(string -> bool) ->
   newline:(newline_action -> (unit, injection_error) Stdlib.result) ->
   focused_window:
     (unit -> (Niri.window_info option, [ `Niri_error of string ]) Stdlib.result) ->
@@ -71,7 +73,8 @@ val deliver :
   string ->
   (string * outcome, injection_error) Stdlib.result
 (** Effect seam for target-window delivery. Every paste follows a clipboard
-    offer. A missing target or focus lookup failure copies only. *)
+    offer. A missing target, a focus lookup failure, or [confirm] returning
+    false copies only and sends no paste key. [confirm] defaults to success. *)
 
 val inject :
   caps:< Ox_caps.Cap.env ; .. > ->
@@ -79,6 +82,7 @@ val inject :
   ?newline_rules:newline_rule list ->
   ?text_entry_rules:text_entry_rule list ->
   ?target_window:Niri.window_info option ->
+  ?read_selection:(unit -> string option) ->
   clock:_ Eio.Time.clock ->
   process_mgr:_ Eio.Process.mgr ->
   string ->
@@ -90,3 +94,8 @@ val inject :
      as
      'err) )
   Stdlib.result
+(** [read_selection] is one clipboard read. Omitted, it runs
+    [wl-paste --no-newline --type text/plain;charset=utf-8]. A paste key is sent
+    only after a read returns exactly the offered text, polling every 20 ms for
+    at most 1000 ms. Otherwise the offer stays on the clipboard and the outcome
+    is [Clipboard_only]. *)
