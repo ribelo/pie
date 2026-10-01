@@ -1877,7 +1877,7 @@ let test_two_pass_retry kind () =
                   paths = [];
                   warnings = [];
                 },
-                None ));
+                Some { Pie.History.id = Some 42; app_id = Some "mpv"; title = None } ));
           pass1 =
             (fun config binding glossary _ ->
               incr source_n;
@@ -1920,7 +1920,9 @@ let test_two_pass_retry kind () =
         }
       in
       let stt _ _ _ = Alcotest.fail "two-pass must not use legacy provider" in
-      let deliver _ _ _target text =
+      let deliver _ _ target text =
+        if !delivery_n > 0 || kind = "provider" then
+          Alcotest.(check bool) "retry has no key-press window" true (target = None);
         incr delivery_n;
         delivered := text :: !delivered;
         if kind = "delivery" && !delivery_n = 1 then

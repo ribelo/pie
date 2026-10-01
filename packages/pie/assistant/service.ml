@@ -1942,6 +1942,8 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
       result
     in
     let retry_loop () =
+      (* Recovery has no key-press target. Never paste into retry-time focus. *)
+      let deliver config mode _window text = deliver config mode None text in
       let rec loop () =
         let job, attempt = Eio.Stream.take retries in
         let config = !current in
