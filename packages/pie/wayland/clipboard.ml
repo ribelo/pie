@@ -81,16 +81,14 @@ let spawn t text =
             in
             let discard_out = Sh.discarded_stderr () in
             let discard_err = Sh.discarded_stderr () in
+            (* No [--type]: a lone text/plain;charset=utf-8 offer is not a Paste
+               target for Wayland Chrome. wl-copy's text default also offers
+               text/plain, TEXT, STRING and UTF8_STRING. *)
             let process =
               Eio.Process.spawn ~sw:helper_sw process_mgr ~stdin:stdin_source
                 ~stdout:discard_out ~stderr:discard_err
                 ~executable:t.copy_program
-                [
-                  t.copy_program;
-                  "--foreground";
-                  "--type";
-                  "text/plain;charset=utf-8";
-                ]
+                [ t.copy_program; "--foreground" ]
             in
             Eio.Flow.close stdin_source;
             match
@@ -127,7 +125,6 @@ let spawn t text =
 
 let offer_sync t text =
   with_slot t @@ fun () ->
-  retire_current t;
   let helper = spawn t text in
   let committed = ref false in
   try
@@ -136,12 +133,17 @@ let offer_sync t text =
         if not !committed then kill_await helper);
     match Eio.Promise.await helper.ready with
     | Error message -> raise (Clipboard_failure message)
-    | Ok pid ->
+    | Ok pid -> (
         if pid = 0 then raise (Clipboard_failure "clipboard helper failed");
+        (* Retire the previous source only after this helper is ready, and not
+           via [retire_current]: [current] already names the new helper. *)
+        let previous = !(t.current) in
         t.current := Some { helper with pid };
-        committed := true
+        committed := true;
+        match previous with None -> () | Some old -> kill_await old)
   with
   | Clipboard_failure _ as exn -> raise exn
+  | exn when !committed -> raise exn
   | exn -> (
       match
         try

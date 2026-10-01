@@ -3033,8 +3033,7 @@ printf '%s\n' '{"id":1,"title":"t","app_id":"app"}'
                (Filename.concat base "copy-stdin")
                In_channel.input_all);
           Alcotest.(check string)
-            "foreground offer of plain text"
-            "--foreground --type text/plain;charset=utf-8\n"
+            "foreground offer without a single MIME type" "--foreground\n"
             (In_channel.with_open_bin
                (Filename.concat base "copy-args")
                In_channel.input_all);

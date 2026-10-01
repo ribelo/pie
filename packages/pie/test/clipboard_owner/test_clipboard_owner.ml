@@ -238,8 +238,8 @@ let test_settled_before_replacement () =
   let fds = fd_count () in
   (match offer "b" with Ok () -> () | Error _ -> Alcotest.fail "second offer");
   Alcotest.(check int)
-    "children settled before next helper" kids (child_count ());
-  Alcotest.(check int) "fds settled before next helper" fds (fd_count ())
+    "children settled when replacement returns" kids (child_count ());
+  Alcotest.(check int) "fds settled when replacement returns" fds (fd_count ())
 
 let test_natural_exit_releases_pipes () =
   with_temp_dir @@ fun dir ->
@@ -489,6 +489,108 @@ let test_paste_handoff_delay ~cancel () =
     "no clipboard inspection" false
     (Sys.file_exists inspected)
 
+let blocking_payload () =
+  let max_pipe =
+    match
+      In_channel.with_open_text "/proc/sys/fs/pipe-max-size"
+        In_channel.input_all
+    with
+    | contents -> int_of_string (String.trim contents)
+    | (exception Sys_error _) | (exception Failure _) | (exception End_of_file)
+      ->
+        1024 * 1024
+  in
+  String.make (max_pipe + 1) 'x'
+
+let pid_alive pid =
+  match Unix.kill pid 0 with () -> true | exception Unix.Unix_error _ -> false
+
+let read_pid path =
+  int_of_string
+    (String.trim (In_channel.with_open_text path In_channel.input_all))
+
+let test_default_mime_and_ready_before_retire () =
+  with_temp_dir @@ fun dir ->
+  let args_path = Filename.concat dir "args" in
+  let pid_path = Filename.concat dir "owner.pid" in
+  let pred_path = Filename.concat dir "predecessor" in
+  let q = Filename.quote in
+  (* Record the previous pid before reading stdin. The payload is larger than
+     the pipe, so [offer] cannot observe readiness — and therefore cannot
+     retire the previous helper — until this read starts. *)
+  let copy =
+    write_exec dir "wl-copy"
+      ("printf '%s\n' \"$*\" >> " ^ q args_path ^ "\n" ^ "if [ -f " ^ q pid_path
+     ^ " ]; then\n" ^ "  pred=$(cat " ^ q pid_path ^ ")\n"
+     ^ "  if kill -0 \"$pred\" 2>/dev/null; then\n"
+     ^ "    printf '%s\n' alive > " ^ q pred_path ^ "\n" ^ "  else\n"
+     ^ "    printf '%s\n' dead > " ^ q pred_path ^ "\n" ^ "  fi\n" ^ "fi\n"
+     ^ "printf '%s\n' \"$$\" > " ^ q pid_path ^ "\n" ^ "cat > /dev/null\n"
+     ^ "while :; do sleep 0.05; done\n")
+  in
+  let payload = blocking_payload () in
+  Pie_test_runtime.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let owner =
+    Pie.Wayland.Clipboard.create ~caps ~sw
+      ~process_mgr:(Eio.Stdenv.process_mgr env)
+      ~copy_program:copy ()
+  in
+  (match Pie.Wayland.Clipboard.offer owner payload with
+  | Ok () -> ()
+  | Error (`Clipboard_error msg) -> Alcotest.failf "first offer failed: %s" msg);
+  let first_pid = read_pid pid_path in
+  Alcotest.(check bool) "first helper alive" true (pid_alive first_pid);
+  (match Pie.Wayland.Clipboard.offer owner payload with
+  | Ok () -> ()
+  | Error (`Clipboard_error msg) ->
+      Alcotest.failf "replacement offer failed: %s" msg);
+  Alcotest.(check string)
+    "wl-copy arguments are --foreground only" "--foreground\n--foreground\n"
+    (In_channel.with_open_text args_path In_channel.input_all);
+  Alcotest.(check string)
+    "previous source still alive when the new helper is ready" "alive\n"
+    (In_channel.with_open_text pred_path In_channel.input_all);
+  Alcotest.(check bool)
+    "previous source retired after the new helper was ready" false
+    (pid_alive first_pid);
+  let second_pid = read_pid pid_path in
+  Alcotest.(check bool)
+    "replacement helper is a new pid" true (second_pid <> first_pid);
+  Alcotest.(check bool)
+    "replacement helper still owns the offer" true (pid_alive second_pid)
+
+let test_failed_replacement_keeps_previous_source () =
+  with_temp_dir @@ fun dir ->
+  let pid_path = Filename.concat dir "owner.pid" in
+  let started = Filename.concat dir "started" in
+  let q = Filename.quote in
+  let copy =
+    write_exec dir "wl-copy"
+      ("if [ -f " ^ q started ^ " ]; then\n" ^ "  exit 1\n" ^ "fi\n" ^ "touch "
+     ^ q started ^ "\n" ^ "printf '%s\n' \"$$\" > " ^ q pid_path ^ "\n"
+     ^ "cat > /dev/null\n" ^ "while :; do sleep 0.05; done\n")
+  in
+  let payload = blocking_payload () in
+  Pie_test_runtime.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let owner =
+    Pie.Wayland.Clipboard.create ~caps ~sw
+      ~process_mgr:(Eio.Stdenv.process_mgr env)
+      ~copy_program:copy ()
+  in
+  (match Pie.Wayland.Clipboard.offer owner payload with
+  | Ok () -> ()
+  | Error (`Clipboard_error msg) -> Alcotest.failf "first offer failed: %s" msg);
+  let first_pid = read_pid pid_path in
+  match Pie.Wayland.Clipboard.offer owner payload with
+  | Ok () -> Alcotest.fail "replacement that exits before reading succeeded"
+  | Error (`Clipboard_error _) ->
+      Alcotest.(check bool)
+        "failed replacement leaves the previous source" true
+        (pid_alive first_pid);
+      Alcotest.(check int) "owner pid unchanged" first_pid (read_pid pid_path)
+
 let () =
   Alcotest.run "clipboard_owner"
     [
@@ -512,8 +614,12 @@ let () =
           Alcotest.test_case "100 offers bounded fds" `Quick
             test_repeated_offers_bounded;
           Alcotest.test_case "app shutdown settles" `Quick test_shutdown_settles;
-          Alcotest.test_case "settled before replacement" `Quick
+          Alcotest.test_case "replacement settles the previous helper" `Quick
             test_settled_before_replacement;
+          Alcotest.test_case "default text types, ready before retire" `Quick
+            test_default_mime_and_ready_before_retire;
+          Alcotest.test_case "failed replacement keeps previous source" `Quick
+            test_failed_replacement_keeps_previous_source;
           Alcotest.test_case "natural exit releases pipes" `Quick
             test_natural_exit_releases_pipes;
           Alcotest.test_case "large stdout discarded" `Quick
