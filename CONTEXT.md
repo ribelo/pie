@@ -59,7 +59,7 @@ The current utterance is accepting microphone audio. A stop request begins a sho
 Capture has ended and the assistant is obtaining the transcription or translation. The microphone recording indicator is off.
 
 **Delivery**:
-The assistant is attempting to enter the resulting text into the target application. Dispatch does not prove receipt.
+The assistant offers the resulting text to the clipboard. It pastes only when the currently focused niri window id matches the id captured with the app id and title at key press. Changed, missing or unavailable focus means clipboard-only delivery: no keystroke, no focus change, and one notice naming the original title without the transcript. Both paths are delivered; history distinguishes `pasted` from `clipboard`. Application newline rules still apply when pasting. Character typing is not a delivery method, and paste dispatch does not prove receipt.
 
 **Busy**:
 One attempt still owns the operation, including setup, recording, processing, delivery and cleanup. A second attempt is not admitted until the first has settled. Busy does not mean recording.
@@ -73,7 +73,7 @@ The optional text step after pass 1: a text model rewrites the raw transcript wi
 _Avoid_: post-processing, fixer
 
 **Raw transcript**:
-The text pass 1 returned, before pass 2. It is kept in the history and typed when pass 2 fails on a transcription binding.
+The text pass 1 returned, before pass 2. It is kept in the history and delivered when pass 2 fails on a transcription binding.
 
 **Glossary**:
 The words the user dictates and how recognition mishears them, rendered from the global glossary and the project glossary and given to both passes.

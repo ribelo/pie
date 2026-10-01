@@ -266,9 +266,9 @@ let test_record_to_delivery_last_good_then_reload () =
       let stt config _mode _bytes =
         Ok config.Pie.Config.Stt.transcription_model
       in
-      let deliver _config _mode text =
+      let deliver _config _mode _target text =
         Atomic.set delivered (text :: Atomic.get delivered);
-        Ok ()
+        Ok Pie.History.Pasted
       in
       let _socket, retry_dir, workflow =
         owner_workflow ~logger:(test_logger env) ~env ~sw ~net ~process_mgr
@@ -323,9 +323,9 @@ let test_required_input_failure_sets_last_error () =
       let load _ = (base_config (), stamp ()) in
       let delivered = Atomic.make [] in
       let stt _ _ _ = Ok "should-not-deliver" in
-      let deliver _config _mode text =
+      let deliver _config _mode _target text =
         Atomic.set delivered (text :: Atomic.get delivered);
-        Ok ()
+        Ok Pie.History.Pasted
       in
       let memory = Ox_observability.Logger.Memory.create () in
       let logger =
@@ -380,9 +380,9 @@ let test_recording_overload_cancels_attempt () =
       let load _ = (base_config (), stamp ()) in
       let delivered = Atomic.make [] in
       let stt _ _ _ = Ok "should-not-deliver" in
-      let deliver _config _mode text =
+      let deliver _config _mode _target text =
         Atomic.set delivered (text :: Atomic.get delivered);
-        Ok ()
+        Ok Pie.History.Pasted
       in
       let memory = Ox_observability.Logger.Memory.create () in
       let logger =
@@ -445,7 +445,7 @@ let test_cancel_waits_for_blocked_loader () =
           (base_config ~model:"openrouter/after" (), stamp ()))
       in
       let stt _ _ _ = Ok "x" in
-      let deliver _ _ _ = Ok () in
+      let deliver _ _ _target _ = Ok Pie.History.Pasted in
       let service_done, resolve_done = Eio.Promise.create () in
       let cancel_service = ref (fun () -> ()) in
       Eio.Switch.run @@ fun outer ->
@@ -499,7 +499,7 @@ let test_service_stop_retains_capture () =
       let stamp () = [ Some (1, 1, 0, 0.) ] in
       let load _ = (base_config (), stamp ()) in
       let stt _ _ _ = Ok "unused" in
-      let deliver _ _ _ = Ok () in
+      let deliver _ _ _target _ = Ok Pie.History.Pasted in
       let retry_dir_ref = ref None in
       let recorded, set_recorded = Eio.Promise.create () in
       let service_done, resolve_done = Eio.Promise.create () in
@@ -551,7 +551,7 @@ let test_cancelled_attempt_releases_recording_fd () =
       let stamp () = [ Some (1, 1, 0, 0.) ] in
       let load _ = (base_config (), stamp ()) in
       let stt _ _ _ = Ok "unused" in
-      let deliver _ _ _ = Ok () in
+      let deliver _ _ _target _ = Ok Pie.History.Pasted in
       let _socket, retry_dir, workflow =
         owner_workflow ~logger:(test_logger env) ~env ~sw ~net ~process_mgr
           ~mono_clock ~dir ~config_control:{ stamp; load } ~stt ~deliver
@@ -795,8 +795,8 @@ let write_synthetic_codex_home dir =
   close_out oc;
   home
 
-(* Production streaming fetches niri focused-window before WS connect. Write
-   the stub next to the test executable so it is not on a noexec temp fs. *)
+(* Both pipelines capture the delivery target at press, before WS connect.
+   Keep the stub next to the test executable, outside a noexec temp fs. *)
 let write_synthetic_niri () =
   let dir =
     Filename.concat (Filename.dirname Sys.executable_name) "niri-stub"
@@ -881,9 +881,9 @@ let run_stream_child () =
            ~logger:(test_logger env) ~process_mgr config mode bytes
           :> (string, Pie.Ptt_loop.error) result)
       in
-      let deliver _config _mode text =
+      let deliver _config _mode _target text =
         Atomic.set delivered (text :: Atomic.get delivered);
-        Ok ()
+        Ok Pie.History.Pasted
       in
       let _socket, _retry, workflow =
         owner_workflow ~logger:(test_logger env) ~env ~sw ~net ~process_mgr
@@ -1006,7 +1006,7 @@ let test_dead_stream_full_buffer two_pass () =
         (String.length (String.concat "" !second)
         > String.length (String.concat "" !first));
       Alcotest.(check bool)
-        "single glossary focus only in two-pass" two_pass
+        "press target captured for both pipelines" true
         (List.mem "niri_ran" (listed_stages stage_dir)))
 
 let test_streaming_codex_private_child () =
@@ -1041,12 +1041,12 @@ let test_streaming_codex_private_child () =
       match status with
       | Unix.WEXITED 0 ->
           Alcotest.(check bool)
-            "niri not invoked before provider" false
+            "niri target captured at press before provider" true
             (List.mem "niri_ran" (listed_stages stage_dir));
           Eio.Promise.await served
       | Unix.WEXITED n ->
           Alcotest.(check bool)
-            "niri not invoked before provider" false
+            "niri target captured at press before provider" true
             (List.mem "niri_ran" (listed_stages stage_dir));
           Alcotest.failf "stream child exited %d stages=[%s]" n
             (stage_report stage_dir)
@@ -1067,9 +1067,9 @@ let test_keyboard_input_lost_cancels_attempt () =
       let load _ = (base_config (), stamp ()) in
       let delivered = Atomic.make [] in
       let stt _ _ _ = Ok "should-not-deliver" in
-      let deliver _config _mode text =
+      let deliver _config _mode _target text =
         Atomic.set delivered (text :: Atomic.get delivered);
-        Ok ()
+        Ok Pie.History.Pasted
       in
       let _socket, retry_dir, workflow =
         owner_workflow ~logger:(test_logger env) ~env ~sw ~net ~process_mgr
@@ -1165,9 +1165,9 @@ let test_fast_tap_settles_then_next_press_delivers () =
       let stamp () = [ Some (1, 1, 0, 0.) ] in
       let load _ = (base_config (), stamp ()) in
       let stt _ _ _ = Ok "after-fast-tap" in
-      let deliver _ _ text =
+      let deliver _ _ _target text =
         Atomic.set delivered (text :: Atomic.get delivered);
-        Ok ()
+        Ok Pie.History.Pasted
       in
       let socket_path, retry_dir, workflow =
         owner_workflow ~logger:(test_logger env) ~env ~sw ~net
@@ -1208,9 +1208,9 @@ let test_pause_resume_fresh_attempt_delivers () =
       let stamp () = [ Some (1, 1, 0, 0.) ] in
       let load _ = (base_config (), stamp ()) in
       let stt _ _ _ = Ok "owned-text" in
-      let deliver _config _mode text =
+      let deliver _config _mode _target text =
         Atomic.set delivered (text :: Atomic.get delivered);
-        Ok ()
+        Ok Pie.History.Pasted
       in
       let socket_path, retry_dir, workflow =
         owner_workflow ~logger:(test_logger env) ~env ~sw ~net ~process_mgr
@@ -1403,7 +1403,7 @@ let test_service_pre_handle_failure_then_fresh_press () =
           ~logger:(test_logger env) ~net ~coordinator ~retry_dir:dir
           ~config:(base_config ~model:"openrouter/" ())
           ~stt:(fun _ _ _ -> Ok "unused")
-          ~deliver:(fun _ _ _ -> Ok ())
+          ~deliver:(fun _ _ _ _ -> Ok Pie.History.Pasted)
           "transcribe"
       in
       (match bad with
@@ -1419,9 +1419,9 @@ let test_service_pre_handle_failure_then_fresh_press () =
           .Pie.Recording.Coordinator.active;
       let delivered = Atomic.make [] in
       let stt _ _ _ = Ok "fresh-after-setup-fail" in
-      let deliver _ _ text =
+      let deliver _ _ _target text =
         Atomic.set delivered [ text ];
-        Ok ()
+        Ok Pie.History.Pasted
       in
       let good =
         Pie.Assistant.Service.on_press ~caps ~sw ~clock:(Eio.Stdenv.clock env)
@@ -1489,7 +1489,7 @@ let test_delayed_old_cleanup_preserves_new_same_mode_attempt () =
           ~logger:(test_logger env) ~net ~coordinator ~retry_dir:dir
           ~config:(base_config ())
           ~stt:(fun _ _ _ -> Ok "unused")
-          ~deliver:(fun _ _ _ -> Ok ())
+          ~deliver:(fun _ _ _ _ -> Ok Pie.History.Pasted)
           "transcribe"
       in
       (match second with
@@ -1529,9 +1529,9 @@ let test_busy_keyboard_and_rpc_then_fresh_cycle () =
       let stamp () = [ Some (1, 1, 0, 0.) ] in
       let load _ = (base_config (), stamp ()) in
       let stt _ _ _ = Ok "cycle-text" in
-      let deliver _ _ text =
+      let deliver _ _ _target text =
         Atomic.set delivered (text :: Atomic.get delivered);
-        Ok ()
+        Ok Pie.History.Pasted
       in
       let socket_path, retry_dir, workflow =
         owner_workflow ~logger:(test_logger env) ~env ~sw ~net ~process_mgr
@@ -1592,7 +1592,7 @@ let test_capture_budget_sets_last_error () =
       let stamp () = [ Some (1, 1, 0, 0.) ] in
       let load _ = (base_config (), stamp ()) in
       let stt _ _ _ = Ok "should-not-deliver" in
-      let deliver _ _ _ = Ok () in
+      let deliver _ _ _target _ = Ok Pie.History.Pasted in
       let memory = Ox_observability.Logger.Memory.create () in
       let logger =
         Ox_observability.Logger.create ~service:"assistant-owner-test" ~clock
@@ -1658,9 +1658,9 @@ let test_provider_failure_publishes_audio_then_retries_provider () =
         Atomic.incr stt_n;
         Error (`Ptt_error "stt:unavailable")
       in
-      let deliver _ _ _ =
+      let deliver _ _ _target _ =
         Atomic.incr deliver_n;
-        Ok ()
+        Ok Pie.History.Pasted
       in
       let keyboard = Pie.Keyboard.Monitor.create () in
       let audio_q, audio = make_audio () in
@@ -1700,7 +1700,7 @@ let test_delivery_failure_publishes_text_retry_skips_provider () =
         Ok "recognized-verbatim"
       in
       let delivered = ref [] in
-      let deliver _ _ text =
+      let deliver _ _ _target text =
         Atomic.incr deliver_n;
         delivered := text :: !delivered;
         Error (`Ptt_error "inject:failed")
@@ -1778,9 +1778,9 @@ let test_blank_transcript_publishes_audio_without_inject () =
         Atomic.incr stt_n;
         Ok (String.make 3 ' ')
       in
-      let deliver _ _ _ =
+      let deliver _ _ _target _ =
         Atomic.incr deliver_n;
-        Ok ()
+        Ok Pie.History.Pasted
       in
       let keyboard = Pie.Keyboard.Monitor.create () in
       let audio_q, audio = make_audio () in
@@ -1808,7 +1808,7 @@ let test_abort_does_not_publish () =
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
       let stt _ _ _ = Ok "should-not-run" in
-      let deliver _ _ _ = Ok () in
+      let deliver _ _ _target _ = Ok Pie.History.Pasted in
       let keyboard = Pie.Keyboard.Monitor.create () in
       let audio_q, audio = make_audio () in
       let stamp () = [ Some (1, 1, 0, 0.) ] in
@@ -1932,12 +1932,12 @@ let test_two_pass_retry kind () =
         }
       in
       let stt _ _ _ = Alcotest.fail "two-pass must not use legacy provider" in
-      let deliver _ _ text =
+      let deliver _ _ _target text =
         incr delivery_n;
         delivered := text :: !delivered;
         if kind = "delivery" && !delivery_n = 1 then
           Error (`Ptt_error "dispatch failed")
-        else Ok ()
+        else Ok Pie.History.Pasted
       in
       let keyboard = Pie.Keyboard.Monitor.create () in
       let audio_q, audio = make_audio () in
@@ -2074,9 +2074,9 @@ let test_one_pass_retry () =
       let stt _ _ _ =
         Alcotest.fail "one-pass must not use the legacy provider"
       in
-      let deliver _ _ text =
+      let deliver _ _ _target text =
         delivered := text :: !delivered;
-        Ok ()
+        Ok Pie.History.Pasted
       in
       let keyboard = Pie.Keyboard.Monitor.create () in
       let audio_q, audio = make_audio () in
@@ -2125,9 +2125,9 @@ let test_startup_text_retry_skips_provider () =
         Atomic.incr stt_n;
         Ok "should-not-recognize"
       in
-      let deliver _ _ text =
+      let deliver _ _ _target text =
         delivered := text :: !delivered;
-        Ok ()
+        Ok Pie.History.Pasted
       in
       let keyboard = Pie.Keyboard.Monitor.create () in
       let _audio_q, audio = make_audio () in
@@ -2164,7 +2164,7 @@ let test_successive_failures_keep_latest_only () =
         let i = Atomic.fetch_and_add n 1 in
         Ok (if i = 0 then "first-text" else "second-text")
       in
-      let deliver _ _ _ = Error (`Ptt_error "inject:failed") in
+      let deliver _ _ _target _ = Error (`Ptt_error "inject:failed") in
       let keyboard = Pie.Keyboard.Monitor.create () in
       let audio_q, audio = make_audio () in
       let stamp () = [ Some (1, 1, 0, 0.) ] in
@@ -2207,7 +2207,7 @@ let test_busy_and_disabled_retry_does_not_load_payload () =
       let clock = Eio.Stdenv.clock env in
       let stt _ _ _ = Ok "held" in
       let never, _ = Eio.Promise.create () in
-      let deliver _ _ _ = Eio.Promise.await never in
+      let deliver _ _ _target _ = Eio.Promise.await never in
       let keyboard = Pie.Keyboard.Monitor.create () in
       let audio_q, audio = make_audio () in
       let stamp () = [ Some (1, 1, 0, 0.) ] in
@@ -2258,7 +2258,7 @@ let test_nested_missing_parent_is_private () =
       let stamp () = [ Some (1, 1, 0, 0.) ] in
       let load _ = (base_config (), stamp ()) in
       let stt _ _ _ = Error (`Ptt_error "stt:unavailable") in
-      let deliver _ _ _ = Ok () in
+      let deliver _ _ _target _ = Ok Pie.History.Pasted in
       let socket_path = Filename.concat dir "control.sock" in
       (try Unix.mkdir (Filename.concat dir "recordings") 0o700
        with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
@@ -2301,7 +2301,7 @@ let test_blueprint_on_press_does_not_publish () =
         Pie.Recording.Coordinator.create ~caps ~persist_path ()
       in
       let stt _ _ _ = Ok "x" in
-      let deliver _ _ _ = Ok () in
+      let deliver _ _ _target _ = Ok Pie.History.Pasted in
       let _blueprint =
         Pie.Assistant.Service.on_press ~caps ~sw ~clock:(Eio.Stdenv.clock env)
           ~logger:(test_logger env) ~net:(Eio.Stdenv.net env) ~coordinator
@@ -2320,9 +2320,9 @@ let test_success_preserves_older_candidate () =
       let gen0 = seed_text retry_dir "older-candidate" in
       let deliver_n = Atomic.make 0 in
       let stt _ _ _ = Ok "fresh-success" in
-      let deliver _ _ _ =
+      let deliver _ _ _target _ =
         Atomic.incr deliver_n;
-        Ok ()
+        Ok Pie.History.Pasted
       in
       let keyboard = Pie.Keyboard.Monitor.create () in
       let audio_q, audio = make_audio () in
@@ -2421,7 +2421,7 @@ let test_publication_failure_keeps_primary () =
         lock_save := pub014_install !retry_dir_ref;
         Error (`Ptt_error "stt:unavailable")
       in
-      let deliver _ _ _ = Ok () in
+      let deliver _ _ _target _ = Ok Pie.History.Pasted in
       let retry_dir = Filename.concat dir "recordings" in
       Unix.mkdir retry_dir 0o700;
       let store =
@@ -2483,7 +2483,7 @@ let test_owned_cancel_cleanup_defect_preserves_older () =
         Eio.Promise.await proceed;
         failwith "provider-cleanup-defect"
       in
-      let deliver _ _ _ = Ok () in
+      let deliver _ _ _target _ = Ok Pie.History.Pasted in
       let keyboard = Pie.Keyboard.Monitor.create () in
       let audio_q, audio = make_audio () in
       let stamp () = [ Some (1, 1, 0, 0.) ] in

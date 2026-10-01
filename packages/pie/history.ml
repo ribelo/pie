@@ -35,7 +35,18 @@ let outcome_of_string = function
   | "failed" -> Some Failed
   | _ -> None
 
-type window = { app_id : string option; title : string option }
+type delivery = Pasted | Clipboard
+
+let string_of_delivery = function
+  | Pasted -> "pasted"
+  | Clipboard -> "clipboard"
+
+let delivery_of_string = function
+  | "pasted" -> Some Pasted
+  | "clipboard" -> Some Clipboard
+  | _ -> None
+
+type window = { id : int option; app_id : string option; title : string option }
 
 type transcribed = {
   id : string;
@@ -56,6 +67,7 @@ type finished = {
   pass2_model : string option;
   pass2_duration_ms : int option;
   outcome : outcome;
+  delivery : delivery option;
   diagnostic : string option;
   audio_path : string option;
 }
@@ -74,6 +86,7 @@ type entry = {
   pass2_model : string option;
   pass2_duration_ms : int option;
   outcome : outcome option;
+  delivery : delivery option;
   diagnostic : string option;
   finished_at : float option;
   audio_path : string option;
@@ -195,9 +208,10 @@ let json_int_opt = function None -> `Null | Some n -> `Int n
 
 let json_window = function
   | None -> `Null
-  | Some window ->
+  | Some (window : window) ->
       `Assoc
         [
+          ("id", json_int_opt window.id);
           ("appId", json_string_opt window.app_id);
           ("title", json_string_opt window.title);
         ]
@@ -225,6 +239,8 @@ let json_of_entry (entry : entry) =
         match entry.outcome with
         | None -> `Null
         | Some outcome -> `String (string_of_outcome outcome) );
+      ( "delivery",
+        json_string_opt (Option.map string_of_delivery entry.delivery) );
       ("diagnostic", json_string_opt entry.diagnostic);
       ( "finishedAt",
         match entry.finished_at with
@@ -252,7 +268,10 @@ let event_json = function
         | None -> fields
         | Some window ->
             let window_fields =
-              (match window.app_id with
+              (match window.id with
+                | None -> []
+                | Some id -> [ ("id", `Int id) ])
+              @ (match window.app_id with
                 | None -> []
                 | Some app_id -> [ ("appId", `String app_id) ])
               @
@@ -304,6 +323,13 @@ let event_json = function
       in
       let fields =
         fields @ [ ("outcome", `String (string_of_outcome event.outcome)) ]
+      in
+      let fields =
+        add "delivery"
+          (Option.map
+             (fun delivery -> `String (string_of_delivery delivery))
+             event.delivery)
+          fields
       in
       let fields =
         add "diagnostic"
@@ -383,10 +409,11 @@ let window_of fields =
   match List.assoc_opt "window" fields with
   | None | Some `Null -> Ok None
   | Some (`Assoc window_fields) ->
+      let* id = optional_int window_fields "id" in
       let* app_id = optional_string window_fields "appId" in
       let* title = optional_string window_fields "title" in
-      if app_id = None && title = None then Ok None
-      else Ok (Some { app_id; title })
+      if id = None && app_id = None && title = None then Ok None
+      else Ok (Some { id; app_id; title })
   | Some _ -> Error "window is not an object"
 
 let time_of fields =
@@ -442,6 +469,15 @@ let event_of_json json =
           | Some outcome -> Ok outcome
           | None -> Error "unknown outcome"
         in
+        let* delivery_text = optional_string fields "delivery" in
+        let* delivery =
+          match delivery_text with
+          | None -> Ok None
+          | Some text -> (
+              match delivery_of_string text with
+              | Some delivery -> Ok (Some delivery)
+              | None -> Error "unknown delivery")
+        in
         let* diagnostic = optional_string fields "diagnostic" in
         let* audio_path = optional_string fields "audioPath" in
         if Option.fold ~none:false ~some:(fun n -> n < 0) pass2_duration_ms then
@@ -456,6 +492,7 @@ let event_of_json json =
                  pass2_model;
                  pass2_duration_ms;
                  outcome;
+                 delivery;
                  diagnostic;
                  audio_path;
                })
@@ -528,6 +565,7 @@ let entry_of id pending =
     pass2_duration_ms =
       Option.bind finished (fun (event : finished) -> event.pass2_duration_ms);
     outcome = Option.map (fun (event : finished) -> event.outcome) finished;
+    delivery = Option.bind finished (fun (event : finished) -> event.delivery);
     diagnostic =
       Option.bind finished (fun (event : finished) -> event.diagnostic);
     finished_at = Option.map (fun (event : finished) -> event.time) finished;

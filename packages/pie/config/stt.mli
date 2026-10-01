@@ -32,7 +32,10 @@ type newline_rule = Input.Text_injection.newline_rule = {
   action : newline_action;
 }
 
-type entry_method = Input.Text_injection.entry_method = Type | Paste
+type entry_method = Input.Text_injection.entry_method =
+  | Paste
+      (** The only entry method. A file may still say ["type"]; that spelling is
+          not a constructor. *)
 
 type text_entry_rule = Input.Text_injection.text_entry_rule = {
   app_id : string option;
@@ -99,6 +102,10 @@ type t = {
   translation_prompt : string;
   newline_rules : newline_rule list;
   text_entry_rules : text_entry_rule list;
+      (** Per-window delivery. [method] is always paste. A file value ["type"]
+          is accepted only for compatibility: the rule pastes, and {!load} or
+          {!decode} warns, naming that rule's index and its [app_id] and/or
+          [title_regex]. *)
   pipeline : pipeline;
   streaming : bool;
       (** Stream pass-1 audio while the key is held. Defaults to true when the
@@ -174,10 +181,26 @@ val default_one_pass_verbatim_prompt : string
 val default_one_pass_translate_prompt : string
 val newline_action_of_string : string -> newline_action
 val string_of_newline_action : newline_action -> string
+
 val entry_method_of_string : string -> entry_method
+(** ["paste"] and the compatibility spelling ["type"] are paste. Any other value
+    raises {!Config_error}. The compatibility warning is emitted by {!load} and
+    {!decode}, which know the rule. *)
+
 val string_of_entry_method : entry_method -> string
+(** ["paste"]. *)
+
 val max_config_file_bytes : int
+
+val decode : ?warn:(string -> unit) -> Yojson.Safe.t -> (t, string) result
+(** Decode the JSON object produced from TOML. After a successful decode, [warn]
+    is called once for each text_entry_rules entry whose [method] was ["type"].
+    The default ignores warnings. {!door_spec} uses that default; startup passes
+    the process logger. *)
+
 val door_spec : t Ox_app.Config.t
+(** [door_spec.of_yojson] does not warn. Pass {!decode} with a logger when the
+    process should report a retired [method]. *)
 
 val default_source :
   caps:< Ox_caps.Cap.env ; .. > -> unit -> Ox_app.Config.source
@@ -189,5 +212,9 @@ val load :
   fs:_ Eio.Path.t ->
   ?source:Ox_app.Config.source ->
   ?read:(string -> (string, Ox_app.Config.read_error) result) ->
+  ?warn:(string -> unit) ->
   unit ->
   (t, Ox_app.Config.error) result
+(** [warn] receives compatibility warnings after a successful decode. The
+    default ignores them. A caller that logs passes its reporter; this function
+    does not print. *)

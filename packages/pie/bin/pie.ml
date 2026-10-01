@@ -129,33 +129,6 @@ let commands_with_env (env : _ Ox_app.Env.t) door_run_owned =
                   ~output_path ~duration_sec ()))
         $ output $ duration)
   in
-  let type_text =
-    let text =
-      Arg.(
-        required
-        & pos 0 (some string) None
-        & info [] ~docv:"TEXT" ~doc:"Text to type into the focused application")
-    in
-    command "type" "Send text to the focused application"
-      Term.(
-        const (fun text ->
-            run_owned (fun _sw ->
-                let* (result : Pie.Input.Text_injection.result) =
-                  Pie.Input.Text_injection.inject ~caps ~clock
-                    ~process_mgr:(Eio.Stdenv.process_mgr base)
-                    text
-                in
-                Ox_caps.Cap_stdlib.printf ~caps "Typed %d chars via %s (%s)\n%!"
-                  (String.length result.text)
-                  (match result.backend with
-                  | Wtype -> "wtype"
-                  | Xdotool -> "xdotool")
-                  (match result.session_type with
-                  | Wayland -> "Wayland"
-                  | X11 -> "X11");
-                Ok ()))
-        $ text)
-  in
   let status =
     command "status" "Show daemon recording status"
       Term.(
@@ -472,7 +445,6 @@ let commands_with_env (env : _ Ox_app.Env.t) door_run_owned =
     source;
     meter;
     record;
-    type_text;
     status;
     toggle;
     pause;
@@ -517,6 +489,11 @@ let () =
     (Ox_app.run_with_args ~name:"pie" ~service_command:"assistant"
        ~config_file:"stt.toml" ~missing:`Required
        ~config:Pie.Config.Stt.door_spec ~service_args
+       ~decode_with_env:(fun env json ->
+         let warn message =
+           Ox_observability.Logger.warn env.Ox_app.Env.logger message ~fields:[]
+         in
+         Pie.Config.Stt.decode ~warn json)
        ~read_file:(fun env path ->
          Ox_app.Config.read_regular
            ~max_bytes:Pie.Config.Stt.max_config_file_bytes

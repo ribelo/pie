@@ -1891,7 +1891,7 @@ let test_failed_processing_retains_captured_audio () =
     require_owner ~dir ~coordinator ~attempt Assistant.Service.Transcribe
   in
   let stt _config _mode _bytes = Error (`Ptt_error "STT unavailable") in
-  let deliver _config _mode _text = Ok () in
+  let deliver _config _mode _target _text = Ok Pie.History.Pasted in
   let inner =
     Assistant.Service.make_clip_handle ~owner ~stt ~deliver
       ~config:(openrouter_clip_config ())
@@ -2046,7 +2046,7 @@ let test_buffered_clip_cancellation_settles_after_offer () =
             Assistant.Service.on_press ~caps ~sw ~net:(Eio.Stdenv.net env)
               ~clock ~logger:(test_logger env)
               ~stt:(fun _ _ _ -> Ok "synthetic transcript")
-              ~deliver:(fun _ _ _ -> Ok ())
+              ~deliver:(fun _ _ _ _ -> Ok Pie.History.Pasted)
               ~coordinator ~retry_dir:dir
               ~config:(openrouter_clip_config ())
               "transcribe"
@@ -2112,7 +2112,7 @@ let test_buffered_clip_defect_settles_after_offer () =
       Assistant.Service.on_press ~caps ~sw ~net:(Eio.Stdenv.net env)
         ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env)
         ~stt:(fun _ _ _ -> Ok "synthetic transcript")
-        ~deliver:(fun _ _ _ -> Ok ())
+        ~deliver:(fun _ _ _ _ -> Ok Pie.History.Pasted)
         ~coordinator ~retry_dir:dir
         ~config:(openrouter_clip_config ())
         "transcribe"
@@ -2164,7 +2164,7 @@ let test_on_press_construction_does_not_admit () =
     Assistant.Service.on_press ~caps ~sw ~net:(Eio.Stdenv.net env)
       ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env)
       ~stt:(fun _ _ _ -> Ok "synthetic transcript")
-      ~deliver:(fun _ _ _ -> Ok ())
+      ~deliver:(fun _ _ _ _ -> Ok Pie.History.Pasted)
       ~coordinator
       ~config:(openrouter_clip_config ())
       "transcribe"
@@ -2185,7 +2185,7 @@ let test_on_press_execution_admits () =
     Assistant.Service.on_press ~caps ~sw ~net:(Eio.Stdenv.net env)
       ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env)
       ~stt:(fun _ _ _ -> Ok "synthetic transcript")
-      ~deliver:(fun _ _ _ -> Ok ())
+      ~deliver:(fun _ _ _ _ -> Ok Pie.History.Pasted)
       ~coordinator ~retry_dir:dir
       ~config:(openrouter_clip_config ())
       "transcribe"
@@ -2217,7 +2217,7 @@ let test_on_press_busy_and_disabled_at_execution () =
   let press () =
     Assistant.Service.on_press ~caps ~sw ~net ~clock ~logger:(test_logger env)
       ~stt:(fun _ _ _ -> Ok "synthetic transcript")
-      ~deliver:(fun _ _ _ -> Ok ())
+      ~deliver:(fun _ _ _ _ -> Ok Pie.History.Pasted)
       ~coordinator ~retry_dir:dir
       ~config:(openrouter_clip_config ())
       "transcribe"
@@ -2283,7 +2283,7 @@ let test_on_press_constructor_failure_releases_without_clearing_other_attempt ()
     Assistant.Service.on_press ~caps ~sw ~net:(Eio.Stdenv.net env)
       ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env)
       ~stt:(fun _ _ _ -> Ok "synthetic transcript")
-      ~deliver:(fun _ _ _ -> Ok ())
+      ~deliver:(fun _ _ _ _ -> Ok Pie.History.Pasted)
       ~coordinator ~retry_dir:dir ~config "transcribe"
   in
   Alcotest.(check bool)
@@ -3158,7 +3158,7 @@ let test_text_injection_entry_method_rules () =
       {
         app_id = Some "Slack";
         title_regex = Some "Draft$";
-        method_ = Pie.Input.Text_injection.Type;
+        method_ = Pie.Input.Text_injection.Paste;
       };
       {
         app_id = Some "Slack";
@@ -3172,7 +3172,7 @@ let test_text_injection_entry_method_rules () =
     (Pie.Input.Text_injection.entry_method_for_window rules (Some window)
     = Pie.Input.Text_injection.Paste);
   Alcotest.(check string)
-    "paste preserves embedded newlines" "first\nsecond"
+    "paste applies collapse newline rule" "first second"
     (Pie.Input.Text_injection.prepare_text
        ~method_:Pie.Input.Text_injection.Paste
        ~newline_action:Pie.Input.Text_injection.Collapse_to_space
@@ -3247,6 +3247,15 @@ printf '%s\n' '{"id":1,"title":"t","app_id":"app"}'
       in
       let operation () =
         Pie.Input.Text_injection.inject ~caps ~clipboard_owner:owner
+          ~target_window:
+            (Some
+               {
+                 Pie.Niri.id = 1;
+                 app_id = Some "app";
+                 title = Some "t";
+                 pid = None;
+                 workspace_id = None;
+               })
           ~clock:(Eio.Stdenv.clock env) ~text_entry_rules:paste_rules
           ~process_mgr:(Eio.Stdenv.process_mgr env)
           "first\nsecond"
@@ -3258,7 +3267,7 @@ printf '%s\n' '{"id":1,"title":"t","app_id":"app"}'
             "previous offer not inspected" false
             (Sys.file_exists (Filename.concat base "inspected"));
           Alcotest.(check string)
-            "offered transcript" "first\nsecond"
+            "offered prepared transcript" "first second"
             (In_channel.with_open_bin
                (Filename.concat base "copy-stdin")
                In_channel.input_all);
@@ -3344,6 +3353,15 @@ printf '%s\n' '{"id":1,"title":"t","app_id":"app"}'
       in
       let operation () =
         Pie.Input.Text_injection.inject ~caps ~clipboard_owner:owner
+          ~target_window:
+            (Some
+               {
+                 Pie.Niri.id = 1;
+                 app_id = Some "app";
+                 title = Some "t";
+                 pid = None;
+                 workspace_id = None;
+               })
           ~clock:(Eio.Stdenv.clock env) ~text_entry_rules:paste_rules
           ~process_mgr:(Eio.Stdenv.process_mgr env)
           "first\nsecond"

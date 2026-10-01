@@ -50,6 +50,7 @@ val load_snapshot :
   caps:< Ox_caps.Cap.env ; .. > ->
   fs:_ Eio.Path.t ->
   source:Ox_app.Config.source ->
+  ?warn:(string -> unit) ->
   int ->
   Config.Stt.t * config_stamp
 
@@ -70,6 +71,7 @@ val make_live_recognizer :
 
 val create_attempt_owner :
   ?dictation:Dictation.t ->
+  ?target_window:History.window option ->
   store:Recording.Retry_store.Active.store ->
   coordinator:Recording.Coordinator.t ->
   attempt:Recording.Coordinator.attempt ->
@@ -82,7 +84,12 @@ val settle_attempt : attempt_owner -> (unit, [ `Ptt_error of string ]) result
 val make_clip_handle :
   owner:attempt_owner ->
   stt:(Config.Stt.t -> ptt_mode -> bytes -> (string, Ptt_loop.error) result) ->
-  deliver:(Config.Stt.t -> ptt_mode -> string -> (unit, Ptt_loop.error) result) ->
+  deliver:
+    (Config.Stt.t ->
+    ptt_mode ->
+    History.window option ->
+    string ->
+    (History.delivery, Ptt_loop.error) result) ->
   config:Config.Stt.t ->
   ptt_mode ->
   Ptt_loop.handle
@@ -99,6 +106,23 @@ val run_acquired_attempt :
   (unit, Ptt_loop.error) result
 (** Always releases the attempt. A body failure followed by settlement failure
     returns [Ptt_cause (Suppressed {primary; finalizer})], retaining both. *)
+
+val report_delivery :
+  notify:(string -> string -> unit) ->
+  target_window:History.window option ->
+  Input.Text_injection.outcome ->
+  History.delivery
+
+val production_deliver :
+  caps:< Ox_caps.Cap.env ; Ox_caps.Cap.stdout ; Ox_caps.Cap.stderr ; .. > ->
+  clock:_ Eio.Time.clock ->
+  process_mgr:_ Eio.Process.mgr ->
+  ?clipboard_owner:Wayland.Clipboard.t ->
+  Config.Stt.t ->
+  ptt_mode ->
+  History.window option ->
+  string ->
+  (History.delivery, Ptt_loop.error) result
 
 val production_stt :
   caps:< Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.time ; .. > ->
@@ -131,8 +155,14 @@ val on_press :
   ?pipeline:Dictation.dependencies ->
   ?binding:Config.Stt.binding ->
   ?on_owner:(attempt_owner -> unit) ->
+  ?focused_window:(unit -> History.window option) ->
   stt:(Config.Stt.t -> ptt_mode -> bytes -> (string, Ptt_loop.error) result) ->
-  deliver:(Config.Stt.t -> ptt_mode -> string -> (unit, Ptt_loop.error) result) ->
+  deliver:
+    (Config.Stt.t ->
+    ptt_mode ->
+    History.window option ->
+    string ->
+    (History.delivery, Ptt_loop.error) result) ->
   string ->
   (Ptt_loop.press_result, Ptt_loop.error) result
 
@@ -158,7 +188,12 @@ val run_with_inputs :
     owned_inputs ->
   config_control:config_control ->
   stt:(Config.Stt.t -> ptt_mode -> bytes -> (string, Ptt_loop.error) result) ->
-  deliver:(Config.Stt.t -> ptt_mode -> string -> (unit, Ptt_loop.error) result) ->
+  deliver:
+    (Config.Stt.t ->
+    ptt_mode ->
+    History.window option ->
+    string ->
+    (History.delivery, Ptt_loop.error) result) ->
   socket_path:string ->
   retry_dir:string ->
   ?config_path:string ->

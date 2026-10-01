@@ -113,6 +113,14 @@ Nothing changes until I opt in: an existing configuration keeps today's single-p
 49. As a dictation user, I want one-pass attempts written to the history and the audio archive like two-pass attempts, so that nothing I say is lost whichever mode I use. ^dict-msdh
 50. As a dictation user, I want a failed one-pass request to keep the audio for `pie retry` and notify me, so that a provider error never costs me the dictation. ^dict-pna4
 
+### Safe delivery
+
+51. As a dictation user, I want Pie to paste only into the niri window captured at key press, so that changing focus during processing never puts my words into another window. WHEN the delivery-time focused id equals the key-press id, the system shall offer the delivery text to the clipboard before each paste and apply the configured newline rules without character typing. ^dict-snot
+
+52. As a dictation user, I want my text kept in the clipboard when its original window is no longer focused, so that I can paste it myself without losing it. WHEN focus is changed, missing or unavailable (or the key-press id is unknown), the system shall copy the text without sending any key or changing focus, send exactly one notification `Pie: text for <title> is in the clipboard` using the original title and no transcript, and record a delivered outcome with `delivery = "clipboard"`; a paste records `delivery = "pasted"`. The system shall retain `window.id` with the key-press app id and title; older history may omit both new fields. ^dict-ib9n
+
+53. As a dictation user, I want every delivery to use the clipboard rather than simulated character typing, so that my clipboard manager always has the text. WHERE a legacy text-entry rule says `method = "type"`, the system shall load it as paste and warn at startup with the rule index and matcher. The system shall preserve existing paste-key selection rather than invent terminal shortcuts. ^dict-mg0p
+
 ### Prompts, vocabulary and diagnostics
 
 36. As a dictation user, I want default pass-2 prompts for correction and translation shipped with Pie, and no prompt that claims context is appended when it is not, so that the documentation matches the behavior. ^dict-4faf
@@ -120,6 +128,8 @@ Nothing changes until I opt in: an existing configuration keeps today's single-p
 38. As a dictation user, I want `pie status` to show the pass-1 model, the streaming switch, the pass-2 model and the bindings, and the logs to record each pass's latency, so that I can check what is configured and where time goes. ^dict-oagf
 
 ## Implementation Decisions
+
+- **Delivery (2026-10-01, dict-snot / dict-ib9n / dict-mg0p).** Capture the niri id alongside app id/title at key press, reuse that snapshot for glossary/history, and compare ids at delivery. Clipboard-only is success, not a retry/error, with one title-only notification; never focus a window. Paste remains best-effort Ctrl+V: no terminal-specific key policy existed, so none is invented. Matching-window newline policies collapse text or paste line segments with the configured newline keys, then restore the full clipboard text. Clipboard-only preserves the normalized multiline transcript. Retire the typing backend and `pie type`; old `method = "type"` rules become paste with a startup warning naming the rule (also warned after a stable hot reload). Unknown targets, including retained-text retries, stay clipboard-only. Optional history `window.id` and `delivery` keep old records readable. The focus check and paste cannot be atomic across external niri/clipboard/key processes: `pasted` records key dispatch, not proof of application receipt.
 
 - **Vocabulary.** "Pass 1" (transcription) and "pass 2" (correction; translation is a pass-2 prompt) are the domain terms. "Glossary" replaces "project context"; the global glossary and the project glossary are its two sources.
 - **Opt-in by configuration.** New STT configuration keys: the pass-1 model (`transcription_model` keeps its provider-prefix syntax), a `streaming` flag, a pass-2 model, a pass-2 reasoning effort and a pass-2 timeout, and a `[[bindings]]` array. A binding has a keysym, a shift flag, a mode (transcribe or translate), a pass-2 flag and an optional pass-2 prompt file name. Without `[[bindings]]`, the legacy `ptt_*` keys produce the two bindings they produce today. Without a pass-2 model and with a conversational pass-1 model, Pie runs today's single-pass path with the audio prompts unchanged. A translate binding requires a pass-2 model; a configuration that has one without the other is rejected.

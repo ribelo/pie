@@ -32,7 +32,13 @@ type outcome =
 val string_of_outcome : outcome -> string
 val outcome_of_string : string -> outcome option
 
-type window = { app_id : string option; title : string option }
+type delivery = Pasted | Clipboard
+
+val string_of_delivery : delivery -> string
+val delivery_of_string : string -> delivery option
+
+type window = { id : int option; app_id : string option; title : string option }
+(** The niri id is absent in records written by older versions. *)
 
 type transcribed = {
   id : string;
@@ -53,6 +59,7 @@ type finished = {
   pass2_model : string option;
   pass2_duration_ms : int option;
   outcome : outcome;
+  delivery : delivery option;
   diagnostic : string option;
       (** Short reason. Absent when there is nothing to say. *)
   audio_path : string option;
@@ -74,6 +81,7 @@ type entry = {
   pass2_model : string option;
   pass2_duration_ms : int option;
   outcome : outcome option;
+  delivery : delivery option;
   diagnostic : string option;
   finished_at : float option;
   audio_path : string option;
@@ -130,9 +138,9 @@ val format_listing_line : entry -> string
 
 val json_of_entry : entry -> Yojson.Safe.t
 (** Stable object: [id], [time] (UTC [YYYY-MM-DDTHH:MM:SS.sssZ]), [mode],
-    [binding], [window] ([{appId, title}] or null), [glossaryPaths],
+    [binding], [window] ([{id, appId, title}] or null), [glossaryPaths],
     [pass1Model], [pass1DurationMs], [rawText], [finalText], [pass2Model],
-    [pass2DurationMs], [outcome], [diagnostic], [finishedAt], [audioPath].
-    Absent fields are null. *)
+    [pass2DurationMs], [outcome], [delivery], [diagnostic], [finishedAt],
+    [audioPath]. Absent fields are null. *)
 
 val json_of_entries : entry list -> Yojson.Safe.t

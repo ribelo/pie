@@ -302,7 +302,7 @@ let test_helper_nonzero_omits_argv_and_stderr () =
   let result, stdout, stderr =
     with_captured_stdio (fun () ->
         run_helper (fun ~env ~sw:_ ->
-            Pie.Wayland.Wtype.type_text ~caps
+            Pie.Wayland.Wtype.key ~caps ~modifiers:[]
               ~process_mgr:(Eio.Stdenv.process_mgr env)
               marker))
   in
@@ -376,7 +376,7 @@ let test_large_helper_stderr_discarded () =
   let result, stdout, stderr =
     with_captured_stdio (fun () ->
         run_helper (fun ~env ~sw:_ ->
-            Pie.Wayland.Wtype.type_text ~caps
+            Pie.Wayland.Wtype.key ~caps ~modifiers:[]
               ~process_mgr:(Eio.Stdenv.process_mgr env)
               "ok"))
   in
@@ -419,7 +419,7 @@ let test_helper_success_stdout_discarded_delivery_file () =
   let result, stdout, stderr =
     with_captured_stdio (fun () ->
         run_helper (fun ~env ~sw:_ ->
-            Pie.Wayland.Wtype.type_text ~caps
+            Pie.Wayland.Wtype.key ~caps ~modifiers:[]
               ~process_mgr:(Eio.Stdenv.process_mgr env)
               intended))
   in

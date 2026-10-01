@@ -49,6 +49,7 @@ type t = {
 
 let glossary t = t.glossary
 let binding t = t.binding
+let window t = t.window
 let id t = t.id
 
 let note_audio_path t path =
@@ -110,7 +111,7 @@ let history_warning t = function
   | Ok () -> ()
   | Error (`History message) -> t.deps.warn ("history write failed: " ^ message)
 
-let finish t ?final_text ?diagnostic outcome =
+let finish t ?final_text ?diagnostic ?delivery outcome =
   if not t.finished then (
     t.finished <- true;
     let pass2_model =
@@ -129,6 +130,7 @@ let finish t ?final_text ?diagnostic outcome =
            pass2_model;
            pass2_duration_ms = t.pass2_duration;
            outcome;
+           delivery;
            diagnostic;
            audio_path = t.audio_path;
          }))
@@ -220,9 +222,9 @@ let run t ~recognize ~deliver ~on_audio_failure ~on_text_failure ~on_success =
       in
       let deliver_final text outcome diagnostic =
         match deliver text with
-        | Ok () ->
+        | Ok delivery ->
             let result = on_success () in
-            finish t ~final_text:text ?diagnostic outcome;
+            finish t ~final_text:text ?diagnostic ~delivery outcome;
             result
         | Error error ->
             let result = on_text_failure text ~dispatch_uncertain:true in

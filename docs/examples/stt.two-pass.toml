@@ -1,5 +1,7 @@
 # Two-pass configuration for ~/.config/pie/stt.toml (2026-09-30).
 # Not installed. Keep your existing text_entry_rules / newline_rules below it.
+# text_entry_rules.method is always paste. method = "type" is accepted only
+# for compatibility and warns at startup; the rule pastes.
 # Numbers come from docs/research/2026-09-30-dictation-models.
 # The recommended configuration is stt.one-pass.toml.
 

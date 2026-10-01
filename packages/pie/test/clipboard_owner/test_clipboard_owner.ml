@@ -324,6 +324,15 @@ let run_configured_inject ~dir ~copy env sw text =
   in
   Pie.Input.Text_injection.inject ~caps ~clock:(Eio.Stdenv.clock env)
     ~clipboard_owner:owner ~text_entry_rules:paste_rules
+    ~target_window:
+      (Some
+         {
+           Pie.Niri.id = 1;
+           title = Some "t";
+           app_id = Some "app";
+           pid = None;
+           workspace_id = None;
+         })
     ~process_mgr:(Eio.Stdenv.process_mgr env)
     text
 
@@ -394,41 +403,6 @@ let test_inject_paste_key_fail_retains_helper () =
         (child_count () - kids_before <= 2)
   | Error _ -> Alcotest.fail "unexpected error shape"
 
-let test_cli_type_stays_type () =
-  with_temp_dir @@ fun dir ->
-  let wtype_args = Filename.concat dir "wtype-args" in
-  let inspected = Filename.concat dir "inspected" in
-  ignore (write_exec dir "wl-paste" ("touch \"" ^ inspected ^ "\"\n"));
-  ignore (write_exec dir "wl-copy" "exit 1\n");
-  ignore
-    (write_exec dir "wtype"
-       ("printf '%s\n' \"$*\" >> \"" ^ wtype_args ^ "\"\n"));
-  let old_path = Option.value ~default:"" (Sys.getenv_opt "PATH") in
-  with_env
-    [
-      ("PATH", dir ^ ":" ^ old_path);
-      ("XDG_SESSION_TYPE", "wayland");
-      ("WAYLAND_DISPLAY", "pie-fake");
-    ]
-  @@ fun () ->
-  Pie_test_runtime.run @@ fun env ->
-  Eio.Switch.run @@ fun sw ->
-  match
-    Pie.Input.Text_injection.inject ~caps ~clock:(Eio.Stdenv.clock env)
-      ~process_mgr:(Eio.Stdenv.process_mgr env)
-      "hello"
-  with
-  | Error _ -> Alcotest.fail "CLI type path failed"
-  | Ok result ->
-      Alcotest.(check bool)
-        "typed outcome" true
-        (result.outcome = Pie.Input.Text_injection.Typed);
-      Alcotest.(check bool)
-        "did not inspect clipboard" false
-        (Sys.file_exists inspected);
-      let keys = In_channel.with_open_text wtype_args In_channel.input_all in
-      Alcotest.(check string) "typed argv not ctrl-v" "-- hello\n" keys
-
 let test_paste_handoff_delay ~cancel () =
   with_temp_dir @@ fun dir ->
   let released = Filename.concat dir "handoff-released" in
@@ -483,6 +457,15 @@ let test_paste_handoff_delay ~cancel () =
   let run () =
     Pie.Input.Text_injection.inject ~caps ~clock:fake_clock
       ~clipboard_owner:owner ~text_entry_rules:paste_rules
+      ~target_window:
+        (Some
+           {
+             Pie.Niri.id = 1;
+             title = Some "t";
+             app_id = Some "app";
+             pid = None;
+             workspace_id = None;
+           })
       ~process_mgr:(Eio.Stdenv.process_mgr env)
       "offered-text"
   in
@@ -545,8 +528,6 @@ let () =
               test_inject_paste_key_success "application/octet-stream");
           Alcotest.test_case "inject key fail retains helper" `Quick
             test_inject_paste_key_fail_retains_helper;
-          Alcotest.test_case "CLI type stays type" `Quick
-            test_cli_type_stays_type;
           Alcotest.test_case "paste waits before key dispatch" `Quick
             (test_paste_handoff_delay ~cancel:false);
           Alcotest.test_case "cancelled handoff never sends paste" `Quick

@@ -26,18 +26,25 @@ let stamp path =
 let config_stamp ~caps ?config_path () =
   List.map stamp (watched_paths ~caps ?config_path ())
 
-let load_snapshot ~caps ~fs ~source attempts =
+let load_snapshot ~caps ~fs ~source ?(warn = fun _ -> ()) attempts =
   let config_path = Config.Stt.source_path source in
   let stamp () = config_stamp ~caps ~config_path () in
   let rec retry n =
     let before = stamp () in
+    let warnings = ref [] in
     let config =
-      match Config.Stt.load ~caps ~fs ~source () with
+      match
+        Config.Stt.load ~caps ~fs ~source
+          ~warn:(fun message -> warnings := message :: !warnings)
+          ()
+      with
       | Ok cfg -> cfg
       | Error (`Config msg) -> raise (Config.Stt.Config_error msg)
     in
     let after = stamp () in
-    if before = after then (config, after)
+    if before = after then (
+      List.iter warn (List.rev !warnings);
+      (config, after))
     else if n > 0 then retry (n - 1)
     else
       raise (Config.Stt.Config_error "config changed repeatedly while loading")
@@ -472,8 +479,18 @@ let run_stt ~caps ~sw ~net ~clock ~logger ~process_mgr:_ (config : Config.Stt.t)
             ~target_language:config.translation_target_language ~prompt_template
             ?thinking_effort:config.thinking_effort pcm_bytes)
 
+let report_delivery ~notify ~target_window = function
+  | Input.Text_injection.Clipboard_key_attempted -> History.Pasted
+  | Input.Text_injection.Clipboard_only ->
+      let title =
+        Option.bind target_window (fun (window : History.window) ->
+            window.title)
+      in
+      notify "Pie" (Desktop.Notification.clipboard_message title);
+      History.Clipboard
+
 let inject_and_report ~caps ~clock ~process_mgr ?clipboard_owner ~newline_rules
-    ~text_entry_rules _mode text =
+    ~text_entry_rules ~target_window _mode text =
   let normalized = Input.Text_injection.normalize_text text in
   if String.length normalized = 0 then (
     ignore
@@ -481,11 +498,25 @@ let inject_and_report ~caps ~clock ~process_mgr ?clipboard_owner ~newline_rules
          "pie: no transcript"
          "Speech-to-text produced no transcript text. Try speaking louder or \
           checking microphone input.");
-    Ok ())
+    Error (`Ptt_error "stt:no_transcript"))
   else
+    let injection_window =
+      Option.bind target_window (fun (window : History.window) ->
+          Option.map
+            (fun id ->
+              {
+                Niri.id;
+                title = window.title;
+                app_id = window.app_id;
+                pid = None;
+                workspace_id = None;
+              })
+            window.id)
+    in
     match
       Input.Text_injection.inject ~caps ?clipboard_owner ~newline_rules
-        ~text_entry_rules ~clock ~process_mgr normalized
+        ~text_entry_rules ~target_window:injection_window ~clock ~process_mgr
+        normalized
     with
     | Error error ->
         ignore
@@ -496,13 +527,18 @@ let inject_and_report ~caps ~clock ~process_mgr ?clipboard_owner ~newline_rules
     | Ok result ->
         Ox_caps.Cap_stdlib.printf ~caps "%s %d chars via %s (%s)\n%!"
           (match result.outcome with
-          | Input.Text_injection.Typed -> "Typed"
+          | Input.Text_injection.Clipboard_only -> "Copied to clipboard"
           | Input.Text_injection.Clipboard_key_attempted ->
               "Paste key dispatched; receipt unconfirmed")
           (String.length result.text)
           (match result.backend with Wtype -> "wtype" | Xdotool -> "xdotool")
           (match result.session_type with Wayland -> "Wayland" | X11 -> "X11");
-        Ok ()
+        Ok
+          (report_delivery ~target_window result.outcome
+             ~notify:(fun title message ->
+               ignore
+                 (Desktop.Notification.notify_warning ~caps ~process_mgr title
+                    message)))
 
 module Active = Recording.Retry_store.Active
 
@@ -567,6 +603,7 @@ type attempt_owner = {
   stage : attempt_stage ref;
   settled : bool Atomic.t;
   dictation : Dictation.t option;
+  target_window : History.window option;
   mutable captured_bytes : int;
   mutable discard_audio : bool;
   mutable failed : bool;
@@ -602,7 +639,8 @@ let open_recovery_store ~caps ~root =
   | Error e -> Error e
   | Ok () -> Active.open_store ~caps ~root
 
-let create_attempt_owner ?dictation ~store ~coordinator ~attempt mode =
+let create_attempt_owner ?dictation ?(target_window = None) ~store ~coordinator
+    ~attempt mode =
   match Active.open_audio_writer store ~mode:(retry_mode mode) with
   | Error e -> Error (ptt_of_retry e)
   | Ok writer ->
@@ -615,6 +653,7 @@ let create_attempt_owner ?dictation ~store ~coordinator ~attempt mode =
           stage = ref (Capturing writer);
           settled = Atomic.make false;
           dictation;
+          target_window;
           captured_bytes = 0;
           discard_audio = false;
           failed = false;
@@ -766,7 +805,7 @@ let recognize_then_deliver ~recognize ~deliver ~on_provider_failure ~on_blank
   | Ok text -> (
       match deliver text with
       | Error primary -> with_publication primary (on_delivery_failure text ())
-      | Ok () -> on_success ())
+      | Ok _ -> on_success ())
 
 let unless_cancelled attempt action =
   if Recording.Coordinator.cancel_signalled attempt then Ok () else action ()
@@ -839,10 +878,10 @@ let production_stt ~caps ~sw ~net ~clock ~logger ~process_mgr config mode bytes
     (run_stt ~caps ~sw ~net ~clock ~logger ~process_mgr config mode bytes)
 
 let production_deliver ~caps ~clock ~process_mgr ?clipboard_owner
-    (config : Config.Stt.t) mode text =
+    (config : Config.Stt.t) mode (target : History.window option) text =
   inject_and_report ~caps ~clock ~process_mgr ?clipboard_owner
     ~newline_rules:config.newline_rules
-    ~text_entry_rules:config.text_entry_rules mode text
+    ~text_entry_rules:config.text_entry_rules ~target_window:target mode text
 
 let source_language (config : Config.Stt.t) (binding : Config.Stt.binding) =
   match binding.mode with
@@ -868,7 +907,11 @@ let production_pipeline ~caps ~sw ~net ~clock ~logger ~process_mgr =
               window :=
                 Option.map
                   (fun (w : Niri.window_info) ->
-                    { History.app_id = w.app_id; title = w.title })
+                    {
+                      History.id = Some w.id;
+                      app_id = w.app_id;
+                      title = w.title;
+                    })
                   focused)
             ()
         in
@@ -1031,7 +1074,7 @@ let make_clip_handle ~owner ~stt ~deliver ~config mode =
       Ptt_loop.Buffered
         (fun clip ->
           after_capture owner
-            ~deliver:(fun text -> deliver config mode text)
+            ~deliver:(fun text -> deliver config mode owner.target_window text)
             (fun () ->
               match owner.dictation with
               | Some dictation ->
@@ -1114,7 +1157,8 @@ let make_streaming_handle ~caps ~sw ~net ~clock ~logger ~owner ~config ~stt
                   Ptt_loop.Streaming
                     (fun ~duration_ms:_ ->
                       after_capture owner
-                        ~deliver:(fun text -> deliver config mode text)
+                        ~deliver:(fun text ->
+                          deliver config mode owner.target_window text)
                         (fun () ->
                           if !dead then buffered ()
                           else
@@ -1251,8 +1295,8 @@ let with_failure_retention owner body () =
       Printexc.raise_with_backtrace exn backtrace
 
 let on_press ~caps ~sw ~net ~clock ~logger ~coordinator ~config ?store
-    ?retry_dir ?pipeline ?binding ?(on_owner = fun _ -> ()) ~stt ~deliver
-    mode_name =
+    ?retry_dir ?pipeline ?binding ?(on_owner = fun _ -> ())
+    ?(focused_window = fun () -> None) ~stt ~deliver mode_name =
   let mode = mode_of_name mode_name in
   match
     Recording.Coordinator.try_start coordinator (recording_mode mode) ()
@@ -1280,7 +1324,13 @@ let on_press ~caps ~sw ~net ~clock ~logger ~coordinator ~config ?store
       | Ok store -> (
           let created =
             let* dictation = create_dictation ~config ?binding pipeline mode in
-            create_attempt_owner ?dictation ~store ~coordinator ~attempt mode
+            let target_window =
+              match dictation with
+              | Some dictation -> Dictation.window dictation
+              | None -> focused_window ()
+            in
+            create_attempt_owner ?dictation ~target_window ~store ~coordinator
+              ~attempt mode
           in
           match created with
           | Error error ->
@@ -1750,6 +1800,16 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
         prune_audio ();
         on_press ~caps ~sw ~net ~clock ~logger ~coordinator ~config:!current
           ~pipeline ?binding
+          ~focused_window:(fun () ->
+            match Niri.focused_window ~process_mgr () with
+            | Ok (Some window) ->
+                Some
+                  {
+                    History.id = Some window.id;
+                    app_id = window.app_id;
+                    title = window.title;
+                  }
+            | Ok None | Error _ -> None)
           ~on_owner:(fun owner ->
             owner.archive_hooks <- Some archive_hooks;
             active_owner := Some owner)
@@ -1924,7 +1984,10 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
                         Dictation.run dictation
                           ~recognize:(fun () ->
                             Dictation.recognize dictation pcm)
-                          ~deliver:(fun text -> deliver config mode text)
+                          ~deliver:(fun text ->
+                            deliver config mode
+                              (Dictation.window dictation)
+                              text)
                           ~on_audio_failure:(fun () -> Ok ())
                           ~on_text_failure:(fun text ~dispatch_uncertain ->
                             publish_text_slot ~dispatch_uncertain store text ())
@@ -1932,7 +1995,7 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
                 | None ->
                     recognize_then_deliver
                       ~recognize:(fun () -> stt config mode pcm)
-                      ~deliver:(fun text -> deliver config mode text)
+                      ~deliver:(fun text -> deliver config mode None text)
                       ~on_provider_failure:(fun () -> Ok ())
                       ~on_blank:(fun () -> Ok ())
                       ~on_delivery_failure:(publish_text_slot store)
@@ -1942,7 +2005,7 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
                   retry_result (Active.load_text store (Option.get generation))
                 in
                 deliver_retained_text
-                  ~deliver:(fun t -> deliver config mode t)
+                  ~deliver:(fun t -> deliver config mode None t)
                   ~on_delivery_failure:(publish_text_slot store)
                   ~on_success:(fun () -> Ok ())
                   text
@@ -1962,7 +2025,10 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
                             Dictation.run dictation
                               ~recognize:(fun () ->
                                 Dictation.recognize dictation pcm)
-                              ~deliver:(fun text -> deliver config mode text)
+                              ~deliver:(fun text ->
+                                deliver config mode
+                                  (Dictation.window dictation)
+                                  text)
                               ~on_audio_failure:(fun () -> Ok ())
                               ~on_text_failure:(fun text ~dispatch_uncertain ->
                                 publish_text_slot ~dispatch_uncertain store text
@@ -1971,7 +2037,7 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
                     | None ->
                         recognize_then_deliver
                           ~recognize:(fun () -> stt config mode pcm)
-                          ~deliver:(fun text -> deliver config mode text)
+                          ~deliver:(fun text -> deliver config mode None text)
                           ~on_provider_failure:(fun () -> Ok ())
                           ~on_blank:(fun () -> Ok ())
                           ~on_delivery_failure:(publish_text_slot store)
@@ -2043,7 +2109,9 @@ let run ~caps ~sw ~fs ~net ~clock ~mono_clock ~logger ~process_mgr ~config
   let config_control =
     {
       stamp = (fun () -> config_stamp ~caps ~config_path ());
-      load = load_snapshot ~caps ~fs ~source;
+      load =
+        load_snapshot ~caps ~fs ~source ~warn:(fun message ->
+            ignore (Ox_observability.Logger.warn logger message ~fields:[]));
     }
   in
   let stt = production_stt ~caps ~sw ~net ~clock ~logger ~process_mgr in

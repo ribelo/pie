@@ -454,9 +454,9 @@ let test_archive_after_success () =
           let delivered = ref [] in
           run_attempt ~env ~dir ~retention:24.
             ~pass1:(fun _ -> Ok "raw words")
-            ~deliver:(fun _ _ text ->
+            ~deliver:(fun _ _ _ text ->
               delivered := text :: !delivered;
-              Ok ())
+              Ok Pie.History.Pasted)
             ~during:(fun
                 ~clock
                 ~net:_
@@ -492,7 +492,7 @@ let test_archive_after_failure () =
         (fun () ->
           run_attempt ~env ~dir ~retention:24.
             ~pass1:(fun _ -> Error (`Ptt_error "stt:unavailable"))
-            ~deliver:(fun _ _ _ -> Alcotest.fail "delivery after failure")
+            ~deliver:(fun _ _ _ _ -> Alcotest.fail "delivery after failure")
             ~during:(fun
                 ~clock
                 ~net:_
@@ -519,7 +519,7 @@ let test_no_archive_after_cancel () =
         (fun () ->
           run_attempt ~env ~dir ~retention:24.
             ~pass1:(fun _ -> Alcotest.fail "pass 1 after cancel")
-            ~deliver:(fun _ _ _ -> Alcotest.fail "delivery after cancel")
+            ~deliver:(fun _ _ _ _ -> Alcotest.fail "delivery after cancel")
             ~during:(fun
                 ~clock
                 ~net
@@ -547,9 +547,9 @@ let test_retention_zero_archives_nothing () =
       let delivered = ref false in
       run_attempt ~env ~dir ~retention:0.
         ~pass1:(fun _ -> Ok "kept")
-        ~deliver:(fun _ _ _ ->
+        ~deliver:(fun _ _ _ _ ->
           delivered := true;
-          Ok ())
+          Ok Pie.History.Pasted)
         ~during:(fun
             ~clock
             ~net:_
@@ -614,7 +614,7 @@ let test_retry_by_id () =
         ~pass1:(fun pcm ->
           seen := Some (Bytes.to_string pcm);
           Ok "from-archive")
-        ~deliver:(fun _ _ _ -> Ok ())
+        ~deliver:(fun _ _ _ _ -> Ok Pie.History.Pasted)
         ~during:(fun
             ~clock
             ~net
