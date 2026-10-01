@@ -33,6 +33,11 @@ type text_entry_rule = {
 val normalize_text : string -> string
 val collapse_line_breaks : string -> string
 
+val matches_window :
+  app_id:string option -> title_regex:string option -> Niri.window_info -> bool
+(** Conjunctive matcher shared by window rules. App ids compare
+    case-insensitively; titles use a Perl regular expression. *)
+
 val newline_action_for_window :
   newline_rule list -> Niri.window_info option -> newline_action
 

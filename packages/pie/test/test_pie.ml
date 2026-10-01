@@ -325,6 +325,8 @@ let test_daemon_contract_action_response () =
       last_error = None;
       build_commit = None;
       build_time = None;
+      reasoning_effort = None;
+      response_schema = None;
     }
   in
   let response =
@@ -906,6 +908,8 @@ let test_daemon_contract_response () =
       last_error = None;
       build_commit = None;
       build_time = None;
+      reasoning_effort = None;
+      response_schema = None;
     }
   in
   let response =
@@ -981,9 +985,11 @@ let test_daemon_server_state () =
   (try Sys.remove socket_path with Sys_error _ -> ());
   (try Sys.remove persist_path with Sys_error _ -> ());
   let coordinator = Pie.Recording.Coordinator.create ~caps ~persist_path () in
+  let effort = ref "low" in
   expect_listener_start
     (Pie.Assistant_service.Server.start ~caps ~sw ~fs:(Eio.Stdenv.fs env)
        ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env) ~socket_path
+       ~status_metadata:(fun () -> (Some !effort, Some "dictation/text-v1"))
        coordinator);
   let send req =
     let flow = Eio.Net.connect ~sw (Eio.Stdenv.net env) (`Unix socket_path) in
@@ -1000,7 +1006,20 @@ let test_daemon_server_state () =
         Yojson.Safe.from_string (Eio.Buf_read.line reader))
   in
   ignore (send Pie.Assistant_service.Contract.Pause);
-  (match send Pie.Assistant_service.Contract.Status with
+  let check_metadata expected json =
+    Alcotest.(check bool)
+      "status configured effort" true
+      (Yojson.Safe.Util.member "reasoningEffort" json = `String expected);
+    Alcotest.(check bool)
+      "status configured schema" true
+      (Yojson.Safe.Util.member "responseSchema" json
+      = `String "dictation/text-v1")
+  in
+  let status = send Pie.Assistant_service.Contract.Status in
+  check_metadata "low" status;
+  effort := "high";
+  check_metadata "high" (send Pie.Assistant_service.Contract.Status);
+  (match status with
   | `Assoc fields ->
       Alcotest.(check bool)
         "paused" false
@@ -1053,6 +1072,8 @@ let test_daemon_server_action_handler () =
           last_error = None;
           build_commit = None;
           build_time = None;
+          reasoning_effort = None;
+          response_schema = None;
         };
     }
   in
@@ -1834,6 +1855,7 @@ let openrouter_clip_config () : Pie.Config.Stt.t =
       "Translate from {{source_language}} to {{target_language}}.";
     newline_rules = [];
     text_entry_rules = [];
+    prompt_rules = [];
     pipeline = Legacy;
     openrouter_provider_order = None;
     one_pass_timeout_seconds = 30.;
@@ -2673,6 +2695,7 @@ let test_assistant_startup_config_json () =
             method_ = Pie.Input.Text_injection.Paste;
           };
         ];
+      prompt_rules = [];
       pipeline = Two_pass;
       openrouter_provider_order = None;
       one_pass_timeout_seconds = 30.;

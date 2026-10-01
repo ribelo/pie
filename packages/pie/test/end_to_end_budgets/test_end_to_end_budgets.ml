@@ -31,6 +31,7 @@ let base_config () : Pie.Config.Stt.t =
       "Translate from {{source_language}} to {{target_language}}.";
     newline_rules = [];
     text_entry_rules = [];
+    prompt_rules = [];
     pipeline = Legacy;
     openrouter_provider_order = None;
     one_pass_timeout_seconds = 30.;

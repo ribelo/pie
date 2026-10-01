@@ -30,6 +30,8 @@ let snapshot_of_coordinator coordinator =
     last_error = snap.last_error;
     build_commit = Some Build_identity.commit;
     build_time = Some Build_identity.time;
+    reasoning_effort = None;
+    response_schema = None;
   }
 
 let rejected_action coordinator action message =
@@ -80,7 +82,7 @@ let secure_socket_dir ~caps dir =
   | _ -> ()
 
 let start ~caps ~sw ~fs ~net ~clock ?socket_path ?(budget = default_budget)
-    ?action_handler coordinator =
+    ?action_handler ?status_metadata coordinator =
   let socket_path =
     Option.value socket_path ~default:(Paths.daemon_socket_path ~caps)
   in
@@ -99,7 +101,22 @@ let start ~caps ~sw ~fs ~net ~clock ?socket_path ?(budget = default_budget)
     ~budget:(fun _ ->
       Some (Ox.Duration.ms (int_of_float (budget.peer_timeout_s *. 400.))))
     ~handler:(fun request ->
-      Ok (handle_request ?action_handler coordinator request))
+      let metadata (snap : Contract.recording_snapshot) =
+        match status_metadata with
+        | None -> snap
+        | Some get ->
+            let reasoning_effort, response_schema = get () in
+            { snap with reasoning_effort; response_schema }
+      in
+      let response =
+        match handle_request ?action_handler coordinator request with
+        | Contract.Status_resp snap -> Contract.Status_resp (metadata snap)
+        | Contract.Action_resp result ->
+            Contract.Action_resp
+              { result with snapshot = metadata result.snapshot }
+        | response -> response
+      in
+      Ok response)
     ~error_response:(function
       | `Decode _ | `Ingress_too_large ->
           Some (Contract.Error_resp err_malformed_request)

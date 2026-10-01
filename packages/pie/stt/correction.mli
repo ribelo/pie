@@ -48,6 +48,9 @@ val default_temperature : float
 (** [0.2]. Used when the caller does not pass a temperature. One pass uses this;
     it does not read [correction_temperature]. *)
 
+val response_schema : string
+(** Stable name/shape identifier: [dictation/text-v1]. *)
+
 val audio_cue : string
 (** ["The recording follows."]. The short text part sent with a WAV. The
     rendered prompt stays in [instructions]. *)
@@ -75,6 +78,7 @@ val run :
   ?target_language:string ->
   ?temperature:float ->
   ?reasoning_effort:string ->
+  ?output_language:string ->
   timeout:Ox.Duration.t ->
   unit ->
   (string, failure) result
@@ -91,11 +95,13 @@ val run :
     when absent or empty. The returned text is trimmed. Blank text and text
     longer than {!Dictation_limits.result_utf8_bytes} are failures. The request
     requires a strict JSON object with exactly one string field [text]; only
-    that field is returned, as Markdown. Unframed, malformed, truncated or
-    extra-field replies are rejected, never pasted verbatim. Reasoning is
-    excluded when a reasoning effort is configured. [on_response] receives the
-    private complete body before classification, including non-2xx bodies. The
-    transport does not retry inside this single exchange. *)
+    that field is returned, as Markdown. Its description frames the message in
+    [?output_language] (defaults to [?language]); translation callers pass the
+    configured target language. Unframed, malformed, truncated or extra-field
+    replies are rejected, never pasted verbatim. Reasoning is excluded when a
+    reasoning effort is configured. [on_response] receives the private complete
+    body before classification, including non-2xx bodies. The transport does not
+    retry inside this single exchange. *)
 
 type upload = Wav of bytes | Mp3 of { mp3 : bytes; wav : bytes }
 
@@ -128,6 +134,7 @@ val run_with_retry :
   ?target_language:string ->
   ?temperature:float ->
   ?reasoning_effort:string ->
+  ?output_language:string ->
   timeout:Ox.Duration.t ->
   unit ->
   report

@@ -51,10 +51,21 @@ let pp_error fmt error = Format.pp_print_string fmt (render_error error)
 
 let render_recording_state
     (snap : Pie.Assistant_service.Contract.recording_snapshot) =
-  if not snap.enabled then "paused"
-  else if not snap.active then "armed"
-  else if snap.mode = "idle" then "stale"
-  else snap.mode
+  let state =
+    if not snap.enabled then "paused"
+    else if not snap.active then "armed"
+    else if snap.mode = "idle" then "stale"
+    else snap.mode
+  in
+  let fields =
+    List.filter_map
+      (fun (name, value) -> Option.map (fun value -> name ^ ": " ^ value) value)
+      [
+        ("reasoning_effort", snap.reasoning_effort);
+        ("response_schema", snap.response_schema);
+      ]
+  in
+  String.concat "\n" (state :: fields)
 
 let client_build_differs
     (snap : Pie.Assistant_service.Contract.recording_snapshot) =

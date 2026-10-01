@@ -1,4 +1,4 @@
-# Recommended configuration for ~/.config/pie/stt.toml (2026-09-30).
+# Recommended configuration for ~/.config/pie/stt.toml (2026-10-01).
 # Not installed. Keep your existing text_entry_rules / newline_rules below it.
 # text_entry_rules.method is always paste. method = "type" is accepted only
 # for compatibility and warns at startup; the rule pastes.
@@ -12,6 +12,10 @@ provider = "openrouter"
 transcription_model = "openrouter/google/gemini-3.8-flash"
 translation_model = "openrouter/google/gemini-3.8-flash"
 thinking_effort = "low"
+# The first request keeps this effort and the strict {text} answer schema.
+# Schema framing names the output language; only text is typed. A deliberate
+# provider-failure retry may raise effort to medium; history records the actual
+# final effort, response_schema and chosen prompt_file.
 
 # Route OpenRouter to Google AI Studio first. Fallbacks stay allowed.
 openrouter_provider_order = ["Google AI Studio"]
@@ -47,3 +51,15 @@ mode = "translate"
 
 # A raw transcript (correct = false, prompts/one-pass-verbatim.md) needs a key of its own; add
 # another [[bindings]] entry with a free keysym to get one.
+
+# Optional destination prompt (dict-c3nt). First matching rule wins over the
+# binding prompt; absent focus or no match retains the binding/pipeline default.
+# App ids compare case-insensitively, like text_entry_rules. title_regex is a
+# Perl regex; when both are set, both must match. Only the key-press window counts.
+# Create prompts/neutral.md first: it must contain {{glossary}}. Translation
+# rules also need {{source_language}} and {{target_language}}; rules without a
+# mode must satisfy every configured binding mode. No neutral prompt is shipped.
+# [[prompt_rules]]
+# app_id = "slack"
+# mode = "transcribe"
+# prompt = "neutral.md"

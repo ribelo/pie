@@ -63,6 +63,19 @@ let note_audio_path t path =
 
 let create deps ~config ~binding =
   let glossary, window = deps.resolve_glossary () in
+  let focused =
+    Option.map
+      (fun (window : History.window) ->
+        {
+          Niri.id = Option.value window.id ~default:0;
+          app_id = window.app_id;
+          title = window.title;
+          pid = None;
+          workspace_id = None;
+        })
+      window
+  in
+  let binding = Config.Stt.select_prompt config binding ~window:focused in
   List.iter
     (fun warning ->
       deps.warn
@@ -170,6 +183,15 @@ let finish t ?final_text ?diagnostic ?delivery ?ignored_capture outcome =
            first_response_path = t.first_response_path;
            retry = t.retry;
            ignored_capture;
+           reasoning_effort =
+             (match t.retry with
+             | Some retry -> retry.reasoning_effort
+             | None -> Config.Stt.effective_reasoning_effort t.config t.binding);
+           response_schema =
+             (if one_pass t || pass2_requested t then
+                Some Stt.Correction.response_schema
+              else None);
+           prompt_file = Some t.binding.prompt_file;
          }))
 
 let ignore_capture t (capture : History.ignored_capture) =

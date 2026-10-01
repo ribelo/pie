@@ -12,6 +12,8 @@ let armed_snapshot : C.recording_snapshot =
     last_error = None;
     build_commit = None;
     build_time = None;
+    reasoning_effort = None;
+    response_schema = None;
   }
 
 let expect_ok label = function
@@ -65,6 +67,22 @@ let test_build_identity () =
     (C.response_of_json C.Status
        (`Assoc
           (("buildCommit", `Int 3) :: List.remove_assoc "buildCommit" fields)))
+
+let test_response_metadata () =
+  let snapshot =
+    {
+      armed_snapshot with
+      reasoning_effort = Some "low";
+      response_schema = Some "dictation/text-v1";
+    }
+  in
+  match C.response_of_json C.Status (C.json_of_snapshot snapshot) with
+  | Ok (C.Status_resp actual) ->
+      Alcotest.(check (option string))
+        "effort" snapshot.reasoning_effort actual.reasoning_effort;
+      Alcotest.(check (option string))
+        "schema" snapshot.response_schema actual.response_schema
+  | _ -> Alcotest.fail "metadata status did not roundtrip"
 
 let test_status_missing_mode () =
   expect_error "missing mode" C.missing_field
@@ -299,6 +317,8 @@ let () =
     [
       ( "decode",
         [
+          Alcotest.test_case "response metadata dict-h8rd" `Quick
+            test_response_metadata;
           Alcotest.test_case "status valid" `Quick test_status_valid;
           Alcotest.test_case "dict-w1pe build identity and old daemon" `Quick
             test_build_identity;

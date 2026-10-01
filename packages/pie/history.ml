@@ -91,6 +91,9 @@ type finished = {
   first_response_path : string option;
   retry : retry option;
   ignored_capture : ignored_capture option;
+  reasoning_effort : string option;
+  response_schema : string option;
+  prompt_file : string option;
 }
 
 type entry = {
@@ -115,6 +118,9 @@ type entry = {
   first_response_path : string option;
   retry : retry option;
   ignored_capture : ignored_capture option;
+  reasoning_effort : string option;
+  response_schema : string option;
+  prompt_file : string option;
 }
 
 type audio_recorded = { id : string; time : float; path : string }
@@ -298,6 +304,9 @@ let json_of_entry (entry : entry) =
       ("firstResponsePath", json_string_opt entry.first_response_path);
       ("retry", json_retry entry.retry);
       ("ignoredCapture", json_ignored_capture entry.ignored_capture);
+      ("reasoningEffort", json_string_opt entry.reasoning_effort);
+      ("responseSchema", json_string_opt entry.response_schema);
+      ("promptFile", json_string_opt entry.prompt_file);
     ]
 
 let json_of_entries entries = `List (List.map json_of_entry entries)
@@ -403,11 +412,24 @@ let event_json = function
         | Some _ -> fields @ [ ("retry", json_retry event.retry) ]
       in
       let fields =
-        match event.ignored_capture with
-        | None -> fields
-        | Some _ ->
-            fields
-            @ [ ("ignoredCapture", json_ignored_capture event.ignored_capture) ]
+        let fields =
+          match event.ignored_capture with
+          | None -> fields
+          | Some _ ->
+              fields
+              @ [
+                  ("ignoredCapture", json_ignored_capture event.ignored_capture);
+                ]
+        in
+        List.fold_left
+          (fun fields (name, value) ->
+            add name (Option.map (fun text -> `String text) value) fields)
+          fields
+          [
+            ("reasoningEffort", event.reasoning_effort);
+            ("responseSchema", event.response_schema);
+            ("promptFile", event.prompt_file);
+          ]
       in
       `Assoc
         (add "audioPath"
@@ -602,6 +624,9 @@ let event_of_json json =
         let* first_response_path = optional_string fields "firstResponsePath" in
         let* retry = retry_of fields in
         let* ignored_capture = ignored_capture_of fields in
+        let* reasoning_effort = optional_string fields "reasoningEffort" in
+        let* response_schema = optional_string fields "responseSchema" in
+        let* prompt_file = optional_string fields "promptFile" in
         if Option.fold ~none:false ~some:(fun n -> n < 0) pass2_duration_ms then
           Error "pass2DurationMs is negative"
         else
@@ -621,6 +646,9 @@ let event_of_json json =
                  first_response_path;
                  retry;
                  ignored_capture;
+                 reasoning_effort;
+                 response_schema;
+                 prompt_file;
                })
     | "audio" ->
         let* path = require_string fields "audioPath" in
@@ -703,6 +731,12 @@ let entry_of id pending =
     retry = Option.bind finished (fun (event : finished) -> event.retry);
     ignored_capture =
       Option.bind finished (fun (event : finished) -> event.ignored_capture);
+    reasoning_effort =
+      Option.bind finished (fun (event : finished) -> event.reasoning_effort);
+    response_schema =
+      Option.bind finished (fun (event : finished) -> event.response_schema);
+    prompt_file =
+      Option.bind finished (fun (event : finished) -> event.prompt_file);
   }
 
 let merge events =

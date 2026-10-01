@@ -9,6 +9,8 @@ type recording_snapshot = {
   last_error : string option;
   build_commit : string option;
   build_time : string option;
+  reasoning_effort : string option;
+  response_schema : string option;
 }
 
 type request = Status | Pause | Resume | Toggle | Action of string
