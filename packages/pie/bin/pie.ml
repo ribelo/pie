@@ -65,7 +65,11 @@ let render_recording_state
         ("response_schema", snap.response_schema);
       ]
   in
-  String.concat "\n" (state :: fields)
+  let processing =
+    if snap.processing = 0 then []
+    else [ Printf.sprintf "processing: %d" snap.processing ]
+  in
+  String.concat "\n" ((state :: processing) @ fields)
 
 let client_build_differs
     (snap : Pie.Assistant_service.Contract.recording_snapshot) =

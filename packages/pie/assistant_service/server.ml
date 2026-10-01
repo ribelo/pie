@@ -22,6 +22,7 @@ let snapshot_of_coordinator coordinator =
   {
     Contract.phase = snap.phase;
     active = snap.active;
+    processing = snap.processing;
     mode = snap.mode;
     enabled = snap.enabled;
     started_at = snap.started_at;

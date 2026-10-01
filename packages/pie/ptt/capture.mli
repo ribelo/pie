@@ -7,5 +7,5 @@ val idle : state
 val start : state -> float -> state
 val release : state -> float -> state
 val is_accepting_chunks : state -> bool
-val post_roll_remaining_ms : state -> float -> float
+val post_roll_remaining_ms : ?tail_ms:int -> state -> float -> float
 val duration_ms : state -> float -> float

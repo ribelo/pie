@@ -1011,6 +1011,28 @@ let test_prompt_rules () =
   write (Filename.concat prompts "neutral.md") "No placeholders";
   expect_error ~needle:"prompt_rules[0]" (load env path)
 
+let test_release_grace () =
+  with_sandbox @@ fun dir ->
+  Eio_main.run @@ fun env ->
+  let path = Filename.concat dir "stt.toml" in
+  write path "";
+  Alcotest.(check int)
+    "default grace" 1000 (expect_ok (load env path)).ptt_release_grace_ms;
+  List.iter
+    (fun ms ->
+      write path (Printf.sprintf "ptt_release_grace_ms = %d\n" ms);
+      let cfg = expect_ok (load env path) in
+      Alcotest.(check int) "parsed grace" ms cfg.ptt_release_grace_ms;
+      match Config.door_spec.yojson_of_t cfg with
+      | `Assoc fields ->
+          Alcotest.(check bool)
+            "status includes grace" true
+            (List.assoc_opt "ptt_release_grace_ms" fields = Some (`Int ms))
+      | _ -> Alcotest.fail "status is not an object")
+    [ 0; 50; 3000 ];
+  write path "ptt_release_grace_ms = -1\n";
+  expect_error ~needle:"ptt_release_grace_ms" (load env path)
+
 let () =
   Alcotest.run "config_boundary"
     [
@@ -1023,6 +1045,8 @@ let () =
           Alcotest.test_case "defaults and model overrides" `Quick
             test_defaults_and_models;
           Alcotest.test_case "invalid settings" `Quick test_invalid_settings;
+          Alcotest.test_case "dict-n3kf release grace config" `Quick
+            test_release_grace;
           Alcotest.test_case "default profanity policy dict-x9pf" `Quick
             test_default_profanity_policy;
           Alcotest.test_case "destination prompt rules dict-c3nt" `Quick

@@ -92,6 +92,7 @@ type t = {
   transcription_language : string;
   translation_source_language : string;
   translation_target_language : string;
+  ptt_release_grace_ms : int;
   ptt_min_capture_rms : float;
   ptt_min_capture_peak : float;
   ptt_transcribe_keysym : int;

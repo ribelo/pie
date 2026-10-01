@@ -11,6 +11,7 @@ let base_config ?(provider = Pie.Config.Stt.Openrouter)
     transcription_language = "English";
     translation_source_language = "English";
     translation_target_language = "English";
+    ptt_release_grace_ms = 0;
     ptt_min_capture_rms = 0.0;
     ptt_min_capture_peak = 0.0;
     ptt_transcribe_keysym = 65478;

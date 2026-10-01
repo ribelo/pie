@@ -86,7 +86,9 @@ let make_live_recognizer ~load_bindings ?load_config_bindings ?coordinator
   let right_shift_keysym = 65506 in
   let busy () =
     match coordinator with
-    | Some c -> Recording.Coordinator.is_active c
+    | Some c ->
+        let snap = Recording.Coordinator.snapshot c in
+        snap.active && snap.phase <> Recording.Phase.Active Stopping
     | None -> Hashtbl.length down > 0
   in
   let press mode =
@@ -409,6 +411,7 @@ let startup_config_json ~caps ?config_path ~(config : Config.Stt.t)
       ("transcription_language", `String config.transcription_language);
       ("translation_source_language", `String config.translation_source_language);
       ("translation_target_language", `String config.translation_target_language);
+      ("ptt_release_grace_ms", `Int config.ptt_release_grace_ms);
       ("ptt_min_duration_ms", `Int min_duration_ms);
       ("ptt_min_capture_rms", `Float config.ptt_min_capture_rms);
       ("ptt_min_capture_peak", `Float config.ptt_min_capture_peak);
@@ -754,23 +757,23 @@ let set_attempt_phase owner phase =
   Ok ()
 
 let settle_attempt owner =
-  let* () = set_attempt_phase owner Recording.Phase.Finishing in
-  if Atomic.compare_and_set owner.settled false true then (
-    Option.iter Dictation.fail_unfinished owner.dictation;
-    let result =
-      if
-        (not owner.failed) || owner.discard_audio || owner.captured_bytes = 0
-        || Recording.Coordinator.cancel_signalled owner.attempt
-      then abort_unpublished owner
-      else
-        match !(owner.stage) with
-        | Closed -> Ok ()
-        | Capturing _ | Sealed _ ->
-            let* () = seal_writer owner in
-            publish_sealed_audio owner
-    in
-    ignore (Recording.Coordinator.release owner.coordinator owner.attempt);
-    result)
+  if Atomic.compare_and_set owner.settled false true then
+    Fun.protect
+      ~finally:(fun () ->
+        ignore (Recording.Coordinator.release owner.coordinator owner.attempt))
+      (fun () ->
+        let* () = set_attempt_phase owner Recording.Phase.Finishing in
+        Option.iter Dictation.fail_unfinished owner.dictation;
+        if
+          (not owner.failed) || owner.discard_audio || owner.captured_bytes = 0
+          || Recording.Coordinator.cancel_signalled owner.attempt
+        then abort_unpublished owner
+        else
+          match !(owner.stage) with
+          | Closed -> Ok ()
+          | Capturing _ | Sealed _ ->
+              let* () = seal_writer owner in
+              publish_sealed_audio owner)
   else Ok ()
 
 (* One recognition -> delivery stage used by live capture and RetryLatest.
@@ -819,6 +822,7 @@ let after_capture owner ~deliver recognize =
   let* () = set_attempt_phase owner Recording.Phase.Processing in
   let* () = seal_writer owner in
   let deliver text =
+    Recording.Coordinator.await_delivery owner.coordinator owner.attempt;
     let* () = set_attempt_phase owner Recording.Phase.Delivering in
     deliver text
   in
@@ -1360,8 +1364,8 @@ let split_action raw =
       in
       (command, if rest = "" then None else Some rest)
 
-let action_handler ~coordinator ~send_control ~retries ~get_store ~load_archived
-    raw_action =
+let action_handler ~sw ~coordinator ~send_control ~retries ~get_store
+    ~load_archived raw_action =
   let action, archive_id = split_action raw_action in
   let snap = Assistant_service.Server.snapshot_of_coordinator coordinator in
   let enqueue trigger message =
@@ -1444,10 +1448,28 @@ let action_handler ~coordinator ~send_control ~retries ~get_store ~load_archived
   | "retry" | "ptt-retry" -> (
       let queue mode job : Assistant_service.Contract.action_result =
         match
-          Recording.Coordinator.try_start coordinator (recording_mode mode) ()
+          Recording.Coordinator.try_start_processing coordinator
+            (recording_mode mode) ()
         with
         | Recording.Coordinator.Started attempt ->
-            Eio.Stream.add retries (job, attempt);
+            (* Register ownership before enqueueing: a queued retry may never be
+               dequeued if the service is cancelled or its active retry fails. *)
+            let hook = ref Eio.Switch.null_hook in
+            let release () =
+              Fun.protect
+                ~finally:(fun () -> Eio.Switch.remove_hook !hook)
+                (fun () ->
+                  ignore (Recording.Coordinator.release coordinator attempt);
+                  Ok ())
+            in
+            hook :=
+              Eio.Switch.on_release_cancellable sw (fun () ->
+                  ignore (release ()));
+            (match Eio.Stream.add retries (job, attempt, release) with
+            | () -> ()
+            | exception exn ->
+                ignore (release ());
+                raise exn);
             {
               action = raw_action;
               accepted = true;
@@ -1510,40 +1532,9 @@ let action_handler ~coordinator ~send_control ~retries ~get_store ~load_archived
                     message = Some "no retained recording to retry";
                     snapshot = snap;
                   }
-              | Ok (Some metadata) -> (
-                  let mode = mode_of_active_metadata metadata in
-                  match
-                    Recording.Coordinator.try_start coordinator
-                      (recording_mode mode) ()
-                  with
-                  | Recording.Coordinator.Started attempt ->
-                      Eio.Stream.add retries (Retained metadata, attempt);
-                      {
-                        action = raw_action;
-                        accepted = true;
-                        message = Some "retry queued";
-                        snapshot =
-                          Assistant_service.Server.snapshot_of_coordinator
-                            coordinator;
-                      }
-                  | Recording.Coordinator.Busy active ->
-                      {
-                        action = raw_action;
-                        accepted = false;
-                        message =
-                          Some
-                            ("cannot retry while "
-                            ^ Recording.Coordinator.string_of_mode active
-                            ^ " is active");
-                        snapshot = snap;
-                      }
-                  | Recording.Coordinator.Disabled ->
-                      {
-                        action = raw_action;
-                        accepted = false;
-                        message = Some "cannot retry while PIE is paused";
-                        snapshot = snap;
-                      }))))
+              | Ok (Some metadata) ->
+                  queue (mode_of_active_metadata metadata) (Retained metadata)))
+      )
   | _ ->
       {
         action = raw_action;
@@ -1612,7 +1603,11 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
     let last_stamp = ref initial_stamp in
     let coordinator = Recording.Coordinator.create ~caps () in
     let control : Ptt_loop.trigger Eio.Stream.t = Eio.Stream.create 1024 in
-    let retries : (retry_job * Recording.Coordinator.attempt) Eio.Stream.t =
+    let retries :
+        (retry_job
+        * Recording.Coordinator.attempt
+        * (unit -> (unit, Ptt_loop.error) result))
+        Eio.Stream.t =
       Eio.Stream.create 16
     in
     let store_cell = ref None in
@@ -1675,7 +1670,7 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
         (Assistant_service.Server.start ~caps ~sw ~net ~fs ~socket_path ~clock
            ~status_metadata:(fun () -> response_metadata !current)
            ~action_handler:
-             (action_handler ~coordinator ~send_control ~retries ~get_store
+             (action_handler ~sw ~coordinator ~send_control ~retries ~get_store
                 ~load_archived)
            coordinator)
     in
@@ -1808,6 +1803,11 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
       let active_owner = ref None in
       let press ?binding mode_name =
         prune_audio ();
+        if (Recording.Coordinator.snapshot coordinator).processing >= 4 then
+          pipeline.Dictation.report_notification Capacity_reached
+            "pie: processing limit reached"
+            "Four dictations are still processing. Please wait for one to \
+             finish.";
         on_press ~caps ~sw ~net ~clock ~logger ~coordinator ~config:!current
           ~pipeline ?binding
           ~focused_window:(fun () ->
@@ -1894,6 +1894,7 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
       in
       let result =
         Ptt_loop.run ~sw ~mono_clock ~logger ~control ~keyboard:inputs.keyboard
+          ~release_grace_ms:(fun () -> !current.Config.Stt.ptt_release_grace_ms)
           ~on_press_binding:(fun binding ->
             press ~binding (Config.Stt.string_of_mode binding.mode))
           ~on_capture_failure:(fun _ ->
@@ -1923,6 +1924,10 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
                   "The recording was too short or too quiet. Please repeat the \
                    dictation.")
           ~on_capture_resumed:(publish_current_phase Recording.Phase.Recording)
+          ~on_capture_ended:(fun () ->
+            let* () = publish_current_phase Recording.Phase.Processing () in
+            active_owner := None;
+            Ok ())
           ~on_low_input:(fun () ->
             Desktop.Notification.emit ~caps ~process_mgr Low_input
               "pie: microphone input is very quiet"
@@ -1942,8 +1947,17 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
       result
     in
     let retry_loop () =
+      (* Recovery has no key-press target. Never paste into retry-time focus. *)
+      let deliver config mode _window text = deliver config mode None text in
       let rec loop () =
-        let job, attempt = Eio.Stream.take retries in
+        let job, attempt, release = Eio.Stream.take retries in
+        ignore
+          (Recording.Coordinator.set_phase coordinator attempt
+             Recording.Phase.Processing);
+        let deliver config mode window text =
+          Recording.Coordinator.await_delivery coordinator attempt;
+          deliver config mode window text
+        in
         let config = !current in
         let mode =
           match job with
@@ -1957,10 +1971,6 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
             ->
               Some generation
           | Archived _ -> None
-        in
-        let release () =
-          ignore (Recording.Coordinator.release coordinator attempt);
-          Ok ()
         in
         let publish_text_slot ?(dispatch_uncertain = true) store text () =
           unless_cancelled attempt (fun () ->

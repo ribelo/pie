@@ -22,10 +22,10 @@ let is_accepting_chunks = function
   | Idle -> false
   | Capturing _ | PostRoll _ -> true
 
-let post_roll_remaining_ms state now =
+let post_roll_remaining_ms ?(tail_ms = post_roll_ms) state now =
   match state with
   | PostRoll { release_at; _ } ->
-      max 0.0 (release_at +. float_of_int post_roll_ms -. now)
+      max 0.0 (release_at +. float_of_int tail_ms -. now)
   | _ -> 0.0
 
 let duration_ms state now =

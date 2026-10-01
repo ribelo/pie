@@ -50,19 +50,28 @@ The fiber that watches component diagnostics and retries failed infrastructure e
 Push-to-talk. The user holds a key, speaks, and releases the key to capture one utterance.
 
 **Enabled**:
-The assistant accepts new recording attempts. Disabling it cancels the current attempt.
+The assistant accepts new recording attempts. Disabling it cancels only the capturing attempt; earlier processing attempts still finish and deliver.
 
 **Recording**:
 The current utterance is accepting microphone audio. A stop request begins a short finishing-capture tail, after which no more audio belongs to that utterance.
 
 **Processing**:
-Capture has ended and the assistant is obtaining the transcription or translation. The microphone recording indicator is off.
+An attempt has finished capture and is obtaining its transcription or translation, waiting for its delivery turn, or delivering. Several attempts can process while one newer attempt records. Processing alone does not keep the microphone recording indicator on.
 
 **Delivery**:
 The assistant offers the resulting text to the clipboard. It pastes only when the currently focused niri window id matches the id captured with the app id and title at key press. Changed, missing or unavailable focus means clipboard-only delivery: no keystroke, no focus change, and one notice naming the original title without the transcript. Both paths are delivered; history distinguishes `pasted` from `clipboard`. Application newline rules still apply when pasting. Character typing is not a delivery method, and paste dispatch does not prove receipt.
 
 **Busy**:
-One attempt still owns the operation, including setup, recording, processing, delivery and cleanup. A second attempt is not admitted until the first has settled. Busy does not mean recording.
+The assistant cannot admit a new capture: another attempt owns microphone capture, including its finishing tail, or the processing capacity is full. A processing attempt alone does not make capture busy.
+
+**Armed**:
+The assistant is enabled and no attempt owns microphone capture. Earlier attempts may still be processing.
+
+**Release grace**:
+The interval after a push-to-talk release in which pressing the same binding continues the same recording and history attempt. A different binding finishes the old capture and starts a separate attempt.
+
+**Delivery order**:
+Attempts deliver in the order they started. A failed, cancelled or ignored attempt leaves its place without blocking later text.
 
 **Dictation pipeline**:
 The configured audio-to-text flow: `one-pass` (the default when `pipeline` is absent) or `two-pass`. Removed pipeline values and conversational-model configurations fail loading rather than falling back.

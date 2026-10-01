@@ -260,6 +260,17 @@ let test_status_success () =
     run.stdout;
   Alcotest.(check string) "stderr empty" "" run.stderr
 
+let test_status_processing () =
+  with_temp_dir @@ fun runtime_dir ->
+  let json = {|{"active":false,"processing":2,"mode":"idle","enabled":true}|} in
+  let run = with_reply ~runtime_dir json [ "status" ] in
+  require_exited_zero run.status;
+  Alcotest.(check string)
+    "armed and processing count"
+    ("armed\nprocessing: 2\n"
+    ^ build_lines ~runtime_dir ~commit:"unknown" ~time:"unknown")
+    run.stdout
+
 let test_status_response_metadata () =
   with_temp_dir @@ fun runtime_dir ->
   let json =
@@ -471,6 +482,8 @@ let () =
             (test_msg_status_metadata ~same_build:false);
           Alcotest.test_case "JSON matching build omits client identity" `Quick
             (test_msg_status_metadata ~same_build:true);
+          Alcotest.test_case "dict-d4jm armed while processing" `Quick
+            test_status_processing;
           Alcotest.test_case "valid status stdout and exit 0" `Quick
             test_status_success;
           Alcotest.test_case "rpc error nonzero stderr" `Quick
