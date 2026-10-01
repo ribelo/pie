@@ -50,6 +50,14 @@ type mode =
           prompt, not a second recognizer. With [One_pass], a translate binding
           uses [translation_model] and the translate prompt. *)
 
+type prompt_rule = {
+  app_id : string option;
+  title_regex : string option;
+  mode : mode option;
+  prompt_file : string;
+  prompt : string;
+}
+
 type correction = {
   model : string;
       (** OpenRouter model id, without the [openrouter/] prefix. Pass 2 sends
@@ -101,6 +109,7 @@ type t = {
   transcription_prompt : string;
   translation_prompt : string;
   newline_rules : newline_rule list;
+  prompt_rules : prompt_rule list;
   text_entry_rules : text_entry_rule list;
       (** Per-window delivery. [method] is always paste. A file value ["type"]
           is accepted only for compatibility: the rule pastes, and {!load} or
@@ -140,6 +149,14 @@ val resolve_model_provider :
   default_provider:provider -> string -> resolved_model
 
 val find_binding : t -> keysym:int -> shift:bool -> binding option
+
+val select_prompt : t -> binding -> window:Niri.window_info option -> binding
+(** First rule matching the key-press window and optional mode wins. Without a
+    match (including absent focus), retains the resolved binding/pipeline
+    default. Both matchers have the same semantics as text-entry rules. *)
+
+val effective_reasoning_effort : t -> binding -> string option
+(** Configured first-request effort. Retries may raise it to medium. *)
 
 val default_audio_retention_hours : float
 (** [24.]. [0] disables archiving and does not delete existing files. *)

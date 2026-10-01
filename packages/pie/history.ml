@@ -80,6 +80,9 @@ type finished = {
   response_path : string option;
   first_response_path : string option;
   retry : retry option;
+  reasoning_effort : string option;
+  response_schema : string option;
+  prompt_file : string option;
 }
 
 type entry = {
@@ -103,6 +106,9 @@ type entry = {
   response_path : string option;
   first_response_path : string option;
   retry : retry option;
+  reasoning_effort : string option;
+  response_schema : string option;
+  prompt_file : string option;
 }
 
 type audio_recorded = { id : string; time : float; path : string }
@@ -274,6 +280,9 @@ let json_of_entry (entry : entry) =
       ("responsePath", json_string_opt entry.response_path);
       ("firstResponsePath", json_string_opt entry.first_response_path);
       ("retry", json_retry entry.retry);
+      ("reasoningEffort", json_string_opt entry.reasoning_effort);
+      ("responseSchema", json_string_opt entry.response_schema);
+      ("promptFile", json_string_opt entry.prompt_file);
     ]
 
 let json_of_entries entries = `List (List.map json_of_entry entries)
@@ -377,6 +386,17 @@ let event_json = function
         match event.retry with
         | None -> fields
         | Some _ -> fields @ [ ("retry", json_retry event.retry) ]
+      in
+      let fields =
+        List.fold_left
+          (fun fields (name, value) ->
+            add name (Option.map (fun text -> `String text) value) fields)
+          fields
+          [
+            ("reasoningEffort", event.reasoning_effort);
+            ("responseSchema", event.response_schema);
+            ("promptFile", event.prompt_file);
+          ]
       in
       `Assoc
         (add "audioPath"
@@ -543,6 +563,9 @@ let event_of_json json =
         let* response_path = optional_string fields "responsePath" in
         let* first_response_path = optional_string fields "firstResponsePath" in
         let* retry = retry_of fields in
+        let* reasoning_effort = optional_string fields "reasoningEffort" in
+        let* response_schema = optional_string fields "responseSchema" in
+        let* prompt_file = optional_string fields "promptFile" in
         if Option.fold ~none:false ~some:(fun n -> n < 0) pass2_duration_ms then
           Error "pass2DurationMs is negative"
         else
@@ -561,6 +584,9 @@ let event_of_json json =
                  response_path;
                  first_response_path;
                  retry;
+                 reasoning_effort;
+                 response_schema;
+                 prompt_file;
                })
     | "audio" ->
         let* path = require_string fields "audioPath" in
@@ -641,6 +667,12 @@ let entry_of id pending =
     first_response_path =
       Option.bind finished (fun (event : finished) -> event.first_response_path);
     retry = Option.bind finished (fun (event : finished) -> event.retry);
+    reasoning_effort =
+      Option.bind finished (fun (event : finished) -> event.reasoning_effort);
+    response_schema =
+      Option.bind finished (fun (event : finished) -> event.response_schema);
+    prompt_file =
+      Option.bind finished (fun (event : finished) -> event.prompt_file);
   }
 
 let merge events =

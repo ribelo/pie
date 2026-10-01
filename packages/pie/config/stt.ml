@@ -22,6 +22,14 @@ type text_entry_rule = Input.Text_injection.text_entry_rule = {
 type mode = Transcribe | Translate
 type pipeline = Legacy | One_pass | Two_pass
 
+type prompt_rule = {
+  app_id : string option;
+  title_regex : string option;
+  mode : mode option;
+  prompt_file : string;
+  prompt : string;
+}
+
 type correction = {
   model : string;
   reasoning_effort : string option;
@@ -56,6 +64,7 @@ type t = {
   transcription_prompt : string;
   translation_prompt : string;
   newline_rules : newline_rule list;
+  prompt_rules : prompt_rule list;
   text_entry_rules : text_entry_rule list;
   pipeline : pipeline;
   streaming : bool;
@@ -180,6 +189,32 @@ let find_binding config ~keysym ~shift =
     (fun binding -> binding.keysym = keysym && binding.shift = shift)
     config.bindings
 
+let select_prompt config (binding : binding) ~window =
+  let matching (rule : prompt_rule) =
+    (rule.mode = None || rule.mode = Some binding.mode)
+    && Option.fold ~none:false
+         ~some:
+           (Input.Text_injection.matches_window ~app_id:rule.app_id
+              ~title_regex:rule.title_regex)
+         window
+  in
+  match List.find_opt matching config.prompt_rules with
+  | None -> binding
+  | Some rule ->
+      {
+        binding with
+        prompt_named = true;
+        prompt_file = rule.prompt_file;
+        prompt = rule.prompt;
+      }
+
+let effective_reasoning_effort config (binding : binding) =
+  match config.pipeline with
+  | One_pass -> config.thinking_effort
+  | Two_pass when binding.correct ->
+      Option.bind config.correction (fun c -> c.reasoning_effort)
+  | Legacy | Two_pass -> None
+
 let toml_find table key =
   match table with `Assoc fields -> List.assoc_opt key fields | _ -> None
 
@@ -262,12 +297,12 @@ let get_int table key default_val =
   | Some _ -> type_error key "an integer"
   | None -> default_val
 
-let get_optional_string table key =
+let get_optional_string ?where table key =
   match toml_find table key with
   | Some (`String value) -> (
       match String.trim value with "" -> None | trimmed -> Some trimmed)
   | Some `Null | None -> None
-  | Some _ -> type_error key "a string"
+  | Some _ -> type_error (Option.value where ~default:key) "a string"
 
 let optional_number table key =
   match toml_find table key with
@@ -594,6 +629,44 @@ let parse_text_entry_rules ?(warn = ignore_warning) table =
       parsed
   | Some _ -> raise (Config_error "text_entry_rules must be an array of tables")
 
+let parse_prompt_rule index table =
+  let where field = Printf.sprintf "prompt_rules[%d].%s" index field in
+  let optional field = get_optional_string ~where:(where field) table field in
+  let app_id = optional "app_id" in
+  let title_regex = optional "title_regex" in
+  if app_id = None && title_regex = None then
+    raise
+      (Config_error
+         (Printf.sprintf
+            "prompt_rules[%d] must specify app_id and/or title_regex" index));
+  validate_title_regex "prompt_rules" index title_regex;
+  let mode =
+    match optional "mode" with
+    | None -> None
+    | Some "transcribe" -> Some Transcribe
+    | Some "translate" -> Some Translate
+    | Some value ->
+        raise
+          (Config_error
+             (Printf.sprintf "%s: unknown mode %S" (where "mode") value))
+  in
+  let prompt_file =
+    match toml_find table "prompt" with
+    | Some (`String value) ->
+        validate_prompt_file_name ~where:(where "prompt") value
+    | None -> raise (Config_error (where "prompt" ^ " is required"))
+    | Some _ -> type_error (where "prompt") "a string"
+  in
+  { app_id; title_regex; mode; prompt_file; prompt = "" }
+
+let parse_prompt_rules table =
+  match toml_find table "prompt_rules" with
+  | None | Some `Null -> []
+  | Some (`List rules)
+    when List.for_all (function `Assoc _ -> true | _ -> false) rules ->
+      List.mapi parse_prompt_rule rules
+  | Some _ -> raise (Config_error "prompt_rules must be an array of tables")
+
 let reject_unsupported_wakeword table =
   List.iter
     (fun key ->
@@ -843,6 +916,7 @@ let of_json ?(warn = ignore_warning) table : t =
     translation_prompt;
     newline_rules = parse_newline_rules table;
     text_entry_rules = parse_text_entry_rules ~warn table;
+    prompt_rules = parse_prompt_rules table;
     pipeline;
     streaming;
     correction;
@@ -874,6 +948,18 @@ let yojson_of_t (config : t) =
         ("app_id", opt r.app_id);
         ("title_regex", opt r.title_regex);
         ("method", string (string_of_entry_method r.method_));
+      ]
+  in
+  let prompt_rule (rule : prompt_rule) =
+    `Assoc
+      [
+        ("app_id", opt rule.app_id);
+        ("title_regex", opt rule.title_regex);
+        ( "mode",
+          Option.fold ~none:`Null
+            ~some:(fun mode -> string (string_of_mode mode))
+            rule.mode );
+        ("prompt", string rule.prompt_file);
       ]
   in
   let correction_field name encode =
@@ -918,6 +1004,7 @@ let yojson_of_t (config : t) =
       ( "newline_rules",
         `List (List.map (fun r -> rule r.action r) config.newline_rules) );
       ("text_entry_rules", `List (List.map entry config.text_entry_rules));
+      ("prompt_rules", `List (List.map prompt_rule config.prompt_rules));
       ("pipeline", string (string_of_pipeline config.pipeline));
       ("streaming", `Bool config.streaming);
       correction_field "correction_model" (fun correction ->
@@ -975,6 +1062,49 @@ let resolve_binding_prompts ~read ~prompts_dir config =
       in
       { config with bindings }
 
+let embedded_prompt_named = function
+  | "correction.md" -> Some default_correction_prompt
+  | "correction-translate.md" -> Some default_correction_translate_prompt
+  | "one-pass.md" -> Some default_one_pass_prompt
+  | "one-pass-verbatim.md" -> Some default_one_pass_verbatim_prompt
+  | "one-pass-translate.md" -> Some default_one_pass_translate_prompt
+  | _ -> None
+
+let resolve_prompt_rules ~read ~prompts_dir config =
+  let prompt_rules =
+    List.mapi
+      (fun index (rule : prompt_rule) ->
+        let label = Printf.sprintf "prompt_rules[%d]" index in
+        let path = Filename.concat prompts_dir rule.prompt_file in
+        let prompt =
+          match read path with
+          | Ok content -> content
+          | Error `Missing -> (
+              match embedded_prompt_named rule.prompt_file with
+              | Some prompt -> prompt
+              | None ->
+                  raise (Config_error (label ^ ": " ^ path ^ ": no such file")))
+          | Error (`Unreadable reason) ->
+              raise (Config_error (label ^ ": " ^ path ^ ": " ^ reason))
+        in
+        let modes =
+          match rule.mode with
+          | Some mode -> [ mode ]
+          | None ->
+              List.sort_uniq compare
+                (List.map
+                   (fun (binding : binding) -> binding.mode)
+                   config.bindings)
+        in
+        List.iter
+          (fun mode ->
+            validate_pass2_prompt mode (label ^ ": " ^ rule.prompt_file) prompt)
+          modes;
+        { rule with prompt })
+      config.prompt_rules
+  in
+  { config with prompt_rules }
+
 let load ~caps ~fs ?source ?read ?(warn = ignore_warning) () =
   let source = Option.value source ~default:(default_source ~caps ()) in
   let path = source_path source in
@@ -1026,6 +1156,7 @@ let load ~caps ~fs ?source ?read ?(warn = ignore_warning) () =
     validate_translation_prompt translation_prompt;
     resolve_binding_prompts ~read ~prompts_dir
       { config with transcription_prompt; translation_prompt }
+    |> resolve_prompt_rules ~read ~prompts_dir
   with
   | config -> Ok config
   | exception Config_error message -> Error (`Config message)

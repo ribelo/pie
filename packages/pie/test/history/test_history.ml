@@ -82,6 +82,9 @@ let finished ?(id = "attempt-1") ?(time = 1_700_000_001.5)
     response_path = None;
     first_response_path = None;
     retry = None;
+    reasoning_effort = None;
+    response_schema = None;
+    prompt_file = None;
   }
 
 let test_round_trip () =
@@ -102,6 +105,9 @@ let test_round_trip () =
           response_path = Some "/audio/attempt-1.response.json";
           first_response_path = Some "/audio/attempt-1.response-1.json";
           retry = Some retry;
+          reasoning_effort = Some "medium";
+          response_schema = Some "dictation/text-v1";
+          prompt_file = Some "neutral.md";
         }
       in
       fail_history (Pie.History.append_transcribed ~caps ~path raw);
@@ -127,6 +133,16 @@ let test_round_trip () =
           Alcotest.(check bool)
             "retry roundtrip dict-x6e9" true
             (entry.retry = done_.retry);
+          List.iter
+            (fun (name, expected, actual) ->
+              Alcotest.(check (option string)) name expected actual)
+            [
+              ( "effort roundtrip",
+                done_.reasoning_effort,
+                entry.reasoning_effort );
+              ("schema roundtrip", done_.response_schema, entry.response_schema);
+              ("prompt roundtrip", done_.prompt_file, entry.prompt_file);
+            ];
           Alcotest.(check string)
             "time" "2023-11-14T22:13:20.000Z"
             (match
@@ -396,6 +412,9 @@ let test_listing_truncation () =
         response_path = None;
         first_response_path = None;
         retry = None;
+        reasoning_effort = None;
+        response_schema = None;
+        prompt_file = None;
         delivery = None;
       }
   in
@@ -744,7 +763,13 @@ let test_audio_path_is_optional () =
       (match entries with
       | [ entry ] ->
           Alcotest.(check (option string))
-            "old line has no audio" None entry.audio_path
+            "old line has no audio" None entry.audio_path;
+          Alcotest.(check (option string))
+            "old effort absent" None entry.reasoning_effort;
+          Alcotest.(check (option string))
+            "old schema absent" None entry.response_schema;
+          Alcotest.(check (option string))
+            "old prompt absent" None entry.prompt_file
       | _ -> Alcotest.fail "expected the old finished line");
       let noted =
         { (finished ~id:"noted" ()) with audio_path = Some "/a/noted.opus" }

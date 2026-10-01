@@ -866,6 +866,165 @@ let test_text_entry_rules_absent () =
   Alcotest.(check int) "no rules" 0 (List.length config.text_entry_rules);
   Alcotest.(check int) "no warning" 0 (List.length warnings)
 
+let test_default_profanity_policy () =
+  List.iter
+    (fun prompt ->
+      Alcotest.(check bool)
+        "remove incidental profanity dict-x9pf" true
+        (contains "Remove incidental profanity used as emphasis or filler"
+           prompt);
+      Alcotest.(check bool)
+        "keep quotation and explicit request" true
+        (contains
+           "keep profanity that is quoted, technically necessary, or \
+            explicitly requested"
+           prompt))
+    [
+      Config.default_one_pass_prompt;
+      Config.default_one_pass_translate_prompt;
+      Config.default_correction_prompt;
+      Config.default_correction_translate_prompt;
+    ];
+  Alcotest.(check bool)
+    "raw verbatim has no removal instruction" false
+    (contains "Remove incidental profanity"
+       Config.default_one_pass_verbatim_prompt)
+
+let test_prompt_rules () =
+  (* dict-c3nt: validate at load, then choose from the captured press window. *)
+  with_sandbox @@ fun dir ->
+  Eio_main.run @@ fun env ->
+  let path = Filename.concat dir "stt.toml" in
+  let prompts = Filename.concat dir "prompts" in
+  Unix.mkdir prompts 0o700;
+  write (Filename.concat prompts "neutral.md") "Neutral {{glossary}}";
+  let base =
+    "pipeline = \"one-pass\"\n\
+     thinking_effort = \"low\"\n\
+     transcription_model = \"openrouter/google/gemini-3.8-flash\"\n\
+     translation_model = \"openrouter/google/gemini-3.8-flash\"\n"
+  in
+  let rule fields = "[[prompt_rules]]\n" ^ fields ^ "\n" in
+  let rules =
+    rule
+      "app_id = \"SLACK\"\n\
+       title_regex = \"^Team\"\n\
+       mode = \"transcribe\"\n\
+       prompt = \"neutral.md\""
+    ^ rule "app_id = \"slack\"\nmode = \"transcribe\"\nprompt = \"one-pass.md\""
+  in
+  write path (base ^ rules);
+  let config = expect_ok (load env path) in
+  let binding = transcribe_binding config in
+  let window app_id title =
+    Some
+      {
+        Pie.Niri.id = 1;
+        app_id = Some app_id;
+        title = Some title;
+        pid = None;
+        workspace_id = None;
+      }
+  in
+  let choose binding window = Config.select_prompt config binding ~window in
+  let selected = choose binding (window "slack" "Team chat") in
+  Alcotest.(check string)
+    "first matching rule" "neutral.md" selected.prompt_file;
+  Alcotest.(check string)
+    "loaded file content" "Neutral {{glossary}}" selected.prompt;
+  Alcotest.(check string)
+    "conjunctive title filter falls through" "one-pass.md"
+    (choose binding (window "slack" "Elsewhere")).prompt_file;
+  List.iter
+    (fun focus ->
+      Alcotest.(check string)
+        "no match keeps default" binding.prompt_file
+        (choose binding focus).prompt_file)
+    [ None; window "editor" "Team chat" ];
+  let named =
+    {
+      binding with
+      prompt_file = "binding.md";
+      prompt = "Binding {{glossary}}";
+      prompt_named = true;
+    }
+  in
+  Alcotest.(check string)
+    "rule beats binding" "neutral.md"
+    (choose named (window "slack" "Team chat")).prompt_file;
+  Alcotest.(check string)
+    "unmatched binding stays" "binding.md" (choose named None).prompt_file;
+  let translated =
+    {
+      binding with
+      mode = Config.Translate;
+      prompt_file = "one-pass-translate.md";
+    }
+  in
+  Alcotest.(check string)
+    "mode filter" "one-pass-translate.md"
+    (choose translated (window "slack" "Team chat")).prompt_file;
+  Alcotest.(check (option string))
+    "first effort stays low" (Some "low")
+    (Config.effective_reasoning_effort config selected);
+  let json =
+    Pie.Assistant.Service.startup_config_json ~caps ~config_path:path ~config
+      ~ptt_transcribe_keysym:config.ptt_transcribe_keysym
+      ~ptt_translate_keysym:config.ptt_translate_keysym ~min_duration_ms:250 ()
+    |> Yojson.Safe.from_string
+  in
+  Alcotest.(check bool)
+    "startup schema" true
+    (Yojson.Safe.Util.member "response_schema" json
+    = `String "dictation/text-v1");
+  Alcotest.(check bool)
+    "startup effort" true
+    (Yojson.Safe.Util.member "reasoning_effort" json = `String "low");
+  Alcotest.(check int)
+    "startup rules" 2
+    (List.length
+       (Yojson.Safe.Util.to_list (Yojson.Safe.Util.member "prompt_rules" json)));
+  write
+    (Filename.concat prompts "universal.md")
+    "{{glossary}} {{source_language}} {{target_language}}";
+  write path (base ^ rule "title_regex = \"Team\"\nprompt = \"universal.md\"");
+  let universal = expect_ok (load env path) in
+  Alcotest.(check string)
+    "mode-less rule covers translation" "universal.md"
+    (Config.select_prompt universal translated ~window:(window "other" "Team"))
+      .prompt_file;
+  let roundtrip =
+    match Config.decode (Config.door_spec.yojson_of_t config) with
+    | Ok decoded -> decoded
+    | Error message -> Alcotest.fail message
+  in
+  Alcotest.(check int)
+    "rules config roundtrip" 2
+    (List.length roundtrip.prompt_rules);
+  List.iter
+    (fun fields ->
+      write path (base ^ rule fields);
+      expect_error ~needle:"prompt_rules[0]" (load env path))
+    [
+      "app_id = 7\nprompt = \"neutral.md\"";
+      "title_regex = 7\nprompt = \"neutral.md\"";
+      "app_id = \"slack\"\nmode = 7\nprompt = \"neutral.md\"";
+      "app_id = \"slack\"\nprompt = 7";
+      "prompt = \"neutral.md\"";
+      "app_id = \"slack\"";
+      "app_id = \"slack\"\nprompt = \"missing.md\"";
+      "app_id = \"slack\"\nprompt = \"../neutral.md\"";
+      "title_regex = \"[\"\nprompt = \"neutral.md\"";
+      "app_id = \"slack\"\nmode = \"chat\"\nprompt = \"neutral.md\"";
+      "app_id = \"slack\"\nmode = \"translate\"\nprompt = \"neutral.md\"";
+      "app_id = \"slack\"\nprompt = \"neutral.md\"";
+    ];
+  write (Filename.concat prompts "neutral.md") "";
+  write path (base ^ rules);
+  expect_error ~needle:"prompt_rules[0]" (load env path);
+  write (Filename.concat prompts "neutral.md") "No placeholders";
+  expect_error ~needle:"prompt_rules[0]" (load env path)
+
 let () =
   Alcotest.run "config_boundary"
     [
@@ -878,6 +1037,10 @@ let () =
           Alcotest.test_case "defaults and model overrides" `Quick
             test_defaults_and_models;
           Alcotest.test_case "invalid settings" `Quick test_invalid_settings;
+          Alcotest.test_case "default profanity policy dict-x9pf" `Quick
+            test_default_profanity_policy;
+          Alcotest.test_case "destination prompt rules dict-c3nt" `Quick
+            test_prompt_rules;
           Alcotest.test_case "typed rule arrays" `Quick test_rules;
           Alcotest.test_case "relative prompt paths and validation" `Quick
             test_prompt_resolution;

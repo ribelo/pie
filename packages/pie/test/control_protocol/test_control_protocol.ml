@@ -10,6 +10,8 @@ let armed_snapshot : C.recording_snapshot =
     updated_at = None;
     transcript_path = None;
     last_error = None;
+    reasoning_effort = None;
+    response_schema = None;
   }
 
 let expect_ok label = function
@@ -27,6 +29,22 @@ let test_status_valid () =
       Alcotest.(check bool) "enabled" true snap.enabled;
       Alcotest.(check string) "mode" "idle" snap.mode
   | _ -> Alcotest.fail "expected Status_resp"
+
+let test_response_metadata () =
+  let snapshot =
+    {
+      armed_snapshot with
+      reasoning_effort = Some "low";
+      response_schema = Some "dictation/text-v1";
+    }
+  in
+  match C.response_of_json C.Status (C.json_of_snapshot snapshot) with
+  | Ok (C.Status_resp actual) ->
+      Alcotest.(check (option string))
+        "effort" snapshot.reasoning_effort actual.reasoning_effort;
+      Alcotest.(check (option string))
+        "schema" snapshot.response_schema actual.response_schema
+  | _ -> Alcotest.fail "metadata status did not roundtrip"
 
 let test_status_missing_mode () =
   expect_error "missing mode" C.missing_field
@@ -261,6 +279,8 @@ let () =
     [
       ( "decode",
         [
+          Alcotest.test_case "response metadata dict-h8rd" `Quick
+            test_response_metadata;
           Alcotest.test_case "status valid" `Quick test_status_valid;
           Alcotest.test_case "status missing field" `Quick
             test_status_missing_mode;

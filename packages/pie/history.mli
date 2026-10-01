@@ -73,6 +73,9 @@ type finished = {
   response_path : string option;
   first_response_path : string option;
   retry : retry option;
+  reasoning_effort : string option;
+  response_schema : string option;
+  prompt_file : string option;
       (** Archive file for this attempt. Absent on lines written before the
           archive existed, and until encoding has recorded a path. *)
 }
@@ -98,6 +101,9 @@ type entry = {
   response_path : string option;
   first_response_path : string option;
   retry : retry option;
+  reasoning_effort : string option;
+  response_schema : string option;
+  prompt_file : string option;
 }
 (** Merged view of one attempt. Fields known only after pass 1 or pass 2 are
     optional, so a transcript can be recovered before the attempt finishes.

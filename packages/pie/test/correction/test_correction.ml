@@ -270,7 +270,7 @@ let expect_failure expected result =
         diagnostic
 
 let call ~sw ~net ~clock ~logger ?temperature ?reasoning_effort ?audio
-    ?audio_format ?provider_order
+    ?audio_format ?provider_order ?output_language
     ?(prompt_template = prompt_sentinel ^ " {{glossary}}")
     ?(glossary = glossary_sentinel) ?(language = "pl") ?(source_language = "pl")
     ?(target_language = "en") ?(transcript = transcript_sentinel)
@@ -278,7 +278,7 @@ let call ~sw ~net ~clock ~logger ?temperature ?reasoning_effort ?audio
   Pie.Stt.Correction.run ~caps ~sw ~net ~clock ~logger ~model:"test-model"
     ~prompt_template ~transcript ~glossary ~language ~source_language
     ~target_language ?audio ?audio_format ?provider_order ?temperature
-    ?reasoning_effort ~timeout ()
+    ?reasoning_effort ?output_language ~timeout ()
 
 let fields = function
   | `Assoc items -> items
@@ -303,7 +303,7 @@ let float_field name json =
   | other ->
       Alcotest.failf "%s not a number: %s" name (Yojson.Safe.to_string other)
 
-let assert_request ~temperature ~reasoning head body =
+let assert_request ?(output_language = "pl") ~temperature ~reasoning head body =
   let request_line =
     match String.index_opt head '\r' with
     | None -> String.sub head 0 (min 120 (String.length head))
@@ -330,6 +330,21 @@ let assert_request ~temperature ~reasoning head body =
     "no extra output fields" true
     (field "additionalProperties" (field "schema" format) = `Bool false);
   Alcotest.(check string) "model" "test-model" (string_field "model" json);
+  let schema = field "schema" format in
+  let text_property = field "text" (field "properties" schema) in
+  Alcotest.(check string)
+    "answer framing dict-7k2q"
+    (Printf.sprintf
+       "The final message to type, in %s, exactly as the instructions require. \
+        Nothing else."
+       output_language)
+    (string_field "description" text_property);
+  Alcotest.(check int)
+    "only text property" 1
+    (List.length (fields (field "properties" schema)));
+  Alcotest.(check bool)
+    "text remains required" true
+    (field "required" schema = `List [ `String "text" ]);
   let expected_instructions =
     prompt_sentinel ^ "\n" ^ glossary_sentinel
     ^ "\npl from pl to en\n{{transcript}}"
@@ -376,12 +391,13 @@ let assert_request ~temperature ~reasoning head body =
         "reasoning excluded" true
         (field "exclude" (field "reasoning" json) = `Bool true)
 
-let child_request () =
+let child_request ?output_language () =
   let result, hits, captured =
     with_fixture
       ~reply:(Json (completed "done"))
       (fun ~sw ~net ~clock ~logger ->
-        call ~sw ~net ~clock ~logger ~temperature:0.4 ~reasoning_effort:"low"
+        call ~sw ~net ~clock ~logger ?output_language ~temperature:0.4
+          ~reasoning_effort:"low"
           ~prompt_template:
             (prompt_sentinel
            ^ "\n\
@@ -400,7 +416,8 @@ let child_request () =
   match captured with
   | None -> Alcotest.fail "fixture saw no request"
   | Some (head, body) ->
-      assert_request ~temperature:0.4 ~reasoning:(Some "low") head body
+      assert_request ?output_language ~temperature:0.4 ~reasoning:(Some "low")
+        head body
 
 let child_reasoning_item () =
   let result, _hits, _captured =
@@ -875,6 +892,7 @@ let child_audio () =
 
 let child_main name =
   match name with
+  | "translate-framing" -> child_request ~output_language:"English" ()
   | "request" -> child_request () (* dict-ldo9 dict-l4zp dict-g52m *)
   | "retry-provider-cancel" -> child_retry_success ~cancelled:true ()
   | "retry-success" -> child_retry_success ()
@@ -987,6 +1005,7 @@ let () =
         [
           ( "adapter",
             [
+              case "translate-framing" "dict-7k2q" ~with_key:true;
               case "request" "dict-ldo9 dict-l4zp dict-g52m" ~with_key:true;
               case "retry-close" "dict-6wq3" ~with_key:true;
               case "retry-output" "dict-6wq3" ~with_key:true;

@@ -243,6 +243,18 @@ let test_status_success () =
   Alcotest.(check string) "stdout armed" "armed\n" run.stdout;
   Alcotest.(check string) "stderr empty" "" run.stderr
 
+let test_status_response_metadata () =
+  with_temp_dir @@ fun runtime_dir ->
+  let json =
+    {|{"active":false,"mode":"idle","enabled":true,"reasoningEffort":"low","responseSchema":"dictation/text-v1"}|}
+  in
+  let run = with_reply ~runtime_dir json [ "status" ] in
+  require_exited_zero run.status;
+  Alcotest.(check string)
+    "configured metadata dict-h8rd"
+    "armed\nreasoning_effort: low\nresponse_schema: dictation/text-v1\n"
+    run.stdout
+
 let test_status_rpc_error () =
   with_temp_dir @@ fun runtime_dir ->
   let run = with_reply ~runtime_dir error_status_json [ "status" ] in
@@ -385,6 +397,8 @@ let () =
     [
       ( "status",
         [
+          Alcotest.test_case "status answer metadata" `Quick
+            test_status_response_metadata;
           Alcotest.test_case "valid status stdout and exit 0" `Quick
             test_status_success;
           Alcotest.test_case "rpc error nonzero stderr" `Quick

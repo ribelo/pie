@@ -7,6 +7,8 @@ type recording_snapshot = {
   updated_at : string option;
   transcript_path : string option;
   last_error : string option;
+  reasoning_effort : string option;
+  response_schema : string option;
 }
 
 type request = Status | Pause | Resume | Toggle | Action of string
@@ -92,6 +94,8 @@ let snapshot_keys =
     "updatedAt";
     "transcriptPath";
     "lastError";
+    "reasoningEffort";
+    "responseSchema";
   ]
 
 let snapshot_of_json json =
@@ -104,6 +108,8 @@ let snapshot_of_json json =
   let* updated_at = optional_string "updatedAt" fields in
   let* transcript_path = optional_string "transcriptPath" fields in
   let* last_error = optional_string "lastError" fields in
+  let* reasoning_effort = optional_string "reasoningEffort" fields in
+  let* response_schema = optional_string "responseSchema" fields in
   let* phase =
     match List.assoc_opt "phase" fields with
     | None -> Ok (Recording.Phase.legacy ~active ~enabled ~mode ~last_error)
@@ -123,24 +129,36 @@ let snapshot_of_json json =
       updated_at;
       transcript_path;
       last_error;
+      reasoning_effort;
+      response_schema;
     }
 
 let json_of_snapshot snap =
+  let metadata =
+    List.filter_map
+      (fun (name, value) ->
+        Option.map (fun value -> (name, `String value)) value)
+      [
+        ("reasoningEffort", snap.reasoning_effort);
+        ("responseSchema", snap.response_schema);
+      ]
+  in
   `Assoc
-    [
-      ("phase", `String (Recording.Phase.to_string snap.phase));
-      ("active", `Bool snap.active);
-      ("mode", `String snap.mode);
-      ("enabled", `Bool snap.enabled);
-      ( "startedAt",
-        match snap.started_at with Some s -> `String s | None -> `Null );
-      ( "updatedAt",
-        match snap.updated_at with Some s -> `String s | None -> `Null );
-      ( "transcriptPath",
-        match snap.transcript_path with Some s -> `String s | None -> `Null );
-      ( "lastError",
-        match snap.last_error with Some s -> `String s | None -> `Null );
-    ]
+    (metadata
+    @ [
+        ("phase", `String (Recording.Phase.to_string snap.phase));
+        ("active", `Bool snap.active);
+        ("mode", `String snap.mode);
+        ("enabled", `Bool snap.enabled);
+        ( "startedAt",
+          match snap.started_at with Some s -> `String s | None -> `Null );
+        ( "updatedAt",
+          match snap.updated_at with Some s -> `String s | None -> `Null );
+        ( "transcriptPath",
+          match snap.transcript_path with Some s -> `String s | None -> `Null );
+        ( "lastError",
+          match snap.last_error with Some s -> `String s | None -> `Null );
+      ])
 
 let json_of_action_result result =
   `Assoc
