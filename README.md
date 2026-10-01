@@ -40,6 +40,35 @@ dune build --build-dir .scratch/example-build/dune --only-packages pie
 
 This does not install or restart anything.
 
+## Glossary
+
+Pie reads one global glossary for every application. Its default is
+`~/.config/pie/glossary.md`, or `$XDG_CONFIG_HOME/pie/glossary.md` when that
+configuration directory is set. `PIE_GLOSSARY` names a replacement file.
+Symlinks are followed, the whole file is read at each key press, and missing or
+unreadable files warn without stopping dictation. There is no project lookup
+or size cap. Project terms go in sections of this same file.
+
+```bash
+pie glossary             # path, existence, physical line count
+pie glossary --help      # format and a coding-agent maintenance recipe
+```
+
+Use one line per term, with comma-separated mishearing variants and `##`
+section headings:
+
+```markdown
+## OCaml
+- Eio — ejo, e i o
+- Dune — dun, diun
+```
+
+Ask a coding agent to collect a project's names, identifiers, tools and
+commands, plus how recognition mishears each. Have it extend the global
+file, keep existing sections, and merge duplicate terms' variants on one
+line. Edits apply at the next key press; do not restart Pie. The bundled
+skill and `pie skill install` have been removed.
+
 ## Test against current local Ox master
 
 ```bash

@@ -861,18 +861,17 @@ let production_pipeline ~caps ~sw ~net ~clock ~logger ~process_mgr =
   {
     Dictation.resolve_glossary =
       (fun () ->
-        let window = ref None in
-        let glossary =
-          Glossary.resolve_focused ~caps ~process_mgr
-            ~on_focus:(fun focused ->
-              window :=
-                Option.map
-                  (fun (w : Niri.window_info) ->
-                    { History.app_id = w.app_id; title = w.title })
-                  focused)
-            ()
+        let glossary = Glossary.resolve ~caps () in
+        let window =
+          match Niri.focused_window ~process_mgr () with
+          | Error _ -> None
+          | Ok focused ->
+              Option.map
+                (fun (w : Niri.window_info) ->
+                  { History.app_id = w.app_id; title = w.title })
+                focused
         in
-        (glossary, !window));
+        (glossary, window));
     pass1 =
       (fun config binding glossary pcm ->
         let model = resolved_model_for_mode config Transcribe in

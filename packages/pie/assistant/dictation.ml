@@ -60,8 +60,7 @@ let create deps ~config ~binding =
     (fun warning ->
       deps.warn
         (match warning with
-        | Glossary.Unreadable { path; message } -> path ^ ": " ^ message
-        | Focus_unavailable message -> message))
+        | Glossary.Unreadable { path; message } -> path ^ ": " ^ message))
     glossary.warnings;
   {
     deps;

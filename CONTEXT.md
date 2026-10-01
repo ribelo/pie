@@ -76,14 +76,14 @@ _Avoid_: post-processing, fixer
 The text pass 1 returned, before pass 2. It is kept in the history and typed when pass 2 fails on a transcription binding.
 
 **Glossary**:
-The words the user dictates and how recognition mishears them, rendered from the global glossary and the project glossary and given to both passes.
+The words the user dictates and how recognition mishears them, read from one global glossary at each key press and given to the selected dictation pipeline. Terms from projects live in sections of this same file.
 _Avoid_: context, project context, vocabulary
 
 **Global glossary**:
-The glossary file in Pie's configuration directory, or the file named by `PIE_GLOSSARY`.
+The only glossary file Pie resolves: `glossary.md` in Pie's XDG configuration directory (normally `~/.config/pie/glossary.md`), or the replacement file named by `PIE_GLOSSARY`. Symlinks are followed and the full file is reread for every attempt; missing or unreadable files warn without blocking dictation. `pie glossary` shows its path, existence and line count, and its help explains maintenance.
 
-**Project glossary**:
-The `.pie/glossary.md` file of the nearest ancestor of the focused window's working directory at key press.
+**Project glossary** (retired):
+The former per-project `.pie/glossary.md` source discovered from the focused process tree. Pie no longer discovers or reads it; project terms belong in the global glossary. Its bundled agent skill and `pie skill install` are retired too.
 
 **Binding**:
 One push-to-talk key: a keysym, a shift flag, a mode (transcribe or translate), whether pass 2 runs, and which pass-2 prompt it uses.

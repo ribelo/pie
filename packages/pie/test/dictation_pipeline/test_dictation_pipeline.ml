@@ -131,10 +131,9 @@ let dependencies ?(history_error = false) ?(pass1 = Ok "  surowy tekst  ")
       (fun () ->
         f.resolutions <- f.resolutions + 1;
         ( {
-            Pie.Glossary.text = "PROJECT TERM";
-            paths = [ "/global"; "/project" ];
+            Pie.Glossary.text = "GLOBAL TERM";
+            paths = [ "/global" ];
             warnings = [];
-            cwd = Some "/project";
           },
           Some { H.app_id = Some "editor"; title = Some "press title" } ));
     pass1 =
@@ -145,7 +144,7 @@ let dependencies ?(history_error = false) ?(pass1 = Ok "  surowy tekst  ")
           "pass1 transcription model" "openrouter/owner-a"
           cfg.C.transcription_model;
         Alcotest.(check string)
-          "press glossary" "PROJECT TERM" glossary.Pie.Glossary.text;
+          "press glossary" "GLOBAL TERM" glossary.Pie.Glossary.text;
         Alcotest.(check string)
           "source language" "Polish"
           (match b.C.mode with
@@ -159,7 +158,7 @@ let dependencies ?(history_error = false) ?(pass1 = Ok "  surowy tekst  ")
         f.time <- f.time +. 0.2;
         Alcotest.(check string) "same raw" "  surowy tekst  " raw;
         Alcotest.(check string)
-          "same glossary" "PROJECT TERM" glossary.Pie.Glossary.text;
+          "same glossary" "GLOBAL TERM" glossary.Pie.Glossary.text;
         Alcotest.(check string)
           "chosen binding prompt"
           "{{glossary}} {{source_language}} {{target_language}}" b.C.prompt;
@@ -177,7 +176,7 @@ let dependencies ?(history_error = false) ?(pass1 = Ok "  surowy tekst  ")
         f.time <- f.time +. 0.25;
         Alcotest.(check string) "full PCM" "PCM" (Bytes.to_string pcm);
         Alcotest.(check string)
-          "press glossary" "PROJECT TERM" glossary.Pie.Glossary.text;
+          "press glossary" "GLOBAL TERM" glossary.Pie.Glossary.text;
         one_pass cfg b glossary pcm);
     append_transcribed =
       (fun raw ->
@@ -253,8 +252,7 @@ let test_success mode () =
   | [ r ] ->
       Alcotest.(check string)
         "raw bytes retained" "  surowy tekst  " r.H.raw_text;
-      Alcotest.(check (list string))
-        "paths" [ "/global"; "/project" ] r.glossary_paths;
+      Alcotest.(check (list string)) "paths" [ "/global" ] r.glossary_paths;
       Alcotest.(check string) "model" "openrouter/owner-a" r.pass1_model;
       Alcotest.(check bool)
         "focus" true
