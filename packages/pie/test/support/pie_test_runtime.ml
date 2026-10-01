@@ -36,8 +36,10 @@ let pipeline ~stt =
     append_transcribed = (fun _ -> Ok ());
     append_finished = (fun _ -> Ok ());
     warn = (fun _ -> ());
-    notify_correction_failure = (fun _ -> ());
-    notify_request_failure = (fun _ -> ());
+    report_notification =
+      Pie.Desktop.Notification.report
+        ~notify:(fun _ _ -> ())
+        ~log:(fun _ -> ());
     fresh_id =
       (fun () ->
         incr next;
