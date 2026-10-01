@@ -10,6 +10,8 @@ consumer: pie
 
 2026-10-01: default prompts now remove incidental profanity, dict-x9pf.
 
+- 2026-10-01 14:48: Chrome stopped offering Paste for any clipboard content until a fresh full-type wl-copy offer; Pie offered only text/plain;charset=utf-8 and killed the previous helper before the new one owned the selection. Fixed in b303fad (default wl-copy MIME types, previous helper retired only after the new one is ready).
+- 2026-10-01 15:5x: installed master 6ee41f9 (sha256 372ef5c9…, previous kept as `pie.pre-install3-20261001`): overlapping attempts, PTT release grace, clipboard-only retries, clipboard fix. Installed after waiting for `armed` and 60 s without capture or processing.
 - 2026-10-01 12:02: installed master 2134e89 (sha256 4406a46a…, previous kept as `pie.pre-leakfix-20261001`) with `audio_retention_hours = 168` and the merged glossary (`glossary.md.pre-merge-20261001` kept). The install script did not stop when Pie was busy and restarted the service during a 5-minute dictation; the audio was retained and recovered with `pie retry`, which pasted into the then-focused window (fixed in the overlapping-attempts slice: retry delivers to the clipboard only). Installs now wait for `armed` and 60 s without capture or processing, and abort otherwise.
 - 2026-10-01 13:4x: installed master 781eab8 (sha256 8d059edc…, previous kept as `pie.pre-install2-20261001`): legacy pipeline removed, actionable notifications, ignored outcome, build identity, schema language framing, prompt_rules. The user's one-pass prompts now remove incidental profanity (`*.pre-profanity-20261001` kept). `pie status` reports build 781eab8e545a, effort low, schema dictation/text-v1.
 
