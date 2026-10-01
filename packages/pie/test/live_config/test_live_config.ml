@@ -18,6 +18,7 @@ let base_config ?(transcribe = transcribe_keysym)
     transcription_language = "English";
     translation_source_language = "English";
     translation_target_language = "English";
+    ptt_release_grace_ms = 0;
     ptt_min_capture_rms = rms;
     ptt_min_capture_peak = peak;
     ptt_transcribe_keysym = transcribe;

@@ -45,6 +45,8 @@ val run :
   ?on_capture_failure:(error -> (unit, error) result) ->
   ?on_ignored_capture:(History.ignored_capture -> unit) ->
   ?on_capture_resumed:(unit -> (unit, error) result) ->
+  ?release_grace_ms:(unit -> int) ->
+  ?on_capture_ended:(unit -> (unit, error) result) ->
   ?on_low_input:(unit -> (unit, error) result) ->
   sw:Eio.Switch.t ->
   mono_clock:_ Eio.Time.Mono.t ->

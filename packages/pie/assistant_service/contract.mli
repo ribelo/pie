@@ -1,6 +1,7 @@
 type recording_snapshot = {
   phase : Recording.Phase.t;
   active : bool;
+  processing : int;
   mode : string;
   enabled : bool;
   started_at : string option;

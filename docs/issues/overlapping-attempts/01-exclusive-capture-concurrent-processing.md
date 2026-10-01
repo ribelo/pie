@@ -1,5 +1,5 @@
 ---
-status: open
+status: implemented
 package: pie
 consumer: pie
 ---
@@ -26,7 +26,11 @@ Releasing the push-to-talk key starts a release grace of 1 s (configurable) insi
 
 ## Implementation decisions
 
-- One capturing attempt at a time; a bounded number of processing attempts (for example 4): beyond it a new press is refused with a notification, so a provider outage cannot pile up requests.
+- One capturing attempt at a time, including setup and the finishing tail. Four processing/delivery slots are allowed; a capture admitted with three processing attempts reserves the fourth. At four processing attempts a fresh press is refused once through `Notification_policy.Capacity_reached` (Notify), so a provider outage cannot pile up requests. Key repeats do not repeat the notice.
 - The delivery queue is FIFO by attempt start; a failed attempt leaves the queue without blocking later ones.
 - Audio archive, history and retry are per attempt and already keyed by attempt ID; nothing in them assumes one attempt at a time, verify in tests.
-- The release grace is measured on the monotonic clock and defaults to 1,000 ms; 0 disables it.
+- `ptt_release_grace_ms` is a non-negative integer, measured on the monotonic clock, default 1,000 ms; 0 disables continuation. Grace is sampled at capture start. The existing 2,000 ms finishing tail remains (extended when grace exceeds it). A same-binding press outside grace or a different binding during the tail ends the old capture immediately and admits a new attempt after handoff. Binding identity is keysym plus shift, not merely transcription mode.
+- Processing fibers stay on the service switch and retain their scoped resources until settlement. Only the capturing fiber reads microphone/input events. Fatal typed/composite processing errors return to the service supervisor; ordinary per-attempt failures still recover after publishing retention.
+- Normal and recovery deliveries use the same FIFO position, retained through delivery and cleanup. Retained and archived `pie retry` always use clipboard-only delivery: recovery has no press-time target, and retry-time focus must never authorize paste.
+- Status remains additive: `active` and `phase` describe microphone ownership; `processing` counts detached attempts including FIFO wait, delivery and cleanup. Older status without `processing` decodes as zero. An enabled assistant without capture still reports armed while processing continues.
+- Regression coverage exercises blocked first requests, reversed completion order, failed FIFO heads, four-slot refusal, toggle capture during processing, pause isolation, grace continuation/expiry/zero/different binding, and clipboard-only retained/archive recovery. Audio writers and history IDs remain per attempt; retention keeps its existing last-published-candidate policy. No live service installation or restart is part of this change.

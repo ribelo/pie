@@ -54,6 +54,7 @@ type t = {
   transcription_language : string;
   translation_source_language : string;
   translation_target_language : string;
+  ptt_release_grace_ms : int;
   ptt_min_capture_rms : float;
   ptt_min_capture_peak : float;
   ptt_transcribe_keysym : int;
@@ -882,6 +883,9 @@ let of_json ?(warn = ignore_warning) table : t =
           bindings )
   in
   require_pass2 ~pipeline ~has_model:(correction_model <> None) bindings;
+  let ptt_release_grace_ms = get_int table "ptt_release_grace_ms" 1000 in
+  if ptt_release_grace_ms < 0 then
+    raise (Config_error "ptt_release_grace_ms must be non-negative");
   let ptt_min_capture_rms =
     get_float table "ptt_min_capture_rms" Audio.Pcm.ptt_min_capture_rms_for_stt
   in
@@ -900,6 +904,7 @@ let of_json ?(warn = ignore_warning) table : t =
       get_string table "translation_source_language" "English";
     translation_target_language =
       get_string table "translation_target_language" "English";
+    ptt_release_grace_ms;
     ptt_min_capture_rms;
     ptt_min_capture_peak;
     ptt_transcribe_keysym;
@@ -985,6 +990,7 @@ let yojson_of_t (config : t) =
       ("transcription_language", string config.transcription_language);
       ("translation_source_language", string config.translation_source_language);
       ("translation_target_language", string config.translation_target_language);
+      ("ptt_release_grace_ms", `Int config.ptt_release_grace_ms);
       ("ptt_min_capture_rms", `Float config.ptt_min_capture_rms);
       ("ptt_min_capture_peak", `Float config.ptt_min_capture_peak);
       ("ptt_transcribe_keysym", `Int config.ptt_transcribe_keysym);

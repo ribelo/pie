@@ -1,6 +1,7 @@
 type recording_snapshot = {
   phase : Recording.Phase.t;
   active : bool;
+  processing : int;
   mode : string;
   enabled : bool;
   started_at : string option;
@@ -90,6 +91,7 @@ let snapshot_keys =
   [
     "phase";
     "active";
+    "processing";
     "mode";
     "enabled";
     "startedAt";
@@ -106,6 +108,12 @@ let snapshot_of_json json =
   let* fields = assoc json in
   let* () = reject_unknown snapshot_keys fields in
   let* active = required_bool "active" fields in
+  let* processing =
+    match List.assoc_opt "processing" fields with
+    | None -> Ok 0
+    | Some (`Int n) when n >= 0 -> Ok n
+    | _ -> Error wrong_type
+  in
   let* mode = required_string "mode" fields in
   let* enabled = required_bool "enabled" fields in
   let* started_at = optional_string "startedAt" fields in
@@ -129,6 +137,7 @@ let snapshot_of_json json =
     {
       phase;
       active;
+      processing;
       mode;
       enabled;
       started_at;
@@ -156,6 +165,7 @@ let json_of_snapshot snap =
     @ [
         ("phase", `String (Recording.Phase.to_string snap.phase));
         ("active", `Bool snap.active);
+        ("processing", `Int snap.processing);
         ("mode", `String snap.mode);
         ("enabled", `Bool snap.enabled);
         ( "startedAt",

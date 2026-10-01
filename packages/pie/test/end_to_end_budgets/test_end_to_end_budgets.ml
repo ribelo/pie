@@ -19,6 +19,7 @@ let base_config () : Pie.Config.Stt.t =
     transcription_language = "English";
     translation_source_language = "English";
     translation_target_language = "English";
+    ptt_release_grace_ms = 0;
     ptt_min_capture_rms = 0.0;
     ptt_min_capture_peak = 0.0;
     ptt_transcribe_keysym = transcribe_keysym;
@@ -204,7 +205,12 @@ let status_active ~net ~sw socket_path =
       | _ -> false)
   | _ -> false
 
-let idle ~net ~sw socket_path = not (status_active ~net ~sw socket_path)
+let idle ~net ~sw socket_path =
+  match Yojson.Safe.from_string (rpc ~net ~sw socket_path status_json) with
+  | `Assoc fields ->
+      List.assoc_opt "active" fields = Some (`Bool false)
+      && List.assoc_opt "processing" fields = Some (`Int 0)
+  | _ -> false
 
 let owner_workflow ~logger ~env ~sw ~net ~process_mgr ~mono_clock ~dir
     ~config_control ~stt ~deliver ~keyboard ~audio =
@@ -592,89 +598,94 @@ let run_e2e ~dir ~stt ~deliver assertions =
   | Ok exit -> require_success exit
   | Error `Timeout -> Alcotest.fail "e2e workflow deadline"
 
-(* A held cleanup: the callback is cancelled by pause, and its own finalizer waits
-   for [cleanup_hold], so the attempt cannot settle and admission stays owned. *)
+(* Hold processing, not capture. Pause must leave this callback alive. A guard
+   in each assertion releases the hold even if an assertion fails. *)
 let held_callback cleanup_hold entered_u body =
   ignore (Eio.Promise.try_resolve entered_u ());
   Fun.protect
     ~finally:(fun () ->
       Eio.Cancel.protect (fun () -> Eio.Promise.await cleanup_hold))
     (fun () ->
-      let hang, _ = Eio.Promise.create () in
-      Eio.Promise.await hang;
+      Eio.Promise.await cleanup_hold;
       body ())
 
 let test_audio_retry_held_cleanup_pause_busy () =
   with_dir (fun dir ->
       let retry_dir = Filename.concat dir "r" in
-      let gen0 = seed_audio retry_dir in
-      let stt_n = Atomic.make 0 in
-      let deliver_n = Atomic.make 0 in
+      ignore (seed_audio retry_dir);
+      let stt_n = Atomic.make 0 and deliver_n = Atomic.make 0 in
       let cleanup_hold, cleanup_u = Eio.Promise.create () in
       let entered, entered_u = Eio.Promise.create () in
       let stt _ _ _ =
         Atomic.incr stt_n;
         held_callback cleanup_hold entered_u (fun () -> Ok "held")
       in
-      let deliver _ _ _target _ =
+      let deliver _ _ target _ =
         Atomic.incr deliver_n;
-        Ok Pie.History.Pasted
+        Alcotest.(check bool)
+          "retained audio retry clipboard-only" true (target = None);
+        Ok Pie.History.Clipboard
       in
-      Fun.protect
-        ~finally:(fun () -> ignore (Eio.Promise.try_resolve cleanup_u ()))
-        (fun () ->
-          run_e2e ~dir ~stt ~deliver
-            (fun ~clock ~net ~sw ~socket_path ~retry_dir ->
+      run_e2e ~dir ~stt ~deliver (fun ~clock ~net ~sw ~socket_path ~retry_dir ->
+          Fun.protect
+            ~finally:(fun () -> ignore (Eio.Promise.try_resolve cleanup_u ()))
+            (fun () ->
               ignore (rpc ~net ~sw socket_path action_retry);
               wait_until ~clock (fun () ->
-                  Atomic.get stt_n >= 1 && Eio.Promise.is_resolved entered);
+                  Atomic.get stt_n = 1 && Eio.Promise.is_resolved entered);
               ignore (rpc ~net ~sw socket_path action_pause);
+              Alcotest.(check bool)
+                "pause does not own retry processing" false
+                (status_active ~net ~sw socket_path);
               ignore (rpc ~net ~sw socket_path action_resume);
               let start =
                 assoc_of_json (rpc ~net ~sw socket_path action_ptt_start)
               in
               Alcotest.(check bool)
-                "ptt-start rejected" false
+                "fresh capture admitted while retry processes" true
                 (bool_field "accepted" start);
+              ignore (rpc ~net ~sw socket_path action_pause);
+              wait_until ~clock (fun () ->
+                  not (status_active ~net ~sw socket_path));
               Alcotest.(check bool)
-                "still active while cleanup held" true
-                (bool_field "active" (snapshot_fields start)
-                || status_active ~net ~sw socket_path);
+                "retry still processing" false
+                (idle ~net ~sw socket_path);
+              Alcotest.(check int)
+                "retry delivery still held" 0 (Atomic.get deliver_n);
               ignore (Eio.Promise.try_resolve cleanup_u ());
               wait_until ~clock (fun () -> idle ~net ~sw socket_path);
-              Alcotest.(check int) "no delivery" 0 (Atomic.get deliver_n);
-              match peek_generation retry_dir with
-              | None -> Alcotest.fail "audio candidate lost"
-              | Some g ->
-                  Alcotest.(check bool)
-                    "same generation" true
-                    (Active.generation_equal g gen0))))
+              Alcotest.(check int)
+                "pause did not cancel retry delivery" 1 (Atomic.get deliver_n);
+              Alcotest.(check bool)
+                "successful retry clears selected candidate" true
+                (peek_generation retry_dir = None))))
 
 let test_text_retry_held_delivery_cleanup_stt_zero () =
   with_dir (fun dir ->
-      let retry_dir = Filename.concat dir "r" in
-      let text0 = "e2e-retained-text" in
-      let gen0 = seed_text retry_dir text0 in
-      let stt_n = Atomic.make 0 in
-      let deliver_n = Atomic.make 0 in
+      let retry_dir = Filename.concat dir "r" and text0 = "e2e-retained-text" in
+      ignore (seed_text retry_dir text0);
+      let stt_n = Atomic.make 0 and deliver_n = Atomic.make 0 in
       let cleanup_hold, cleanup_u = Eio.Promise.create () in
       let entered, entered_u = Eio.Promise.create () in
       let stt _ _ _ =
         Atomic.incr stt_n;
         Ok "should-not-run"
       in
-      let deliver _ _ _target _ =
+      let deliver _ _ target text =
         Atomic.incr deliver_n;
-        held_callback cleanup_hold entered_u (fun () -> Ok Pie.History.Pasted)
+        Alcotest.(check bool)
+          "retained text retry clipboard-only" true (target = None);
+        Alcotest.(check string) "exact retained text" text0 text;
+        held_callback cleanup_hold entered_u (fun () ->
+            Ok Pie.History.Clipboard)
       in
-      Fun.protect
-        ~finally:(fun () -> ignore (Eio.Promise.try_resolve cleanup_u ()))
-        (fun () ->
-          run_e2e ~dir ~stt ~deliver
-            (fun ~clock ~net ~sw ~socket_path ~retry_dir ->
+      run_e2e ~dir ~stt ~deliver (fun ~clock ~net ~sw ~socket_path ~retry_dir ->
+          Fun.protect
+            ~finally:(fun () -> ignore (Eio.Promise.try_resolve cleanup_u ()))
+            (fun () ->
               ignore (rpc ~net ~sw socket_path action_retry);
               wait_until ~clock (fun () ->
-                  Atomic.get deliver_n >= 1 && Eio.Promise.is_resolved entered);
+                  Atomic.get deliver_n = 1 && Eio.Promise.is_resolved entered);
               Alcotest.(check int) "text retry skips STT" 0 (Atomic.get stt_n);
               ignore (rpc ~net ~sw socket_path action_pause);
               ignore (rpc ~net ~sw socket_path action_resume);
@@ -682,20 +693,21 @@ let test_text_retry_held_delivery_cleanup_stt_zero () =
                 assoc_of_json (rpc ~net ~sw socket_path action_ptt_start)
               in
               Alcotest.(check bool)
-                "ptt-start rejected" false
+                "fresh capture admitted while delivery held" true
                 (bool_field "accepted" start);
+              ignore (rpc ~net ~sw socket_path action_pause);
+              wait_until ~clock (fun () ->
+                  not (status_active ~net ~sw socket_path));
+              Alcotest.(check bool)
+                "delivery still processing" false
+                (idle ~net ~sw socket_path);
               ignore (Eio.Promise.try_resolve cleanup_u ());
               wait_until ~clock (fun () -> idle ~net ~sw socket_path);
-              match peek_meta retry_dir with
-              | Some (Active.Text { generation; _ })
-                when Active.generation_equal generation gen0 -> (
-                  match Active.open_store ~caps ~root:retry_dir with
-                  | Error (`Retry_store msg) -> Alcotest.fail msg
-                  | Ok store -> (
-                      match Active.load_text store generation with
-                      | Ok t -> Alcotest.(check string) "exact text" text0 t
-                      | Error (`Retry_store msg) -> Alcotest.fail msg))
-              | _ -> Alcotest.fail "text candidate not preserved")))
+              Alcotest.(check int)
+                "new capture cancelled before STT" 0 (Atomic.get stt_n);
+              Alcotest.(check bool)
+                "successful text retry clears candidate" true
+                (peek_meta retry_dir = None))))
 
 (* Both failures must survive: the delivery failure stays primary and the failed
    publication stays retained as the finalizer, neither replacing the other. *)
@@ -873,7 +885,8 @@ let () =
         ] );
       ( "edges",
         [
-          Alcotest.test_case "audio retry held cleanup pause ptt-start busy"
+          Alcotest.test_case
+            "dict-q7we audio retry survives pause; fresh capture admitted"
             `Quick test_audio_retry_held_cleanup_pause_busy;
           Alcotest.test_case "text retry held delivery STT stays 0" `Quick
             test_text_retry_held_delivery_cleanup_stt_zero;

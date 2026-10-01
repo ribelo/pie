@@ -12,7 +12,12 @@ type cancel = {
   resolve : unit Eio.Promise.u;
 }
 
-type attempt = { id : int; mode : recording_mode; cancel : cancel }
+type attempt = {
+  id : int;
+  mode : recording_mode;
+  cancel : cancel;
+  mutable activity : Phase.activity;
+}
 
 let attempt_counter = Atomic.make 0
 
@@ -21,7 +26,12 @@ let make_cancel () =
   { fired = Atomic.make false; wait; resolve }
 
 let make_attempt mode =
-  { id = Atomic.fetch_and_add attempt_counter 1; mode; cancel = make_cancel () }
+  {
+    id = Atomic.fetch_and_add attempt_counter 1;
+    mode;
+    cancel = make_cancel ();
+    activity = Phase.Starting;
+  }
 
 let attempt_mode attempt = attempt.mode
 let attempt_id attempt = attempt.id
@@ -39,6 +49,7 @@ type snapshot = {
   phase : Phase.t;
   enabled : bool;
   active : bool;
+  processing : int;
   mode : string;
   started_at : string option;
   updated_at : string;
@@ -67,6 +78,8 @@ type t = {
   logger : Ox_observability.Logger.t option;
   state : state ref;
   mutex : Eio.Mutex.t;
+  changed : Eio.Condition.t;
+  mutable attempts : attempt list;
 }
 
 let locked t f = Eio.Mutex.use_rw ~protect:true t.mutex f
@@ -97,7 +110,7 @@ let iso_of_unix seconds =
   Printf.sprintf "%04d-%02d-%02dT%02d:%02d:%02dZ" (tm.tm_year + 1900)
     (tm.tm_mon + 1) tm.tm_mday tm.tm_hour tm.tm_min tm.tm_sec
 
-let snapshot_of_state state =
+let snapshot_of_state ?(processing = 0) state =
   let mode =
     match state.mode with
     | Some attempt -> string_of_mode attempt.mode
@@ -115,6 +128,7 @@ let snapshot_of_state state =
             ~last_error:state.last_error);
     enabled = state.enabled;
     active = state.mode <> None;
+    processing;
     mode;
     started_at = Option.map iso_of_unix state.started_at;
     updated_at = iso_of_unix state.updated_at;
@@ -128,6 +142,7 @@ let json_of_snapshot (snapshot : snapshot) =
       ("phase", `String (Phase.to_string snapshot.phase));
       ("enabled", `Bool snapshot.enabled);
       ("active", `Bool snapshot.active);
+      ("processing", `Int snapshot.processing);
       ("mode", `String snapshot.mode);
       ( "startedAt",
         match snapshot.started_at with Some s -> `String s | None -> `Null );
@@ -144,7 +159,12 @@ let mkdir_p = Fs.mkdir_p
 
 let write_state t =
   let caps = t.caps in
-  let snapshot = snapshot_of_state !(t.state) in
+  let snapshot =
+    snapshot_of_state
+      ~processing:
+        (List.length t.attempts - if !(t.state).mode = None then 0 else 1)
+      !(t.state)
+  in
   mkdir_p ~caps (Filename.dirname t.persist_path);
   let oc = Ox_caps.Cap_stdlib.open_out_bin ~caps t.persist_path in
   Fun.protect
@@ -194,6 +214,8 @@ let create ~caps ?logger ?persist_path () =
       logger;
       state = ref (initial_state now);
       mutex = Eio.Mutex.create ();
+      changed = Eio.Condition.create ();
+      attempts = [];
     }
   in
   (* Fail fast at startup: if we cannot write the initial state file, the
@@ -201,7 +223,26 @@ let create ~caps ?logger ?persist_path () =
   write_state t;
   t
 
-let snapshot t = locked t (fun () -> snapshot_of_state !(t.state))
+let processing_count t =
+  List.length t.attempts - if !(t.state).mode = None then 0 else 1
+
+let snapshot t =
+  locked t (fun () ->
+      snapshot_of_state ~processing:(processing_count t) !(t.state))
+
+(* The admitted attempt owns its FIFO position through delivery and settlement. *)
+let await_delivery t attempt =
+  locked t (fun () ->
+      let rec wait () =
+        match t.attempts with
+        | first :: _ when first.id = attempt.id -> ()
+        | _ when not (List.exists (fun a -> a.id = attempt.id) t.attempts) -> ()
+        | _ ->
+            Eio.Condition.await t.changed t.mutex;
+            wait ()
+      in
+      wait ())
+
 let is_active t = locked t (fun () -> !(t.state).mode <> None)
 
 let mutate_unlocked t f =
@@ -213,7 +254,8 @@ let mutate_unlocked t f =
 
 let mutate t f = locked t (fun () -> mutate_unlocked t f)
 
-(* Phase publication never releases admission, and stale owners cannot change it. *)
+(* Processing releases microphone ownership, not the FIFO settlement slot.
+   A stale processing owner cannot change the next capture's status. *)
 let set_phase t (attempt : attempt) phase =
   let caps = t.caps in
   locked t @@ fun () ->
@@ -224,15 +266,34 @@ let set_phase t (attempt : attempt) phase =
       let before = Option.value ~default:Phase.Starting current.phase in
       if not (Phase.can_transition before phase) then false
       else if before = phase then true
-      else
+      else (
+        attempt.activity <- phase;
         mutate_unlocked t (fun current ->
             ( true,
               {
                 current with
-                phase = Some phase;
+                mode =
+                  (if phase = Phase.Processing || phase = Phase.Delivering then
+                     None
+                   else current.mode);
+                started_at =
+                  (if phase = Phase.Processing || phase = Phase.Delivering then
+                     None
+                   else current.started_at);
+                phase =
+                  (if phase = Phase.Processing || phase = Phase.Delivering then
+                     None
+                   else Some phase);
                 updated_at = Ox_caps.Cap_unix.gettimeofday ~caps ();
-              } ))
-  | _ -> false
+              } )))
+  | _ ->
+      if
+        List.exists (fun a -> a.id = attempt.id) t.attempts
+        && Phase.can_transition attempt.activity phase
+      then (
+        attempt.activity <- phase;
+        true)
+      else false
 
 let try_start t mode ?transcript_path () =
   let caps = t.caps in
@@ -241,9 +302,11 @@ let try_start t mode ?transcript_path () =
       else
         match current.mode with
         | Some active -> (Busy active.mode, current)
+        | None when processing_count t >= 4 -> (Busy mode, current)
         | None ->
             let now = Ox_caps.Cap_unix.gettimeofday ~caps () in
             let attempt = make_attempt mode in
+            t.attempts <- t.attempts @ [ attempt ];
             ( Started attempt,
               {
                 enabled = current.enabled;
@@ -255,12 +318,14 @@ let try_start t mode ?transcript_path () =
                 updated_at = now;
               } ))
 
-(* Release admission only when [attempt] still owns it. A stale settlement from
-   an earlier same-mode attempt reports [false] and leaves the current owner
-   untouched. *)
+(* Settlement removes this attempt's FIFO slot without changing a newer capture.
+   Persist queue-count changes even when no capture state changes. *)
 let release t attempt =
   let caps = t.caps in
   mutate t (fun current ->
+      let known = List.exists (fun a -> a.id = attempt.id) t.attempts in
+      t.attempts <- List.filter (fun a -> a.id <> attempt.id) t.attempts;
+      Eio.Condition.broadcast t.changed;
       match current.mode with
       | Some active when active.id = attempt.id ->
           let now = Ox_caps.Cap_unix.gettimeofday ~caps () in
@@ -274,7 +339,14 @@ let release t attempt =
               last_error = current.last_error;
               updated_at = now;
             } )
-      | _ -> (false, current))
+      | _ ->
+          ( known,
+            if known then
+              {
+                current with
+                updated_at = Ox_caps.Cap_unix.gettimeofday ~caps ();
+              }
+            else current ))
 
 (* Publish order: signal the current attempt, then write enabled, then persist.
    A persist failure is logged by [mutate] and does not unsignal. Pause of an
@@ -322,6 +394,12 @@ let set_error t message =
 let clear t =
   let caps = t.caps in
   mutate t (fun current ->
+      (match current.mode with
+      | None -> ()
+      | Some attempt ->
+          signal_cancel attempt;
+          t.attempts <- List.filter (fun a -> a.id <> attempt.id) t.attempts;
+          Eio.Condition.broadcast t.changed);
       let next =
         {
           enabled = current.enabled;

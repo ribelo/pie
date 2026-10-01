@@ -86,7 +86,9 @@ let make_live_recognizer ~load_bindings ?load_config_bindings ?coordinator
   let right_shift_keysym = 65506 in
   let busy () =
     match coordinator with
-    | Some c -> Recording.Coordinator.is_active c
+    | Some c ->
+        let snap = Recording.Coordinator.snapshot c in
+        snap.active && snap.phase <> Recording.Phase.Active Stopping
     | None -> Hashtbl.length down > 0
   in
   let press mode =
@@ -409,6 +411,7 @@ let startup_config_json ~caps ?config_path ~(config : Config.Stt.t)
       ("transcription_language", `String config.transcription_language);
       ("translation_source_language", `String config.translation_source_language);
       ("translation_target_language", `String config.translation_target_language);
+      ("ptt_release_grace_ms", `Int config.ptt_release_grace_ms);
       ("ptt_min_duration_ms", `Int min_duration_ms);
       ("ptt_min_capture_rms", `Float config.ptt_min_capture_rms);
       ("ptt_min_capture_peak", `Float config.ptt_min_capture_peak);
@@ -819,6 +822,7 @@ let after_capture owner ~deliver recognize =
   let* () = set_attempt_phase owner Recording.Phase.Processing in
   let* () = seal_writer owner in
   let deliver text =
+    Recording.Coordinator.await_delivery owner.coordinator owner.attempt;
     let* () = set_attempt_phase owner Recording.Phase.Delivering in
     deliver text
   in
@@ -1808,6 +1812,11 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
       let active_owner = ref None in
       let press ?binding mode_name =
         prune_audio ();
+        if (Recording.Coordinator.snapshot coordinator).processing >= 4 then
+          pipeline.Dictation.report_notification Capacity_reached
+            "pie: processing limit reached"
+            "Four dictations are still processing. Please wait for one to \
+             finish.";
         on_press ~caps ~sw ~net ~clock ~logger ~coordinator ~config:!current
           ~pipeline ?binding
           ~focused_window:(fun () ->
@@ -1894,6 +1903,7 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
       in
       let result =
         Ptt_loop.run ~sw ~mono_clock ~logger ~control ~keyboard:inputs.keyboard
+          ~release_grace_ms:(fun () -> !current.Config.Stt.ptt_release_grace_ms)
           ~on_press_binding:(fun binding ->
             press ~binding (Config.Stt.string_of_mode binding.mode))
           ~on_capture_failure:(fun _ ->
@@ -1923,6 +1933,10 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
                   "The recording was too short or too quiet. Please repeat the \
                    dictation.")
           ~on_capture_resumed:(publish_current_phase Recording.Phase.Recording)
+          ~on_capture_ended:(fun () ->
+            let* () = publish_current_phase Recording.Phase.Processing () in
+            active_owner := None;
+            Ok ())
           ~on_low_input:(fun () ->
             Desktop.Notification.emit ~caps ~process_mgr Low_input
               "pie: microphone input is very quiet"
@@ -1946,6 +1960,13 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
       let deliver config mode _window text = deliver config mode None text in
       let rec loop () =
         let job, attempt = Eio.Stream.take retries in
+        ignore
+          (Recording.Coordinator.set_phase coordinator attempt
+             Recording.Phase.Processing);
+        let deliver config mode window text =
+          Recording.Coordinator.await_delivery coordinator attempt;
+          deliver config mode window text
+        in
         let config = !current in
         let mode =
           match job with

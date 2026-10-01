@@ -21,6 +21,7 @@ let base_config ?(provider = Pie.Config.Stt.Openrouter)
     transcription_language = "English";
     translation_source_language = "English";
     translation_target_language = "English";
+    ptt_release_grace_ms = 0;
     ptt_min_capture_rms = 0.0;
     ptt_min_capture_peak = 0.0;
     ptt_transcribe_keysym = transcribe_keysym;
@@ -1877,7 +1878,12 @@ let test_two_pass_retry kind () =
                   paths = [];
                   warnings = [];
                 },
-                Some { Pie.History.id = Some 42; app_id = Some "mpv"; title = None } ));
+                Some
+                  {
+                    Pie.History.id = Some 42;
+                    app_id = Some "mpv";
+                    title = None;
+                  } ));
           pass1 =
             (fun config binding glossary _ ->
               incr source_n;
@@ -1922,7 +1928,8 @@ let test_two_pass_retry kind () =
       let stt _ _ _ = Alcotest.fail "two-pass must not use legacy provider" in
       let deliver _ _ target text =
         if !delivery_n > 0 || kind = "provider" then
-          Alcotest.(check bool) "retry has no key-press window" true (target = None);
+          Alcotest.(check bool)
+            "retry has no key-press window" true (target = None);
         incr delivery_n;
         delivered := text :: !delivered;
         if kind = "delivery" && !delivery_n = 1 then
@@ -2748,12 +2755,278 @@ let test_recover_sequential_typed_pair () =
       Alcotest.(check bool) "first retained" true (has "stt:unavailable");
       Alcotest.(check bool) "second retained" true (has "inject:failed")
 
+let processing_count ~net ~sw socket_path =
+  match
+    Yojson.Safe.from_string
+      (rpc_line ~net ~sw socket_path "{\"method\":\"Status\"}")
+  with
+  | `Assoc fields -> (
+      match List.assoc_opt "processing" fields with
+      | Some (`Int n) -> n
+      | _ -> Alcotest.fail "missing processing count")
+  | _ -> Alcotest.fail "status is not an object"
+
+let test_overlapping_attempts first_outcome =
+  Pie_test_runtime.run @@ fun env ->
+  with_dir (fun dir ->
+      Eio.Switch.run @@ fun sw ->
+      let clock = Eio.Stdenv.clock env in
+      let net = Eio.Stdenv.net env in
+      let keyboard = Pie.Keyboard.Monitor.create () in
+      let audio_q, audio = make_audio () in
+      let first, release_first = Eio.Promise.create () in
+      let calls = ref 0 and delivered = ref [] in
+      let stt _ _ _ =
+        incr calls;
+        let n = !calls in
+        if n = 1 then Eio.Promise.await first;
+        if n = 1 && first_outcome = "failed" then
+          Error (`Ptt_error "stt:first failed")
+        else if n = 1 && first_outcome = "ignored" then Ok ""
+        else Ok (string_of_int n)
+      in
+      let deliver _ _ _ text =
+        delivered := !delivered @ [ text ];
+        Ok Pie.History.Pasted
+      in
+      let stamp () = [ Some (1, 1, 0, 0.) ] in
+      let load _ = (base_config (), stamp ()) in
+      let socket_path, retry_dir, workflow =
+        owner_workflow ~logger:(test_logger env) ~env ~sw ~net
+          ~process_mgr:(Eio.Stdenv.process_mgr env)
+          ~mono_clock:(Eio.Stdenv.mono_clock env)
+          ~dir ~config_control:{ stamp; load } ~stt ~deliver ~keyboard ~audio
+      in
+      with_workflow_background ~sw ~clock workflow (fun () ->
+          Eio.Time.sleep clock 0.2;
+          Pie.Keyboard.Monitor.emit keyboard (key ~released:false);
+          wait_for_recorded_pcm ~clock ~audio_q ~retry_dir;
+          Pie.Keyboard.Monitor.emit keyboard (key ~released:true);
+          Pie.Keyboard.Monitor.emit keyboard (key ~released:false);
+          wait_until ~clock (fun () -> !calls = 1);
+          wait_for_recorded_pcm ~clock ~audio_q ~retry_dir;
+          Pie.Keyboard.Monitor.emit keyboard (key ~released:true);
+          wait_until ~steps:100 ~clock (fun () -> !calls = 2);
+          Alcotest.(check (list string))
+            "second ready waits for FIFO head" [] !delivered;
+          Alcotest.(check int)
+            "two processing without capture" 2
+            (processing_count ~net ~sw socket_path);
+          Alcotest.(check bool)
+            "armed while processing" false
+            (status_bool ~net ~sw socket_path "active");
+          (* Mod5 latch starts a fresh capture while two attempts process. *)
+          Pie.Keyboard.Monitor.emit keyboard
+            { (key ~released:false) with state = 128 };
+          wait_for_recorded_pcm ~clock ~audio_q ~retry_dir;
+          Alcotest.(check bool)
+            "toggle admitted capture" true
+            (status_bool ~net ~sw socket_path "active");
+          ignore (rpc_line ~net ~sw socket_path "{\"method\":\"Pause\"}");
+          wait_until ~clock (fun () ->
+              not (status_bool ~net ~sw socket_path "active"));
+          Alcotest.(check int)
+            "pause preserves both processing attempts" 2
+            (processing_count ~net ~sw socket_path);
+          Eio.Promise.resolve release_first ();
+          wait_until ~clock (fun () ->
+              processing_count ~net ~sw socket_path = 0);
+          Alcotest.(check (list string))
+            "FIFO delivery; failed head does not block"
+            (if first_outcome = "success" then [ "1"; "2" ] else [ "2" ])
+            !delivered;
+          Alcotest.(check int) "paused capture did not reach provider" 2 !calls))
+
+let test_processing_capacity () =
+  Pie_test_runtime.run @@ fun env ->
+  with_dir (fun dir ->
+      Eio.Switch.run @@ fun sw ->
+      let clock = Eio.Stdenv.clock env and net = Eio.Stdenv.net env in
+      let keyboard = Pie.Keyboard.Monitor.create () in
+      let audio_q, audio = make_audio () in
+      let gates = Array.init 4 (fun _ -> Eio.Promise.create ()) in
+      let calls = ref 0 and delivered = ref [] and refused = ref 0 in
+      let stt _ _ _ =
+        incr calls;
+        let n = !calls in
+        Eio.Promise.await (fst gates.(n - 1));
+        Ok (string_of_int n)
+      in
+      let next_id = ref 0 in
+      let pipeline : Pie.Assistant.Dictation.dependencies =
+        {
+          resolve_glossary =
+            (fun () ->
+              ({ Pie.Glossary.text = ""; paths = []; warnings = [] }, None));
+          pass1 = (fun _ _ _ _ -> Alcotest.fail "one-pass only");
+          pass2 = (fun ~on_response:_ _ _ _ _ -> Alcotest.fail "one-pass only");
+          one_pass =
+            (fun ~on_response:_ config binding _ pcm ->
+              let mode =
+                match binding.Pie.Config.Stt.mode with
+                | Transcribe -> Pie.Assistant.Service.Transcribe
+                | Translate -> Pie.Assistant.Service.Translate
+              in
+              Pie.Stt.Correction.of_result
+                (Result.map_error
+                   (fun _ ->
+                     Pie.Stt.Correction.Provider
+                       Pie.Stt.Correction.Invalid_request)
+                   (stt config mode pcm)));
+          store_response = (fun ~id:_ ~first:_ _ -> Ok "test-response");
+          append_transcribed = (fun _ -> Ok ());
+          append_finished = (fun _ -> Ok ());
+          warn = (fun _ -> ());
+          report_notification =
+            (fun event _ _ ->
+              match event with
+              | Pie.Desktop.Notification_policy.Capacity_reached -> incr refused
+              | _ -> ());
+          fresh_id =
+            (fun () ->
+              incr next_id;
+              Printf.sprintf "capacity-%d" !next_id);
+          now = (fun () -> 0.);
+          log_pass = (fun _ ~model:_ ~duration_ms:_ -> ());
+        }
+      in
+      let deliver _ _ _ text =
+        delivered := !delivered @ [ text ];
+        Ok Pie.History.Pasted
+      in
+      let stamp () = [ Some (1, 1, 0, 0.) ] in
+      let load _ = ({ (base_config ()) with pipeline = One_pass }, stamp ()) in
+      let socket_path, retry_dir, workflow =
+        owner_workflow_with_pipeline ~production:false ~pipeline:(Some pipeline)
+          ~logger:(test_logger env) ~env ~sw ~net
+          ~process_mgr:(Eio.Stdenv.process_mgr env)
+          ~mono_clock:(Eio.Stdenv.mono_clock env)
+          ~dir ~config_control:{ stamp; load } ~stt ~deliver ~keyboard ~audio
+      in
+      with_workflow_background ~sw ~clock workflow (fun () ->
+          Eio.Time.sleep clock 0.2;
+          for n = 1 to 4 do
+            Pie.Keyboard.Monitor.emit keyboard (key ~released:false);
+            if n > 1 then wait_until ~clock (fun () -> !calls = n - 1);
+            wait_for_recorded_pcm ~clock ~audio_q ~retry_dir;
+            Pie.Keyboard.Monitor.emit keyboard (key ~released:true)
+          done;
+          wait_until ~steps:100 ~clock (fun () -> !calls = 4);
+          Alcotest.(check int)
+            "four slots occupied" 4
+            (processing_count ~net ~sw socket_path);
+          Pie.Keyboard.Monitor.emit keyboard (key ~released:false);
+          wait_until ~clock (fun () -> !refused = 1);
+          Pie.Keyboard.Monitor.emit keyboard (key ~released:false);
+          Eio.Time.sleep clock 0.05;
+          Alcotest.(check int) "one refusal notification, no repeat" 1 !refused;
+          Alcotest.(check bool)
+            "fifth press did not acquire capture" false
+            (status_bool ~net ~sw socket_path "active");
+          for n = 3 downto 1 do
+            Eio.Promise.resolve (snd gates.(n)) ()
+          done;
+          Eio.Time.sleep clock 0.05;
+          Alcotest.(check (list string))
+            "later completions still wait" [] !delivered;
+          Eio.Promise.resolve (snd gates.(0)) ();
+          wait_until ~clock (fun () ->
+              processing_count ~net ~sw socket_path = 0);
+          Alcotest.(check (list string))
+            "reverse completions delivered FIFO" [ "1"; "2"; "3"; "4" ]
+            !delivered))
+
+let test_release_grace kind =
+  Pie_test_runtime.run @@ fun env ->
+  with_dir (fun dir ->
+      Eio.Switch.run @@ fun sw ->
+      let clock = Eio.Stdenv.clock env and net = Eio.Stdenv.net env in
+      let keyboard = Pie.Keyboard.Monitor.create () in
+      let audio_q, audio = make_audio () in
+      let calls = ref 0 and delivered = ref [] in
+      let stt _ _ _ =
+        incr calls;
+        Ok (string_of_int !calls)
+      in
+      let deliver _ _ _ text =
+        delivered := !delivered @ [ text ];
+        Ok Pie.History.Pasted
+      in
+      let cfg =
+        {
+          (base_config ()) with
+          bindings =
+            { (List.hd (base_config ()).bindings) with keysym = 65480 }
+            :: (base_config ()).bindings;
+          ptt_release_grace_ms =
+            (if kind = "disabled" then 0
+             else if kind = "expired" then 50
+             else 1000);
+        }
+      in
+      let stamp () = [ Some (1, 1, 0, 0.) ] in
+      let load _ = (cfg, stamp ()) in
+      let socket_path, retry_dir, workflow =
+        owner_workflow ~logger:(test_logger env) ~env ~sw ~net
+          ~process_mgr:(Eio.Stdenv.process_mgr env)
+          ~mono_clock:(Eio.Stdenv.mono_clock env)
+          ~dir ~config_control:{ stamp; load } ~stt ~deliver ~keyboard ~audio
+      in
+      with_workflow_background ~sw ~clock workflow (fun () ->
+          Eio.Time.sleep clock 0.2;
+          Pie.Keyboard.Monitor.emit keyboard (key ~released:false);
+          wait_for_recorded_pcm ~clock ~audio_q ~retry_dir;
+          Pie.Keyboard.Monitor.emit keyboard (key ~released:true);
+          Eio.Time.sleep clock 0.1;
+          let second =
+            if kind = "different" then
+              { (key ~released:false) with keysym = 65479; keycode = 76 }
+            else if kind = "different_same_mode" then
+              { (key ~released:false) with keysym = 65480; keycode = 77 }
+            else key ~released:false
+          in
+          Pie.Keyboard.Monitor.emit keyboard second;
+          if kind <> "same" then wait_until ~clock (fun () -> !calls = 1);
+          wait_for_recorded_pcm ~clock ~audio_q ~retry_dir;
+          Pie.Keyboard.Monitor.emit keyboard { second with released = true };
+          let expected = if kind = "same" then 1 else 2 in
+          wait_until ~steps:100 ~clock (fun () ->
+              List.length !delivered = expected);
+          wait_until ~clock (fun () ->
+              processing_count ~net ~sw socket_path = 0);
+          Alcotest.(check int)
+            "provider attempts follow grace policy" expected !calls;
+          Alcotest.(check bool)
+            "capture settled" false
+            (status_bool ~net ~sw socket_path "active")))
+
 let () =
   match Sys.getenv_opt stream_child_env with
   | Some "1" -> run_stream_child ()
   | _ ->
       Alcotest.run "assistant-owner"
         [
+          ( "overlap",
+            [
+              Alcotest.test_case "dict-q7we/b1yt FIFO and pause isolation"
+                `Quick (fun () -> test_overlapping_attempts "success");
+              Alcotest.test_case "dict-b1yt failed FIFO head advances" `Quick
+                (fun () -> test_overlapping_attempts "failed");
+              Alcotest.test_case "dict-b1yt ignored FIFO head advances" `Quick
+                (fun () -> test_overlapping_attempts "ignored");
+              Alcotest.test_case "dict-z8hc four slots and one refusal" `Quick
+                test_processing_capacity;
+              Alcotest.test_case "dict-n3kf same-binding grace" `Quick
+                (fun () -> test_release_grace "same");
+              Alcotest.test_case "dict-n3kf zero grace" `Quick (fun () ->
+                  test_release_grace "disabled");
+              Alcotest.test_case "dict-n3kf expired grace" `Quick (fun () ->
+                  test_release_grace "expired");
+              Alcotest.test_case "dict-n3kf different binding in grace" `Quick
+                (fun () -> test_release_grace "different");
+              Alcotest.test_case "dict-n3kf different binding, same mode" `Quick
+                (fun () -> test_release_grace "different_same_mode");
+            ] );
           ( "reload",
             [
               Alcotest.test_case

@@ -157,6 +157,7 @@ let ptt_fields ?duration_ms ?held_duration_ms ?bytes ?rms ?peak config mode =
 
 let run ?control ?on_press_binding ?(on_capture_failure = fun _ -> Ok ())
     ?(on_ignored_capture = fun _ -> ()) ?(on_capture_resumed = fun () -> Ok ())
+    ?(release_grace_ms = fun () -> 1000) ?(on_capture_ended = fun () -> Ok ())
     ?(on_low_input = fun () -> Ok ()) ~sw ~mono_clock ~logger
     ~(keyboard : Keyboard.Monitor.t) ~audio
     ?(queue_pcm_bytes = Dictation_limits.queue_pcm_bytes)
@@ -181,27 +182,8 @@ let run ?control ?on_press_binding ?(on_capture_failure = fun _ -> Ok ())
         item
     | None -> queue_take input
   in
-  let rec consume_processing_input () =
-    let stamped = take_input () in
-    let park item =
-      pending := Some item;
-      Ok ()
-    in
-    match stamped.input with
-    | Chunk _ -> consume_processing_input ()
-    | Trigger (Press _ | Press_binding _ | Release _)
-      when stamped.operation_active ->
-        consume_processing_input ()
-    | Trigger (Press _ | Press_binding _ | Release _) -> park stamped
-    | Event event -> (
-        match config.recognize event with
-        | Some trigger when not stamped.operation_active ->
-            park { stamped with input = Trigger trigger }
-        | _ -> consume_processing_input ())
-  in
-  let finish_with_processing f =
-    Ox.Concurrent.with_background ~sw consume_processing_input f
-  in
+  (* Only the capturing fiber reads input; the idle reader takes over once
+     finishing hands ownership to a processing fiber. *)
   let rec keyboard_loop () =
     let* () = push_input (Event (Eio.Stream.take keyboard_queue)) in
     keyboard_loop ()
@@ -232,6 +214,8 @@ let run ?control ?on_press_binding ?(on_capture_failure = fun _ -> Ok ())
         in
         Ok ()
   in
+  let fatal, resolve_fatal = Eio.Promise.create () in
+  let fatal_sent = ref false in
   let state_loop () =
     let log_info ?(fields = []) msg =
       Ox_observability.Logger.info logger ~fields msg
@@ -280,12 +264,22 @@ let run ?control ?on_press_binding ?(on_capture_failure = fun _ -> Ok ())
                ~bytes:(Audio.Pcm.s16le_complete_bytes acc)
                ~rms ~peak config mode)
           "PTT capture stopped";
-        finish_with_processing (fun () ->
-            match handle.finish with
-            | Buffered f -> f { duration_ms; pcm_bytes = concat_chunks chunks }
-            | Streaming f -> f ~duration_ms)
+        match handle.finish with
+        | Buffered f -> f { duration_ms; pcm_bytes = concat_chunks chunks }
+        | Streaming f -> f ~duration_ms
     in
-    let run_active ~thresholds mode started_at handle =
+    let run_active ?binding ~thresholds mode started_at handle =
+      let grace_ms = max 0 (release_grace_ms ()) in
+      let same_binding = function
+        | Press pressed_mode -> pressed_mode = mode
+        | Press_binding pressed -> (
+            match binding with
+            | Some original ->
+                pressed.Config.Stt.keysym = original.Config.Stt.keysym
+                && pressed.shift = original.shift
+            | None -> Config.Stt.string_of_mode pressed.mode = mode)
+        | Release _ -> false
+      in
       let captured = ref 0 in
       let min_rms, min_peak = thresholds in
       let low_volume = ref (Ptt.Low_volume.create ~min_rms ~min_peak ()) in
@@ -296,7 +290,8 @@ let run ?control ?on_press_binding ?(on_capture_failure = fun _ -> Ok ())
           match capture_state with
           | Ptt.Capture.PostRoll _ ->
               let remaining =
-                Ptt.Capture.post_roll_remaining_ms capture_state
+                Ptt.Capture.post_roll_remaining_ms ~tail_ms:(max 2000 grace_ms)
+                  capture_state
                   (float_of_int (now_ms ()))
               in
               if remaining <= 0.0 then
@@ -387,12 +382,6 @@ let run ?control ?on_press_binding ?(on_capture_failure = fun _ -> Ok ())
               offered chunks acc trigger
       and handle_trigger ~notify_resumed capture_state dead_input offered chunks
           acc trigger =
-        let trigger =
-          match trigger with
-          | Press_binding binding ->
-              Press (Config.Stt.string_of_mode binding.mode)
-          | trigger -> trigger
-        in
         match trigger with
         | Release release_mode when release_mode = mode -> (
             match capture_state with
@@ -403,22 +392,29 @@ let run ?control ?on_press_binding ?(on_capture_failure = fun _ -> Ok ())
                 let* () = config.on_release mode in
                 loop next dead_input offered chunks acc
             | _ -> loop capture_state dead_input offered chunks acc)
-        | Press press_mode when press_mode = mode ->
-            let next =
-              Ptt.Capture.start capture_state (float_of_int (now_ms ()))
-            in
-            let* () =
-              match capture_state with
-              | Ptt.Capture.PostRoll _ ->
-                  let* () =
-                    if notify_resumed then on_capture_resumed () else Ok ()
-                  in
+        | Press _ | Press_binding _ -> (
+            match capture_state with
+            | Ptt.Capture.PostRoll { release_at; _ } ->
+                if
+                  same_binding trigger && grace_ms > 0
+                  && float_of_int (now_ms ()) -. release_at
+                     < float_of_int grace_ms
+                then (
+                  let _ = notify_resumed in
+                  let* () = on_capture_resumed () in
                   log_info ~fields:(ptt_fields config mode)
-                    "Post-roll cancelled, continuing capture";
-                  Ok ()
-              | _ -> Ok ()
-            in
-            loop next dead_input offered chunks acc
+                    "Release grace cancelled, continuing capture";
+                  let next =
+                    Ptt.Capture.start capture_state (float_of_int (now_ms ()))
+                  in
+                  loop next dead_input offered chunks acc)
+                else (
+                  (* End the tail and admit this fresh press after handoff. *)
+                  pending :=
+                    Some { input = Trigger trigger; operation_active = false };
+                  finish_capture ~thresholds mode handle started_at
+                    capture_state offered chunks acc)
+            | _ -> loop capture_state dead_input offered chunks acc)
         | _ -> loop capture_state dead_input offered chunks acc
       in
       loop
@@ -444,7 +440,7 @@ let run ?control ?on_press_binding ?(on_capture_failure = fun _ -> Ok ())
         | Error (`Ptt_cause _ as cause) -> Error cause
         | Ok () -> Ok ()
       in
-      let run_capture mode handle run =
+      let run_capture ~capture_ended mode handle run =
         let result = run () in
         let result =
           match result with
@@ -463,7 +459,9 @@ let run ?control ?on_press_binding ?(on_capture_failure = fun _ -> Ok ())
                      (Ox.Cause.Suppressed
                         { primary = to_cause error; finalizer }))
               in
-              let publication = on_capture_failure error in
+              let publication =
+                if !capture_ended then Ok () else on_capture_failure error
+              in
               let with_publication cause =
                 match publication with
                 | Ok () -> cause
@@ -508,23 +506,56 @@ let run ?control ?on_press_binding ?(on_capture_failure = fun _ -> Ok ())
               idle_loop ()
           | Error (`Ptt_cause _ as cause) -> Error cause
           | Ok Skip -> idle_loop ()
-          | Ok (Handle handle) ->
+          | Ok ((Handle _ | Scoped _) as operation) ->
               let started_at = now_ms () in
-              log_info ~fields:(ptt_fields config mode) "PTT capture started";
-              let* () =
-                run_capture mode handle (fun () ->
-                    run_active ~thresholds mode started_at handle)
+              let capture_done, resolve_capture = Eio.Promise.create () in
+              let capture_ended = ref false in
+              let handoff result =
+                if not !capture_ended then (
+                  capture_ended := true;
+                  Eio.Promise.resolve resolve_capture result)
               in
-              idle_loop ()
-          | Ok (Scoped with_handle) ->
-              let started_at = now_ms () in
-              log_info ~fields:(ptt_fields config mode) "PTT capture started";
-              let result =
-                with_handle (fun handle ->
-                    run_capture mode handle (fun () ->
-                        run_active ~thresholds mode started_at handle))
+              let use handle =
+                let finish f =
+                  let* () = on_capture_ended () in
+                  handoff (Ok ());
+                  f ()
+                in
+                let handle =
+                  {
+                    handle with
+                    finish =
+                      (match handle.finish with
+                      | Buffered f ->
+                          Buffered (fun clip -> finish (fun () -> f clip))
+                      | Streaming f ->
+                          Streaming
+                            (fun ~duration_ms ->
+                              finish (fun () -> f ~duration_ms)));
+                  }
+                in
+                run_capture ~capture_ended mode handle (fun () ->
+                    run_active ?binding ~thresholds mode started_at handle)
               in
-              let* () = recover_operation mode "PTT operation failed" result in
+              log_info ~fields:(ptt_fields config mode) "PTT capture started";
+              Eio.Fiber.fork ~sw (fun () ->
+                  let result =
+                    match operation with
+                    | Handle handle -> use handle
+                    | Scoped with_handle -> with_handle use
+                    | Skip -> assert false
+                  in
+                  let result =
+                    recover_operation mode "PTT operation failed" result
+                  in
+                  if not !capture_ended then handoff result
+                  else
+                    match result with
+                    | Error error when not !fatal_sent ->
+                        fatal_sent := true;
+                        Eio.Promise.resolve resolve_fatal error
+                    | _ -> ());
+              let* () = Eio.Promise.await capture_done in
               idle_loop ()
       in
       match take_input () with
@@ -552,7 +583,9 @@ let run ?control ?on_press_binding ?(on_capture_failure = fun _ -> Ok ())
     Result.map_error (fun e -> (e :> run_error)) (input_loop ())
   in
   let state_loop () =
-    Result.map_error (fun e -> (e :> run_error)) (state_loop ())
+    Result.map_error
+      (fun e -> (e :> run_error))
+      (Eio.Fiber.first state_loop (fun () -> Error (Eio.Promise.await fatal)))
   in
   let* _ = Ox.Concurrent.par ~sw input_loop state_loop in
   Ok ()

@@ -440,6 +440,7 @@ let service_config ~retention () : Pie.Config.Stt.t =
     transcription_language = "English";
     translation_source_language = "English";
     translation_target_language = "English";
+    ptt_release_grace_ms = 0;
     ptt_min_capture_rms = 0.;
     ptt_min_capture_peak = 0.;
     ptt_transcribe_keysym = transcribe_keysym;
@@ -510,11 +511,14 @@ let run_attempt ~env ~dir ~retention ~pass1 ~deliver ~during =
       ~reporter:(Ox_observability.Logger.Reporter.writer ignore)
       ()
   in
+  let next_id = ref 0 in
   let pipeline : Pie.Assistant.Dictation.dependencies =
     {
       resolve_glossary =
         (fun () ->
-          ({ Pie.Glossary.text = ""; paths = []; warnings = [] }, None));
+          ( { Pie.Glossary.text = ""; paths = []; warnings = [] },
+            Some { Pie.History.id = Some 42; app_id = Some "mpv"; title = None }
+          ));
       pass1 = (fun _ _ _ pcm -> pass1 pcm);
       pass2 =
         (fun ~on_response:_ _ _ _ text ->
@@ -531,7 +535,11 @@ let run_attempt ~env ~dir ~retention ~pass1 ~deliver ~during =
       one_pass =
         (fun ~on_response:_ _ _ _ _ ->
           Pie.Stt.Correction.of_result (Error Pie.Stt.Correction.Blank));
-      fresh_id = (fun () -> "live-attempt");
+      fresh_id =
+        (fun () ->
+          incr next_id;
+          if !next_id = 1 then "live-attempt"
+          else Printf.sprintf "live-attempt-%d" !next_id);
       now = (fun () -> Unix.gettimeofday ());
       log_pass = (fun _ ~model:_ ~duration_ms:_ -> ());
     }
@@ -720,18 +728,100 @@ let json_message line =
       | _ -> "")
   | _ -> ""
 
+let test_overlapping_archives () =
+  Pie_test_runtime.run @@ fun env ->
+  with_root (fun dir ->
+      with_env
+        [ ("PIE_FFMPEG", Filename.concat dir "missing-ffmpeg") ]
+        (fun () ->
+          let first, release_first = Eio.Promise.create () in
+          let calls = ref 0 and delivered = ref [] in
+          run_attempt ~env ~dir ~retention:24.
+            ~pass1:(fun _ ->
+              incr calls;
+              let n = !calls in
+              if n = 1 then Eio.Promise.await first;
+              Ok (string_of_int n))
+            ~deliver:(fun _ _ _ text ->
+              delivered := !delivered @ [ text ];
+              Ok Pie.History.Pasted)
+            ~during:(fun
+                ~clock
+                ~net:_
+                ~sw:_
+                ~keyboard
+                ~audio_q
+                ~retry_dir
+                ~socket_path:_
+                ~audio_dir
+                ~history_path
+              ->
+              Eio.Time.sleep clock 0.2;
+              for n = 1 to 2 do
+                Pie.Keyboard.Monitor.emit keyboard (key ~released:false);
+                offer ~clock ~audio_q ~retry_dir;
+                Pie.Keyboard.Monitor.emit keyboard (key ~released:true);
+                wait_until ~clock (fun () -> !calls = n)
+              done;
+              Alcotest.(check (list string))
+                "later archive does not bypass delivery FIFO" [] !delivered;
+              Eio.Promise.resolve release_first ();
+              wait_until ~clock (fun () -> List.length !delivered = 2);
+              wait_until ~clock (fun () ->
+                  match Pie.History.read ~caps ~path:history_path with
+                  | Ok entries ->
+                      List.length entries = 2
+                      && List.for_all
+                           (fun (e : Pie.History.entry) ->
+                             e.outcome = Some Delivered && e.audio_path <> None)
+                           entries
+                  | _ -> false);
+              Alcotest.(check (list string))
+                "independent audio files"
+                [ "live-attempt-2.wav"; "live-attempt.wav" ]
+                (List.sort String.compare (archive_names audio_dir));
+              let entries =
+                match Pie.History.read ~caps ~path:history_path with
+                | Ok entries -> entries
+                | Error _ -> Alcotest.fail "history read failed"
+              in
+              let records =
+                List.map
+                  (fun (e : Pie.History.entry) ->
+                    (e.id, (e.raw_text, e.audio_path)))
+                  entries
+                |> List.sort compare
+              in
+              Alcotest.(
+                check
+                  (list (pair string (pair (option string) (option string)))))
+                "attempt IDs keep their own text and archive"
+                [
+                  ( "live-attempt",
+                    ( Some "1",
+                      Some (Filename.concat audio_dir "live-attempt.wav") ) );
+                  ( "live-attempt-2",
+                    ( Some "2",
+                      Some (Filename.concat audio_dir "live-attempt-2.wav") ) );
+                ]
+                records)))
+
 let test_retry_by_id () =
   Pie_test_runtime.run @@ fun env ->
   with_root (fun dir ->
       let clip = Bytes.of_string "archive-pcm!!" in
       let audio_dir = Filename.concat dir "audio" in
       ignore (write_private_wav audio_dir "clip-1" clip);
-      let seen = ref None in
+      let seen = ref None and delivered = ref false in
       run_attempt ~env ~dir ~retention:24.
         ~pass1:(fun pcm ->
           seen := Some (Bytes.to_string pcm);
           Ok "from-archive")
-        ~deliver:(fun _ _ _ _ -> Ok Pie.History.Pasted)
+        ~deliver:(fun _ _ target _ ->
+          Alcotest.(check bool)
+            "dict-d4jm archived retry clipboard-only" true (target = None);
+          delivered := true;
+          Ok Pie.History.Clipboard)
         ~during:(fun
             ~clock
             ~net
@@ -759,7 +849,11 @@ let test_retry_by_id () =
               "{\"method\":\"Action\",\"action\":\"retry clip-1\"}"
           in
           Alcotest.(check bool) "queued" true (json_bool queued "accepted");
-          wait_until ~clock (fun () -> !seen = Some (Bytes.to_string clip))))
+          wait_until ~clock (fun () -> !delivered);
+          Alcotest.(check (option string))
+            "archived PCM reached provider"
+            (Some (Bytes.to_string clip))
+            !seen))
 
 let () =
   Alcotest.run "audio_archive"
@@ -792,6 +886,9 @@ let () =
             test_no_archive_after_cancel;
           Alcotest.test_case "retention 0 archives nothing dict-1y3i" `Quick
             test_retention_zero_archives_nothing;
+          Alcotest.test_case
+            "dict-q7we overlap preserves archive and history IDs" `Quick
+            test_overlapping_archives;
           Alcotest.test_case "retry by history id dict-z1ax dict-ynad" `Quick
             test_retry_by_id;
         ] );

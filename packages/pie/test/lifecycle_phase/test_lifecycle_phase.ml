@@ -4,7 +4,7 @@ module C = Pie.Recording.Coordinator
 module P = Pie.Recording.Phase
 module Contract = Pie.Assistant_service.Contract
 
-let with_coordinator f =
+let with_coordinator_state f =
   Eio_main.run @@ fun _env ->
   let dir = Filename.temp_dir "pie-phase" "" in
   Fun.protect
@@ -13,8 +13,10 @@ let with_coordinator f =
       |> Array.iter (fun name -> Sys.remove (Filename.concat dir name));
       Unix.rmdir dir)
     (fun () ->
-      f (C.create ~caps ~persist_path:(Filename.concat dir "state.json") ()))
+      let path = Filename.concat dir "state.json" in
+      f (C.create ~caps ~persist_path:path ()) path)
 
+let with_coordinator f = with_coordinator_state (fun t _ -> f t)
 let phase t = C.snapshot t |> fun s -> P.to_string s.phase
 let check_phase expected t = Alcotest.(check string) "phase" expected (phase t)
 
@@ -35,18 +37,53 @@ let test_full_sequence () =
         "transition accepted" true
         (C.set_phase t attempt next);
       check_phase expected t;
-      Alcotest.(check bool) "admission remains busy" true (C.is_active t))
+      Alcotest.(check bool)
+        "capture ownership matches phase" (expected <> "ready") (C.is_active t);
+      Alcotest.(check int)
+        "detached processing slot remains"
+        (if expected = "ready" then 1 else 0)
+        (C.snapshot t).processing)
     [
       (P.Recording, "recording");
       (P.Stopping, "stopping");
       (P.Recording, "recording");
-      (P.Processing, "processing");
-      (P.Delivering, "delivering");
-      (P.Finishing, "finishing");
+      (P.Processing, "ready");
+      (P.Delivering, "ready");
+      (P.Finishing, "ready");
     ];
   Alcotest.(check bool) "release owner" true (C.release t attempt);
   check_phase "ready" t;
   Alcotest.(check bool) "idle after settlement" false (C.is_active t)
+
+let test_processing_settlement () =
+  with_coordinator_state @@ fun t path ->
+  let process a =
+    ignore (C.set_phase t a P.Recording);
+    ignore (C.set_phase t a P.Processing)
+  in
+  let first = start t in
+  process first;
+  let second = start t in
+  process second;
+  Alcotest.(check int) "two processing" 2 (C.snapshot t).processing;
+  ignore (C.release t first);
+  let persisted () =
+    Yojson.Safe.Util.member "processing" (Yojson.Safe.from_file path)
+  in
+  Alcotest.(check bool)
+    "persist detached settlement" true
+    (persisted () = `Int 1);
+  let third = start t in
+  Alcotest.(check bool)
+    "old delivery accepted" true
+    (C.set_phase t second P.Delivering);
+  check_phase "starting" t;
+  Alcotest.(check bool) "old settlement accepted" true (C.release t second);
+  Alcotest.(check bool) "new capture preserved" true (C.is_active t);
+  Alcotest.(check bool)
+    "persist while newer capture owns input" true
+    (persisted () = `Int 0);
+  ignore (C.release t third)
 
 let test_stale_and_backwards_rejected () =
   with_coordinator @@ fun t ->
@@ -63,7 +100,7 @@ let test_stale_and_backwards_rejected () =
   Alcotest.(check bool)
     "processing cannot become recording" false
     (C.set_phase t current P.Recording);
-  check_phase "processing" t
+  check_phase "ready" t
 
 let test_cancel_phase_is_sticky () =
   with_coordinator @@ fun t ->
@@ -148,8 +185,12 @@ let () =
     [
       ( "coordinator",
         [
-          Alcotest.test_case "full sequence remains admitted" `Quick
-            test_full_sequence;
+          Alcotest.test_case "capture handoff retains processing admission"
+            `Quick test_full_sequence;
+          Alcotest.test_case
+            "dict-b1yt processing settlement preserves capture and persists \
+             counts"
+            `Quick test_processing_settlement;
           Alcotest.test_case "stale and backwards rejected" `Quick
             test_stale_and_backwards_rejected;
           Alcotest.test_case "cancellation phase sticky" `Quick

@@ -1,4 +1,5 @@
 type event =
+  | Capacity_reached
   | Clipboard_only
   | Attempt_failed of { retry_exhausted : bool; audio_kept : bool }
   | Config_rejected
@@ -13,7 +14,7 @@ type event =
 type decision = Notify | Log
 
 let decide = function
-  | Clipboard_only | Config_rejected -> Notify
+  | Capacity_reached | Clipboard_only | Config_rejected -> Notify
   | Attempt_failed { retry_exhausted = true; audio_kept = true }
   | Provider_outage { retry_exhausted = true } ->
       Notify

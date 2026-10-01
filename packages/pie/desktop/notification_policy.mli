@@ -1,5 +1,6 @@
 (** The complete desktop notification allowlist. No effects or timing state. *)
 type event =
+  | Capacity_reached
   | Clipboard_only
   | Attempt_failed of { retry_exhausted : bool; audio_kept : bool }
   | Config_rejected

@@ -3,6 +3,7 @@ module P = Pie.Desktop.Notification_policy
 let test_allowlist () =
   let cases =
     [
+      (P.Capacity_reached, P.Notify);
       (P.Clipboard_only, P.Notify);
       (Config_rejected, Notify);
       (Attempt_failed { retry_exhausted = true; audio_kept = true }, Notify);

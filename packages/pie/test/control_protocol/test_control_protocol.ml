@@ -3,6 +3,7 @@ module C = Pie.Assistant_service.Contract
 let armed_snapshot : C.recording_snapshot =
   {
     phase = Pie.Recording.Phase.Ready;
+    processing = 0;
     active = false;
     mode = "idle";
     enabled = true;
