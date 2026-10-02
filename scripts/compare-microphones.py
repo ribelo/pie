@@ -285,7 +285,7 @@ def build_record_argv(node_name: str, sample_count: int, wav_path: Path) -> list
         "--sample-count",
         str(sample_count),
         "-P",
-        "node.dont-fallback=true",
+        "node.dont-reconnect=true",
         str(wav_path),
     ]
 
@@ -366,6 +366,41 @@ def log_tail(path: Path, limit: int = 20) -> str:
     return "\n".join(lines[-limit:])
 
 
+def completed_capture(proc) -> bool:
+    """pw-record 1.6.8 exits 1 at sample-count, even for a complete WAV."""
+    if proc.returncode == 0:
+        return True
+    args = proc.args
+    if proc.returncode != 1 or args[0] != "pw-record" or "--sample-count" not in args:
+        return False
+    try:
+        validate_recording(Path(args[-1]), int(args[args.index("--sample-count") + 1]))
+    except (MicError, ValueError):
+        return False
+    return True
+
+
+def verified_links(dump: list, expected: dict[str, str]) -> set[str]:
+    """Fail closed if any recording connects to a different microphone."""
+    nodes = {obj["id"]: props_of(obj) for obj in dump
+             if obj.get("type") == "PipeWire:Interface:Node"}
+    verified = set()
+    for obj in dump:
+        if obj.get("type") != "PipeWire:Interface:Link":
+            continue
+        info = obj.get("info", {})
+        target = nodes.get(info.get("input-node-id"), {})
+        filename = target.get("media.filename")
+        if filename not in expected:
+            continue
+        source = nodes.get(info.get("output-node-id"), {}).get("node.name")
+        if source != expected[filename]:
+            raise MicError(f"Nieprawidłowe źródło nagrania {filename}: {source}")
+        if info.get("state") == "active":
+            verified.add(filename)
+    return verified
+
+
 def run_captures(commands: list[tuple[str, Path, list[str]]], timeout_s: float, owned: Owned | None = None) -> None:
     owned = owned or Owned()
     previous_int = signal.getsignal(signal.SIGINT)
@@ -380,8 +415,15 @@ def run_captures(commands: list[tuple[str, Path, list[str]]], timeout_s: float, 
         for _label, log_path, cmd in commands:
             owned.spawn(cmd, log_path)
         deadline = time.monotonic() + timeout_s
+        expected = {cmd[-1]: cmd[cmd.index("--target") + 1]
+                    for _, _, cmd in commands if cmd[0] == "pw-record"}
+        verified = set()
         while True:
-            failed = [proc for proc in owned.procs if proc.poll() not in (None, 0)]
+            if expected and any(proc.poll() is None for proc in owned.procs):
+                dump = json.loads(run_text(["pw-dump"], 3))
+                verified.update(verified_links(dump, expected))
+            failed = [proc for proc in owned.procs
+                      if proc.poll() is not None and not completed_capture(proc)]
             running = [proc for proc in owned.procs if proc.poll() is None]
             if failed:
                 details = []
@@ -391,6 +433,8 @@ def run_captures(commands: list[tuple[str, Path, list[str]]], timeout_s: float, 
                     )
                 raise MicError("nagranie nie powiodło się:\n" + "\n".join(details))
             if not running:
+                if set(expected) != verified:
+                    raise MicError("Nie potwierdzono połączenia każdego nagrania z właściwym mikrofonem")
                 return
             if time.monotonic() >= deadline:
                 names = ", ".join(proc.label for proc in running)
@@ -806,7 +850,7 @@ def self_test() -> int:
         "record-argv",
         argv == [
             "pw-record", "--target", "alsa_input.example", "--rate", "48000", "--channels", "1",
-            "--format", "s16", "--sample-count", str(5 * RATE), "-P", "node.dont-fallback=true",
+            "--format", "s16", "--sample-count", str(5 * RATE), "-P", "node.dont-reconnect=true",
             "fifine-silence.wav",
         ],
         str(argv),
@@ -814,6 +858,26 @@ def self_test() -> int:
 
     with tempfile.TemporaryDirectory() as raw:
         root = Path(raw)
+        wav_path = root / "completed.wav"
+        with wave.open(str(wav_path), "wb") as wav:
+            wav.setparams((1, 2, RATE, 0, "NONE", "not compressed"))
+            wav.writeframes(b"\x01\x00" * RATE)
+        argv = build_record_argv("source", RATE, wav_path)
+        check("sample-count-exit-one-complete", completed_capture(subprocess.CompletedProcess(argv, 1)))
+        argv = build_record_argv("source", RATE * 2, wav_path)
+        check("sample-count-exit-one-short-rejected", not completed_capture(subprocess.CompletedProcess(argv, 1)))
+        check("unexpected-exit-rejected", not completed_capture(subprocess.CompletedProcess(argv, 3)))
+        links = [
+            {"id": 1, "type": "PipeWire:Interface:Node", "info": {"props": {"node.name": "source"}}},
+            {"id": 2, "type": "PipeWire:Interface:Node", "info": {"props": {"media.filename": str(wav_path)}}},
+            {"id": 3, "type": "PipeWire:Interface:Link", "info": {"input-node-id": 2, "output-node-id": 1, "state": "active"}},
+        ]
+        check("correct-source-link", verified_links(links, {str(wav_path): "source"}) == {str(wav_path)})
+        try:
+            verified_links(links, {str(wav_path): "other-source"})
+            check("wrong-source-rejected", False)
+        except MicError:
+            check("wrong-source-rejected", True)
         pid_path = root / "sleeper.pid"
         sleeper = (
             "import os,signal,sys,time,pathlib;"
