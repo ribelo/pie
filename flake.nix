@@ -102,12 +102,6 @@
               NIX_CFLAGS_COMPILE = "${old.NIX_CFLAGS_COMPILE or ""} -std=gnu17";
               doCheck = false;
             });
-          eioSrc = pkgs.fetchFromGitHub {
-            owner = "oxcaml";
-            repo = "eio";
-            rev = "7de26f5331f1e7aac1c086a5ebe849dd940b5c3e";
-            hash = "sha256-2sgXOko6qjTWcb6PONPS+SO7PPKvBEUIU/7U6ooXDyA=";
-          };
           oxcamlSystemOverlay = final: prev: {
             ocaml-system = prev.ocaml-system.overrideAttrs (old: {
               nativeBuildInputs = [ oxcamlCompiler ];
@@ -147,17 +141,14 @@
                 [ ''args+=("${final.ocamlfind}/bin/ocaml")'' ]
                 old.buildPhase;
             });
-          } // builtins.listToAttrs (map
-            (name: {
-              inherit name;
-              value = prev.${name}.overrideAttrs (_: { src = eioSrc; });
-            })
-            [ "eio" "eio_linux" "eio_main" "eio_posix" ]);
+          };
           scope = opamLib.buildOpamProject
             {
               inherit pkgs;
               overlays = [ oxcamlSystemOverlay ];
               repos = [
+                # Upstream Eio 1.6 from ox, never the oxcaml/eio snapshot (ox ^neio-w4hd).
+                ox.legacyPackages.${system}.eioOpamRepository
                 oxRepo
                 oxcaml-opam-repository
                 opam-repository

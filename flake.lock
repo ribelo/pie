@@ -175,6 +175,23 @@
         "type": "github"
       }
     },
+    "opam-repository-eio": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1789988300,
+        "narHash": "sha256-YG/g9DwWwaTM8GMZbMIKgNz4ESETkg1G75jTiCNtVk8=",
+        "owner": "ocaml",
+        "repo": "opam-repository",
+        "rev": "2da7d48d1861cf46ff10773584abdee8693bde2b",
+        "type": "github"
+      },
+      "original": {
+        "owner": "ocaml",
+        "repo": "opam-repository",
+        "rev": "2da7d48d1861cf46ff10773584abdee8693bde2b",
+        "type": "github"
+      }
+    },
     "opam-repository_2": {
       "flake": false,
       "locked": {
@@ -225,6 +242,7 @@
         "opam-repository": [
           "opam-repository"
         ],
+        "opam-repository-eio": "opam-repository-eio",
         "oxcaml": [
           "oxcaml"
         ],
@@ -235,11 +253,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1790788679,
-        "narHash": "sha256-fc4Te9bUEt3PYUfpLb0Zleq2Zjn0wXl44sbXkw6iq7k=",
+        "lastModified": 1791067445,
+        "narHash": "sha256-0jN6DZqQzBKx0dcb3aM4HlRVFPkrV2RUe2nvN54ruTM=",
         "ref": "master",
-        "rev": "ffe57e78a77dc1aeadc4a165454f26f744b3501a",
-        "revCount": 129,
+        "rev": "1c354255fa549892a650e5785f2b3323d1b39bdc",
+        "revCount": 138,
         "type": "git",
         "url": "file:///home/ribelo/projects/ribelo/ocaml/ox"
       },
