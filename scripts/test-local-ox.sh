@@ -7,18 +7,26 @@ set -euo pipefail
 pie_root="$(cd "$(dirname "$0")/.." && pwd -P)"
 ox_root="$(cd "${OX_PATH:-$pie_root/../ocaml/ox}" && pwd -P)"
 if [[ "${1:-}" != --in-shell ]]; then
-  exec nix develop "$ox_root" -c bash "$0" --in-shell
+  shell_root="$ox_root"
+  if [[ "${1:-}" == --shared-ox ]]; then shell_root="$pie_root"; fi
+  exec nix develop "$shell_root" -c bash "$0" --in-shell "$@"
+fi
+mode="${2:-}"
+if [[ "$#" -gt 2 || ( -n "$mode" && "$mode" != --shared-ox ) ]]; then
+  echo "Usage: $0 [--shared-ox]" >&2
+  exit 2
 fi
 
 export OPAMROOT="$HOME/.cache/opam"
 eval "$(opam env --switch 5.4.0+ox --set-switch)"
 export DUNE_CACHE=disabled
 pkg-config --exists openssl sqlite3 || {
-  echo 'The Ox Nix shell must provide OpenSSL and SQLite native libraries.' >&2
+  echo 'The Nix shell must provide OpenSSL and SQLite native libraries.' >&2
   exit 1
 }
-if [[ "$(git -C "$ox_root" rev-parse HEAD)" != "$(git -C "$ox_root" rev-parse master)" ]] ||
-   [[ -n "$(git -C "$ox_root" status --porcelain --untracked-files=no -- lib dune-project)" ]]; then
+if [[ "$mode" != --shared-ox ]] && {
+   [[ "$(git -C "$ox_root" rev-parse HEAD)" != "$(git -C "$ox_root" rev-parse master)" ]] ||
+   [[ -n "$(git -C "$ox_root" status --porcelain --untracked-files=no -- lib dune-project)" ]]; }; then
   echo 'Ox must be checked out at its clean local master branch for this test.' >&2
   exit 1
 fi
@@ -28,24 +36,50 @@ prefix="$pie_root/_dev/ox-install"
 build="$pie_root/_dev/pie-build"
 run="$pie_root/_dev/test-run"
 mkdir -p "$pie_root/_dev"
-rm -rf "$mirror" "$prefix" "$run"
-mkdir -p "$mirror" "$run/logs" "$run/alcotest"
-# Dune does not traverse directory symlinks. Mirror real directories and
-# symlink each source file; Ox's build products stay in this ignored tree.
-cp -rs "$ox_root/lib" "$mirror/lib"
-ln -s "$ox_root/dune-project" "$mirror/dune-project"
+rm -rf "$run"
+mkdir -p "$run/logs" "$run/alcotest"
+if [[ "$mode" != --shared-ox ]]; then
+  rm -rf "$mirror" "$prefix"
+  mkdir -p "$mirror"
+  # Dune does not traverse directory symlinks. Mirror real directories and
+  # symlink each source file; Ox's build products stay in this ignored tree.
+  cp -rs "$ox_root/lib" "$mirror/lib"
+  ln -s "$ox_root/dune-project" "$mirror/dune-project"
+  # ^pcapslint-t4bn: ox_lint installs its rule pages and fixtures beside the launcher.
+  mkdir -p "$mirror/docs" "$mirror/test/caps"
+  cp -rs "$ox_root/docs/rules" "$mirror/docs/rules"
+  ln -s "$ox_root/docs/caps.md" "$mirror/docs/caps.md"
+  cp -rs "$ox_root/test/lint" "$mirror/test/lint"
+  cp -rs "$ox_root/test/caps/rules" "$mirror/test/caps/rules"
 
-packages=ox,ox_ai,ox_ai_openrouter,ox_ai_realtime,ox_app,ox_blocking,ox_http,ox_ipc,ox_json,ox_observability,ox_otel,ox_process,ox_rpc,ox_test
-dune build --root "$mirror" --only-packages "$packages" @install
-dune install --root "$mirror" --only-packages "$packages" --prefix "$prefix"
-export OCAMLPATH="$prefix/lib${OCAMLPATH:+:$OCAMLPATH}"
-export CAML_LD_LIBRARY_PATH="$prefix/lib/stublibs${CAML_LD_LIBRARY_PATH:+:$CAML_LD_LIBRARY_PATH}"
-if [[ "$(ocamlfind query ox_http)" != "$prefix/lib/ox_http" ]]; then
-  echo 'Local Ox installation did not take precedence over the shared switch.' >&2
-  exit 1
+  packages=ox,ox_ai,ox_ai_openrouter,ox_ai_realtime,ox_app,ox_blocking,ox_caps,ox_http,ox_ipc,ox_json,ox_lint,ox_observability,ox_otel,ox_process,ox_rpc,ox_test
+  dune build --root "$mirror" --only-packages "$packages" @install
+  dune install --root "$mirror" --only-packages "$packages" --prefix "$prefix"
+  export OCAMLPATH="$prefix/lib${OCAMLPATH:+:$OCAMLPATH}"
+  export CAML_LD_LIBRARY_PATH="$prefix/lib/stublibs${CAML_LD_LIBRARY_PATH:+:$CAML_LD_LIBRARY_PATH}"
+  if [[ "$(ocamlfind query ox_http)" != "$prefix/lib/ox_http" ]]; then
+    echo 'Local Ox installation did not take precedence over the shared switch.' >&2
+    exit 1
+  fi
+  printf 'Ox master: %s\n' "$(git -C "$ox_root" rev-parse --short HEAD)"
+else
+  printf 'Ox shared switch: %s\n' "$OPAMSWITCH"
 fi
-printf 'Ox master: %s\n' "$(git -C "$ox_root" rev-parse --short HEAD)"
-dune build --root "$pie_root" --build-dir "$build" --only-packages pie @all
+
+run_gate() {
+  local name="$1" ec
+  shift
+  set +e
+  "$@"
+  ec=$?
+  set -e
+  printf '%s rc=%s\n' "$name" "$ec"
+  return "$ec"
+}
+run_gate build dune build --root "$pie_root" --build-dir "$build" --only-packages pie @all
+# The wrapper builds @install and production bin @check in _build for typed evidence.
+run_gate caps-gate "$pie_root/scripts/caps-gate"
+run_gate fmt dune build --root "$pie_root" --build-dir "$build" --only-packages pie @fmt
 
 # Fail closed rather than accidentally using a real desktop/audio/session. Do
 # not read or copy the user's auth; fixtures run with an empty private HOME.

@@ -210,8 +210,9 @@
               eval "$(opam env --switch "$switch_name" --set-switch)"
 
               # etabuild-e0gr: install committed Ox master for development.
+              # ^ncapslint-ebh6 ^pcapslint-h9x2: include compiler-backed gate tooling.
               ox_path="''${OX_PATH:-$repo_root/../ocaml/ox}"
-              export OX_OPAM_PACKAGES="''${OX_OPAM_PACKAGES:-ox ox_ai ox_ai_openrouter ox_ai_realtime ox_app ox_blocking ox_http ox_ipc ox_json ox_observability ox_otel ox_process ox_rpc ox_test}"
+              export OX_OPAM_PACKAGES="''${OX_OPAM_PACKAGES:-ox ox_ai ox_ai_openrouter ox_ai_realtime ox_app ox_blocking ox_http ox_ipc ox_json ox_lint ox_observability ox_otel ox_process ox_rpc ox_test}"
               if command -v ox-opam-install >/dev/null 2>&1; then
                 OX_REPO_ROOT="$ox_path" ox-opam-install
               elif [ -d "$ox_path" ]; then

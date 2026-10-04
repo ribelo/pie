@@ -2,11 +2,16 @@
 
 ; Volatile by design: commit/dirty state and time are sampled at build time,
 ; never fetched from the runtime checkout or restored from an action cache.
+
 (rule
  (target build_identity.ml)
- (deps (universe) ../../scripts/build-identity.sh (sandbox none))
+ (deps
+  (universe)
+  ../../scripts/build-identity.sh
+  (sandbox none))
  (action
-  (with-stdout-to %{target}
+  (with-stdout-to
+   %{target}
    (run bash %{dep:../../scripts/build-identity.sh}))))
 
 (library

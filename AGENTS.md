@@ -24,6 +24,25 @@ uncommitted work is effectively lost work.
 - The user dictates through the running `pie.service` all the time. Replace its binary or restart it only when asked, and only after `pie msg status` says `armed` and the journal shows no `PTT capture started` without a matching stop: a restart during a dictation ends it.
 - Dangerous calls go through `Ox_caps.Cap_*` and require a capability in the signature; `scripts/caps-gate` checks production code.
 
+## Gates (before any commit)
+
+Run `scripts/test-local-ox.sh --shared-ox` for a build, the installed capability
+gate, formatting, and every registered test (including Slow cases) with a private
+HOME and fail-closed desktop helpers. This uses the same shared switch as Pie’s
+`nix develop` without installing packages or changing the running Pie service.
+The legacy no-argument mode instead installs Ox into ignored `_dev/ox-install`;
+use it only when a private local-Ox build is wanted.
+
+For a standalone capability check, run `nix develop -c scripts/caps-gate` after
+updating the shared switch with Ox’s own installation workflow.
+Do not run `pie-opam-install` just to gate: it also replaces the installed Pie
+binary, which needs explicit authorization. The wrapper builds `@install` plus
+`@packages/pie/bin/check` immediately before the gate and requires fresh typed
+evidence; the scoped `@check` produces executable annotations, without unrelated
+test-only probes.
+A source-clean run with undecided modules is not green.
+Finish with `git diff --check`.
+
 ## Agent skills
 
 ### Issue tracker

@@ -37,9 +37,7 @@ let pipeline ~stt =
     append_finished = (fun _ -> Ok ());
     warn = (fun _ -> ());
     report_notification =
-      Pie.Desktop.Notification.report
-        ~notify:(fun _ _ -> ())
-        ~log:(fun _ -> ());
+      Pie.Desktop.Notification.report ~notify:(fun _ _ -> ()) ~log:(fun _ -> ());
     fresh_id =
       (fun () ->
         incr next;

@@ -13,4 +13,6 @@ if [ ! -f "$gate" ]; then
   exit 2
 fi
 
-exec bash "$gate" "$@" packages
+# ^pcapslint-t4bn: @check retains executable .cmt; exclude test-only probe failures.
+dune build @install @packages/pie/bin/check
+exec bash "$gate" --require-typed "$@" packages

@@ -69,6 +69,25 @@ file, keep existing sections, and merge duplicate terms' variants on one
 line. Edits apply at the next key press; do not restart Pie. The bundled
 skill and `pie skill install` have been removed.
 
+## Gates against the normal shared switch
+
+```bash
+scripts/test-local-ox.sh --shared-ox
+git diff --check
+```
+
+This enters Pie’s own `nix develop`, builds and gates against its shared switch,
+and runs all tests with a private HOME and fail-closed desktop helpers. It does
+not install packages or change the live service. The shared switch must already
+contain current Ox packages, including the build-time `ox_lint`.
+Do not run `pie-opam-install` just to gate: although its package list includes
+`ox_lint`, it also replaces the installed Pie binary and needs explicit permission.
+The capability gate builds `@install @packages/pie/bin/check` before invoking the
+installed launcher with fresh typed evidence required; the production-scoped
+`@check` produces executable annotations without unrelated test-only probes.
+For a standalone check use
+`nix develop -c scripts/caps-gate`.
+
 ## Test against current local Ox master
 
 ```bash
@@ -81,7 +100,10 @@ installs only the needed Ox packages into ignored `_dev/ox-install`, then
 puts that local prefix ahead of the shared switch via `OCAMLPATH` and
 `CAML_LD_LIBRARY_PATH`. It builds Pie and runs **every registered test**
 (including long end-to-end cases) with a private HOME and fail-closed desktop
-helpers. It never installs into the shared opam switch. Inspect
+helpers. Before tests, it runs formatting and the installed compiler-backed
+capability gate; the gate builds `@install @packages/pie/bin/check` first and
+requires fresh typed evidence. `ox_caps` and the build-time `ox_lint` are installed together in the
+private prefix. It never installs into the shared opam switch. Inspect
 `_dev/test-run/summary.tsv` for per-suite pass counts and
 `_dev/test-run/logs/` for test diagnostics. Set `OX_PATH` to use a different
 local Ox checkout. The script refuses a dirty or non-master Ox checkout.
