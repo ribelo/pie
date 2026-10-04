@@ -23,3 +23,17 @@ uncommitted work is effectively lost work.
 - Push only when the user asks.
 - The user dictates through the running `pie.service` all the time. Replace its binary or restart it only when asked, and only after `pie msg status` says `armed` and the journal shows no `PTT capture started` without a matching stop: a restart during a dictation ends it.
 - Dangerous calls go through `Ox_caps.Cap_*` and require a capability in the signature; `scripts/caps-gate` checks production code.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs live as committed markdown files under `docs/issues/`; wayfinder maps under `docs/wayfinder/`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical triage roles, with label strings equal to their names. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one `GLOSSARY.md` at the repo root. See `docs/agents/domain.md`.
