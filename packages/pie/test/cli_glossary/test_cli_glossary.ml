@@ -142,6 +142,7 @@ let run_pie
        ; Ox_caps.Cap.fork
        ; Ox_caps.Cap.signal
        ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.stdin
        ; .. >) ~runtime_dir ?(glossary = "") args =
   let stdout_r, stdout_w = Unix.pipe ~cloexec:true () in
   let stderr_r, stderr_w = Unix.pipe ~cloexec:true () in
@@ -166,7 +167,9 @@ let run_pie
   let pid =
     Ox_caps.Cap_unix.create_process_env ~caps pie_exe
       (Array.of_list (pie_exe :: args))
-      env Unix.stdin stdout_w stderr_w
+      env
+      (Unix.descr_of_in_channel (Ox_caps.Cap_stdlib.stdin ~caps))
+      stdout_w stderr_w
   in
   close_fd stdout_w;
   close_fd stderr_w;

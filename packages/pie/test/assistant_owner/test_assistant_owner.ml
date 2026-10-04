@@ -1049,8 +1049,14 @@ let run_stream_child
           mark "delivered"))
 
 let spawn_stream_child
-    ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.exec ; Ox_caps.Cap.fork ; .. >)
-    ?(fallback = "none") ~port ~codex_home ~niri_dir ~stage_dir () =
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.stdin
+       ; Ox_caps.Cap.stdout
+       ; .. >) ?(fallback = "none") ~port ~codex_home ~niri_dir ~stage_dir () =
   let path =
     match Ox_caps.Cap_sys.getenv_opt ~caps "PATH" with
     | Some path -> niri_dir ^ ":" ^ path
@@ -1080,8 +1086,10 @@ let spawn_stream_child
   in
   let exe = Sys.executable_name in
   let pid =
-    Ox_caps.Cap_unix.create_process_env ~caps exe [| exe |] env Unix.stdin
-      Unix.stdout Unix.stderr
+    Ox_caps.Cap_unix.create_process_env ~caps exe [| exe |] env
+      (Unix.descr_of_in_channel (Ox_caps.Cap_stdlib.stdin ~caps))
+      (Unix.descr_of_out_channel (Ox_caps.Cap_stdlib.stdout ~caps))
+      (Unix.descr_of_out_channel (Ox_caps.Cap_stdlib.stderr ~caps))
   in
   snd (Unix.waitpid [] pid)
 

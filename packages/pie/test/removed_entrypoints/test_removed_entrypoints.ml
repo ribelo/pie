@@ -53,8 +53,12 @@ let write_file ~(caps : < Ox_caps.Cap.fs_write ; .. >) path contents =
     (fun () -> output_string oc contents)
 
 let run_pie
-    ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.exec ; Ox_caps.Cap.fork ; .. >)
-    ~sandbox ~sentinel args =
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.stdin
+       ; .. >) ~sandbox ~sentinel args =
   let stdout_r, stdout_w = Unix.pipe ~cloexec:true () in
   let stderr_r, stderr_w = Unix.pipe ~cloexec:true () in
   let bin = Filename.concat sandbox "bin" in
@@ -81,7 +85,9 @@ let run_pie
   let pid =
     Ox_caps.Cap_unix.create_process_env ~caps pie_exe
       (Array.of_list (pie_exe :: args))
-      env Unix.stdin stdout_w stderr_w
+      env
+      (Unix.descr_of_in_channel (Ox_caps.Cap_stdlib.stdin ~caps))
+      stdout_w stderr_w
   in
   Unix.close stdout_w;
   Unix.close stderr_w;

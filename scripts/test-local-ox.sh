@@ -76,10 +76,8 @@ run_gate() {
   printf '%s rc=%s\n' "$name" "$ec"
   return "$ec"
 }
-run_gate build dune build --root "$pie_root" --build-dir "$build" --only-packages pie @all
-# The wrapper builds @install and @check in _build for fresh typed evidence.
-run_gate caps-gate "$pie_root/scripts/caps-gate"
 run_gate fmt dune build --root "$pie_root" --build-dir "$build" --only-packages pie @fmt
+run_gate build dune build --root "$pie_root" --build-dir "$build" --only-packages pie @all
 
 # Fail closed rather than accidentally using a real desktop/audio/session. Do
 # not read or copy the user's auth; fixtures run with an empty private HOME.
@@ -150,4 +148,6 @@ with open(sys.argv[1]) as f:
 print(f'TOTAL: {sum(int(r["passed"]) for r in rows)} passed in {len(rows)} suites; '
       f'{sum(int(r["exit"]) != 0 for r in rows)} failed suites')
 PY
+# The wrapper builds @install and @check in _build for fresh typed evidence.
+run_gate caps-gate "$pie_root/scripts/caps-gate" || status=1
 exit "$status"

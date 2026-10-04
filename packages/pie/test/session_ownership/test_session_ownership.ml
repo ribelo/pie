@@ -574,6 +574,9 @@ let repeat_wss
        ; Ox_caps.Cap.fork
        ; Ox_caps.Cap.fs_write
        ; Ox_caps.Cap.tmp
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.stdin
+       ; Ox_caps.Cap.stdout
        ; .. >) ~rounds () =
   with_localhost_tls ~caps @@ fun cert key ->
   let env =
@@ -598,8 +601,10 @@ let repeat_wss
     else Sys.executable_name
   in
   let pid =
-    Ox_caps.Cap_unix.create_process_env ~caps exe [| exe |] env Unix.stdin
-      Unix.stdout Unix.stderr
+    Ox_caps.Cap_unix.create_process_env ~caps exe [| exe |] env
+      (Unix.descr_of_in_channel (Ox_caps.Cap_stdlib.stdin ~caps))
+      (Unix.descr_of_out_channel (Ox_caps.Cap_stdlib.stdout ~caps))
+      (Unix.descr_of_out_channel (Ox_caps.Cap_stdlib.stderr ~caps))
   in
   match snd (Unix.waitpid [] pid) with
   | Unix.WEXITED 0 -> ()

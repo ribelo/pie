@@ -951,6 +951,9 @@ let test_isolated_dbus_daemon_optional
        ; Ox_caps.Cap.fs_write
        ; Ox_caps.Cap.signal
        ; Ox_caps.Cap.tmp
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.stdin
+       ; Ox_caps.Cap.stdout
        ; .. >) () =
   match
     Ox_caps.Cap_unix.system ~caps "command -v dbus-daemon >/dev/null 2>&1"
@@ -962,7 +965,9 @@ let test_isolated_dbus_daemon_optional
       let pid =
         Ox_caps.Cap_unix.create_process ~caps "dbus-daemon"
           [| "dbus-daemon"; "--session"; "--nofork"; "--address=" ^ addr |]
-          Unix.stdin Unix.stdout Unix.stderr
+          (Unix.descr_of_in_channel (Ox_caps.Cap_stdlib.stdin ~caps))
+          (Unix.descr_of_out_channel (Ox_caps.Cap_stdlib.stdout ~caps))
+          (Unix.descr_of_out_channel (Ox_caps.Cap_stdlib.stderr ~caps))
       in
       Fun.protect
         ~finally:(fun () ->

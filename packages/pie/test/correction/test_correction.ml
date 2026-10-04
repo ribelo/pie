@@ -771,8 +771,14 @@ let env_without ~(caps : < Ox_caps.Cap.env ; .. >) keys =
   |> Array.of_list
 
 let spawn_case
-    ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.exec ; Ox_caps.Cap.fork ; .. >)
-    name ~with_key =
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.stdin
+       ; Ox_caps.Cap.stdout
+       ; .. >) name ~with_key =
   let base =
     env_without ~caps [ "OPENROUTER_API_KEY"; "OPENROUTER_BASE_URL"; case_env ]
   in
@@ -786,8 +792,10 @@ let spawn_case
   in
   let exe = Sys.executable_name in
   let pid =
-    Ox_caps.Cap_unix.create_process_env ~caps exe [| exe |] env Unix.stdin
-      Unix.stdout Unix.stderr
+    Ox_caps.Cap_unix.create_process_env ~caps exe [| exe |] env
+      (Unix.descr_of_in_channel (Ox_caps.Cap_stdlib.stdin ~caps))
+      (Unix.descr_of_out_channel (Ox_caps.Cap_stdlib.stdout ~caps))
+      (Unix.descr_of_out_channel (Ox_caps.Cap_stdlib.stderr ~caps))
   in
   match snd (Unix.waitpid [] pid) with
   | Unix.WEXITED 0 -> ()

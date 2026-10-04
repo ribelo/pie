@@ -294,18 +294,29 @@ let run ~caps ~sw ~net ~clock ~logger:_ ~model ~prompt_template ~transcript
                   ~body ~deadline:timeout ~max_body_bytes:max_response_bytes ()
               with
               | Error (`Timeout | `Idle_timeout) -> Error Timeout
-              | Error `Body_too_large -> Error (Provider Invalid_response)
-              | Error (`Closed | `Connect _ | `Tls _ | `Protocol _) ->
+              | Error (`Body { reason = `Timeout | `Idle_timeout; _ }) ->
+                  Error Timeout
+              | Error (`Body { reason = `Too_large; _ }) ->
+                  Error (Provider Invalid_response)
+              | Error
+                  ( `Closed | `Connect _ | `Tls _ | `Protocol _
+                  | `Body
+                      {
+                        reason =
+                          ( `Truncated | `Malformed _ | `Tls _ | `Closed
+                          | `Connect _ );
+                        _;
+                      } ) ->
                   Error (Provider Unavailable)
-              | Ok response -> (
-                  on_response response.body;
-                  if response.status = 401 then Error (Provider Authentication)
-                  else if response.status = 413 then
-                    Error (Provider Input_too_large)
-                  else if response.status < 200 || response.status >= 300 then
+              | Ok { body = `Skipped; _ } -> Error (Provider Invalid_response)
+              | Ok { body = `Read body; status; _ } -> (
+                  on_response body;
+                  if status = 401 then Error (Provider Authentication)
+                  else if status = 413 then Error (Provider Input_too_large)
+                  else if status < 200 || status >= 300 then
                     Error (Provider Unavailable)
                   else
-                    match parse_body response.body with
+                    match parse_body body with
                     | Error _ as error -> error
                     | Ok json when Openrouter.provider_failed json ->
                         Error (Provider Unavailable)
