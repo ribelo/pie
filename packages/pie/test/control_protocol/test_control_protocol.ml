@@ -199,10 +199,11 @@ let test_line_codec () =
     "error response" {|{"error":"malformed-request"}|}
     (C.encode_response (C.Error_resp "malformed-request"))
 
-let serve_one ~socket_path reply =
-  let server = Unix.socket Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+let serve_one ~(caps : < Ox_caps.Cap.fs_write ; Ox_caps.Cap.network ; .. >)
+    ~socket_path reply =
+  let server = Ox_caps.Cap_unix.socket ~caps Unix.PF_UNIX Unix.SOCK_STREAM 0 in
   Unix.set_nonblock server;
-  (try Unix.unlink socket_path with Unix.Unix_error _ -> ());
+  (try Ox_caps.Cap_unix.unlink ~caps socket_path with Unix.Unix_error _ -> ());
   Unix.bind server (Unix.ADDR_UNIX socket_path);
   Unix.listen server 1;
   let worker =
@@ -227,22 +228,28 @@ let serve_one ~socket_path reply =
   in
   (server, worker)
 
-let with_temp_dir f =
-  let runtime_dir = Filename.temp_file "pie-control-protocol" "" in
-  Sys.remove runtime_dir;
-  Unix.mkdir runtime_dir 0o700;
+let with_temp_dir
+    ~(caps :
+       < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.tmp ; .. >) f
+    =
+  let runtime_dir =
+    Ox_caps.Cap_stdlib.Filename.temp_file ~caps "pie-control-protocol" ""
+  in
+  Ox_caps.Cap_sys.remove ~caps runtime_dir;
+  Ox_caps.Cap_unix.mkdir ~caps runtime_dir 0o700;
   Fun.protect
     ~finally:(fun () ->
       Array.iter
         (fun name ->
-          try Sys.remove (Filename.concat runtime_dir name)
+          try Ox_caps.Cap_sys.remove ~caps (Filename.concat runtime_dir name)
           with Sys_error _ -> ())
-        (try Sys.readdir runtime_dir with Sys_error _ -> [||]);
-      try Unix.rmdir runtime_dir with Unix.Unix_error _ -> ())
+        (try Ox_caps.Cap_sys.readdir ~caps runtime_dir with Sys_error _ -> [||]);
+      try Ox_caps.Cap_unix.rmdir ~caps runtime_dir
+      with Unix.Unix_error _ -> ())
     (fun () -> f runtime_dir)
 
-let request_op ~socket_path req =
-  let client = Unix.socket Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+let request_op ~(caps : < Ox_caps.Cap.network ; .. >) ~socket_path req =
+  let client = Ox_caps.Cap_unix.socket ~caps Unix.PF_UNIX Unix.SOCK_STREAM 0 in
   Fun.protect
     ~finally:(fun () -> try Unix.close client with _ -> ())
     (fun () ->
@@ -255,65 +262,123 @@ let request_op ~socket_path req =
       let n = Unix.read client buf 0 (Bytes.length buf) in
       Yojson.Safe.from_string (String.trim (Bytes.sub_string buf 0 n)))
 
-let run_op_roundtrip req reply =
-  with_temp_dir @@ fun runtime_dir ->
+let run_op_roundtrip
+    ~(caps :
+       < Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.tmp
+       ; .. >) req reply =
+  with_temp_dir ~caps @@ fun runtime_dir ->
   let socket_path = Filename.concat runtime_dir "control.sock" in
-  let server, worker = serve_one ~socket_path reply in
+  let server, worker = serve_one ~caps ~socket_path reply in
   Fun.protect
     ~finally:(fun () ->
       (try Unix.close server with _ -> ());
       (try Thread.join worker with _ -> ());
-      try Unix.unlink socket_path with Unix.Unix_error _ -> ())
+      try Ox_caps.Cap_unix.unlink ~caps socket_path
+      with Unix.Unix_error _ -> ())
     (fun () ->
-      let json = request_op ~socket_path req in
+      let json = request_op ~caps ~socket_path req in
       C.response_of_json req json)
 
-let test_roundtrip_status () =
+let test_roundtrip_status
+    ~(caps :
+       < Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
   let json = Yojson.Safe.to_string (C.json_of_snapshot armed_snapshot) in
-  match run_op_roundtrip C.Status json with
+  match run_op_roundtrip ~caps C.Status json with
   | Ok (C.Status_resp snap) -> Alcotest.(check bool) "enabled" true snap.enabled
   | Ok _ -> Alcotest.fail "expected Status_resp"
   | Error label -> Alcotest.failf "status roundtrip protocol error %s" label
 
-let test_roundtrip_missing_status () =
-  match run_op_roundtrip C.Status {|{"active":false,"enabled":true}|} with
+let test_roundtrip_missing_status
+    ~(caps :
+       < Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  match run_op_roundtrip ~caps C.Status {|{"active":false,"enabled":true}|} with
   | Error label -> Alcotest.(check string) "missing-field" C.missing_field label
   | Ok (C.Status_resp _) -> Alcotest.fail "missing field fabricated a snapshot"
   | Ok _ -> Alcotest.fail "expected protocol error"
 
-let test_roundtrip_wrong_type () =
+let test_roundtrip_wrong_type
+    ~(caps :
+       < Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
   match
-    run_op_roundtrip C.Status {|{"active":"no","mode":"idle","enabled":true}|}
+    run_op_roundtrip ~caps C.Status
+      {|{"active":"no","mode":"idle","enabled":true}|}
   with
   | Error label -> Alcotest.(check string) "wrong-type" C.wrong_type label
   | Ok (C.Status_resp _) -> Alcotest.fail "wrong type fabricated a snapshot"
   | Ok _ -> Alcotest.fail "expected protocol error"
 
-let test_roundtrip_pause () =
-  match run_op_roundtrip C.Pause "{}" with
+let test_roundtrip_pause
+    ~(caps :
+       < Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  match run_op_roundtrip ~caps C.Pause "{}" with
   | Ok C.Pause_resp -> ()
   | _ -> Alcotest.fail "expected Pause_resp"
 
-let test_roundtrip_toggle () =
-  match run_op_roundtrip C.Toggle {|{"value":true}|} with
+let test_roundtrip_toggle
+    ~(caps :
+       < Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  match run_op_roundtrip ~caps C.Toggle {|{"value":true}|} with
   | Ok (C.Toggle_resp true) -> ()
   | _ -> Alcotest.fail "expected Toggle_resp"
 
-let test_roundtrip_error () =
-  match run_op_roundtrip C.Status {|{"error":"synthetic protocol error"}|} with
+let test_roundtrip_error
+    ~(caps :
+       < Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  match
+    run_op_roundtrip ~caps C.Status {|{"error":"synthetic protocol error"}|}
+  with
   | Ok (C.Error_resp "synthetic protocol error") -> ()
   | _ -> Alcotest.fail "expected Error_resp"
 
-let test_roundtrip_action_mismatch () =
+let test_roundtrip_action_mismatch
+    ~(caps :
+       < Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
   let reply = Yojson.Safe.to_string (action_json ~action:"ptt-start") in
-  match run_op_roundtrip (C.Action "retry") reply with
+  match run_op_roundtrip ~caps (C.Action "retry") reply with
   | Error label ->
       Alcotest.(check string) "action-mismatch" C.action_mismatch label
   | Ok (C.Action_resp result) ->
       Alcotest.failf "fabricated acknowledgement of %s" result.action
   | Ok _ -> Alcotest.fail "expected action-mismatch"
 
-let () =
+let main
+    ~(caps :
+       < Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.tmp
+       ; .. >) =
   Alcotest.run "control_protocol"
     [
       ( "decode",
@@ -351,15 +416,20 @@ let () =
         ] );
       ( "roundtrip",
         [
-          Alcotest.test_case "status valid unix" `Quick test_roundtrip_status;
+          Alcotest.test_case "status valid unix" `Quick
+            (test_roundtrip_status ~caps);
           Alcotest.test_case "status missing unix" `Quick
-            test_roundtrip_missing_status;
+            (test_roundtrip_missing_status ~caps);
           Alcotest.test_case "status wrong type unix" `Quick
-            test_roundtrip_wrong_type;
-          Alcotest.test_case "pause empty unix" `Quick test_roundtrip_pause;
-          Alcotest.test_case "toggle unix" `Quick test_roundtrip_toggle;
-          Alcotest.test_case "explicit error unix" `Quick test_roundtrip_error;
+            (test_roundtrip_wrong_type ~caps);
+          Alcotest.test_case "pause empty unix" `Quick
+            (test_roundtrip_pause ~caps);
+          Alcotest.test_case "toggle unix" `Quick (test_roundtrip_toggle ~caps);
+          Alcotest.test_case "explicit error unix" `Quick
+            (test_roundtrip_error ~caps);
           Alcotest.test_case "action mismatch unix" `Quick
-            test_roundtrip_action_mismatch;
+            (test_roundtrip_action_mismatch ~caps);
         ] );
     ]
+
+let () = main ~caps:(Ox_test.powerbox ())

@@ -1,7 +1,6 @@
 (* Pass-2 correction adapter against a local Responses fixture.
    dict-ldo9 dict-l4zp dict-g52m dict-fk8i dict-bpuh dict-swyn *)
 
-let caps = Ox_test.powerbox ()
 let case_env = "PIE_CORRECTION_CASE"
 let transcript_sentinel = "TRANSCRIPT_SENTINEL"
 let prompt_sentinel = "PROMPT_SENTINEL"
@@ -193,7 +192,8 @@ let logger env =
          (Ox_observability.Logger.Memory.create ()))
     ()
 
-let with_fixture ~reply ?(extra_replies = []) ?(on_request = fun _ _ -> ()) f =
+let with_fixture ~(caps : < Ox_caps.Cap.env ; .. >) ~reply ?(extra_replies = [])
+    ?(on_request = fun _ _ -> ()) f =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let net = Eio.Stdenv.net env in
@@ -209,7 +209,8 @@ let with_fixture ~reply ?(extra_replies = []) ?(on_request = fun _ _ -> ()) f =
     | `Tcp (_, port) -> port
     | `Unix _ -> Alcotest.fail "expected TCP listener"
   in
-  Unix.putenv "OPENROUTER_BASE_URL" (Printf.sprintf "http://127.0.0.1:%d" port);
+  Ox_caps.Cap_unix.putenv ~caps "OPENROUTER_BASE_URL"
+    (Printf.sprintf "http://127.0.0.1:%d" port);
   (* The server fiber finishes itself. A nested switch that only ends when the
      outer switch is cancelled can stick on accept, which hung the missing-key
      case. *)
@@ -269,8 +270,8 @@ let expect_failure expected result =
         (Pie.Stt.Correction.diagnostic expected)
         diagnostic
 
-let call ~sw ~net ~clock ~logger ?temperature ?reasoning_effort ?audio
-    ?audio_format ?provider_order ?output_language
+let call ~(caps : < Ox_caps.Cap.env ; .. >) ~sw ~net ~clock ~logger ?temperature
+    ?reasoning_effort ?audio ?audio_format ?provider_order ?output_language
     ?(prompt_template = prompt_sentinel ^ " {{glossary}}")
     ?(glossary = glossary_sentinel) ?(language = "pl") ?(source_language = "pl")
     ?(target_language = "en") ?(transcript = transcript_sentinel)
@@ -391,12 +392,12 @@ let assert_request ?(output_language = "pl") ~temperature ~reasoning head body =
         "reasoning excluded" true
         (field "exclude" (field "reasoning" json) = `Bool true)
 
-let child_request ?output_language () =
+let child_request ~(caps : < Ox_caps.Cap.env ; .. >) ?output_language () =
   let result, hits, captured =
-    with_fixture
+    with_fixture ~caps
       ~reply:(Json (completed "done"))
       (fun ~sw ~net ~clock ~logger ->
-        call ~sw ~net ~clock ~logger ?output_language ~temperature:0.4
+        call ~caps ~sw ~net ~clock ~logger ?output_language ~temperature:0.4
           ~reasoning_effort:"low"
           ~prompt_template:
             (prompt_sentinel
@@ -419,12 +420,12 @@ let child_request ?output_language () =
       assert_request ?output_language ~temperature:0.4 ~reasoning:(Some "low")
         head body
 
-let child_reasoning_item () =
+let child_reasoning_item ~(caps : < Ox_caps.Cap.env ; .. >) () =
   let result, _hits, _captured =
-    with_fixture
+    with_fixture ~caps
       ~reply:(Json (reasoning_body "hello"))
       (fun ~sw ~net ~clock ~logger ->
-        call ~sw ~net ~clock ~logger
+        call ~caps ~sw ~net ~clock ~logger
           ~prompt_template:(prompt_sentinel ^ " {{glossary}}")
           ())
   in
@@ -436,7 +437,7 @@ let child_reasoning_item () =
 
 (* dict-dq3o/dict-ldo9: delivery consumes the final-text envelope, not the
    model's free-form message (the real incident contained repeated analysis). *)
-let child_answer_envelope () =
+let child_answer_envelope ~(caps : < Ox_caps.Cap.env ; .. >) () =
   let answer =
     "# Plan\n\n\
      - debugging Eio\n\
@@ -445,9 +446,9 @@ let child_answer_envelope () =
   in
   let envelope = Yojson.Safe.to_string (`Assoc [ ("text", `String answer) ]) in
   let result, _, _ =
-    with_fixture
+    with_fixture ~caps
       ~reply:(Json (completed_raw envelope))
-      (fun ~sw ~net ~clock ~logger -> call ~sw ~net ~clock ~logger ())
+      (fun ~sw ~net ~clock ~logger -> call ~caps ~sw ~net ~clock ~logger ())
   in
   match result with
   | Ok got -> Alcotest.(check string) "only the Markdown answer" answer got
@@ -455,13 +456,13 @@ let child_answer_envelope () =
       Alcotest.failf "envelope failed: %s"
         (Pie.Stt.Correction.diagnostic failure)
 
-let child_invalid_envelopes () =
+let child_invalid_envelopes ~(caps : < Ox_caps.Cap.env ; .. >) () =
   List.iter
     (fun raw ->
       let result, _, _ =
-        with_fixture
+        with_fixture ~caps
           ~reply:(Json (completed_raw raw))
-          (fun ~sw ~net ~clock ~logger -> call ~sw ~net ~clock ~logger ())
+          (fun ~sw ~net ~clock ~logger -> call ~caps ~sw ~net ~clock ~logger ())
       in
       expect_failure
         (Pie.Stt.Correction.Provider Pie.Stt.Correction.Invalid_response) result)
@@ -483,14 +484,14 @@ let child_invalid_envelopes () =
       "{\"text\":\"unescaped\nnewline\"}";
     ]
 
-let child_unframed_analysis () =
+let child_unframed_analysis ~(caps : < Ox_caps.Cap.env ; .. >) () =
   let result, _, _ =
-    with_fixture
+    with_fixture ~caps
       ~reply:
         (Json
            (completed_raw
               "The speaker says: ... Wait, let's listen again. Final text."))
-      (fun ~sw ~net ~clock ~logger -> call ~sw ~net ~clock ~logger ())
+      (fun ~sw ~net ~clock ~logger -> call ~caps ~sw ~net ~clock ~logger ())
   in
   expect_failure
     (Pie.Stt.Correction.Provider Pie.Stt.Correction.Invalid_response) result
@@ -499,21 +500,22 @@ let choice_error_body =
   "{\"choices\":[{\"finish_reason\":\"error\",\"native_finish_reason\":\"OTHER\",\"error\":{\"code\":500,\"message\":\"PROVIDER_SENTINEL\",\"metadata\":{\"error_type\":\"unmapped\"}},\"message\":{\"role\":\"assistant\",\"content\":\"truncated \
    made-up content\"}}],\"usage\":{\"total_tokens\":0}}"
 
-let child_choice_error () =
+let child_choice_error ~(caps : < Ox_caps.Cap.env ; .. >) () =
   let result, hits, _ =
-    with_fixture ~reply:(Json choice_error_body) (fun ~sw ~net ~clock ~logger ->
-        call ~sw ~net ~clock ~logger ())
+    with_fixture ~caps ~reply:(Json choice_error_body)
+      (fun ~sw ~net ~clock ~logger -> call ~caps ~sw ~net ~clock ~logger ())
   in
   expect_failure (Pie.Stt.Correction.Provider Pie.Stt.Correction.Unavailable)
     result;
   Alcotest.(check int) "single exchange" 1 hits
 
 (* dict-6wq3 dict-x6e9 *)
-let child_retry ?(effort = "low") ?(first_diagnostic = "unavailable")
-    ?(wav = false) ~first ~second ~success ~audio () =
+let child_retry ~(caps : < Ox_caps.Cap.env ; .. >) ?(effort = "low")
+    ?(first_diagnostic = "unavailable") ?(wav = false) ~first ~second ~success
+    ~audio () =
   let requests = ref [] and evidence = ref [] in
   let report, hits, _ =
-    with_fixture ~reply:first
+    with_fixture ~caps ~reply:first
       ~extra_replies:[ second; Json (completed "third-forbidden") ]
       ~on_request:(fun _ body -> requests := body :: !requests)
       (fun ~sw ~net ~clock ~logger ->
@@ -598,10 +600,11 @@ let child_retry ?(effort = "low") ?(first_diagnostic = "unavailable")
       "text and prompt unchanged" true
       (content (List.nth !requests 0) = content (List.nth !requests 1))
 
-let child_retry_success ?(cancelled = false) () =
+let child_retry_success ~(caps : < Ox_caps.Cap.env ; .. >) ?(cancelled = false)
+    () =
   let evidence = ref [] in
   let report, hits, _ =
-    with_fixture
+    with_fixture ~caps
       ~reply:
         (Json
            (if cancelled then
@@ -625,10 +628,10 @@ let child_retry_success ?(cancelled = false) () =
   Alcotest.(check (list bool))
     "final evidence only" [ false ] (List.map fst !evidence)
 
-let child_retry_cancel () =
+let child_retry_cancel ~(caps : < Ox_caps.Cap.env ; .. >) () =
   let evidence = ref [] in
   let result, hits, _ =
-    with_fixture ~reply:(Json choice_error_body)
+    with_fixture ~caps ~reply:(Json choice_error_body)
       ~extra_replies:[ Hang; Json (completed "third-forbidden") ]
       (fun ~sw ~net ~clock ~logger ->
         Eio.Time.with_timeout clock 0.1 (fun () ->
@@ -647,12 +650,12 @@ let child_retry_cancel () =
     [ (true, choice_error_body) ]
     (List.rev !evidence)
 
-let child_success () =
+let child_success ~(caps : < Ox_caps.Cap.env ; .. >) () =
   let result, hits, captured =
-    with_fixture
+    with_fixture ~caps
       ~reply:(Json (completed "  hello\nworld  "))
       (fun ~sw ~net ~clock ~logger ->
-        call ~sw ~net ~clock ~logger
+        call ~caps ~sw ~net ~clock ~logger
           ~prompt_template:(prompt_sentinel ^ " {{glossary}}")
           ())
   in
@@ -679,20 +682,20 @@ let child_success () =
       if not (String.starts_with ~prefix:"POST /api/v1/responses " head) then
         Alcotest.fail "request line was not POST /api/v1/responses"
 
-let child_blank () =
+let child_blank ~(caps : < Ox_caps.Cap.env ; .. >) () =
   let result, _, _ =
-    with_fixture
+    with_fixture ~caps
       ~reply:(Json (completed " \n\t "))
-      (fun ~sw ~net ~clock ~logger -> call ~sw ~net ~clock ~logger ())
+      (fun ~sw ~net ~clock ~logger -> call ~caps ~sw ~net ~clock ~logger ())
   in
   expect_failure Pie.Stt.Correction.Blank result
 
-let child_at_budget () =
+let child_at_budget ~(caps : < Ox_caps.Cap.env ; .. >) () =
   let text = String.make Pie.Dictation_limits.result_utf8_bytes 'y' in
   let result, _, _ =
-    with_fixture
+    with_fixture ~caps
       ~reply:(Json (completed text))
-      (fun ~sw ~net ~clock ~logger -> call ~sw ~net ~clock ~logger ())
+      (fun ~sw ~net ~clock ~logger -> call ~caps ~sw ~net ~clock ~logger ())
   in
   match result with
   | Ok got ->
@@ -703,31 +706,31 @@ let child_at_budget () =
       Alcotest.failf "text at the budget was rejected: %s"
         (Pie.Stt.Correction.diagnostic failure)
 
-let child_oversize () =
+let child_oversize ~(caps : < Ox_caps.Cap.env ; .. >) () =
   let text = String.make (Pie.Dictation_limits.result_utf8_bytes + 1) 'x' in
   let result, _, _ =
-    with_fixture
+    with_fixture ~caps
       ~reply:(Json (completed text))
-      (fun ~sw ~net ~clock ~logger -> call ~sw ~net ~clock ~logger ())
+      (fun ~sw ~net ~clock ~logger -> call ~caps ~sw ~net ~clock ~logger ())
   in
   expect_failure Pie.Stt.Correction.Over_budget result
 
-let child_reject reply expected () =
+let child_reject ~(caps : < Ox_caps.Cap.env ; .. >) reply expected () =
   let result, _, _ =
-    with_fixture ~reply (fun ~sw ~net ~clock ~logger ->
-        call ~sw ~net ~clock ~logger ())
+    with_fixture ~caps ~reply (fun ~sw ~net ~clock ~logger ->
+        call ~caps ~sw ~net ~clock ~logger ())
   in
   expect_failure expected result
 
-let child_timeout () =
+let child_timeout ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) () =
   let elapsed = ref 0. in
   let result, hits, captured =
-    with_fixture ~reply:Hang (fun ~sw ~net ~clock ~logger ->
-        let started = Unix.gettimeofday () in
+    with_fixture ~caps ~reply:Hang (fun ~sw ~net ~clock ~logger ->
+        let started = Ox_caps.Cap_unix.gettimeofday ~caps () in
         let result =
-          call ~sw ~net ~clock ~logger ~timeout:(Ox.Duration.ms 300) ()
+          call ~caps ~sw ~net ~clock ~logger ~timeout:(Ox.Duration.ms 300) ()
         in
-        elapsed := Unix.gettimeofday () -. started;
+        elapsed := Ox_caps.Cap_unix.gettimeofday ~caps () -. started;
         result)
   in
   if hits <> 1 then
@@ -741,21 +744,22 @@ let child_timeout () =
   expect_failure Pie.Stt.Correction.Timeout result;
   if !elapsed > 2.0 then Alcotest.failf "timeout took %.2fs" !elapsed
 
-let child_missing_key () =
+let child_missing_key ~(caps : < Ox_caps.Cap.env ; .. >) () =
   (* A closed port, not a listening socket: a mistaken call fails as
      unavailable instead of hanging on accept. *)
-  Unix.putenv "OPENROUTER_API_KEY" "";
-  Unix.putenv "OPENROUTER_BASE_URL" "http://127.0.0.1:1";
+  Ox_caps.Cap_unix.putenv ~caps "OPENROUTER_API_KEY" "";
+  Ox_caps.Cap_unix.putenv ~caps "OPENROUTER_BASE_URL" "http://127.0.0.1:1";
   let result =
     Eio_main.run @@ fun env ->
     Eio.Switch.run @@ fun sw ->
-    call ~sw ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env)
+    call ~caps ~sw ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env)
       ~logger:(logger env) ()
   in
   expect_failure (Pie.Stt.Correction.Provider Missing_api_key) result
 
-let env_without keys =
-  Unix.environment () |> Array.to_list
+let env_without ~(caps : < Ox_caps.Cap.env ; .. >) keys =
+  Ox_caps.Cap_unix.environment ~caps ()
+  |> Array.to_list
   |> List.filter (fun entry ->
       not
         (List.exists
@@ -766,9 +770,11 @@ let env_without keys =
            keys))
   |> Array.of_list
 
-let spawn_case name ~with_key =
+let spawn_case
+    ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.exec ; Ox_caps.Cap.fork ; .. >)
+    name ~with_key =
   let base =
-    env_without [ "OPENROUTER_API_KEY"; "OPENROUTER_BASE_URL"; case_env ]
+    env_without ~caps [ "OPENROUTER_API_KEY"; "OPENROUTER_BASE_URL"; case_env ]
   in
   let extra =
     if with_key then
@@ -780,7 +786,8 @@ let spawn_case name ~with_key =
   in
   let exe = Sys.executable_name in
   let pid =
-    Unix.create_process_env exe [| exe |] env Unix.stdin Unix.stdout Unix.stderr
+    Ox_caps.Cap_unix.create_process_env ~caps exe [| exe |] env Unix.stdin
+      Unix.stdout Unix.stderr
   in
   match snd (Unix.waitpid [] pid) with
   | Unix.WEXITED 0 -> ()
@@ -793,13 +800,13 @@ module C = Pie.Stt.Correction
 (* A four-minute dictation (7.7 MB of PCM) was refused locally as "input too
    large" by Ox's 4 MiB default request limit. 6 MiB of mp3 must reach the
    provider with its format. *)
-let child_large_audio () =
+let child_large_audio ~(caps : < Ox_caps.Cap.env ; .. >) () =
   let mp3 = Bytes.make (6 * 1024 * 1024) 'm' in
   let result, hits, captured =
-    with_fixture
+    with_fixture ~caps
       ~reply:(Json (completed "heard"))
       (fun ~sw ~net ~clock ~logger ->
-        call ~sw ~net ~clock ~logger ~audio:mp3 ~audio_format:"mp3"
+        call ~caps ~sw ~net ~clock ~logger ~audio:mp3 ~audio_format:"mp3"
           ~transcript:Pie.Stt.Correction.audio_cue ())
   in
   Alcotest.(check int) "one request" 1 hits;
@@ -825,14 +832,14 @@ let child_large_audio () =
         "format" "mp3"
         (string_field "format" (field "input_audio" audio_part))
 
-let child_audio () =
+let child_audio ~(caps : < Ox_caps.Cap.env ; .. >) () =
   let wav = Bytes.of_string "RIFF-wav" in
   let order = [ "Google AI Studio"; "Google" ] in
   let result, hits, captured =
-    with_fixture
+    with_fixture ~caps
       ~reply:(Json (completed "heard"))
       (fun ~sw ~net ~clock ~logger ->
-        call ~sw ~net ~clock ~logger ~audio:wav ~provider_order:order
+        call ~caps ~sw ~net ~clock ~logger ~audio:wav ~provider_order:order
           ~transcript:Pie.Stt.Correction.audio_cue ~reasoning_effort:"low" ())
   in
   Alcotest.(check int) "one request" 1 hits;
@@ -890,116 +897,124 @@ let child_audio () =
         "fallbacks allowed" true
         (List.assoc_opt "allow_fallbacks" (fields provider) = None)
 
-let child_main name =
+let child_main ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) name =
   match name with
-  | "translate-framing" -> child_request ~output_language:"English" ()
-  | "request" -> child_request () (* dict-ldo9 dict-l4zp dict-g52m *)
-  | "retry-provider-cancel" -> child_retry_success ~cancelled:true ()
-  | "retry-success" -> child_retry_success ()
-  | "retry-cancel" -> child_retry_cancel ()
+  | "translate-framing" -> child_request ~caps ~output_language:"English" ()
+  | "request" -> child_request ~caps () (* dict-ldo9 dict-l4zp dict-g52m *)
+  | "retry-provider-cancel" -> child_retry_success ~caps ~cancelled:true ()
+  | "retry-success" -> child_retry_success ~caps ()
+  | "retry-cancel" -> child_retry_cancel ~caps ()
   | "retry-medium" ->
-      child_retry ~effort:"medium" ~first:(Json choice_error_body)
+      child_retry ~caps ~effort:"medium" ~first:(Json choice_error_body)
         ~second:(Json (completed "WAV recovery"))
         ~success:true ~audio:true ()
   | "retry-high" ->
-      child_retry ~effort:"high" ~first:(Json choice_error_body)
+      child_retry ~caps ~effort:"high" ~first:(Json choice_error_body)
         ~second:(Json (completed "WAV recovery"))
         ~success:true ~audio:true ()
   | "retry-wav" ->
-      child_retry ~wav:true ~first:(Json choice_error_body)
+      child_retry ~caps ~wav:true ~first:(Json choice_error_body)
         ~second:(Json (completed "WAV recovery"))
         ~success:true ~audio:true ()
   | "retry-malformed" ->
-      child_retry ~first_diagnostic:"invalid response" ~first:(Json "{bad")
+      child_retry ~caps ~first_diagnostic:"invalid response"
+        ~first:(Json "{bad")
         ~second:(Json (completed "WAV recovery"))
         ~success:true ~audio:true ()
   | "retry-timeout" ->
-      child_retry ~first_diagnostic:"timeout" ~first:Hang
+      child_retry ~caps ~first_diagnostic:"timeout" ~first:Hang
         ~second:(Json (completed "WAV recovery"))
         ~success:true ~audio:false ()
   | "retry-429" ->
-      child_retry
+      child_retry ~caps
         ~first:(Http (429, choice_error_body))
         ~second:(Http (429, choice_error_body))
         ~success:false ~audio:false ()
   | "retry-close" ->
-      child_retry ~first:Close
+      child_retry ~caps ~first:Close
         ~second:(Json (completed "WAV recovery"))
         ~success:true ~audio:false ()
   | "retry-output" ->
-      child_retry ~first_diagnostic:"invalid response"
+      child_retry ~caps ~first_diagnostic:"invalid response"
         ~first:(Json (completed_raw "not JSON"))
         ~second:(Json (completed "WAV recovery"))
         ~success:true ~audio:false ()
   | "retry-tool" ->
-      child_retry ~first_diagnostic:"tool continuation" ~first:(Json tool_body)
+      child_retry ~caps ~first_diagnostic:"tool continuation"
+        ~first:(Json tool_body)
         ~second:(Json (completed "WAV recovery"))
         ~success:true ~audio:false ()
-  | "choice-error" -> child_choice_error ()
+  | "choice-error" -> child_choice_error ~caps ()
   | "wav-retry" ->
-      child_retry ~first:(Json choice_error_body)
+      child_retry ~caps ~first:(Json choice_error_body)
         ~second:(Json (completed "WAV recovery"))
         ~success:true ~audio:true ()
   | "retry-fails" ->
-      child_retry ~first:(Json choice_error_body)
+      child_retry ~caps ~first:(Json choice_error_body)
         ~second:(Json choice_error_body) ~success:false ~audio:true ()
   | "http-retry" ->
-      child_retry
+      child_retry ~caps
         ~first:(Http (500, choice_error_body))
         ~second:(Json (completed "WAV recovery"))
         ~success:true ~audio:false ()
-  | "success" -> child_success () (* dict-ldo9 dict-g52m *)
-  | "answer-envelope" -> child_answer_envelope ()
-  | "unframed-analysis" -> child_unframed_analysis ()
-  | "invalid-envelopes" -> child_invalid_envelopes ()
-  | "reasoning-item" -> child_reasoning_item () (* dict-dq3o dict-ldo9 *)
-  | "blank" -> child_blank () (* dict-bpuh *)
-  | "at-budget" -> child_at_budget () (* dict-fk8i *)
-  | "oversize" -> child_oversize () (* dict-fk8i *)
+  | "success" -> child_success ~caps () (* dict-ldo9 dict-g52m *)
+  | "answer-envelope" -> child_answer_envelope ~caps ()
+  | "unframed-analysis" -> child_unframed_analysis ~caps ()
+  | "invalid-envelopes" -> child_invalid_envelopes ~caps ()
+  | "reasoning-item" -> child_reasoning_item ~caps () (* dict-dq3o dict-ldo9 *)
+  | "blank" -> child_blank ~caps () (* dict-bpuh *)
+  | "at-budget" -> child_at_budget ~caps () (* dict-fk8i *)
+  | "oversize" -> child_oversize ~caps () (* dict-fk8i *)
   | "refusal" ->
-      child_reject (Json refusal_body) (C.Rejected C.Refusal) ()
+      child_reject ~caps (Json refusal_body) (C.Rejected C.Refusal) ()
       (* dict-bpuh dict-swyn *)
   | "tool" ->
-      child_reject (Json tool_body) (C.Rejected C.Tool_continuation) ()
+      child_reject ~caps (Json tool_body) (C.Rejected C.Tool_continuation) ()
       (* dict-bpuh dict-swyn *)
   | "incomplete" ->
-      child_reject
+      child_reject ~caps
         (Json (status_body "incomplete" "should-not-deliver"))
         (C.Rejected C.Incomplete) ()
       (* dict-bpuh dict-swyn *)
   | "cancelled" ->
-      child_reject
+      child_reject ~caps
         (Json (status_body "cancelled" "should-not-deliver"))
         (C.Rejected C.Cancelled) ()
       (* dict-bpuh dict-swyn *)
   | "unknown-status" ->
-      child_reject
+      child_reject ~caps
         (Json (status_body provider_sentinel "should-not-deliver"))
         (C.Rejected C.Not_completed) ()
       (* dict-bpuh dict-swyn *)
   | "failed" ->
-      child_reject (Json failed_body) (C.Provider C.Unavailable) ()
+      child_reject ~caps (Json failed_body) (C.Provider C.Unavailable) ()
       (* dict-bpuh dict-swyn *)
   | "transport" ->
-      child_reject
+      child_reject ~caps
         (Http (500, provider_sentinel ^ transcript_sentinel))
         (C.Provider C.Unavailable) ()
       (* dict-bpuh dict-swyn *)
-  | "timeout" -> child_timeout () (* dict-l4zp dict-bpuh *)
-  | "missing-key" -> child_missing_key () (* dict-bpuh *)
-  | "audio" -> child_audio () (* dict-dq3o dict-4y4r *)
-  | "large-audio" -> child_large_audio () (* dict-dq3o *)
+  | "timeout" -> child_timeout ~caps () (* dict-l4zp dict-bpuh *)
+  | "missing-key" -> child_missing_key ~caps () (* dict-bpuh *)
+  | "audio" -> child_audio ~caps () (* dict-dq3o dict-4y4r *)
+  | "large-audio" -> child_large_audio ~caps () (* dict-dq3o *)
   | other -> Alcotest.failf "unknown child case %s" other
 
-let () =
-  match Sys.getenv_opt case_env with
-  | Some name -> child_main name
+let main
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.time
+       ; .. >) =
+  match Ox_caps.Cap_sys.getenv_opt ~caps case_env with
+  | Some name -> child_main ~caps name
   | None ->
       let case name stories ~with_key =
         Alcotest.test_case
           (name ^ " " ^ stories)
           `Quick
-          (fun () -> spawn_case name ~with_key)
+          (fun () -> spawn_case ~caps name ~with_key)
       in
       Alcotest.run "correction"
         [
@@ -1044,3 +1059,5 @@ let () =
               case "large-audio" "dict-dq3o" ~with_key:true;
             ] );
         ]
+
+let () = main ~caps:(Ox_test.powerbox ())

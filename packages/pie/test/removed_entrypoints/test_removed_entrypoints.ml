@@ -14,34 +14,47 @@ let string_contains hay needle =
   in
   nlen = 0 || loop 0
 
-let rec rm_rf path =
+let rec rm_rf ~(caps : < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; .. >) path
+    =
   match Unix.lstat path with
   | exception Unix.Unix_error (Unix.ENOENT, _, _) -> ()
   | { Unix.st_kind = Unix.S_DIR; _ } -> (
-      (match Sys.readdir path with
+      (match Ox_caps.Cap_sys.readdir ~caps path with
       | names ->
           Array.iter
             (fun name ->
               if name <> "." && name <> ".." then
-                rm_rf (Filename.concat path name))
+                rm_rf ~caps (Filename.concat path name))
             names
       | exception Sys_error _ -> ());
-      try Unix.rmdir path with Unix.Unix_error _ -> ())
-  | _ -> ( try Unix.unlink path with Unix.Unix_error _ -> ())
+      try Ox_caps.Cap_unix.rmdir ~caps path with Unix.Unix_error _ -> ())
+  | _ -> (
+      try Ox_caps.Cap_unix.unlink ~caps path with Unix.Unix_error _ -> ())
 
-let with_sandbox f =
-  let dir = Filename.temp_file "pie-removed-entrypoints" "" in
-  Sys.remove dir;
-  Unix.mkdir dir 0o700;
-  Fun.protect ~finally:(fun () -> rm_rf dir) (fun () -> f dir)
+let with_sandbox
+    ~(caps :
+       < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.tmp ; .. >) f
+    =
+  let dir =
+    Ox_caps.Cap_stdlib.Filename.temp_file ~caps "pie-removed-entrypoints" ""
+  in
+  Ox_caps.Cap_sys.remove ~caps dir;
+  Ox_caps.Cap_unix.mkdir ~caps dir 0o700;
+  Fun.protect ~finally:(fun () -> rm_rf ~caps dir) (fun () -> f dir)
 
-let write_file path contents =
-  let oc = open_out_gen [ Open_creat; Open_trunc; Open_wronly ] 0o700 path in
+let write_file ~(caps : < Ox_caps.Cap.fs_write ; .. >) path contents =
+  let oc =
+    Ox_caps.Cap_stdlib.open_out_gen ~caps
+      [ Open_creat; Open_trunc; Open_wronly ]
+      0o700 path
+  in
   Fun.protect
     ~finally:(fun () -> close_out_noerr oc)
     (fun () -> output_string oc contents)
 
-let run_pie ~sandbox ~sentinel args =
+let run_pie
+    ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.exec ; Ox_caps.Cap.fork ; .. >)
+    ~sandbox ~sentinel args =
   let stdout_r, stdout_w = Unix.pipe ~cloexec:true () in
   let stderr_r, stderr_w = Unix.pipe ~cloexec:true () in
   let bin = Filename.concat sandbox "bin" in
@@ -49,7 +62,8 @@ let run_pie ~sandbox ~sentinel args =
     Array.of_list
       [
         "PATH=" ^ bin ^ ":"
-        ^ Option.value ~default:"/usr/bin" (Sys.getenv_opt "PATH");
+        ^ Option.value ~default:"/usr/bin"
+            (Ox_caps.Cap_sys.getenv_opt ~caps "PATH");
         "HOME=" ^ sandbox;
         "XDG_CONFIG_HOME=" ^ Filename.concat sandbox "config";
         "XDG_DATA_HOME=" ^ Filename.concat sandbox "data";
@@ -65,7 +79,7 @@ let run_pie ~sandbox ~sentinel args =
       ]
   in
   let pid =
-    Unix.create_process_env pie_exe
+    Ox_caps.Cap_unix.create_process_env ~caps pie_exe
       (Array.of_list (pie_exe :: args))
       env Unix.stdin stdout_w stderr_w
   in
@@ -92,20 +106,20 @@ let sentinel_script =
   "#!/bin/sh\n" ^ "echo accessed >> \"$PIE_REMOVED_ENTRYPOINTS_SENTINEL\"\n"
   ^ "exit 1\n"
 
-let with_helpers sandbox f =
+let with_helpers ~(caps : < Ox_caps.Cap.fs_write ; .. >) sandbox f =
   let bin = Filename.concat sandbox "bin" in
   let config = Filename.concat sandbox "config" in
   let data = Filename.concat sandbox "data" in
   let runtime = Filename.concat sandbox "runtime" in
-  Unix.mkdir bin 0o700;
-  Unix.mkdir config 0o700;
-  Unix.mkdir data 0o700;
-  Unix.mkdir runtime 0o700;
+  Ox_caps.Cap_unix.mkdir ~caps bin 0o700;
+  Ox_caps.Cap_unix.mkdir ~caps config 0o700;
+  Ox_caps.Cap_unix.mkdir ~caps data 0o700;
+  Ox_caps.Cap_unix.mkdir ~caps runtime 0o700;
   let sentinel = Filename.concat sandbox "sentinel" in
   List.iter
     (fun name ->
-      write_file (Filename.concat bin name) sentinel_script;
-      Unix.chmod (Filename.concat bin name) 0o700)
+      write_file ~caps (Filename.concat bin name) sentinel_script;
+      Ox_caps.Cap_unix.chmod ~caps (Filename.concat bin name) 0o700)
     [ "pactl"; "pulseaudio"; "curl"; "wget"; "busctl"; "parec" ];
   f ~sentinel
 
@@ -115,10 +129,18 @@ let exited_nonzero = function
   | Unix.WSIGNALED n -> Alcotest.failf "signaled %d" n
   | Unix.WSTOPPED n -> Alcotest.failf "stopped %d" n
 
-let test_help_omits_removed_commands () =
-  with_sandbox @@ fun sandbox ->
-  with_helpers sandbox @@ fun ~sentinel ->
-  let status, stdout, stderr = run_pie ~sandbox ~sentinel [ "--help" ] in
+let test_help_omits_removed_commands
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_sandbox ~caps @@ fun sandbox ->
+  with_helpers ~caps sandbox @@ fun ~sentinel ->
+  let status, stdout, stderr = run_pie ~caps ~sandbox ~sentinel [ "--help" ] in
   (match status with
   | Unix.WEXITED 0 -> ()
   | Unix.WEXITED n -> Alcotest.failf "help exit %d stderr=%s" n stderr
@@ -159,12 +181,20 @@ let test_help_omits_removed_commands () =
   Alcotest.(check bool)
     "sentinel unused for --help" false (Sys.file_exists sentinel)
 
-let test_removed_names_fail_before_helpers () =
-  with_sandbox @@ fun sandbox ->
-  with_helpers sandbox @@ fun ~sentinel ->
+let test_removed_names_fail_before_helpers
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_sandbox ~caps @@ fun sandbox ->
+  with_helpers ~caps sandbox @@ fun ~sentinel ->
   List.iter
     (fun name ->
-      let status, stdout, _stderr = run_pie ~sandbox ~sentinel [ name ] in
+      let status, stdout, _stderr = run_pie ~caps ~sandbox ~sentinel [ name ] in
       ignore (exited_nonzero status);
       Alcotest.(check bool)
         (name ^ " did not access Pulse/provider helpers")
@@ -175,14 +205,25 @@ let test_removed_names_fail_before_helpers () =
         (stdout = "" || not (string_contains stdout "recording")))
     removed_commands
 
-let () =
+let main
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) =
   Alcotest.run "removed-entrypoints"
     [
       ( "cli",
         [
           Alcotest.test_case "help omits removed prototype names" `Quick
-            test_help_omits_removed_commands;
+            (test_help_omits_removed_commands ~caps);
           Alcotest.test_case "removed names fail before Pulse/provider helpers"
-            `Quick test_removed_names_fail_before_helpers;
+            `Quick
+            (test_removed_names_fail_before_helpers ~caps);
         ] );
     ]
+
+let () = main ~caps:(Ox_test.powerbox ())

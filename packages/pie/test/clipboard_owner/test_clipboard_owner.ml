@@ -1,4 +1,4 @@
-let caps = Ox_test.powerbox () (* ^pcaps-n1rg *)
+(* ^pcaps-n1rg *)
 
 let contains hay needle =
   let rec loop i =
@@ -7,8 +7,8 @@ let contains hay needle =
   in
   needle = "" || loop 0
 
-let fd_count () =
-  let dir = Unix.opendir "/proc/self/fd" in
+let fd_count ~(caps : < Ox_caps.Cap.fs_read ; .. >) () =
+  let dir = Ox_caps.Cap_unix.opendir ~caps "/proc/self/fd" in
   let rec loop n =
     match Unix.readdir dir with
     | exception End_of_file ->
@@ -18,16 +18,17 @@ let fd_count () =
   in
   loop 0
 
-let child_count () =
+let child_count ~(caps : < Ox_caps.Cap.fs_read ; .. >) () =
   let self = Unix.getpid () in
   let task_dir = Printf.sprintf "/proc/%d/task" self in
   let tasks =
-    try Array.to_list (Sys.readdir task_dir) with Sys_error _ -> []
+    try Array.to_list (Ox_caps.Cap_sys.readdir ~caps task_dir)
+    with Sys_error _ -> []
   in
   List.fold_left
     (fun acc tid ->
       let path = Printf.sprintf "/proc/%d/task/%s/children" self tid in
-      match open_in path with
+      match Ox_caps.Cap_stdlib.open_in ~caps path with
       | exception Sys_error _ -> acc
       | ic ->
           Fun.protect
@@ -43,40 +44,52 @@ let child_count () =
               | exception End_of_file -> acc))
     0 tasks
 
-let with_temp_dir f =
-  let dir = Filename.temp_file "pie-clipboard-owner" "" in
-  Sys.remove dir;
-  Unix.mkdir dir 0o700;
+let with_temp_dir
+    ~(caps :
+       < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.tmp ; .. >) f
+    =
+  let dir =
+    Ox_caps.Cap_stdlib.Filename.temp_file ~caps "pie-clipboard-owner" ""
+  in
+  Ox_caps.Cap_sys.remove ~caps dir;
+  Ox_caps.Cap_unix.mkdir ~caps dir 0o700;
   Fun.protect
     ~finally:(fun () ->
       Array.iter
         (fun name ->
-          try Sys.remove (Filename.concat dir name) with Sys_error _ -> ())
-        (try Sys.readdir dir with Sys_error _ -> [||]);
-      try Unix.rmdir dir with Unix.Unix_error _ -> ())
+          try Ox_caps.Cap_sys.remove ~caps (Filename.concat dir name)
+          with Sys_error _ -> ())
+        (try Ox_caps.Cap_sys.readdir ~caps dir with Sys_error _ -> [||]);
+      try Ox_caps.Cap_unix.rmdir ~caps dir with Unix.Unix_error _ -> ())
     (fun () -> f dir)
 
-let write_exec dir name body =
+let write_exec ~(caps : < Ox_caps.Cap.fs_write ; .. >) dir name body =
   let path = Filename.concat dir name in
-  let oc = open_out path in
+  let oc = Ox_caps.Cap_stdlib.open_out ~caps path in
   output_string oc ("#!/bin/sh\nset -eu\n" ^ body);
   close_out oc;
-  Unix.chmod path 0o700;
+  Ox_caps.Cap_unix.chmod ~caps path 0o700;
   path
 
-let test_no_inspection_exact_stdin previous =
-  with_temp_dir @@ fun dir ->
+let test_no_inspection_exact_stdin
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) previous =
+  with_temp_dir ~caps @@ fun dir ->
   let inspected = Filename.concat dir "inspected" in
   let stdin_path = Filename.concat dir "stdin" in
   ignore
-    (write_exec dir "wl-paste"
+    (write_exec ~caps dir "wl-paste"
        ("touch \"" ^ inspected ^ "\"\nprintf '%s' \"" ^ previous ^ "\"\n"));
   let copy =
-    write_exec dir "wl-copy"
+    write_exec ~caps dir "wl-copy"
       ("cat > \"" ^ stdin_path ^ ".partial\"\nmv \"" ^ stdin_path
      ^ ".partial\" \"" ^ stdin_path ^ "\"\nwhile :; do sleep 0.05; done\n")
   in
-  Pie_test_runtime.run @@ fun env ->
+  Pie_test_runtime.run ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let owner =
     Pie.Wayland.Clipboard.create ~caps ~sw
@@ -103,13 +116,22 @@ let test_no_inspection_exact_stdin previous =
       Alcotest.(check bool)
         "helper received stdin" true
         (Sys.file_exists stdin_path);
-      let got = In_channel.with_open_text stdin_path In_channel.input_all in
+      let got =
+        Ox_caps.Cap_stdlib.In_channel.with_open_text ~caps stdin_path
+          In_channel.input_all
+      in
       Alcotest.(check string) "exact stdin" "offered-text" got
 
-let test_known_spawn_failure_hides_secret () =
-  with_temp_dir @@ fun dir ->
+let test_known_spawn_failure_hides_secret
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun dir ->
   let secret = Filename.concat dir "secret-argv-token-wl-copy" in
-  Pie_test_runtime.run @@ fun env ->
+  Pie_test_runtime.run ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let owner =
     Pie.Wayland.Clipboard.create ~caps ~sw
@@ -126,10 +148,16 @@ let test_known_spawn_failure_hides_secret () =
         "no execve context" false
         (contains message "execve")
 
-let test_copy_early_failure () =
-  with_temp_dir @@ fun dir ->
+let test_copy_early_failure
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun dir ->
   let copy = Filename.concat dir "missing-wl-copy" in
-  Pie_test_runtime.run @@ fun env ->
+  Pie_test_runtime.run ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let owner =
     Pie.Wayland.Clipboard.create ~caps ~sw
@@ -140,18 +168,24 @@ let test_copy_early_failure () =
   | Error (`Clipboard_error _) -> ()
   | Ok () -> Alcotest.fail "early copy failure reported success"
 
-let test_cancellation_at_acquisition () =
-  with_temp_dir @@ fun dir ->
-  let copy = write_exec dir "wl-copy" "sleep 30\n" in
-  Pie_test_runtime.run @@ fun env ->
+let test_cancellation_at_acquisition
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun dir ->
+  let copy = write_exec ~caps dir "wl-copy" "sleep 30\n" in
+  Pie_test_runtime.run ~caps @@ fun env ->
   Eio.Switch.run @@ fun owner_sw ->
   let owner =
     Pie.Wayland.Clipboard.create ~caps ~sw:owner_sw
       ~process_mgr:(Eio.Stdenv.process_mgr env)
       ~copy_program:copy ()
   in
-  let fds0 = fd_count () in
-  let kids0 = child_count () in
+  let fds0 = fd_count ~caps () in
+  let kids0 = child_count ~caps () in
   let payload = String.make (1024 * 1024) 'x' in
   (try
      Eio.Switch.run @@ fun offer_sw ->
@@ -162,20 +196,27 @@ let test_cancellation_at_acquisition () =
      Eio.Time.sleep (Eio.Stdenv.clock env) 10.0
    with Exit | Eio.Cancel.Cancelled _ -> ());
   Alcotest.(check int)
-    "children settled before cancel returns" kids0 (child_count ());
-  Alcotest.(check int) "fds settled before cancel returns" fds0 (fd_count ());
+    "children settled before cancel returns" kids0 (child_count ~caps ());
+  Alcotest.(check int)
+    "fds settled before cancel returns" fds0 (fd_count ~caps ());
   match Pie.Wayland.Clipboard.offer owner "next" with
   | Ok () -> ()
   | Error _ -> Alcotest.fail "next offer after cancelled call"
 
-let test_slow_consumer_still_alive () =
-  with_temp_dir @@ fun dir ->
+let test_slow_consumer_still_alive
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun dir ->
   let alive = Filename.concat dir "alive" in
   let copy =
-    write_exec dir "wl-copy"
+    write_exec ~caps dir "wl-copy"
       ("cat > /dev/null\ntouch \"" ^ alive ^ "\"\nsleep 2\n")
   in
-  Pie_test_runtime.run @@ fun env ->
+  Pie_test_runtime.run ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let owner =
     Pie.Wayland.Clipboard.create ~caps ~sw
@@ -189,12 +230,19 @@ let test_slow_consumer_still_alive () =
       Alcotest.(check bool)
         "offer still available after 250ms" true (Sys.file_exists alive)
 
-let test_repeated_offers_bounded () =
-  with_temp_dir @@ fun dir ->
+let test_repeated_offers_bounded
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun dir ->
   let copy =
-    write_exec dir "wl-copy" "cat > /dev/null\nwhile :; do sleep 0.05; done\n"
+    write_exec ~caps dir "wl-copy"
+      "cat > /dev/null\nwhile :; do sleep 0.05; done\n"
   in
-  Pie_test_runtime.run @@ fun env ->
+  Pie_test_runtime.run ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let owner =
     Pie.Wayland.Clipboard.create ~caps ~sw
@@ -204,24 +252,31 @@ let test_repeated_offers_bounded () =
   match Pie.Wayland.Clipboard.offer owner "0" with
   | Error _ -> Alcotest.fail "first offer failed"
   | Ok () ->
-      let fds_one = fd_count () in
-      let kids_one = child_count () in
+      let fds_one = fd_count ~caps () in
+      let kids_one = child_count ~caps () in
       for i = 1 to 99 do
         match Pie.Wayland.Clipboard.offer owner (string_of_int i) with
         | Ok () -> ()
         | Error _ -> Alcotest.fail "offer failed during replacement"
       done;
-      let fds_hundred = fd_count () in
-      let kids_hundred = child_count () in
+      let fds_hundred = fd_count ~caps () in
+      let kids_hundred = child_count ~caps () in
       Alcotest.(check int) "fd plateau after warm" fds_one fds_hundred;
       Alcotest.(check int) "process plateau after warm" kids_one kids_hundred
 
-let test_shutdown_settles () =
-  with_temp_dir @@ fun dir ->
+let test_shutdown_settles
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun dir ->
   let copy =
-    write_exec dir "wl-copy" "cat > /dev/null\nwhile :; do sleep 0.05; done\n"
+    write_exec ~caps dir "wl-copy"
+      "cat > /dev/null\nwhile :; do sleep 0.05; done\n"
   in
-  Pie_test_runtime.run @@ fun env ->
+  Pie_test_runtime.run ~caps @@ fun env ->
   ( Eio.Switch.run @@ fun sw ->
     let owner =
       Pie.Wayland.Clipboard.create ~caps ~sw
@@ -231,12 +286,19 @@ let test_shutdown_settles () =
     ignore (Pie.Wayland.Clipboard.offer owner "payload") );
   Alcotest.(check bool) "switch settled" true true
 
-let test_settled_before_replacement () =
-  with_temp_dir @@ fun dir ->
+let test_settled_before_replacement
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun dir ->
   let copy =
-    write_exec dir "wl-copy" "cat > /dev/null\nwhile :; do sleep 0.05; done\n"
+    write_exec ~caps dir "wl-copy"
+      "cat > /dev/null\nwhile :; do sleep 0.05; done\n"
   in
-  Pie_test_runtime.run @@ fun env ->
+  Pie_test_runtime.run ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let owner =
     Pie.Wayland.Clipboard.create ~caps ~sw
@@ -245,39 +307,52 @@ let test_settled_before_replacement () =
   in
   let offer text = Pie.Wayland.Clipboard.offer owner text in
   (match offer "a" with Ok () -> () | Error _ -> Alcotest.fail "first offer");
-  let kids = child_count () in
-  let fds = fd_count () in
+  let kids = child_count ~caps () in
+  let fds = fd_count ~caps () in
   (match offer "b" with Ok () -> () | Error _ -> Alcotest.fail "second offer");
   Alcotest.(check int)
-    "children settled when replacement returns" kids (child_count ());
-  Alcotest.(check int) "fds settled when replacement returns" fds (fd_count ())
+    "children settled when replacement returns" kids (child_count ~caps ());
+  Alcotest.(check int)
+    "fds settled when replacement returns" fds (fd_count ~caps ())
 
-let test_natural_exit_releases_pipes () =
-  with_temp_dir @@ fun dir ->
-  let copy = write_exec dir "wl-copy" "cat > /dev/null\nexit 0\n" in
-  Pie_test_runtime.run @@ fun env ->
+let test_natural_exit_releases_pipes
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun dir ->
+  let copy = write_exec ~caps dir "wl-copy" "cat > /dev/null\nexit 0\n" in
+  Pie_test_runtime.run ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let owner =
     Pie.Wayland.Clipboard.create ~caps ~sw
       ~process_mgr:(Eio.Stdenv.process_mgr env)
       ~copy_program:copy ()
   in
-  let fds_idle = fd_count () in
-  let kids_idle = child_count () in
+  let fds_idle = fd_count ~caps () in
+  let kids_idle = child_count ~caps () in
   ignore (Pie.Wayland.Clipboard.offer owner "payload");
   Eio.Time.sleep (Eio.Stdenv.clock env) 0.2;
-  Alcotest.(check int) "natural exit fds" fds_idle (fd_count ());
-  Alcotest.(check int) "natural exit children" kids_idle (child_count ())
+  Alcotest.(check int) "natural exit fds" fds_idle (fd_count ~caps ());
+  Alcotest.(check int) "natural exit children" kids_idle (child_count ~caps ())
 
-let test_large_stdout_discarded () =
-  with_temp_dir @@ fun dir ->
+let test_large_stdout_discarded
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun dir ->
   let copy =
-    write_exec dir "wl-copy"
+    write_exec ~caps dir "wl-copy"
       "dd if=/dev/zero bs=65536 count=128 status=none\n\
        cat > /dev/null\n\
        while :; do sleep 0.05; done\n"
   in
-  Pie_test_runtime.run @@ fun env ->
+  Pie_test_runtime.run ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let owner =
     Pie.Wayland.Clipboard.create ~caps ~sw
@@ -288,16 +363,21 @@ let test_large_stdout_discarded () =
   | Error _ -> Alcotest.fail "large stdout should be discarded"
   | Ok () -> ()
 
-let with_env bindings f =
+let with_env ~(caps : < Ox_caps.Cap.env ; .. >) bindings f =
   let previous =
-    List.map (fun (key, _) -> (key, Sys.getenv_opt key)) bindings
+    List.map
+      (fun (key, _) -> (key, Ox_caps.Cap_sys.getenv_opt ~caps key))
+      bindings
   in
-  List.iter (fun (key, value) -> Unix.putenv key value) bindings;
+  List.iter
+    (fun (key, value) -> Ox_caps.Cap_unix.putenv ~caps key value)
+    bindings;
   Fun.protect
     ~finally:(fun () ->
       List.iter
         (fun (key, old) ->
-          Unix.putenv key (match old with None -> "" | Some value -> value))
+          Ox_caps.Cap_unix.putenv ~caps key
+            (match old with None -> "" | Some value -> value))
         previous)
     f
 
@@ -310,24 +390,25 @@ let paste_rules =
     };
   ]
 
-let setup_paste_path dir ~wtype_body =
+let setup_paste_path ~(caps : < Ox_caps.Cap.fs_write ; .. >) dir ~wtype_body =
   let inspected = Filename.concat dir "inspected" in
   let stdin_path = Filename.concat dir "stdin" in
   let wtype_args = Filename.concat dir "wtype-args" in
   let alive = Filename.concat dir "alive" in
-  ignore (write_exec dir "wl-paste" ("touch \"" ^ inspected ^ "\"\n"));
+  ignore (write_exec ~caps dir "wl-paste" ("touch \"" ^ inspected ^ "\"\n"));
   ignore
-    (write_exec dir "niri"
+    (write_exec ~caps dir "niri"
        "printf '%s\n' '{\"id\":1,\"title\":\"t\",\"app_id\":\"app\"}'\n");
   let copy =
-    write_exec dir "wl-copy"
+    write_exec ~caps dir "wl-copy"
       ("cat > \"" ^ stdin_path ^ "\"\ntouch \"" ^ alive
      ^ "\"\nwhile :; do sleep 0.05; done\n")
   in
-  ignore (write_exec dir "wtype" wtype_body);
+  ignore (write_exec ~caps dir "wtype" wtype_body);
   (inspected, stdin_path, wtype_args, alive, copy)
 
-let run_configured_inject ?read_selection ?clock ~dir ~copy env sw text =
+let run_configured_inject ~(caps : < Ox_caps.Cap.env ; .. >) ?read_selection
+    ?clock ~dir ~copy env sw text =
   let owner =
     Pie.Wayland.Clipboard.create ~caps ~sw
       ~process_mgr:(Eio.Stdenv.process_mgr env)
@@ -351,15 +432,23 @@ let run_configured_inject ?read_selection ?clock ~dir ~copy env sw text =
     ~process_mgr:(Eio.Stdenv.process_mgr env)
     text
 
-let test_inject_paste_key_success previous =
-  with_temp_dir @@ fun dir ->
+let test_inject_paste_key_success
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) previous =
+  with_temp_dir ~caps @@ fun dir ->
   let wtype_args = Filename.concat dir "wtype-args" in
   let inspected, stdin_path, _, alive, copy =
-    setup_paste_path dir
+    setup_paste_path ~caps dir
       ~wtype_body:("printf '%s\n' \"$*\" >> \"" ^ wtype_args ^ "\"\n")
   in
-  let old_path = Option.value ~default:"" (Sys.getenv_opt "PATH") in
-  with_env
+  let old_path =
+    Option.value ~default:"" (Ox_caps.Cap_sys.getenv_opt ~caps "PATH")
+  in
+  with_env ~caps
     [
       ("PATH", dir ^ ":" ^ old_path);
       ("XDG_SESSION_TYPE", "wayland");
@@ -368,9 +457,9 @@ let test_inject_paste_key_success previous =
       ("NIRI_SOCKET", Filename.concat dir "niri.sock");
     ]
   @@ fun () ->
-  Pie_test_runtime.run @@ fun env ->
+  Pie_test_runtime.run ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  match run_configured_inject ~dir ~copy env sw "offered-text" with
+  match run_configured_inject ~caps ~dir ~copy env sw "offered-text" with
   | Error _ -> Alcotest.fail "configured paste inject failed"
   | Ok result ->
       Eio.Time.sleep (Eio.Stdenv.clock env) 0.1;
@@ -379,8 +468,12 @@ let test_inject_paste_key_success previous =
         (Sys.file_exists inspected);
       Alcotest.(check string)
         "exact stdin" "offered-text"
-        (In_channel.with_open_text stdin_path In_channel.input_all);
-      let keys = In_channel.with_open_text wtype_args In_channel.input_all in
+        (Ox_caps.Cap_stdlib.In_channel.with_open_text ~caps stdin_path
+           In_channel.input_all);
+      let keys =
+        Ox_caps.Cap_stdlib.In_channel.with_open_text ~caps wtype_args
+          In_channel.input_all
+      in
       Alcotest.(check string) "exact one ctrl-v" "-M ctrl -k v -m ctrl\n" keys;
       Alcotest.(check bool)
         "outcome is key attempted" true
@@ -388,13 +481,21 @@ let test_inject_paste_key_success previous =
       Alcotest.(check bool) "helper retained" true (Sys.file_exists alive);
       ignore previous
 
-let test_inject_paste_key_fail_retains_helper () =
-  with_temp_dir @@ fun dir ->
+let test_inject_paste_key_fail_retains_helper
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun dir ->
   let inspected, _, _, alive, copy =
-    setup_paste_path dir ~wtype_body:"exit 1\n"
+    setup_paste_path ~caps dir ~wtype_body:"exit 1\n"
   in
-  let old_path = Option.value ~default:"" (Sys.getenv_opt "PATH") in
-  with_env
+  let old_path =
+    Option.value ~default:"" (Ox_caps.Cap_sys.getenv_opt ~caps "PATH")
+  in
+  with_env ~caps
     [
       ("PATH", dir ^ ":" ^ old_path);
       ("XDG_SESSION_TYPE", "wayland");
@@ -403,10 +504,10 @@ let test_inject_paste_key_fail_retains_helper () =
       ("NIRI_SOCKET", Filename.concat dir "niri.sock");
     ]
   @@ fun () ->
-  Pie_test_runtime.run @@ fun env ->
+  Pie_test_runtime.run ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  let kids_before = child_count () in
-  match run_configured_inject ~dir ~copy env sw "payload" with
+  let kids_before = child_count ~caps () in
+  match run_configured_inject ~caps ~dir ~copy env sw "payload" with
   | Ok _ -> Alcotest.fail "key failure reported success"
   | Error (`Wtype_error _) ->
       Eio.Time.sleep (Eio.Stdenv.clock env) 0.1;
@@ -415,12 +516,14 @@ let test_inject_paste_key_fail_retains_helper () =
         "committed helper retained" true (Sys.file_exists alive);
       Alcotest.(check bool)
         "no extra helper" true
-        (child_count () - kids_before <= 2)
+        (child_count ~caps () - kids_before <= 2)
   | Error _ -> Alcotest.fail "unexpected error shape"
 
-let with_wayland dir f =
-  let old_path = Option.value ~default:"" (Sys.getenv_opt "PATH") in
-  with_env
+let with_wayland ~(caps : < Ox_caps.Cap.env ; .. >) dir f =
+  let old_path =
+    Option.value ~default:"" (Ox_caps.Cap_sys.getenv_opt ~caps "PATH")
+  in
+  with_env ~caps
     [
       ("PATH", dir ^ ":" ^ old_path);
       ("XDG_SESSION_TYPE", "wayland");
@@ -453,15 +556,21 @@ let report_outcome outcome =
   in
   (delivery, List.rev !notices)
 
-let test_confirmed_selection_pastes () =
-  with_temp_dir @@ fun dir ->
+let test_confirmed_selection_pastes
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun dir ->
   let wtype_args = Filename.concat dir "wtype-args" in
   let inspected, stdin_path, _, alive, copy =
-    setup_paste_path dir
+    setup_paste_path ~caps dir
       ~wtype_body:("printf '%s\n' \"$*\" >> " ^ Filename.quote wtype_args ^ "\n")
   in
-  with_wayland dir @@ fun () ->
-  Pie_test_runtime.run @@ fun env ->
+  with_wayland ~caps dir @@ fun () ->
+  Pie_test_runtime.run ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let polls = ref 0 in
   let read () =
@@ -469,7 +578,8 @@ let test_confirmed_selection_pastes () =
     Some "offered-text"
   in
   match
-    run_configured_inject ~read_selection:read ~dir ~copy env sw "offered-text"
+    run_configured_inject ~caps ~read_selection:read ~dir ~copy env sw
+      "offered-text"
   with
   | Error _ -> Alcotest.fail "confirmed selection did not paste"
   | Ok result ->
@@ -480,10 +590,12 @@ let test_confirmed_selection_pastes () =
         (Sys.file_exists inspected);
       Alcotest.(check string)
         "text left with the helper" "offered-text"
-        (In_channel.with_open_text stdin_path In_channel.input_all);
+        (Ox_caps.Cap_stdlib.In_channel.with_open_text ~caps stdin_path
+           In_channel.input_all);
       Alcotest.(check string)
         "one ctrl-v" "-M ctrl -k v -m ctrl\n"
-        (In_channel.with_open_text wtype_args In_channel.input_all);
+        (Ox_caps.Cap_stdlib.In_channel.with_open_text ~caps wtype_args
+           In_channel.input_all);
       Alcotest.(check bool)
         "paste key attempted" true
         (result.outcome = Pie.Input.Text_injection.Clipboard_key_attempted);
@@ -493,15 +605,21 @@ let test_confirmed_selection_pastes () =
       Alcotest.(check (list (pair string string)))
         "no clipboard notification" [] notices
 
-let test_unconfirmed_selection_stays_on_clipboard () =
-  with_temp_dir @@ fun dir ->
+let test_unconfirmed_selection_stays_on_clipboard
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun dir ->
   let wtype_args = Filename.concat dir "wtype-args" in
   let inspected, stdin_path, _, alive, copy =
-    setup_paste_path dir
+    setup_paste_path ~caps dir
       ~wtype_body:("printf key > " ^ Filename.quote wtype_args ^ "\n")
   in
-  with_wayland dir @@ fun () ->
-  Pie_test_runtime.run @@ fun env ->
+  with_wayland ~caps dir @@ fun () ->
+  Pie_test_runtime.run ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock, sleeps = instant_clock () in
   let polls = ref 0 in
@@ -510,7 +628,7 @@ let test_unconfirmed_selection_stays_on_clipboard () =
     None
   in
   match
-    run_configured_inject ~read_selection:read ~clock ~dir ~copy env sw
+    run_configured_inject ~caps ~read_selection:read ~clock ~dir ~copy env sw
       "offered-text"
   with
   | Error _ -> Alcotest.fail "unconfirmed selection was reported as a failure"
@@ -529,7 +647,8 @@ let test_unconfirmed_selection_stays_on_clipboard () =
         (Sys.file_exists inspected);
       Alcotest.(check string)
         "text left in the clipboard" "offered-text"
-        (In_channel.with_open_text stdin_path In_channel.input_all);
+        (Ox_caps.Cap_stdlib.In_channel.with_open_text ~caps stdin_path
+           In_channel.input_all);
       Alcotest.(check bool) "helper retained" true (Sys.file_exists alive);
       Alcotest.(check bool)
         "clipboard outcome" true
@@ -543,31 +662,38 @@ let test_unconfirmed_selection_stays_on_clipboard () =
         [ ("Pie", "Pie: text for the original window is in the clipboard") ]
         notices
 
-let test_selection_confirmed_after_polls_pastes () =
-  with_temp_dir @@ fun dir ->
+let test_selection_confirmed_after_polls_pastes
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun dir ->
   let confirmed = Filename.concat dir "confirmed" in
   let wtype_args = Filename.concat dir "wtype-args" in
   let q = Filename.quote in
   let _, stdin_path, _, _, copy =
-    setup_paste_path dir
+    setup_paste_path ~caps dir
       ~wtype_body:
         ("test -f " ^ q confirmed ^ " || exit 42\nprintf '%s\n' \"$*\" >> "
        ^ q wtype_args ^ "\n")
   in
-  with_wayland dir @@ fun () ->
-  Pie_test_runtime.run @@ fun env ->
+  with_wayland ~caps dir @@ fun () ->
+  Pie_test_runtime.run ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock, sleeps = instant_clock () in
   let polls = ref 0 in
   let read () =
     incr polls;
     if !polls >= 3 then (
-      Out_channel.with_open_bin confirmed (fun oc -> output_string oc "ok");
+      Ox_caps.Cap_stdlib.Out_channel.with_open_bin ~caps confirmed (fun oc ->
+          output_string oc "ok");
       Some "offered-text")
     else Some "previous selection"
   in
   match
-    run_configured_inject ~read_selection:read ~clock ~dir ~copy env sw
+    run_configured_inject ~caps ~read_selection:read ~clock ~dir ~copy env sw
       "offered-text"
   with
   | Error _ -> Alcotest.fail "late confirmation did not paste"
@@ -580,30 +706,38 @@ let test_selection_confirmed_after_polls_pastes () =
         !sleeps;
       Alcotest.(check string)
         "offered text" "offered-text"
-        (In_channel.with_open_text stdin_path In_channel.input_all);
+        (Ox_caps.Cap_stdlib.In_channel.with_open_text ~caps stdin_path
+           In_channel.input_all);
       Alcotest.(check string)
         "one ctrl-v after confirmation" "-M ctrl -k v -m ctrl\n"
-        (In_channel.with_open_text wtype_args In_channel.input_all);
+        (Ox_caps.Cap_stdlib.In_channel.with_open_text ~caps wtype_args
+           In_channel.input_all);
       Alcotest.(check bool)
         "paste key attempted" true
         (result.outcome = Pie.Input.Text_injection.Clipboard_key_attempted)
 
 let long_selection () = String.make 200_000 'q' ^ "zażółć-end"
 
-let test_long_text_must_match_exactly () =
+let test_long_text_must_match_exactly
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
   let text = long_selection () in
   let mismatch = String.sub text 0 (String.length text - 1) ^ "X" in
-  with_temp_dir @@ fun dir ->
+  with_temp_dir ~caps @@ fun dir ->
   let wtype_args = Filename.concat dir "wtype-args" in
   let _, stdin_path, _, _, copy =
-    setup_paste_path dir
+    setup_paste_path ~caps dir
       ~wtype_body:("printf '%s\n' \"$*\" >> " ^ Filename.quote wtype_args ^ "\n")
   in
-  with_wayland dir @@ fun () ->
-  Pie_test_runtime.run @@ fun env ->
+  with_wayland ~caps dir @@ fun () ->
+  Pie_test_runtime.run ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   (match
-     run_configured_inject
+     run_configured_inject ~caps
        ~read_selection:(fun () -> Some text)
        ~dir ~copy env sw text
    with
@@ -614,11 +748,12 @@ let test_long_text_must_match_exactly () =
         (result.outcome = Pie.Input.Text_injection.Clipboard_key_attempted);
       Alcotest.(check string)
         "full text offered" text
-        (In_channel.with_open_text stdin_path In_channel.input_all));
+        (Ox_caps.Cap_stdlib.In_channel.with_open_text ~caps stdin_path
+           In_channel.input_all));
   let clock, _sleeps = instant_clock () in
   let polls = ref 0 in
   match
-    run_configured_inject ~clock
+    run_configured_inject ~caps ~clock
       ~read_selection:(fun () ->
         incr polls;
         Some mismatch)
@@ -634,32 +769,39 @@ let test_long_text_must_match_exactly () =
         "clipboard outcome" true
         (result.outcome = Pie.Input.Text_injection.Clipboard_only)
 
-let test_production_wl_paste_confirms_before_key () =
-  with_temp_dir @@ fun dir ->
+let test_production_wl_paste_confirms_before_key
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun dir ->
   let text = long_selection () in
   let q = Filename.quote in
   let selection = Filename.concat dir "selection" in
   let paste_args = Filename.concat dir "paste-args" in
   let stdin_path = Filename.concat dir "stdin" in
   let wtype_args = Filename.concat dir "wtype-args" in
-  Out_channel.with_open_bin selection (fun oc -> output_string oc text);
+  Ox_caps.Cap_stdlib.Out_channel.with_open_bin ~caps selection (fun oc ->
+      output_string oc text);
   ignore
-    (write_exec dir "wl-paste"
+    (write_exec ~caps dir "wl-paste"
        ("printf '%s\n' \"$@\" >> " ^ q paste_args ^ "\ncat " ^ q selection
       ^ "\n"));
   ignore
-    (write_exec dir "niri"
+    (write_exec ~caps dir "niri"
        "printf '%s\n' '{\"id\":1,\"title\":\"t\",\"app_id\":\"app\"}'\n");
   let copy =
-    write_exec dir "wl-copy"
+    write_exec ~caps dir "wl-copy"
       ("cat > " ^ q stdin_path ^ "\nwhile :; do sleep 0.05; done\n")
   in
   ignore
-    (write_exec dir "wtype"
+    (write_exec ~caps dir "wtype"
        ("test -s " ^ q paste_args ^ " || exit 42\nprintf '%s\n' \"$*\" >> "
       ^ q wtype_args ^ "\n"));
-  with_wayland dir @@ fun () ->
-  Pie_test_runtime.run @@ fun env ->
+  with_wayland ~caps dir @@ fun () ->
+  Pie_test_runtime.run ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let owner =
     Pie.Wayland.Clipboard.create ~caps ~sw
@@ -685,30 +827,40 @@ let test_production_wl_paste_confirms_before_key () =
   | Ok result ->
       Alcotest.(check string)
         "wl-paste arguments" "--no-newline\n--type\ntext/plain;charset=utf-8\n"
-        (In_channel.with_open_text paste_args In_channel.input_all);
+        (Ox_caps.Cap_stdlib.In_channel.with_open_text ~caps paste_args
+           In_channel.input_all);
       Alcotest.(check string)
         "full text offered" text
-        (In_channel.with_open_bin stdin_path In_channel.input_all);
+        (Ox_caps.Cap_stdlib.In_channel.with_open_bin ~caps stdin_path
+           In_channel.input_all);
       Alcotest.(check string)
         "one ctrl-v after wl-paste" "-M ctrl -k v -m ctrl\n"
-        (In_channel.with_open_text wtype_args In_channel.input_all);
+        (Ox_caps.Cap_stdlib.In_channel.with_open_text ~caps wtype_args
+           In_channel.input_all);
       Alcotest.(check bool)
         "paste key attempted" true
         (result.outcome = Pie.Input.Text_injection.Clipboard_key_attempted)
 
-let test_cancelled_confirmation_never_pastes () =
-  with_temp_dir @@ fun dir ->
+let test_cancelled_confirmation_never_pastes
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun dir ->
   let keys = Filename.concat dir "keys" in
   let q = Filename.quote in
   let copy =
-    write_exec dir "wl-copy" "cat > /dev/null\nwhile :; do sleep 0.05; done\n"
+    write_exec ~caps dir "wl-copy"
+      "cat > /dev/null\nwhile :; do sleep 0.05; done\n"
   in
   ignore
-    (write_exec dir "niri"
+    (write_exec ~caps dir "niri"
        "printf '%s\n' '{\"id\":1,\"title\":\"t\",\"app_id\":\"app\"}'\n");
-  ignore (write_exec dir "wtype" ("printf key > " ^ q keys ^ "\n"));
-  with_wayland dir @@ fun () ->
-  Pie_test_runtime.run @@ fun env ->
+  ignore (write_exec ~caps dir "wtype" ("printf key > " ^ q keys ^ "\n"));
+  with_wayland ~caps dir @@ fun () ->
+  Pie_test_runtime.run ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let real = Eio.Stdenv.clock env in
   let module Clock = struct
@@ -746,11 +898,11 @@ let test_cancelled_confirmation_never_pastes () =
   Alcotest.(check bool)
     "cancel never sends paste key" false (Sys.file_exists keys)
 
-let blocking_payload () =
+let blocking_payload ~(caps : < Ox_caps.Cap.fs_read ; .. >) () =
   let max_pipe =
     match
-      In_channel.with_open_text "/proc/sys/fs/pipe-max-size"
-        In_channel.input_all
+      Ox_caps.Cap_stdlib.In_channel.with_open_text ~caps
+        "/proc/sys/fs/pipe-max-size" In_channel.input_all
     with
     | contents -> int_of_string (String.trim contents)
     | (exception Sys_error _) | (exception Failure _) | (exception End_of_file)
@@ -759,15 +911,26 @@ let blocking_payload () =
   in
   String.make (max_pipe + 1) 'x'
 
-let pid_alive pid =
-  match Unix.kill pid 0 with () -> true | exception Unix.Unix_error _ -> false
+let pid_alive ~(caps : < Ox_caps.Cap.signal ; .. >) pid =
+  match Ox_caps.Cap_unix.kill ~caps pid 0 with
+  | () -> true
+  | exception Unix.Unix_error _ -> false
 
-let read_pid path =
+let read_pid ~(caps : < Ox_caps.Cap.fs_read ; .. >) path =
   int_of_string
-    (String.trim (In_channel.with_open_text path In_channel.input_all))
+    (String.trim
+       (Ox_caps.Cap_stdlib.In_channel.with_open_text ~caps path
+          In_channel.input_all))
 
-let test_default_mime_and_ready_before_retire () =
-  with_temp_dir @@ fun dir ->
+let test_default_mime_and_ready_before_retire
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.signal
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun dir ->
   let args_path = Filename.concat dir "args" in
   let pid_path = Filename.concat dir "owner.pid" in
   let pred_path = Filename.concat dir "predecessor" in
@@ -776,7 +939,7 @@ let test_default_mime_and_ready_before_retire () =
      the pipe, so [offer] cannot observe readiness — and therefore cannot
      retire the previous helper — until this read starts. *)
   let copy =
-    write_exec dir "wl-copy"
+    write_exec ~caps dir "wl-copy"
       ("printf '%s\n' \"$*\" >> " ^ q args_path ^ "\n" ^ "if [ -f " ^ q pid_path
      ^ " ]; then\n" ^ "  pred=$(cat " ^ q pid_path ^ ")\n"
      ^ "  if kill -0 \"$pred\" 2>/dev/null; then\n"
@@ -785,8 +948,8 @@ let test_default_mime_and_ready_before_retire () =
      ^ "printf '%s\n' \"$$\" > " ^ q pid_path ^ "\n" ^ "cat > /dev/null\n"
      ^ "while :; do sleep 0.05; done\n")
   in
-  let payload = blocking_payload () in
-  Pie_test_runtime.run @@ fun env ->
+  let payload = blocking_payload ~caps () in
+  Pie_test_runtime.run ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let owner =
     Pie.Wayland.Clipboard.create ~caps ~sw
@@ -796,40 +959,50 @@ let test_default_mime_and_ready_before_retire () =
   (match Pie.Wayland.Clipboard.offer owner payload with
   | Ok () -> ()
   | Error (`Clipboard_error msg) -> Alcotest.failf "first offer failed: %s" msg);
-  let first_pid = read_pid pid_path in
-  Alcotest.(check bool) "first helper alive" true (pid_alive first_pid);
+  let first_pid = read_pid ~caps pid_path in
+  Alcotest.(check bool) "first helper alive" true (pid_alive ~caps first_pid);
   (match Pie.Wayland.Clipboard.offer owner payload with
   | Ok () -> ()
   | Error (`Clipboard_error msg) ->
       Alcotest.failf "replacement offer failed: %s" msg);
   Alcotest.(check string)
     "wl-copy arguments are --foreground only" "--foreground\n--foreground\n"
-    (In_channel.with_open_text args_path In_channel.input_all);
+    (Ox_caps.Cap_stdlib.In_channel.with_open_text ~caps args_path
+       In_channel.input_all);
   Alcotest.(check string)
     "previous source still alive when the new helper is ready" "alive\n"
-    (In_channel.with_open_text pred_path In_channel.input_all);
+    (Ox_caps.Cap_stdlib.In_channel.with_open_text ~caps pred_path
+       In_channel.input_all);
   Alcotest.(check bool)
     "previous source retired after the new helper was ready" false
-    (pid_alive first_pid);
-  let second_pid = read_pid pid_path in
+    (pid_alive ~caps first_pid);
+  let second_pid = read_pid ~caps pid_path in
   Alcotest.(check bool)
     "replacement helper is a new pid" true (second_pid <> first_pid);
   Alcotest.(check bool)
-    "replacement helper still owns the offer" true (pid_alive second_pid)
+    "replacement helper still owns the offer" true
+    (pid_alive ~caps second_pid)
 
-let test_failed_replacement_keeps_previous_source () =
-  with_temp_dir @@ fun dir ->
+let test_failed_replacement_keeps_previous_source
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.signal
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun dir ->
   let pid_path = Filename.concat dir "owner.pid" in
   let started = Filename.concat dir "started" in
   let q = Filename.quote in
   let copy =
-    write_exec dir "wl-copy"
+    write_exec ~caps dir "wl-copy"
       ("if [ -f " ^ q started ^ " ]; then\n" ^ "  exit 1\n" ^ "fi\n" ^ "touch "
      ^ q started ^ "\n" ^ "printf '%s\n' \"$$\" > " ^ q pid_path ^ "\n"
      ^ "cat > /dev/null\n" ^ "while :; do sleep 0.05; done\n")
   in
-  let payload = blocking_payload () in
-  Pie_test_runtime.run @@ fun env ->
+  let payload = blocking_payload ~caps () in
+  Pie_test_runtime.run ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let owner =
     Pie.Wayland.Clipboard.create ~caps ~sw
@@ -839,69 +1012,82 @@ let test_failed_replacement_keeps_previous_source () =
   (match Pie.Wayland.Clipboard.offer owner payload with
   | Ok () -> ()
   | Error (`Clipboard_error msg) -> Alcotest.failf "first offer failed: %s" msg);
-  let first_pid = read_pid pid_path in
+  let first_pid = read_pid ~caps pid_path in
   match Pie.Wayland.Clipboard.offer owner payload with
   | Ok () -> Alcotest.fail "replacement that exits before reading succeeded"
   | Error (`Clipboard_error _) ->
       Alcotest.(check bool)
         "failed replacement leaves the previous source" true
-        (pid_alive first_pid);
-      Alcotest.(check int) "owner pid unchanged" first_pid (read_pid pid_path)
+        (pid_alive ~caps first_pid);
+      Alcotest.(check int)
+        "owner pid unchanged" first_pid (read_pid ~caps pid_path)
 
-let () =
+let main
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.signal
+       ; Ox_caps.Cap.tmp
+       ; .. >) =
   Alcotest.run "clipboard_owner"
     [
       ( "ownership",
         [
           Alcotest.test_case "image previous not inspected" `Quick (fun () ->
-              test_no_inspection_exact_stdin "image/png");
+              test_no_inspection_exact_stdin ~caps "image/png");
           Alcotest.test_case "text previous not inspected" `Quick (fun () ->
-              test_no_inspection_exact_stdin "text/plain");
+              test_no_inspection_exact_stdin ~caps "text/plain");
           Alcotest.test_case "empty previous not inspected" `Quick (fun () ->
-              test_no_inspection_exact_stdin "");
+              test_no_inspection_exact_stdin ~caps "");
           Alcotest.test_case "arbitrary MIME not inspected" `Quick (fun () ->
-              test_no_inspection_exact_stdin "application/octet-stream");
-          Alcotest.test_case "copy early failure" `Quick test_copy_early_failure;
+              test_no_inspection_exact_stdin ~caps "application/octet-stream");
+          Alcotest.test_case "copy early failure" `Quick
+            (test_copy_early_failure ~caps);
           Alcotest.test_case "known spawn failure hides secret" `Quick
-            test_known_spawn_failure_hides_secret;
+            (test_known_spawn_failure_hides_secret ~caps);
           Alcotest.test_case "cancellation at acquisition" `Quick
-            test_cancellation_at_acquisition;
+            (test_cancellation_at_acquisition ~caps);
           Alcotest.test_case "slow consumer still alive after 250ms" `Quick
-            test_slow_consumer_still_alive;
+            (test_slow_consumer_still_alive ~caps);
           Alcotest.test_case "100 offers bounded fds" `Quick
-            test_repeated_offers_bounded;
-          Alcotest.test_case "app shutdown settles" `Quick test_shutdown_settles;
+            (test_repeated_offers_bounded ~caps);
+          Alcotest.test_case "app shutdown settles" `Quick
+            (test_shutdown_settles ~caps);
           Alcotest.test_case "replacement settles the previous helper" `Quick
-            test_settled_before_replacement;
+            (test_settled_before_replacement ~caps);
           Alcotest.test_case "default text types, ready before retire" `Quick
-            test_default_mime_and_ready_before_retire;
+            (test_default_mime_and_ready_before_retire ~caps);
           Alcotest.test_case "failed replacement keeps previous source" `Quick
-            test_failed_replacement_keeps_previous_source;
+            (test_failed_replacement_keeps_previous_source ~caps);
           Alcotest.test_case "natural exit releases pipes" `Quick
-            test_natural_exit_releases_pipes;
+            (test_natural_exit_releases_pipes ~caps);
           Alcotest.test_case "large stdout discarded" `Quick
-            test_large_stdout_discarded;
+            (test_large_stdout_discarded ~caps);
           Alcotest.test_case "inject paste image previous" `Quick (fun () ->
-              test_inject_paste_key_success "image/png");
+              test_inject_paste_key_success ~caps "image/png");
           Alcotest.test_case "inject paste text previous" `Quick (fun () ->
-              test_inject_paste_key_success "text/plain");
+              test_inject_paste_key_success ~caps "text/plain");
           Alcotest.test_case "inject paste empty previous" `Quick (fun () ->
-              test_inject_paste_key_success "");
+              test_inject_paste_key_success ~caps "");
           Alcotest.test_case "inject paste arbitrary MIME" `Quick (fun () ->
-              test_inject_paste_key_success "application/octet-stream");
+              test_inject_paste_key_success ~caps "application/octet-stream");
           Alcotest.test_case "inject key fail retains helper" `Quick
-            test_inject_paste_key_fail_retains_helper;
+            (test_inject_paste_key_fail_retains_helper ~caps);
           Alcotest.test_case "confirmed selection pastes" `Quick
-            test_confirmed_selection_pastes;
+            (test_confirmed_selection_pastes ~caps);
           Alcotest.test_case "unconfirmed selection stays on the clipboard"
-            `Quick test_unconfirmed_selection_stays_on_clipboard;
+            `Quick
+            (test_unconfirmed_selection_stays_on_clipboard ~caps);
           Alcotest.test_case "selection confirmed after polls pastes" `Quick
-            test_selection_confirmed_after_polls_pastes;
+            (test_selection_confirmed_after_polls_pastes ~caps);
           Alcotest.test_case "long selection must match exactly" `Quick
-            test_long_text_must_match_exactly;
+            (test_long_text_must_match_exactly ~caps);
           Alcotest.test_case "wl-paste confirms before the paste key" `Quick
-            test_production_wl_paste_confirms_before_key;
+            (test_production_wl_paste_confirms_before_key ~caps);
           Alcotest.test_case "cancelled confirmation never sends paste" `Quick
-            test_cancelled_confirmation_never_pastes;
+            (test_cancelled_confirmation_never_pastes ~caps);
         ] );
     ]
+
+let () = main ~caps:(Ox_test.powerbox ())

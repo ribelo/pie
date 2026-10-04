@@ -1,4 +1,4 @@
-let caps = Ox_test.powerbox () (* ^pcaps-n1rg *)
+(* ^pcaps-n1rg *)
 
 (* PIE013 provider byte budgets. Synthetic PCM and local WS only. *)
 
@@ -52,7 +52,8 @@ let with_listening f =
   in
   f ~sw ~net ~clock ~logger ~url ~socket
 
-let run_offer ~logger ~url ~sw ~net ~clock offer =
+let run_offer ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) ~logger ~url
+    ~sw ~net ~clock offer =
   let operation =
     Codex.with_stream_session ~caps ~sw ~net ~clock ~logger ~url
       ~access_token:"synthetic" ~mode:Codex.Transcription ~operation:"budget"
@@ -62,41 +63,46 @@ let run_offer ~logger ~url ~sw ~net ~clock offer =
   in
   operation
 
-let test_queue_minus_one_succeeds () =
+let test_queue_minus_one_succeeds
+    ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) () =
   with_listening @@ fun ~sw ~net ~clock ~logger ~url ~socket:_ ->
   match
-    run_offer ~logger ~url ~sw ~net ~clock (fun handle ->
+    run_offer ~caps ~logger ~url ~sw ~net ~clock (fun handle ->
         handle.offer_chunk (pcm (Limits.queue_pcm_bytes - 1)))
   with
   | Ok () -> ()
   | Error cause -> Alcotest.failf "queue-1 failed: %s" (cause_text cause)
 
-let test_queue_exact_succeeds () =
+let test_queue_exact_succeeds
+    ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) () =
   with_listening @@ fun ~sw ~net ~clock ~logger ~url ~socket:_ ->
   match
-    run_offer ~logger ~url ~sw ~net ~clock (fun handle ->
+    run_offer ~caps ~logger ~url ~sw ~net ~clock (fun handle ->
         handle.offer_chunk (pcm Limits.queue_pcm_bytes))
   with
   | Ok () -> ()
   | Error cause -> Alcotest.failf "queue exact failed: %s" (cause_text cause)
 
-let test_queue_plus_one_rejected () =
+let test_queue_plus_one_rejected
+    ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) () =
   with_listening @@ fun ~sw ~net ~clock ~logger ~url ~socket:_ ->
   expect_budget
-    (run_offer ~logger ~url ~sw ~net ~clock (fun handle ->
+    (run_offer ~caps ~logger ~url ~sw ~net ~clock (fun handle ->
          handle.offer_chunk (pcm (Limits.queue_pcm_bytes + 1))))
 
-let test_stalled_then_overflow_rejected () =
+let test_stalled_then_overflow_rejected
+    ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) () =
   with_listening @@ fun ~sw ~net ~clock ~logger ~url ~socket:_ ->
   expect_budget
-    (run_offer ~logger ~url ~sw ~net ~clock (fun handle ->
+    (run_offer ~caps ~logger ~url ~sw ~net ~clock (fun handle ->
          let* () = handle.offer_chunk (pcm Limits.queue_pcm_bytes) in
          handle.offer_chunk (pcm 1)))
 
-let test_cancel_then_offer_fails () =
+let test_cancel_then_offer_fails
+    ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) () =
   with_listening @@ fun ~sw ~net ~clock ~logger ~url ~socket:_ ->
   match
-    run_offer ~logger ~url ~sw ~net ~clock (fun handle ->
+    run_offer ~caps ~logger ~url ~sw ~net ~clock (fun handle ->
         let* () = handle.cancel_stream () in
         handle.offer_chunk (pcm 2))
   with
@@ -108,14 +114,15 @@ let test_cancel_then_offer_fails () =
         (contains text "cancelled" || contains text "closed"
        || contains text "budget")
 
-let test_two_blueprints_independent () =
+let test_two_blueprints_independent
+    ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) () =
   with_listening @@ fun ~sw ~net ~clock ~logger ~url ~socket:_ ->
   let first =
-    run_offer ~logger ~url ~sw ~net ~clock (fun handle ->
+    run_offer ~caps ~logger ~url ~sw ~net ~clock (fun handle ->
         handle.offer_chunk (pcm Limits.queue_pcm_bytes))
   in
   let second =
-    run_offer ~logger ~url ~sw ~net ~clock (fun handle ->
+    run_offer ~caps ~logger ~url ~sw ~net ~clock (fun handle ->
         handle.offer_chunk (pcm Limits.queue_pcm_bytes))
   in
   (match first with
@@ -125,7 +132,8 @@ let test_two_blueprints_independent () =
   | Ok () -> ()
   | Error cause -> Alcotest.failf "second blueprint: %s" (cause_text cause)
 
-let test_buffered_capture_plus_one () =
+let test_buffered_capture_plus_one
+    ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let pcm_bytes = pcm (Limits.capture_pcm_bytes + 1) in
@@ -137,7 +145,7 @@ let test_buffered_capture_plus_one () =
   in
   expect_budget operation
 
-let test_openrouter_capture_plus_one () =
+let test_openrouter_capture_plus_one ~(caps : < Ox_caps.Cap.env ; .. >) () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let pcm_bytes = pcm (Limits.capture_pcm_bytes + 1) in
@@ -149,10 +157,11 @@ let test_openrouter_capture_plus_one () =
   in
   expect_budget operation
 
-let test_empty_offers_are_noop_until_item_cap () =
+let test_empty_offers_are_noop_until_item_cap
+    ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) () =
   with_listening @@ fun ~sw ~net ~clock ~logger ~url ~socket:_ ->
   match
-    run_offer ~logger ~url ~sw ~net ~clock (fun handle ->
+    run_offer ~caps ~logger ~url ~sw ~net ~clock (fun handle ->
         let rec empties n =
           if n = 0 then Ok ()
           else
@@ -175,10 +184,11 @@ let test_empty_offers_are_noop_until_item_cap () =
         "item cap" true
         (contains (cause_text cause) "budget")
 
-let test_empty_offer_after_cancel_fails () =
+let test_empty_offer_after_cancel_fails
+    ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) () =
   with_listening @@ fun ~sw ~net ~clock ~logger ~url ~socket:_ ->
   match
-    run_offer ~logger ~url ~sw ~net ~clock (fun handle ->
+    run_offer ~caps ~logger ~url ~sw ~net ~clock (fun handle ->
         let* () = handle.cancel_stream () in
         handle.offer_chunk (pcm 0))
   with
@@ -329,8 +339,8 @@ let serve_script ~after_handshake ~after_update ~after_append flow =
   in
   loop false
 
-let run_buffered ~mode ~session_update ~script_handshake ~script_append
-    pcm_bytes =
+let run_buffered ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) ~mode
+    ~session_update ~script_handshake ~script_append pcm_bytes =
   with_listening @@ fun ~sw ~net ~clock ~logger ~url ~socket ->
   Eio.Fiber.fork ~sw (fun () ->
       try
@@ -364,11 +374,12 @@ let delta_chunks ~n ~size fill =
 (* A dedicated completion includes the JSON envelope in the bounded websocket
    message. The former conversation terminal could return accumulated deltas
    without sending that full final transcript. *)
-let test_final_message_budget () =
+let test_final_message_budget
+    ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) () =
   List.iter
     (fun size ->
       match
-        run_buffered ~mode:Codex.Transcription
+        run_buffered ~caps ~mode:Codex.Transcription
           ~session_update:transcription_update ~script_handshake:[ created ]
           ~script_append:[ json_final (String.make size 'a') ]
           (pcm 320)
@@ -380,7 +391,8 @@ let test_final_message_budget () =
             (contains (cause_text cause) "message too large"))
     [ Limits.result_utf8_bytes - 1; Limits.result_utf8_bytes ]
 
-let test_result_plus_one () =
+let test_result_plus_one ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >)
+    () =
   let size = 32_768 in
   let n = Limits.result_utf8_bytes / size in
   let append =
@@ -391,13 +403,15 @@ let test_result_plus_one () =
       ]
   in
   expect_budget
-    (run_buffered ~mode:Codex.Transcription ~session_update:transcription_update
-       ~script_handshake:[ created ] ~script_append:append (pcm 320))
+    (run_buffered ~caps ~mode:Codex.Transcription
+       ~session_update:transcription_update ~script_handshake:[ created ]
+       ~script_append:append (pcm 320))
 
-let test_final_replaces_partials () =
+let test_final_replaces_partials
+    ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) () =
   let chunk = String.make (Limits.result_utf8_bytes * 2 / 3) 'd' in
   match
-    run_buffered ~mode:Codex.Transcription
+    run_buffered ~caps ~mode:Codex.Transcription
       ~session_update:
         (Codex.build_pass1_session_update ~model:"gpt-4o-mini-transcribe" ())
       ~script_handshake:[ created ]
@@ -409,10 +423,11 @@ let test_final_replaces_partials () =
       Alcotest.failf "replacement double-counted or failed: %s"
         (cause_text cause)
 
-let test_empty_deltas_do_not_grow () =
+let test_empty_deltas_do_not_grow
+    ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) () =
   let empties = List.init 512 (fun _ -> json_delta "") in
   match
-    run_buffered ~mode:Codex.Transcription
+    run_buffered ~caps ~mode:Codex.Transcription
       ~session_update:
         (Codex.build_pass1_session_update ~model:"gpt-4o-mini-transcribe" ())
       ~script_handshake:[ created ]
@@ -422,7 +437,8 @@ let test_empty_deltas_do_not_grow () =
   | Ok got -> Alcotest.(check string) "final after empties" "ok" got
   | Error cause -> Alcotest.failf "empty deltas failed: %s" (cause_text cause)
 
-let test_offer_after_provider_failure () =
+let test_offer_after_provider_failure
+    ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) () =
   with_listening @@ fun ~sw ~net ~clock ~logger ~url ~socket ->
   Eio.Fiber.fork ~sw (fun () ->
       try
@@ -441,7 +457,7 @@ let test_offer_after_provider_failure () =
         wait ()
       with _ -> ());
   match
-    run_offer ~logger ~url ~sw ~net ~clock (fun handle ->
+    run_offer ~caps ~logger ~url ~sw ~net ~clock (fun handle ->
         let rec spin n =
           if n <= 0 then Error (`Stt_error "timeout")
           else
@@ -465,7 +481,8 @@ let test_offer_after_provider_failure () =
           || contains text "cancelled" || contains text "error")
       then Alcotest.failf "unexpected provider-failure cause: %s" text
 
-let test_closed_after_success () =
+let test_closed_after_success
+    ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) () =
   with_listening @@ fun ~sw ~net ~clock ~logger ~url ~socket ->
   Eio.Fiber.fork ~sw (fun () ->
       try
@@ -511,49 +528,52 @@ let test_queue_accounting_underflow_is_visible () =
   Alcotest.(check int) "queued" 0 !queued;
   Alcotest.(check int) "items" 0 !items
 
-let () =
+let main ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) =
   Alcotest.run "provider-budgets"
     [
       ( "admission",
         [
           Alcotest.test_case "queue minus one" `Quick
-            test_queue_minus_one_succeeds;
-          Alcotest.test_case "queue exact" `Quick test_queue_exact_succeeds;
+            (test_queue_minus_one_succeeds ~caps);
+          Alcotest.test_case "queue exact" `Quick
+            (test_queue_exact_succeeds ~caps);
           Alcotest.test_case "queue plus one rejected" `Quick
-            test_queue_plus_one_rejected;
+            (test_queue_plus_one_rejected ~caps);
           Alcotest.test_case "stalled queue then overflow" `Quick
-            test_stalled_then_overflow_rejected;
+            (test_stalled_then_overflow_rejected ~caps);
           Alcotest.test_case "cancel then offer fails" `Quick
-            test_cancel_then_offer_fails;
+            (test_cancel_then_offer_fails ~caps);
           Alcotest.test_case "two blueprint runs independent" `Quick
-            test_two_blueprints_independent;
+            (test_two_blueprints_independent ~caps);
           Alcotest.test_case "empty offers noop until item cap" `Quick
-            test_empty_offers_are_noop_until_item_cap;
+            (test_empty_offers_are_noop_until_item_cap ~caps);
           Alcotest.test_case "empty offer after cancel fails" `Quick
-            test_empty_offer_after_cancel_fails;
+            (test_empty_offer_after_cancel_fails ~caps);
           Alcotest.test_case "offer after provider failure" `Quick
-            test_offer_after_provider_failure;
+            (test_offer_after_provider_failure ~caps);
           Alcotest.test_case "closed after success" `Quick
-            test_closed_after_success;
+            (test_closed_after_success ~caps);
           Alcotest.test_case "queue accounting underflow is visible" `Quick
             test_queue_accounting_underflow_is_visible;
         ] );
       ( "capture",
         [
           Alcotest.test_case "buffered capture plus one" `Quick
-            test_buffered_capture_plus_one;
+            (test_buffered_capture_plus_one ~caps);
           Alcotest.test_case "openrouter capture plus one" `Quick
-            test_openrouter_capture_plus_one;
+            (test_openrouter_capture_plus_one ~caps);
         ] );
       ( "output",
         [
           Alcotest.test_case "completion frame budget" `Quick
-            test_final_message_budget;
+            (test_final_message_budget ~caps);
           Alcotest.test_case "delta accumulation result budget" `Quick
-            test_result_plus_one;
+            (test_result_plus_one ~caps);
           Alcotest.test_case "final replaces partials" `Quick
-            test_final_replaces_partials;
+            (test_final_replaces_partials ~caps);
           Alcotest.test_case "empty deltas do not grow" `Quick
-            test_empty_deltas_do_not_grow;
+            (test_empty_deltas_do_not_grow ~caps);
         ] );
     ]
+
+let () = main ~caps:(Ox_test.powerbox ())

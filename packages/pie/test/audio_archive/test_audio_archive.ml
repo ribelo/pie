@@ -1,7 +1,5 @@
 (* dict-1y3i dict-agvw dict-g3ap *)
 
-let caps = Ox_test.powerbox ()
-
 let pcm =
   let bytes = Bytes.create 8 in
   Bytes.set_int16_le bytes 0 1000;
@@ -12,42 +10,49 @@ let pcm =
 
 let perm path = (Unix.lstat path).Unix.st_perm land 0o777
 
-let rec rm_r path =
+let rec rm_r ~(caps : < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; .. >) path
+    =
   match Unix.lstat path with
   | exception Unix.Unix_error (Unix.ENOENT, _, _) -> ()
   | { Unix.st_kind = Unix.S_DIR; _ } ->
       Array.iter
         (fun name ->
-          if name <> "." && name <> ".." then rm_r (Filename.concat path name))
-        (Sys.readdir path);
-      Unix.rmdir path
-  | _ -> Unix.unlink path
+          if name <> "." && name <> ".." then
+            rm_r ~caps (Filename.concat path name))
+        (Ox_caps.Cap_sys.readdir ~caps path);
+      Ox_caps.Cap_unix.rmdir ~caps path
+  | _ -> Ox_caps.Cap_unix.unlink ~caps path
 
-let with_root f =
-  let root = Filename.temp_file "pie-audio" "" in
-  Sys.remove root;
-  Unix.mkdir root 0o700;
-  Fun.protect ~finally:(fun () -> rm_r root) (fun () -> f root)
+let with_root
+    ~(caps :
+       < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.tmp ; .. >) f
+    =
+  let root = Ox_caps.Cap_stdlib.Filename.temp_file ~caps "pie-audio" "" in
+  Ox_caps.Cap_sys.remove ~caps root;
+  Ox_caps.Cap_unix.mkdir ~caps root 0o700;
+  Fun.protect ~finally:(fun () -> rm_r ~caps root) (fun () -> f root)
 
-let with_env pairs f =
-  let saved = List.map (fun (key, _) -> (key, Sys.getenv_opt key)) pairs in
-  List.iter (fun (key, value) -> Unix.putenv key value) pairs;
+let with_env ~(caps : < Ox_caps.Cap.env ; .. >) pairs f =
+  let saved =
+    List.map (fun (key, _) -> (key, Ox_caps.Cap_sys.getenv_opt ~caps key)) pairs
+  in
+  List.iter (fun (key, value) -> Ox_caps.Cap_unix.putenv ~caps key value) pairs;
   Fun.protect
     ~finally:(fun () ->
       List.iter
         (fun (key, previous) ->
-          Unix.putenv key (Option.value previous ~default:""))
+          Ox_caps.Cap_unix.putenv ~caps key (Option.value previous ~default:""))
         saved)
     f
 
-let write_file path contents =
-  let channel = open_out_bin path in
+let write_file ~(caps : < Ox_caps.Cap.fs_write ; .. >) path contents =
+  let channel = Ox_caps.Cap_stdlib.open_out_bin ~caps path in
   Fun.protect
     ~finally:(fun () -> close_out_noerr channel)
     (fun () -> output_string channel contents)
 
-let read_file path =
-  let channel = open_in_bin path in
+let read_file ~(caps : < Ox_caps.Cap.fs_read ; .. >) path =
+  let channel = Ox_caps.Cap_stdlib.open_in_bin ~caps path in
   Fun.protect
     ~finally:(fun () -> close_in_noerr channel)
     (fun () -> really_input_string channel (in_channel_length channel))
@@ -64,15 +69,18 @@ let contains hay needle =
   in
   nlen = 0 || loop 0
 
-let install_ffmpeg ~root ~body =
+let install_ffmpeg ~(caps : < Ox_caps.Cap.fs_write ; .. >) ~root ~body =
   let bin = Filename.concat root "bin" in
-  Unix.mkdir bin 0o700;
+  Ox_caps.Cap_unix.mkdir ~caps bin 0o700;
   let path = Filename.concat bin "ffmpeg" in
-  write_file path body;
-  Unix.chmod path 0o755;
+  write_file ~caps path body;
+  Ox_caps.Cap_unix.chmod ~caps path 0o755;
   bin
 
-let store ~env ~dir ~id =
+let store
+    ~(caps :
+       < Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; .. >)
+    ~env ~dir ~id =
   Eio_main.run @@ fun env_eio ->
   ignore env;
   Pie.Recording.Audio_archive.store ~caps
@@ -80,8 +88,14 @@ let store ~env ~dir ~id =
     ~dir ~id pcm
 
 (* dict-x6e9 *)
-let test_response_evidence () =
-  with_root (fun root ->
+let test_response_evidence
+    ~(caps :
+       < Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_root ~caps (fun root ->
       let dir = Filename.concat root "audio" in
       let body = Bytes.of_string "{\"private\":\"complete provider body\"}\n" in
       let store first =
@@ -99,9 +113,9 @@ let test_response_evidence () =
         (fun path ->
           Alcotest.(check int) "private response" 0o600 (perm path);
           Alcotest.(check string)
-            "whole response" (Bytes.to_string body) (read_file path))
+            "whole response" (Bytes.to_string body) (read_file ~caps path))
         [ first; final ];
-      let now = Unix.gettimeofday () in
+      let now = Ox_caps.Cap_unix.gettimeofday ~caps () in
       List.iter
         (fun path ->
           Unix.utimes path (now -. (169. *. 3600.)) (now -. (169. *. 3600.)))
@@ -124,7 +138,7 @@ let test_response_evidence () =
       | Ok _ -> Alcotest.fail "unsafe response id accepted")
 
 (* dict-4c5v: actual encoder, probe and decode, not a shell fixture. *)
-let test_real_mp3 () =
+let test_real_mp3 ~(caps : < Ox_caps.Cap.env ; .. >) () =
   Eio_main.run @@ fun env ->
   let process_mgr = Eio.Stdenv.process_mgr env in
   let source = Bytes.create 32000 in
@@ -195,26 +209,35 @@ let test_real_mp3 () =
     "decodes whole source" true
     (String.length decoded >= Bytes.length source)
 
-let test_wav_fallback_ignores_path () =
-  with_root (fun root ->
+let test_wav_fallback_ignores_path
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_root ~caps (fun root ->
       let dir = Filename.concat root "audio" in
       let log = Filename.concat root "ffmpeg.log" in
       let bin =
-        install_ffmpeg ~root
+        install_ffmpeg ~caps ~root
           ~body:
             "#!/bin/sh\n\
              printf '%s\\n' \"$@\" >> \"$PIE_TEST_FFMPEG_LOG\"\n\
              exit 0\n"
       in
       let path =
-        with_env
+        with_env ~caps
           [
             ("PIE_FFMPEG", Filename.concat root "missing-ffmpeg");
             ( "PATH",
-              bin ^ ":" ^ Option.value (Sys.getenv_opt "PATH") ~default:"" );
+              bin ^ ":"
+              ^ Option.value
+                  (Ox_caps.Cap_sys.getenv_opt ~caps "PATH")
+                  ~default:"" );
             ("PIE_TEST_FFMPEG_LOG", log);
           ]
-          (fun () -> fail_archive (store ~env:() ~dir ~id:"attempt-1"))
+          (fun () -> fail_archive (store ~caps ~env:() ~dir ~id:"attempt-1"))
       in
       Alcotest.(check string)
         "wav path"
@@ -235,46 +258,61 @@ let test_wav_fallback_ignores_path () =
       Alcotest.(check string)
         "pcm round trip" (Bytes.to_string pcm) (Bytes.to_string loaded))
 
-let test_opus_fake_ffmpeg_on_path () =
-  with_root (fun root ->
+let test_opus_fake_ffmpeg_on_path
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_root ~caps (fun root ->
       let dir = Filename.concat root "audio" in
       let log = Filename.concat root "ffmpeg.log" in
       let bin =
-        install_ffmpeg ~root
+        install_ffmpeg ~caps ~root
           ~body:
             ("#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$PIE_TEST_FFMPEG_LOG\"\n"
            ^ "out=\nfor arg in \"$@\"; do out=\"$arg\"; done\n"
            ^ "printf OPUS > \"$out\"\nexit 0\n")
       in
       let path =
-        with_env
+        with_env ~caps
           [
             ("PIE_FFMPEG", "");
             ( "PATH",
-              bin ^ ":" ^ Option.value (Sys.getenv_opt "PATH") ~default:"" );
+              bin ^ ":"
+              ^ Option.value
+                  (Ox_caps.Cap_sys.getenv_opt ~caps "PATH")
+                  ~default:"" );
             ("PIE_TEST_FFMPEG_LOG", log);
           ]
-          (fun () -> fail_archive (store ~env:() ~dir ~id:"attempt-2"))
+          (fun () -> fail_archive (store ~caps ~env:() ~dir ~id:"attempt-2"))
       in
       Alcotest.(check string)
         "opus path"
         (Filename.concat dir "attempt-2.opus")
         path;
-      Alcotest.(check string) "marker" "OPUS" (read_file path);
+      Alcotest.(check string) "marker" "OPUS" (read_file ~caps path);
       Alcotest.(check int) "file 0600" 0o600 (perm path);
-      let args = read_file log in
+      let args = read_file ~caps log in
       List.iter
         (fun needle -> Alcotest.(check bool) needle true (contains args needle))
         [ "s16le"; "16000"; "libopus"; "24k"; "voip"; "pipe:0"; "ogg" ])
 
-let test_encoder_failure_writes_wav () =
-  with_root (fun root ->
+let test_encoder_failure_writes_wav
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_root ~caps (fun root ->
       let dir = Filename.concat root "audio" in
-      let bin = install_ffmpeg ~root ~body:"#!/bin/sh\nexit 1\n" in
+      let bin = install_ffmpeg ~caps ~root ~body:"#!/bin/sh\nexit 1\n" in
       let path =
-        with_env
+        with_env ~caps
           [ ("PIE_FFMPEG", Filename.concat bin "ffmpeg"); ("PATH", bin) ]
-          (fun () -> fail_archive (store ~env:() ~dir ~id:"attempt-3"))
+          (fun () -> fail_archive (store ~caps ~env:() ~dir ~id:"attempt-3"))
       in
       Alcotest.(check bool)
         "wav fallback" true
@@ -283,38 +321,44 @@ let test_encoder_failure_writes_wav () =
         "no opus left" false
         (Sys.file_exists (Filename.concat dir "attempt-3.opus")))
 
-let touch path =
-  let channel = open_out_bin path in
+let touch ~(caps : < Ox_caps.Cap.fs_write ; .. >) path =
+  let channel = Ox_caps.Cap_stdlib.open_out_bin ~caps path in
   close_out channel
 
-let age path seconds =
-  let stamp = Unix.gettimeofday () -. seconds in
+let age ~(caps : < Ox_caps.Cap.time ; .. >) path seconds =
+  let stamp = Ox_caps.Cap_unix.gettimeofday ~caps () -. seconds in
   Unix.utimes path stamp stamp
 
-let test_prune () =
-  with_root (fun root ->
+let test_prune
+    ~(caps :
+       < Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_root ~caps (fun root ->
       let dir = Filename.concat root "audio" in
-      Unix.mkdir dir 0o700;
+      Ox_caps.Cap_unix.mkdir ~caps dir 0o700;
       let old = Filename.concat dir "old-attempt.opus" in
       let fresh = Filename.concat dir "fresh-attempt.wav" in
       let notes = Filename.concat dir "notes.txt" in
       let partial = Filename.concat dir "old-attempt.opus.1.partial" in
       let outside = Filename.concat root "outside" in
       let link = Filename.concat dir "linked-attempt.opus" in
-      touch old;
-      touch fresh;
-      touch notes;
-      touch partial;
-      write_file outside "keep";
-      age outside (48. *. 3600.);
-      Unix.symlink outside link;
-      age old (48. *. 3600.);
-      age notes (48. *. 3600.);
-      age partial (48. *. 3600.);
+      touch ~caps old;
+      touch ~caps fresh;
+      touch ~caps notes;
+      touch ~caps partial;
+      write_file ~caps outside "keep";
+      age ~caps outside (48. *. 3600.);
+      Ox_caps.Cap_unix.symlink ~caps outside link;
+      age ~caps old (48. *. 3600.);
+      age ~caps notes (48. *. 3600.);
+      age ~caps partial (48. *. 3600.);
       let removed =
         fail_archive
           (Pie.Recording.Audio_archive.prune ~caps ~dir ~retention_hours:24.
-             ~now:(Unix.gettimeofday ()))
+             ~now:(Ox_caps.Cap_unix.gettimeofday ~caps ()))
       in
       Alcotest.(check int) "one expired file" 1 removed;
       Alcotest.(check bool) "old opus gone" false (Sys.file_exists old);
@@ -322,20 +366,26 @@ let test_prune () =
       Alcotest.(check bool) "notes kept" true (Sys.file_exists notes);
       Alcotest.(check bool) "partial kept" true (Sys.file_exists partial);
       Alcotest.(check bool) "symlink kept" true (Sys.file_exists link);
-      Alcotest.(check string) "target kept" "keep" (read_file outside);
+      Alcotest.(check string) "target kept" "keep" (read_file ~caps outside);
       let kept =
         fail_archive
           (Pie.Recording.Audio_archive.prune ~caps ~dir ~retention_hours:0.
-             ~now:(Unix.gettimeofday ()))
+             ~now:(Ox_caps.Cap_unix.gettimeofday ~caps ()))
       in
       Alcotest.(check int) "zero retention deletes nothing" 0 kept;
       Alcotest.(check bool) "fresh still there" true (Sys.file_exists fresh))
 
-let test_locate_errors () =
-  with_root (fun root ->
+let test_locate_errors
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_root ~caps (fun root ->
       let dir = Filename.concat root "audio" in
-      Unix.mkdir dir 0o700;
-      with_env
+      Ox_caps.Cap_unix.mkdir ~caps dir 0o700;
+      with_env ~caps
         [ ("PIE_FFMPEG", Filename.concat root "missing-ffmpeg") ]
         (fun () ->
           (match
@@ -354,7 +404,7 @@ let test_locate_errors () =
                 "missing" true
                 (contains message "no archived audio")
           | Ok _ -> Alcotest.fail "expected missing file");
-          touch (Filename.concat dir "only-opus.opus");
+          touch ~caps (Filename.concat dir "only-opus.opus");
           match
             Pie.Recording.Audio_archive.locate ~caps ~dir ~id:"only-opus"
           with
@@ -364,19 +414,25 @@ let test_locate_errors () =
                 (contains message "no decoder")
           | Ok _ -> Alcotest.fail "expected no decoder"))
 
-let write_config root body =
+let write_config ~(caps : < Ox_caps.Cap.fs_write ; .. >) root body =
   let path = Filename.concat root "stt.toml" in
-  write_file path body;
+  write_file ~caps path body;
   path
 
-let load path =
+let load ~(caps : < Ox_caps.Cap.env ; .. >) path =
   Eio_main.run @@ fun env ->
   Pie.Config.Stt.load ~caps ~fs:(Eio.Stdenv.fs env) ~source:(`Explicit path) ()
 
-let test_retention_config () =
-  with_root (fun root ->
+let test_retention_config
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_root ~caps (fun root ->
       let loaded body =
-        match load (write_config root body) with
+        match load ~caps (write_config ~caps root body) with
         | Error (`Config message) -> Alcotest.fail message
         | Ok config -> config
       in
@@ -388,13 +444,17 @@ let test_retention_config () =
       Alcotest.(check (float 0.001))
         "fraction" 12.5
         (loaded "audio_retention_hours = 12.5\n").audio_retention_hours;
-      (match load (write_config root "audio_retention_hours = -1\n") with
+      (match
+         load ~caps (write_config ~caps root "audio_retention_hours = -1\n")
+       with
       | Error (`Config message) ->
           Alcotest.(check bool)
             "negative" true
             (contains message "non-negative")
       | Ok _ -> Alcotest.fail "expected negative rejection");
-      match load (write_config root "audio_retention_hours = \"day\"\n") with
+      match
+        load ~caps (write_config ~caps root "audio_retention_hours = \"day\"\n")
+      with
       | Error (`Config message) ->
           Alcotest.(check bool) "type" true (contains message "number")
       | Ok _ -> Alcotest.fail "expected type rejection")
@@ -464,21 +524,21 @@ let service_config ~retention () : Pie.Config.Stt.t =
       ];
   }
 
-let archive_names dir =
+let archive_names ~(caps : < Ox_caps.Cap.fs_read ; .. >) dir =
   if not (Sys.file_exists dir) then []
   else
-    Array.to_list (Sys.readdir dir)
+    Array.to_list (Ox_caps.Cap_sys.readdir ~caps dir)
     |> List.filter (fun name ->
         Filename.check_suffix name ".wav" || Filename.check_suffix name ".opus")
 
-let draft_ready retry_dir =
+let draft_ready ~(caps : < Ox_caps.Cap.fs_read ; .. >) retry_dir =
   let active = Filename.concat retry_dir "active" in
   Sys.file_exists active
   && Array.exists
        (fun name ->
          Sys.file_exists
            (Filename.concat (Filename.concat active name) "draft.pcm"))
-       (try Sys.readdir active with Sys_error _ -> [||])
+       (try Ox_caps.Cap_sys.readdir ~caps active with Sys_error _ -> [||])
 
 let rpc ~net ~sw socket_path body =
   let socket = Eio.Net.connect ~sw net (`Unix socket_path) in
@@ -488,14 +548,23 @@ let rpc ~net ~sw socket_path body =
       Eio.Flow.copy_string (body ^ "\n") socket;
       Eio.Buf_read.of_flow ~max_size:65536 socket |> Eio.Buf_read.line)
 
-let run_attempt ~env ~dir ~retention ~pass1 ~deliver ~during =
+let run_attempt
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.stdout
+       ; Ox_caps.Cap.time
+       ; .. >) ~env ~dir ~retention ~pass1 ~deliver ~during =
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
   let audio_dir = Filename.concat dir "audio" in
   let history_path = Filename.concat dir "history.jsonl" in
   let retry_dir = Filename.concat dir "recordings" in
   let socket_path = Filename.concat dir "control.sock" in
-  Unix.mkdir retry_dir 0o700;
+  Ox_caps.Cap_unix.mkdir ~caps retry_dir 0o700;
   let config = service_config ~retention () in
   let stamp () = [ Some (1, 1, 0, 0.) ] in
   let keyboard = Pie.Keyboard.Monitor.create () in
@@ -540,7 +609,7 @@ let run_attempt ~env ~dir ~retention ~pass1 ~deliver ~during =
           incr next_id;
           if !next_id = 1 then "live-attempt"
           else Printf.sprintf "live-attempt-%d" !next_id);
-      now = (fun () -> Unix.gettimeofday ());
+      now = (fun () -> Ox_caps.Cap_unix.gettimeofday ~caps ());
       log_pass = (fun _ ~model:_ ~duration_ms:_ -> ());
     }
   in
@@ -565,19 +634,29 @@ let run_attempt ~env ~dir ~retention ~pass1 ~deliver ~during =
   | Ok () -> ()
   | Error _ -> Alcotest.fail "service workflow failed"
 
-let offer ~clock ~audio_q ~retry_dir =
+let offer ~(caps : < Ox_caps.Cap.fs_read ; .. >) ~clock ~audio_q ~retry_dir =
   wait_until ~clock (fun () ->
       Eio.Stream.add audio_q (`Chunk loud_pcm);
-      draft_ready retry_dir)
+      draft_ready ~caps retry_dir)
 
-let test_archive_after_success () =
-  Pie_test_runtime.run @@ fun env ->
-  with_root (fun dir ->
-      with_env
+let test_archive_after_success
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.stdout
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  Pie_test_runtime.run ~caps @@ fun env ->
+  with_root ~caps (fun dir ->
+      with_env ~caps
         [ ("PIE_FFMPEG", Filename.concat dir "missing-ffmpeg") ]
         (fun () ->
           let delivered = ref [] in
-          run_attempt ~env ~dir ~retention:24.
+          run_attempt ~caps ~env ~dir ~retention:24.
             ~pass1:(fun _ -> Ok "raw words")
             ~deliver:(fun _ _ _ text ->
               delivered := text :: !delivered;
@@ -595,11 +674,11 @@ let test_archive_after_success () =
               ->
               Eio.Time.sleep clock 0.2;
               Pie.Keyboard.Monitor.emit keyboard (key ~released:false);
-              offer ~clock ~audio_q ~retry_dir;
+              offer ~caps ~clock ~audio_q ~retry_dir;
               Pie.Keyboard.Monitor.emit keyboard (key ~released:true);
               wait_until ~clock (fun () -> !delivered <> []);
               wait_until ~clock (fun () ->
-                  archive_names audio_dir = [ "live-attempt.wav" ]);
+                  archive_names ~caps audio_dir = [ "live-attempt.wav" ]);
               wait_until ~clock (fun () ->
                   match Pie.History.read ~caps ~path:history_path with
                   | Ok [ entry ] ->
@@ -609,13 +688,23 @@ let test_archive_after_success () =
               Alcotest.(check (list string))
                 "delivered" [ "raw words" ] (List.rev !delivered))))
 
-let test_archive_after_failure () =
-  Pie_test_runtime.run @@ fun env ->
-  with_root (fun dir ->
-      with_env
+let test_archive_after_failure
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.stdout
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  Pie_test_runtime.run ~caps @@ fun env ->
+  with_root ~caps (fun dir ->
+      with_env ~caps
         [ ("PIE_FFMPEG", Filename.concat dir "missing-ffmpeg") ]
         (fun () ->
-          run_attempt ~env ~dir ~retention:24.
+          run_attempt ~caps ~env ~dir ~retention:24.
             ~pass1:(fun _ -> Error (`Ptt_error "stt:unavailable"))
             ~deliver:(fun _ _ _ _ -> Alcotest.fail "delivery after failure")
             ~during:(fun
@@ -631,18 +720,28 @@ let test_archive_after_failure () =
               ->
               Eio.Time.sleep clock 0.2;
               Pie.Keyboard.Monitor.emit keyboard (key ~released:false);
-              offer ~clock ~audio_q ~retry_dir;
+              offer ~caps ~clock ~audio_q ~retry_dir;
               Pie.Keyboard.Monitor.emit keyboard (key ~released:true);
               wait_until ~clock (fun () ->
-                  archive_names audio_dir = [ "live-attempt.wav" ]))))
+                  archive_names ~caps audio_dir = [ "live-attempt.wav" ]))))
 
-let test_no_archive_after_cancel () =
-  Pie_test_runtime.run @@ fun env ->
-  with_root (fun dir ->
-      with_env
+let test_no_archive_after_cancel
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.stdout
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  Pie_test_runtime.run ~caps @@ fun env ->
+  with_root ~caps (fun dir ->
+      with_env ~caps
         [ ("PIE_FFMPEG", Filename.concat dir "missing-ffmpeg") ]
         (fun () ->
-          run_attempt ~env ~dir ~retention:24.
+          run_attempt ~caps ~env ~dir ~retention:24.
             ~pass1:(fun _ -> Alcotest.fail "pass 1 after cancel")
             ~deliver:(fun _ _ _ _ -> Alcotest.fail "delivery after cancel")
             ~during:(fun
@@ -658,19 +757,30 @@ let test_no_archive_after_cancel () =
               ->
               wait_until ~clock (fun () -> Sys.file_exists socket_path);
               Pie.Keyboard.Monitor.emit keyboard (key ~released:false);
-              offer ~clock ~audio_q ~retry_dir;
+              offer ~caps ~clock ~audio_q ~retry_dir;
               ignore
                 (rpc ~net ~sw socket_path
                    "{\"method\":\"Action\",\"action\":\"pause\"}");
               Eio.Time.sleep clock 1.0;
               Alcotest.(check (list string))
-                "no archive after pause" [] (archive_names audio_dir))))
+                "no archive after pause" []
+                (archive_names ~caps audio_dir))))
 
-let test_retention_zero_archives_nothing () =
-  Pie_test_runtime.run @@ fun env ->
-  with_root (fun dir ->
+let test_retention_zero_archives_nothing
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.stdout
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  Pie_test_runtime.run ~caps @@ fun env ->
+  with_root ~caps (fun dir ->
       let delivered = ref false in
-      run_attempt ~env ~dir ~retention:0.
+      run_attempt ~caps ~env ~dir ~retention:0.
         ~pass1:(fun _ -> Ok "kept")
         ~deliver:(fun _ _ _ _ ->
           delivered := true;
@@ -688,22 +798,25 @@ let test_retention_zero_archives_nothing () =
           ->
           Eio.Time.sleep clock 0.2;
           Pie.Keyboard.Monitor.emit keyboard (key ~released:false);
-          offer ~clock ~audio_q ~retry_dir;
+          offer ~caps ~clock ~audio_q ~retry_dir;
           Pie.Keyboard.Monitor.emit keyboard (key ~released:true);
           wait_until ~clock (fun () -> !delivered);
           Eio.Time.sleep clock 0.5;
           Alcotest.(check (list string))
-            "retention 0 writes nothing" [] (archive_names audio_dir)))
+            "retention 0 writes nothing" []
+            (archive_names ~caps audio_dir)))
 
-let write_private_wav dir id pcm =
-  Unix.mkdir dir 0o700;
+let write_private_wav ~(caps : < Ox_caps.Cap.fs_write ; .. >) dir id pcm =
+  Ox_caps.Cap_unix.mkdir ~caps dir 0o700;
   let path = Filename.concat dir (id ^ ".wav") in
   let header =
     Pie.Audio.Pcm.build_pcm_wav_header ~data_length:(Bytes.length pcm)
       ~sample_rate:16000
   in
   let channel =
-    open_out_gen [ Open_creat; Open_wronly; Open_trunc ] 0o600 path
+    Ox_caps.Cap_stdlib.open_out_gen ~caps
+      [ Open_creat; Open_wronly; Open_trunc ]
+      0o600 path
   in
   Fun.protect
     ~finally:(fun () -> close_out_noerr channel)
@@ -728,15 +841,25 @@ let json_message line =
       | _ -> "")
   | _ -> ""
 
-let test_overlapping_archives () =
-  Pie_test_runtime.run @@ fun env ->
-  with_root (fun dir ->
-      with_env
+let test_overlapping_archives
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.stdout
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  Pie_test_runtime.run ~caps @@ fun env ->
+  with_root ~caps (fun dir ->
+      with_env ~caps
         [ ("PIE_FFMPEG", Filename.concat dir "missing-ffmpeg") ]
         (fun () ->
           let first, release_first = Eio.Promise.create () in
           let calls = ref 0 and delivered = ref [] in
-          run_attempt ~env ~dir ~retention:24.
+          run_attempt ~caps ~env ~dir ~retention:24.
             ~pass1:(fun _ ->
               incr calls;
               let n = !calls in
@@ -759,7 +882,7 @@ let test_overlapping_archives () =
               Eio.Time.sleep clock 0.2;
               for n = 1 to 2 do
                 Pie.Keyboard.Monitor.emit keyboard (key ~released:false);
-                offer ~clock ~audio_q ~retry_dir;
+                offer ~caps ~clock ~audio_q ~retry_dir;
                 Pie.Keyboard.Monitor.emit keyboard (key ~released:true);
                 wait_until ~clock (fun () -> !calls = n)
               done;
@@ -779,7 +902,7 @@ let test_overlapping_archives () =
               Alcotest.(check (list string))
                 "independent audio files"
                 [ "live-attempt-2.wav"; "live-attempt.wav" ]
-                (List.sort String.compare (archive_names audio_dir));
+                (List.sort String.compare (archive_names ~caps audio_dir));
               let entries =
                 match Pie.History.read ~caps ~path:history_path with
                 | Ok entries -> entries
@@ -806,14 +929,24 @@ let test_overlapping_archives () =
                 ]
                 records)))
 
-let test_retry_by_id () =
-  Pie_test_runtime.run @@ fun env ->
-  with_root (fun dir ->
+let test_retry_by_id
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.stdout
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  Pie_test_runtime.run ~caps @@ fun env ->
+  with_root ~caps (fun dir ->
       let clip = Bytes.of_string "archive-pcm!!" in
       let audio_dir = Filename.concat dir "audio" in
-      ignore (write_private_wav audio_dir "clip-1" clip);
+      ignore (write_private_wav ~caps audio_dir "clip-1" clip);
       let seen = ref None and delivered = ref false in
-      run_attempt ~env ~dir ~retention:24.
+      run_attempt ~caps ~env ~dir ~retention:24.
         ~pass1:(fun pcm ->
           seen := Some (Bytes.to_string pcm);
           Ok "from-archive")
@@ -855,41 +988,53 @@ let test_retry_by_id () =
             (Some (Bytes.to_string clip))
             !seen))
 
-let () =
+let main
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.stdout
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) =
   Alcotest.run "audio_archive"
     [
       ( "archive",
         [
           Alcotest.test_case "response evidence dict-x6e9" `Quick
-            test_response_evidence;
-          Alcotest.test_case "real MP3 dict-4c5v" `Quick test_real_mp3;
+            (test_response_evidence ~caps);
+          Alcotest.test_case "real MP3 dict-4c5v" `Quick (test_real_mp3 ~caps);
           Alcotest.test_case
             "wav fallback when PIE_FFMPEG is missing dict-agvw dict-1y3i" `Quick
-            test_wav_fallback_ignores_path;
+            (test_wav_fallback_ignores_path ~caps);
           Alcotest.test_case "opus via fake ffmpeg on PATH dict-agvw" `Quick
-            test_opus_fake_ffmpeg_on_path;
+            (test_opus_fake_ffmpeg_on_path ~caps);
           Alcotest.test_case "encoder failure writes wav dict-agvw" `Quick
-            test_encoder_failure_writes_wav;
+            (test_encoder_failure_writes_wav ~caps);
           Alcotest.test_case
             "retention prune skips links and zero dict-g3ap dict-1y3i" `Quick
-            test_prune;
+            (test_prune ~caps);
           Alcotest.test_case "locate unknown missing and no decoder dict-z1ax"
-            `Quick test_locate_errors;
+            `Quick (test_locate_errors ~caps);
           Alcotest.test_case "audio_retention_hours validation dict-1y3i" `Quick
-            test_retention_config;
+            (test_retention_config ~caps);
           Alcotest.test_case
             "archive after success dict-1y3i dict-agvw dict-z1ax" `Quick
-            test_archive_after_success;
+            (test_archive_after_success ~caps);
           Alcotest.test_case "archive after failure dict-1y3i dict-agvw" `Quick
-            test_archive_after_failure;
+            (test_archive_after_failure ~caps);
           Alcotest.test_case "no archive after cancel dict-1y3i" `Quick
-            test_no_archive_after_cancel;
+            (test_no_archive_after_cancel ~caps);
           Alcotest.test_case "retention 0 archives nothing dict-1y3i" `Quick
-            test_retention_zero_archives_nothing;
+            (test_retention_zero_archives_nothing ~caps);
           Alcotest.test_case
             "dict-q7we overlap preserves archive and history IDs" `Quick
-            test_overlapping_archives;
+            (test_overlapping_archives ~caps);
           Alcotest.test_case "retry by history id dict-z1ax dict-ynad" `Quick
-            test_retry_by_id;
+            (test_retry_by_id ~caps);
         ] );
     ]
+
+let () = main ~caps:(Ox_test.powerbox ())

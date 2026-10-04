@@ -1,22 +1,41 @@
-let caps = Ox_test.powerbox () (* ^pcaps-n1rg *)
+(* ^pcaps-n1rg *)
 
 module C = Pie.Recording.Coordinator
 module P = Pie.Recording.Phase
 module Contract = Pie.Assistant_service.Contract
 
-let with_coordinator_state f =
+let with_coordinator_state
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) f =
   Eio_main.run @@ fun _env ->
-  let dir = Filename.temp_dir "pie-phase" "" in
+  let dir = Ox_caps.Cap_stdlib.Filename.temp_dir ~caps "pie-phase" "" in
   Fun.protect
     ~finally:(fun () ->
-      Sys.readdir dir
-      |> Array.iter (fun name -> Sys.remove (Filename.concat dir name));
-      Unix.rmdir dir)
+      Ox_caps.Cap_sys.readdir ~caps dir
+      |> Array.iter (fun name ->
+          Ox_caps.Cap_sys.remove ~caps (Filename.concat dir name));
+      Ox_caps.Cap_unix.rmdir ~caps dir)
     (fun () ->
       let path = Filename.concat dir "state.json" in
       f (C.create ~caps ~persist_path:path ()) path)
 
-let with_coordinator f = with_coordinator_state (fun t _ -> f t)
+let with_coordinator
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) f =
+  with_coordinator_state ~caps (fun t _ -> f t)
+
 let phase t = C.snapshot t |> fun s -> P.to_string s.phase
 let check_phase expected t = Alcotest.(check string) "phase" expected (phase t)
 
@@ -26,8 +45,16 @@ let start t =
   | C.Busy _ -> Alcotest.fail "unexpected busy"
   | C.Disabled -> Alcotest.fail "unexpected disabled"
 
-let test_full_sequence () =
-  with_coordinator @@ fun t ->
+let test_full_sequence
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_coordinator ~caps @@ fun t ->
   check_phase "ready" t;
   let attempt = start t in
   check_phase "starting" t;
@@ -55,8 +82,16 @@ let test_full_sequence () =
   check_phase "ready" t;
   Alcotest.(check bool) "idle after settlement" false (C.is_active t)
 
-let test_processing_settlement () =
-  with_coordinator_state @@ fun t path ->
+let test_processing_settlement
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_coordinator_state ~caps @@ fun t path ->
   let process a =
     ignore (C.set_phase t a P.Recording);
     ignore (C.set_phase t a P.Processing)
@@ -85,8 +120,16 @@ let test_processing_settlement () =
     (persisted () = `Int 0);
   ignore (C.release t third)
 
-let test_fifo_wait_cancellation () =
-  with_coordinator @@ fun t ->
+let test_fifo_wait_cancellation
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_coordinator ~caps @@ fun t ->
   Eio.Switch.run @@ fun sw ->
   let first = start t in
   ignore (C.set_phase t first P.Processing);
@@ -115,8 +158,16 @@ let test_fifo_wait_cancellation () =
     cancelled_before_release;
   Alcotest.(check bool) "cancelled waiter did not deliver" false !delivered
 
-let test_stale_and_backwards_rejected () =
-  with_coordinator @@ fun t ->
+let test_stale_and_backwards_rejected
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_coordinator ~caps @@ fun t ->
   let old = start t in
   ignore (C.set_phase t old P.Recording);
   ignore (C.release t old);
@@ -132,8 +183,16 @@ let test_stale_and_backwards_rejected () =
     (C.set_phase t current P.Recording);
   check_phase "ready" t
 
-let test_cancel_phase_is_sticky () =
-  with_coordinator @@ fun t ->
+let test_cancel_phase_is_sticky
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_coordinator ~caps @@ fun t ->
   let attempt = start t in
   ignore (C.set_phase t attempt P.Recording);
   C.set_enabled t false;
@@ -147,11 +206,19 @@ let test_cancel_phase_is_sticky () =
   ignore (C.release t attempt);
   check_phase "ready" t
 
-let test_idle_projection () =
-  with_coordinator (fun t ->
+let test_idle_projection
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_coordinator ~caps (fun t ->
       C.set_enabled t false;
       check_phase "disabled" t);
-  with_coordinator (fun t ->
+  with_coordinator ~caps (fun t ->
       C.set_error t "failure";
       check_phase "failed" t)
 
@@ -210,26 +277,38 @@ let test_protocol () =
       Alcotest.(check string) "null phase" Contract.wrong_type label
   | Ok _ -> Alcotest.fail "null phase accepted"
 
-let () =
+let main
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) =
   Alcotest.run "lifecycle_phase"
     [
       ( "coordinator",
         [
           Alcotest.test_case "capture handoff retains processing admission"
-            `Quick test_full_sequence;
+            `Quick (test_full_sequence ~caps);
           Alcotest.test_case
             "dict-b1yt processing settlement preserves capture and persists \
              counts"
-            `Quick test_processing_settlement;
+            `Quick
+            (test_processing_settlement ~caps);
           Alcotest.test_case "stale and backwards rejected" `Quick
-            test_stale_and_backwards_rejected;
+            (test_stale_and_backwards_rejected ~caps);
           Alcotest.test_case "cancellation phase sticky" `Quick
-            test_cancel_phase_is_sticky;
-          Alcotest.test_case "idle projection" `Quick test_idle_projection;
+            (test_cancel_phase_is_sticky ~caps);
+          Alcotest.test_case "idle projection" `Quick
+            (test_idle_projection ~caps);
           Alcotest.test_case "dict-b1yt FIFO wait is cancellable" `Quick
-            test_fifo_wait_cancellation;
+            (test_fifo_wait_cancellation ~caps);
         ] );
       ( "protocol",
         [ Alcotest.test_case "explicit and legacy phases" `Quick test_protocol ]
       );
     ]
+
+let () = main ~caps:(Ox_test.powerbox ())

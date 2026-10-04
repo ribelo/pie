@@ -2,6 +2,7 @@
 
 (test
  (name test_pie)
+ (modules test_pie)
  (libraries
   pie
   alcotest
@@ -20,8 +21,10 @@
 
 (executable
  (name live_one_pass)
+ (modules live_one_pass)
  (libraries ox_test pie eio_main ox))
 
 (executable
  (name ws_settlement_probe)
+ (modules ws_settlement_probe)
  (libraries ox_test pie eio_main ox ox_http))

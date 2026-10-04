@@ -1,4 +1,4 @@
-let caps = Ox_test.powerbox () (* ^pcaps-n1rg *)
+(* ^pcaps-n1rg *)
 
 (* PIE011: readiness vs terminal status on a local scripted WebSocket. *)
 
@@ -188,7 +188,8 @@ let serve ?(close_peer = write_ws_close) ~saw_audio script flow =
   in
   loop `Init
 
-let run_session_with ?tls ?(peer_close = `Websocket) ~mode ~script () =
+let run_session_with ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) ?tls
+    ?(peer_close = `Websocket) ~mode ~script () =
   let saw_audio = ref false in
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
@@ -236,7 +237,10 @@ let run_session_with ?tls ?(peer_close = `Websocket) ~mode ~script () =
   in
   (result, !saw_audio)
 
-let run_session ~mode ~script = run_session_with ~mode ~script ()
+let run_session ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) ~mode
+    ~script =
+  run_session_with ~caps ~mode ~script ()
+
 let created = {|{"type":"session.created"}|}
 let created_tx = {|{"type":"transcription_session.created"}|}
 let updated = {|{"type":"session.updated"}|}
@@ -262,9 +266,10 @@ let expect_error needle (result, _) =
       Alcotest.(check bool) needle true (contains text needle);
       Alcotest.(check bool) "no secret" false (contains text "SECRET_MARKER")
 
-let test_created_only_sends_no_audio () =
+let test_created_only_sends_no_audio
+    ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) () =
   let result, saw_audio =
-    run_session ~mode:Codex.Transcription
+    run_session ~caps ~mode:Codex.Transcription
       ~script:
         {
           after_handshake = [ created ];
@@ -275,9 +280,10 @@ let test_created_only_sends_no_audio () =
   expect_error "acknowledgement" (result, saw_audio);
   Alcotest.(check bool) "no audio before ack" false saw_audio
 
-let test_config_reject_sends_no_audio () =
+let test_config_reject_sends_no_audio
+    ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) () =
   let result, saw_audio =
-    run_session ~mode:Codex.Transcription
+    run_session ~caps ~mode:Codex.Transcription
       ~script:
         {
           after_handshake = [ created ];
@@ -288,9 +294,10 @@ let test_config_reject_sends_no_audio () =
   expect_error "server error" (result, saw_audio);
   Alcotest.(check bool) "no audio after reject" false saw_audio
 
-let test_delayed_ack_then_transcription_completed () =
+let test_delayed_ack_then_transcription_completed
+    ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) () =
   let result, saw_audio =
-    run_session ~mode:Codex.Transcription
+    run_session ~caps ~mode:Codex.Transcription
       ~script:
         {
           after_handshake = [ created_tx ];
@@ -303,9 +310,10 @@ let test_delayed_ack_then_transcription_completed () =
   | Ok text -> Alcotest.(check string) "final" "hello" text
   | Error cause -> Alcotest.failf "expected success: %s" (cause_text cause)
 
-let test_wrong_ack_sends_no_audio () =
+let test_wrong_ack_sends_no_audio
+    ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) () =
   let result, saw_audio =
-    run_session ~mode:Codex.Transcription
+    run_session ~caps ~mode:Codex.Transcription
       ~script:
         {
           after_handshake = [ created ];
@@ -316,9 +324,10 @@ let test_wrong_ack_sends_no_audio () =
   expect_error "acknowledgement" (result, saw_audio);
   Alcotest.(check bool) "no audio on wrong ack" false saw_audio
 
-let test_transcription_ignores_conversation_done () =
+let test_transcription_ignores_conversation_done
+    ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) () =
   let result, saw_audio =
-    run_session ~mode:Codex.Transcription
+    run_session ~caps ~mode:Codex.Transcription
       ~script:
         {
           after_handshake = [ created ];
@@ -329,13 +338,21 @@ let test_transcription_ignores_conversation_done () =
   Alcotest.(check bool) "audio after correct ack" true saw_audio;
   expect_error "incomplete" (result, ())
 
-let with_tls test =
-  let cert = Filename.temp_file "pie-r38-cert-" ".pem" in
-  let key = Filename.temp_file "pie-r38-key-" ".pem" in
+let with_tls
+    ~(caps :
+       < Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) test =
+  let cert =
+    Ox_caps.Cap_stdlib.Filename.temp_file ~caps "pie-r38-cert-" ".pem"
+  in
+  let key = Ox_caps.Cap_stdlib.Filename.temp_file ~caps "pie-r38-key-" ".pem" in
   Fun.protect
     ~finally:(fun () ->
-      Sys.remove cert;
-      Sys.remove key)
+      Ox_caps.Cap_sys.remove ~caps cert;
+      Ox_caps.Cap_sys.remove ~caps key)
     (fun () ->
       let command =
         Printf.sprintf
@@ -344,7 +361,7 @@ let with_tls test =
           (Filename.quote "subjectAltName=DNS:localhost,IP:127.0.0.1")
           (Filename.quote key) (Filename.quote cert)
       in
-      if Sys.command command <> 0 then
+      if Ox_caps.Cap_sys.command ~caps command <> 0 then
         Alcotest.fail "TLS fixture generation failed";
       let ctx =
         Ox_http.Ox_http_tls_openssl.create_server_ctx
@@ -353,10 +370,18 @@ let with_tls test =
       in
       test (ctx, cert))
 
-let test_tls_peer_close peer_close diagnostic () =
-  with_tls (fun tls ->
+let test_tls_peer_close
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) peer_close diagnostic () =
+  with_tls ~caps (fun tls ->
       let result, saw_audio =
-        run_session_with ~tls ~peer_close ~mode:Codex.Transcription
+        run_session_with ~caps ~tls ~peer_close ~mode:Codex.Transcription
           ~script:
             {
               after_handshake = [ created ];
@@ -463,18 +488,20 @@ let serve_recording ~terminal ~frames ~request flow =
   in
   try loop () with _ -> ()
 
-let with_saved_env pairs f =
-  let saved = List.map (fun (key, _) -> (key, Sys.getenv_opt key)) pairs in
-  List.iter (fun (key, value) -> Unix.putenv key value) pairs;
+let with_saved_env ~(caps : < Ox_caps.Cap.env ; .. >) pairs f =
+  let saved =
+    List.map (fun (key, _) -> (key, Ox_caps.Cap_sys.getenv_opt ~caps key)) pairs
+  in
+  List.iter (fun (key, value) -> Ox_caps.Cap_unix.putenv ~caps key value) pairs;
   Fun.protect
     ~finally:(fun () ->
       List.iter
         (fun (key, previous) ->
-          Unix.putenv key (Option.value previous ~default:""))
+          Ox_caps.Cap_unix.putenv ~caps key (Option.value previous ~default:""))
         saved)
     f
 
-let run_peer ~terminal client =
+let run_peer ~(caps : < Ox_caps.Cap.env ; .. >) ~terminal client =
   let frames = ref [] in
   let request = ref "" in
   Eio_main.run @@ fun env ->
@@ -492,7 +519,7 @@ let run_peer ~terminal client =
         serve_recording ~terminal ~frames ~request flow
       with _ -> ());
   let result =
-    with_saved_env
+    with_saved_env ~caps
       [
         ( "CODEX_REALTIME_BASE_URL_OVERRIDE",
           Printf.sprintf "ws://127.0.0.1:%d" port );
@@ -587,9 +614,11 @@ let test_pass1_update_fields () =
       Alcotest.(check bool) "no prompt" false (List.mem_assoc "prompt" fields)
   | _ -> Alcotest.fail "missing transcription object"
 
-let test_pass1_stream_commits () =
+let test_pass1_stream_commits
+    ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.time ; .. >)
+    () =
   let result, request, frames =
-    run_peer ~terminal:On_commit (fun env sw net clock ->
+    run_peer ~caps ~terminal:On_commit (fun env sw net clock ->
         let logger = pass1_logger env clock in
         Codex.with_pass1_stream ~caps ~sw ~net ~clock ~logger
           ~model:"gpt-live-transcribe" ~language:"pl" ~context:"Nema\nPie"
@@ -617,9 +646,11 @@ let test_pass1_stream_commits () =
     "no conversation response.create" false
     (List.mem "response.create" (frame_types frames))
 
-let test_pass1_buffered_sends_all_audio () =
+let test_pass1_buffered_sends_all_audio
+    ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.time ; .. >)
+    () =
   let result, request, frames =
-    run_peer ~terminal:On_commit (fun _env sw net clock ->
+    run_peer ~caps ~terminal:On_commit (fun _env sw net clock ->
         Codex.transcribe_pass1 ~caps ~sw ~net ~clock ~model:"gpt-transcribe" pcm)
   in
   expect_transcript "hello" result;
@@ -661,33 +692,44 @@ let test_pass1_buffered_sends_all_audio () =
     "all resampled audio before commit" [ expected ] audio;
   assert_commit_after_audio frames
 
-let () =
+let main
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) =
   Alcotest.run "realtime-outcomes"
     [
       ( "readiness",
         [
           Alcotest.test_case "created-only sends no audio" `Quick
-            test_created_only_sends_no_audio;
+            (test_created_only_sends_no_audio ~caps);
           Alcotest.test_case "config reject sends no audio" `Quick
-            test_config_reject_sends_no_audio;
+            (test_config_reject_sends_no_audio ~caps);
           Alcotest.test_case "wrong ack before session.updated sends no audio"
-            `Quick test_wrong_ack_sends_no_audio;
+            `Quick
+            (test_wrong_ack_sends_no_audio ~caps);
           Alcotest.test_case "delayed ack then transcription completed" `Quick
-            test_delayed_ack_then_transcription_completed;
+            (test_delayed_ack_then_transcription_completed ~caps);
         ] );
       ( "TLS close (nhttp-7pp8 nhttp-rs5p pienext-jlmd)",
         [
           Alcotest.test_case "TCP EOF is a closed session" `Quick
-            (test_tls_peer_close `Tcp_eof "closed (1006)");
+            (test_tls_peer_close ~caps `Tcp_eof "closed (1006)");
           Alcotest.test_case "close_notify is a closed session" `Quick
-            (test_tls_peer_close `Notify "closed (1006)");
+            (test_tls_peer_close ~caps `Notify "closed (1006)");
           Alcotest.test_case "truncated record is still TLS failure" `Quick
-            (test_tls_peer_close `Truncated "TLS failed");
+            (test_tls_peer_close ~caps `Truncated "TLS failed");
         ] );
       ( "terminal",
         [
           Alcotest.test_case "transcription ignores conversation response.done"
-            `Quick test_transcription_ignores_conversation_done;
+            `Quick
+            (test_transcription_ignores_conversation_done ~caps);
         ] );
       ( "pass 1 (dict-dl3q dict-m2xr dict-q6xd dict-wha3)",
         [
@@ -699,9 +741,12 @@ let () =
             `Quick test_pass1_update_fields;
           Alcotest.test_case
             "stream commits and returns the transcript (dict-q6xd dict-dl3q)"
-            `Quick test_pass1_stream_commits;
+            `Quick
+            (test_pass1_stream_commits ~caps);
           Alcotest.test_case
             "buffered sends all audio then commits (dict-q6xd dict-m2xr)" `Quick
-            test_pass1_buffered_sends_all_audio;
+            (test_pass1_buffered_sends_all_audio ~caps);
         ] );
     ]
+
+let () = main ~caps:(Ox_test.powerbox ())

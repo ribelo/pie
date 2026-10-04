@@ -11,17 +11,21 @@ let string_contains hay needle =
   in
   nlen = 0 || loop 0
 
-let with_temp_dir f =
-  let path = Filename.temp_file "pie-cli-status" "" in
-  Sys.remove path;
-  Unix.mkdir path 0o700;
+let with_temp_dir
+    ~(caps :
+       < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.tmp ; .. >) f
+    =
+  let path = Ox_caps.Cap_stdlib.Filename.temp_file ~caps "pie-cli-status" "" in
+  Ox_caps.Cap_sys.remove ~caps path;
+  Ox_caps.Cap_unix.mkdir ~caps path 0o700;
   Fun.protect
     ~finally:(fun () ->
       Array.iter
         (fun name ->
-          try Sys.remove (Filename.concat path name) with Sys_error _ -> ())
-        (try Sys.readdir path with Sys_error _ -> [||]);
-      try Unix.rmdir path with Unix.Unix_error _ -> ())
+          try Ox_caps.Cap_sys.remove ~caps (Filename.concat path name)
+          with Sys_error _ -> ())
+        (try Ox_caps.Cap_sys.readdir ~caps path with Sys_error _ -> [||]);
+      try Ox_caps.Cap_unix.rmdir ~caps path with Unix.Unix_error _ -> ())
     (fun () -> f path)
 
 type cli_run = {
@@ -44,11 +48,11 @@ let read_available buf fd =
   | Unix.Unix_error ((Unix.EAGAIN | Unix.EWOULDBLOCK), _, _) -> `Empty
   | Unix.Unix_error (Unix.EBADF, _, _) -> `Eof
 
-let rec drain_select ~deadline ~stdout_r ~stderr_r stdout_buf stderr_buf
-    stdout_open stderr_open =
+let rec drain_select ~(caps : < Ox_caps.Cap.time ; .. >) ~deadline ~stdout_r
+    ~stderr_r stdout_buf stderr_buf stdout_open stderr_open =
   if not (stdout_open || stderr_open) then (false, false)
   else
-    let now = Unix.gettimeofday () in
+    let now = Ox_caps.Cap_unix.gettimeofday ~caps () in
     if now >= deadline then (stdout_open, stderr_open)
     else
       let timeout = min 0.05 (deadline -. now) in
@@ -81,11 +85,18 @@ let rec drain_select ~deadline ~stdout_r ~stderr_r stdout_buf stderr_buf
         else (stderr_open, false)
       in
       if stdout_more || stderr_more then
-        drain_select ~deadline ~stdout_r ~stderr_r stdout_buf stderr_buf
+        drain_select ~caps ~deadline ~stdout_r ~stderr_r stdout_buf stderr_buf
           stdout_open stderr_open
       else (stdout_open, stderr_open)
 
-let run_pie ~runtime_dir args =
+let run_pie
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.signal
+       ; Ox_caps.Cap.time
+       ; .. >) ~runtime_dir args =
   let stdout_r, stdout_w = Unix.pipe ~cloexec:true () in
   let stderr_r, stderr_w = Unix.pipe ~cloexec:true () in
   Unix.set_nonblock stdout_r;
@@ -93,7 +104,9 @@ let run_pie ~runtime_dir args =
   let env =
     Array.of_list
       [
-        "PATH=" ^ Option.value ~default:"/usr/bin" (Sys.getenv_opt "PATH");
+        "PATH=" ^ runtime_dir ^ ":"
+        ^ Option.value ~default:"/usr/bin"
+            (Ox_caps.Cap_sys.getenv_opt ~caps "PATH");
         "HOME=" ^ runtime_dir;
         "XDG_CONFIG_HOME=" ^ runtime_dir;
         "XDG_DATA_HOME=" ^ runtime_dir;
@@ -103,7 +116,7 @@ let run_pie ~runtime_dir args =
       ]
   in
   let pid =
-    Unix.create_process_env pie_exe
+    Ox_caps.Cap_unix.create_process_env ~caps pie_exe
       (Array.of_list (pie_exe :: args))
       env Unix.stdin stdout_w stderr_w
   in
@@ -111,22 +124,23 @@ let run_pie ~runtime_dir args =
   close_fd stderr_w;
   let stdout_buf = Buffer.create 256 in
   let stderr_buf = Buffer.create 256 in
-  let deadline = Unix.gettimeofday () +. child_deadline_s in
+  let deadline = Ox_caps.Cap_unix.gettimeofday ~caps () +. child_deadline_s in
   let rec wait_child stdout_open stderr_open =
     let stdout_open, stderr_open =
-      drain_select ~deadline ~stdout_r ~stderr_r stdout_buf stderr_buf
+      drain_select ~caps ~deadline ~stdout_r ~stderr_r stdout_buf stderr_buf
         stdout_open stderr_open
     in
     match Unix.waitpid [ Unix.WNOHANG ] pid with
     | 0, _ ->
-        if Unix.gettimeofday () >= deadline then (
-          (try Unix.kill pid Sys.sigkill with Unix.Unix_error _ -> ());
+        if Ox_caps.Cap_unix.gettimeofday ~caps () >= deadline then (
+          (try Ox_caps.Cap_unix.kill ~caps pid Sys.sigkill
+           with Unix.Unix_error _ -> ());
           snd (Unix.waitpid [] pid))
         else wait_child stdout_open stderr_open
     | _, status ->
         ignore
-          (drain_select ~deadline ~stdout_r ~stderr_r stdout_buf stderr_buf
-             stdout_open stderr_open);
+          (drain_select ~caps ~deadline ~stdout_r ~stderr_r stdout_buf
+             stderr_buf stdout_open stderr_open);
         status
   in
   let status =
@@ -158,10 +172,61 @@ let require_exited_nonzero status =
   | Unix.WSTOPPED n ->
       Alcotest.failf "expected normal nonzero exit, stopped %d" n
 
-let serve_one ~socket_path reply =
-  let server = Unix.socket Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+(* ^dict-f2vx: exercise the actual CLI diagnostic hook, not just the policy. *)
+let test_startup_notice
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.signal
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) ~config ~expected_notice ~diagnostic () =
+  with_temp_dir ~caps @@ fun runtime_dir ->
+  let write name body =
+    let path = Filename.concat runtime_dir name in
+    Ox_caps.Cap_stdlib.Out_channel.with_open_text ~caps path (fun channel ->
+        output_string channel body);
+    path
+  in
+  let helper =
+    write "notify-send"
+      "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$XDG_RUNTIME_DIR/notice\"\n"
+  in
+  Ox_caps.Cap_unix.chmod ~caps helper 0o700;
+  let args =
+    match config with
+    | None -> [ "sources" ]
+    | Some contents ->
+        let path = write "stt.toml" contents in
+        [ "assistant"; "--config"; path ]
+  in
+  let result = run_pie ~caps ~runtime_dir args in
+  ignore (require_exited_nonzero result.status);
+  if not (string_contains result.stderr diagnostic) then
+    Alcotest.failf "expected diagnostic %S in %S" diagnostic result.stderr;
+  let notice_path = Filename.concat runtime_dir "notice" in
+  let notice =
+    if Sys.file_exists notice_path then
+      Ox_caps.Cap_stdlib.In_channel.with_open_text ~caps notice_path
+        In_channel.input_all
+    else ""
+  in
+  let notices =
+    String.split_on_char '\n' notice
+    |> List.filter (String.equal "pie: config rejected")
+    |> List.length
+  in
+  Alcotest.(check int)
+    "configuration notification count" expected_notice notices
+
+let serve_one ~(caps : < Ox_caps.Cap.fs_write ; Ox_caps.Cap.network ; .. >)
+    ~socket_path reply =
+  let server = Ox_caps.Cap_unix.socket ~caps Unix.PF_UNIX Unix.SOCK_STREAM 0 in
   Unix.set_nonblock server;
-  (try Unix.unlink socket_path with Unix.Unix_error _ -> ());
+  (try Ox_caps.Cap_unix.unlink ~caps socket_path with Unix.Unix_error _ -> ());
   Unix.bind server (Unix.ADDR_UNIX socket_path);
   Unix.listen server 1;
   let error = ref None in
@@ -203,28 +268,39 @@ let serve_one ~socket_path reply =
   in
   (server, worker, error)
 
-let join_worker worker =
-  let deadline = Unix.gettimeofday () +. 2.0 in
+let join_worker ~(caps : < Ox_caps.Cap.time ; .. >) worker =
+  let deadline = Ox_caps.Cap_unix.gettimeofday ~caps () +. 2.0 in
   let rec loop () =
     (* Thread.join has no timeout; closing the listen socket unblocks accept. *)
     try Thread.join worker
     with exn ->
-      if Unix.gettimeofday () >= deadline then raise exn else loop ()
+      if Ox_caps.Cap_unix.gettimeofday ~caps () >= deadline then raise exn
+      else loop ()
   in
   loop ()
 
-let with_reply ~runtime_dir reply args =
+let with_reply
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.signal
+       ; Ox_caps.Cap.time
+       ; .. >) ~runtime_dir reply args =
   let socket_path = Filename.concat runtime_dir "control.sock" in
-  let server, worker, error = serve_one ~socket_path reply in
+  let server, worker, error = serve_one ~caps ~socket_path reply in
   Fun.protect
     ~finally:(fun () ->
       close_fd server;
-      (try join_worker worker with _ -> ());
-      try Unix.unlink socket_path with Unix.Unix_error _ -> ())
+      (try join_worker ~caps worker with _ -> ());
+      try Ox_caps.Cap_unix.unlink ~caps socket_path
+      with Unix.Unix_error _ -> ())
     (fun () ->
-      let result = run_pie ~runtime_dir args in
+      let result = run_pie ~caps ~runtime_dir args in
       close_fd server;
-      join_worker worker;
+      join_worker ~caps worker;
       (match !error with Some exn -> raise exn | None -> ());
       result)
 
@@ -236,58 +312,117 @@ let error_status_json = {|{"error":"synthetic protocol error"}|}
 let rejected_retry_json =
   {|{"action":"retry","accepted":false,"message":"synthetic rejection","snapshot":{"active":false,"mode":"idle","enabled":true}}|}
 
-let client_identity ~runtime_dir =
-  let run = run_pie ~runtime_dir [ "--version" ] in
+let client_identity
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.signal
+       ; Ox_caps.Cap.time
+       ; .. >) ~runtime_dir =
+  let run = run_pie ~caps ~runtime_dir [ "--version" ] in
   require_exited_zero run.status;
   match String.split_on_char ' ' (String.trim run.stdout) with
   | [ commit; time ] -> (commit, time)
   | _ -> Alcotest.failf "unexpected build identity: %S" run.stdout
 
-let build_lines ~runtime_dir ~commit ~time =
-  let client_commit, client_time = client_identity ~runtime_dir in
+let build_lines
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.signal
+       ; Ox_caps.Cap.time
+       ; .. >) ~runtime_dir ~commit ~time =
+  let client_commit, client_time = client_identity ~caps ~runtime_dir in
   Printf.sprintf "build: %s (%s)\n" commit time
   ^
   if commit = client_commit && time = client_time then ""
   else Printf.sprintf "client build: %s (%s)\n" client_commit client_time
 
-let test_status_success () =
-  with_temp_dir @@ fun runtime_dir ->
-  let run = with_reply ~runtime_dir armed_status_json [ "status" ] in
+let test_status_success
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.signal
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun runtime_dir ->
+  let run = with_reply ~caps ~runtime_dir armed_status_json [ "status" ] in
   require_exited_zero run.status;
   Alcotest.(check string)
     "stdout armed with unknown daemon identity"
-    ("armed\n" ^ build_lines ~runtime_dir ~commit:"unknown" ~time:"unknown")
+    ("armed\n"
+    ^ build_lines ~caps ~runtime_dir ~commit:"unknown" ~time:"unknown")
     run.stdout;
   Alcotest.(check string) "stderr empty" "" run.stderr
 
-let test_status_processing () =
-  with_temp_dir @@ fun runtime_dir ->
+let test_status_processing
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.signal
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun runtime_dir ->
   let json = {|{"active":false,"processing":2,"mode":"idle","enabled":true}|} in
-  let run = with_reply ~runtime_dir json [ "status" ] in
+  let run = with_reply ~caps ~runtime_dir json [ "status" ] in
   require_exited_zero run.status;
   Alcotest.(check string)
     "armed and processing count"
     ("armed\nprocessing: 2\n"
-    ^ build_lines ~runtime_dir ~commit:"unknown" ~time:"unknown")
+    ^ build_lines ~caps ~runtime_dir ~commit:"unknown" ~time:"unknown")
     run.stdout
 
-let test_status_response_metadata () =
-  with_temp_dir @@ fun runtime_dir ->
+let test_status_response_metadata
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.signal
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun runtime_dir ->
   let json =
     {|{"active":false,"mode":"idle","enabled":true,"reasoningEffort":"low","responseSchema":"dictation/text-v1","buildCommit":"daemon-old","buildTime":"2026-10-01T10:00:00Z"}|}
   in
-  let run = with_reply ~runtime_dir json [ "status" ] in
+  let run = with_reply ~caps ~runtime_dir json [ "status" ] in
   require_exited_zero run.status;
   Alcotest.(check string)
     "configured metadata dict-h8rd"
     ("armed\nreasoning_effort: low\nresponse_schema: dictation/text-v1\n"
-    ^ build_lines ~runtime_dir ~commit:"daemon-old" ~time:"2026-10-01T10:00:00Z"
-    )
+    ^ build_lines ~caps ~runtime_dir ~commit:"daemon-old"
+        ~time:"2026-10-01T10:00:00Z")
     run.stdout
 
-let test_msg_status_metadata ~same_build () =
-  with_temp_dir @@ fun runtime_dir ->
-  let client_commit, client_time = client_identity ~runtime_dir in
+let test_msg_status_metadata
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.signal
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) ~same_build () =
+  with_temp_dir ~caps @@ fun runtime_dir ->
+  let client_commit, client_time = client_identity ~caps ~runtime_dir in
   let commit, time =
     if same_build then (client_commit, client_time)
     else ("daemon-old", "2026-10-01T10:00:00Z")
@@ -305,7 +440,7 @@ let test_msg_status_metadata ~same_build () =
            ("buildTime", `String time);
          ])
   in
-  let run = with_reply ~runtime_dir json [ "msg"; "status"; "--json" ] in
+  let run = with_reply ~caps ~runtime_dir json [ "msg"; "status"; "--json" ] in
   require_exited_zero run.status;
   let result = Yojson.Safe.from_string run.stdout in
   let field name = Yojson.Safe.Util.member name result in
@@ -334,28 +469,62 @@ let test_msg_status_metadata ~same_build () =
           (Yojson.Safe.Util.to_string (field "clientBuildTime")))
   | _ -> Alcotest.fail "expected status object"
 
-let test_status_rpc_error () =
-  with_temp_dir @@ fun runtime_dir ->
-  let run = with_reply ~runtime_dir error_status_json [ "status" ] in
+let test_status_rpc_error
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.signal
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun runtime_dir ->
+  let run = with_reply ~caps ~runtime_dir error_status_json [ "status" ] in
   ignore (require_exited_nonzero run.status);
   Alcotest.(check string) "stdout empty" "" run.stdout;
   Alcotest.(check bool)
     "stderr contains synthetic protocol error" true
     (string_contains run.stderr "synthetic protocol error")
 
-let test_status_malformed_json () =
-  with_temp_dir @@ fun runtime_dir ->
-  let run = with_reply ~runtime_dir "not-json" [ "status" ] in
+let test_status_malformed_json
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.signal
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun runtime_dir ->
+  let run = with_reply ~caps ~runtime_dir "not-json" [ "status" ] in
   ignore (require_exited_nonzero run.status);
   Alcotest.(check string) "stdout empty" "" run.stdout;
   Alcotest.(check bool)
     "stderr identifies malformed protocol response" true
     (string_contains run.stderr "malformed-response")
 
-let test_status_protocol_error_nonzero () =
-  with_temp_dir @@ fun runtime_dir ->
+let test_status_protocol_error_nonzero
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.signal
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun runtime_dir ->
   let run =
-    with_reply ~runtime_dir {|{"active":false,"enabled":true}|} [ "status" ]
+    with_reply ~caps ~runtime_dir {|{"active":false,"enabled":true}|}
+      [ "status" ]
   in
   ignore (require_exited_nonzero run.status);
   Alcotest.(check bool)
@@ -365,25 +534,60 @@ let test_status_protocol_error_nonzero () =
     "stderr names missing-field" true
     (string_contains run.stderr "missing-field")
 
-let test_status_absent_socket () =
-  with_temp_dir @@ fun runtime_dir ->
-  let run = run_pie ~runtime_dir [ "status" ] in
+let test_status_absent_socket
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.signal
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun runtime_dir ->
+  let run = run_pie ~caps ~runtime_dir [ "status" ] in
   require_exited_zero run.status;
   Alcotest.(check string) "stdout off" "off\n" run.stdout
 
-let test_msg_status_rpc_error () =
-  with_temp_dir @@ fun runtime_dir ->
-  let run = with_reply ~runtime_dir error_status_json [ "msg"; "status" ] in
+let test_msg_status_rpc_error
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.signal
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun runtime_dir ->
+  let run =
+    with_reply ~caps ~runtime_dir error_status_json [ "msg"; "status" ]
+  in
   ignore (require_exited_nonzero run.status);
   Alcotest.(check string) "stdout empty" "" run.stdout;
   Alcotest.(check bool)
     "stderr contains synthetic protocol error" true
     (string_contains run.stderr "synthetic protocol error")
 
-let test_msg_action_rejected () =
-  with_temp_dir @@ fun runtime_dir ->
+let test_msg_action_rejected
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.signal
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun runtime_dir ->
   let run =
-    with_reply ~runtime_dir rejected_retry_json [ "msg"; "action"; "retry" ]
+    with_reply ~caps ~runtime_dir rejected_retry_json
+      [ "msg"; "action"; "retry" ]
   in
   ignore (require_exited_nonzero run.status);
   Alcotest.(check string) "stdout empty" "" run.stdout;
@@ -391,40 +595,81 @@ let test_msg_action_rejected () =
     "stderr contains synthetic rejection" true
     (string_contains run.stderr "synthetic rejection")
 
-let test_retry_rejected () =
-  with_temp_dir @@ fun runtime_dir ->
-  let run = with_reply ~runtime_dir rejected_retry_json [ "retry" ] in
+let test_retry_rejected
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.signal
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun runtime_dir ->
+  let run = with_reply ~caps ~runtime_dir rejected_retry_json [ "retry" ] in
   ignore (require_exited_nonzero run.status);
   Alcotest.(check string) "stdout empty" "" run.stdout;
   Alcotest.(check bool)
     "stderr contains synthetic rejection" true
     (string_contains run.stderr "synthetic rejection")
 
-let test_harness_unknown_command_unblocks_server () =
-  with_temp_dir @@ fun runtime_dir ->
-  let started = Unix.gettimeofday () in
-  let run = with_reply ~runtime_dir armed_status_json [ "nosuchcmd" ] in
-  let elapsed = Unix.gettimeofday () -. started in
+let test_harness_unknown_command_unblocks_server
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.signal
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun runtime_dir ->
+  let started = Ox_caps.Cap_unix.gettimeofday ~caps () in
+  let run = with_reply ~caps ~runtime_dir armed_status_json [ "nosuchcmd" ] in
+  let elapsed = Ox_caps.Cap_unix.gettimeofday ~caps () -. started in
   Alcotest.(check bool)
     "finished before child deadline" true
     (elapsed < child_deadline_s);
   ignore (require_exited_nonzero run.status)
 
-let test_subscriber_failed_connect_fds ~backend ~refused () =
-  with_temp_dir @@ fun runtime_dir ->
+let test_subscriber_failed_connect_fds
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.signal
+       ; Ox_caps.Cap.tmp
+       ; .. >) ~backend ~refused () =
+  with_temp_dir ~caps @@ fun runtime_dir ->
   let bound =
     if refused then (
-      let fd = Unix.socket ~cloexec:true Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+      let fd =
+        Ox_caps.Cap_unix.socket ~caps ~cloexec:true Unix.PF_UNIX
+          Unix.SOCK_STREAM 0
+      in
       Unix.bind fd (Unix.ADDR_UNIX (Filename.concat runtime_dir "control.sock"));
       Some fd)
     else None
   in
   Fun.protect ~finally:(fun () -> Option.iter close_fd bound) @@ fun () ->
   let stdout_r, stdout_w = Unix.pipe ~cloexec:true () in
-  let null = Unix.openfile "/dev/null" [ Unix.O_RDWR; Unix.O_CLOEXEC ] 0 in
+  let null =
+    Ox_caps.Cap_unix.openfile ~caps "/dev/null"
+      [ Unix.O_RDWR; Unix.O_CLOEXEC ]
+      0
+  in
   let env =
     [|
-      "PATH=" ^ Option.value ~default:"/usr/bin" (Sys.getenv_opt "PATH");
+      "PATH="
+      ^ Option.value ~default:"/usr/bin"
+          (Ox_caps.Cap_sys.getenv_opt ~caps "PATH");
       "HOME=" ^ runtime_dir;
       "XDG_RUNTIME_DIR=" ^ runtime_dir;
       "CAMELPIE_RUNTIME_DIR=" ^ runtime_dir;
@@ -434,7 +679,7 @@ let test_subscriber_failed_connect_fds ~backend ~refused () =
   in
   let pid =
     match
-      Unix.create_process_env pie_exe
+      Ox_caps.Cap_unix.create_process_env ~caps pie_exe
         [| pie_exe; "msg"; "subscribe"; "--interval-ms=1" |]
         env null stdout_w null
     with
@@ -447,7 +692,7 @@ let test_subscriber_failed_connect_fds ~backend ~refused () =
   close_fd null;
   Fun.protect ~finally:(fun () ->
       close_fd stdout_r;
-      (try Unix.kill pid Sys.sigterm
+      (try Ox_caps.Cap_unix.kill ~caps pid Sys.sigterm
        with Unix.Unix_error (Unix.ESRCH, _, _) -> ());
       ignore (Unix.waitpid [] pid))
   @@ fun () ->
@@ -460,7 +705,8 @@ let test_subscriber_failed_connect_fds ~backend ~refused () =
     "expected unavailable daemon result" true
     (string_contains (Bytes.sub_string buffer 0 count) "daemon is not running");
   let fd_count () =
-    Array.length (Sys.readdir (Printf.sprintf "/proc/%d/fd" pid))
+    Array.length
+      (Ox_caps.Cap_sys.readdir ~caps (Printf.sprintf "/proc/%d/fd" pid))
   in
   let baseline = fd_count () in
   for _ = 1 to 20 do
@@ -471,38 +717,72 @@ let test_subscriber_failed_connect_fds ~backend ~refused () =
       (current <= baseline + 1)
   done
 
-let () =
+let main
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.signal
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) =
   Alcotest.run "cli_status"
     [
+      ( "startup_notice",
+        [
+          Alcotest.test_case "dict-f2vx audio failure is not config rejection"
+            `Quick
+            (test_startup_notice ~caps ~config:None ~expected_notice:0
+               ~diagnostic:"PulseAudio disconnected");
+          Alcotest.test_case "dict-f2vx assistant audio failure stays runtime"
+            `Quick
+            (test_startup_notice ~caps ~config:(Some "") ~expected_notice:0
+               ~diagnostic:"PulseAudio disconnected");
+          Alcotest.test_case "dict-f2vx malformed config still notifies" `Quick
+            (test_startup_notice ~caps ~config:(Some "[broken")
+               ~expected_notice:1 ~diagnostic:"TOML");
+          Alcotest.test_case "dict-f2vx source validation still notifies" `Quick
+            (test_startup_notice ~caps
+               ~config:
+                 (Some
+                    "[[bindings]]\n\
+                     keysym = 65478\n\
+                     mode = \"transcribe\"\n\
+                     prompt = \"missing.md\"\n")
+               ~expected_notice:1 ~diagnostic:"missing.md");
+        ] );
       ( "status",
         [
           Alcotest.test_case "status answer and build metadata" `Quick
-            test_status_response_metadata;
+            (test_status_response_metadata ~caps);
           Alcotest.test_case "JSON answer and differing build metadata" `Quick
-            (test_msg_status_metadata ~same_build:false);
+            (test_msg_status_metadata ~caps ~same_build:false);
           Alcotest.test_case "JSON matching build omits client identity" `Quick
-            (test_msg_status_metadata ~same_build:true);
+            (test_msg_status_metadata ~caps ~same_build:true);
           Alcotest.test_case "dict-d4jm armed while processing" `Quick
-            test_status_processing;
+            (test_status_processing ~caps);
           Alcotest.test_case "valid status stdout and exit 0" `Quick
-            test_status_success;
+            (test_status_success ~caps);
           Alcotest.test_case "rpc error nonzero stderr" `Quick
-            test_status_rpc_error;
+            (test_status_rpc_error ~caps);
           Alcotest.test_case "malformed json nonzero stderr" `Quick
-            test_status_malformed_json;
+            (test_status_malformed_json ~caps);
           Alcotest.test_case "absent socket off exit 0" `Quick
-            test_status_absent_socket;
+            (test_status_absent_socket ~caps);
           Alcotest.test_case "protocol error missing-field nonzero" `Quick
-            test_status_protocol_error_nonzero;
+            (test_status_protocol_error_nonzero ~caps);
         ] );
       ( "controls",
         [
           Alcotest.test_case "msg status rpc error nonzero" `Quick
-            test_msg_status_rpc_error;
+            (test_msg_status_rpc_error ~caps);
           Alcotest.test_case "msg action accepted=false nonzero" `Quick
-            test_msg_action_rejected;
+            (test_msg_action_rejected ~caps);
           Alcotest.test_case "retry accepted=false nonzero" `Quick
-            test_retry_rejected;
+            (test_retry_rejected ~caps);
         ] );
       ( "subscriber_fds",
         List.concat_map
@@ -512,12 +792,14 @@ let () =
                 Alcotest.test_case
                   (backend ^ if refused then " refused" else " absent")
                   `Quick
-                  (test_subscriber_failed_connect_fds ~backend ~refused))
+                  (test_subscriber_failed_connect_fds ~caps ~backend ~refused))
               [ false; true ])
           [ "linux"; "posix" ] );
       ( "harness",
         [
           Alcotest.test_case "unknown command does not hang server join" `Quick
-            test_harness_unknown_command_unblocks_server;
+            (test_harness_unknown_command_unblocks_server ~caps);
         ] );
     ]
+
+let () = main ~caps:(Ox_test.powerbox ())

@@ -1,7 +1,5 @@
 (* dict-dozi dict-3dqh dict-s0jv dict-zzju dict-5xmu dict-z87z dict-b18k dict-6frx *)
 
-let caps = Ox_test.powerbox ()
-
 let string_contains hay needle =
   let hlen = String.length hay in
   let nlen = String.length needle in
@@ -16,34 +14,39 @@ let fail_history = function
 
 let perm path = (Unix.lstat path).Unix.st_perm land 0o777
 
-let read_file path =
-  let channel = open_in_bin path in
+let read_file ~(caps : < Ox_caps.Cap.fs_read ; .. >) path =
+  let channel = Ox_caps.Cap_stdlib.open_in_bin ~caps path in
   Fun.protect
     ~finally:(fun () -> close_in_noerr channel)
     (fun () -> really_input_string channel (in_channel_length channel))
 
-let write_file path contents =
-  let channel = open_out_bin path in
+let write_file ~(caps : < Ox_caps.Cap.fs_write ; .. >) path contents =
+  let channel = Ox_caps.Cap_stdlib.open_out_bin ~caps path in
   Fun.protect
     ~finally:(fun () -> close_out_noerr channel)
     (fun () -> output_string channel contents)
 
-let rec rm_r path =
+let rec rm_r ~(caps : < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; .. >) path
+    =
   match Unix.lstat path with
   | exception Unix.Unix_error (Unix.ENOENT, _, _) -> ()
   | { Unix.st_kind = Unix.S_DIR; _ } ->
       Array.iter
         (fun name ->
-          if name <> "." && name <> ".." then rm_r (Filename.concat path name))
-        (Sys.readdir path);
-      Unix.rmdir path
-  | _ -> Unix.unlink path
+          if name <> "." && name <> ".." then
+            rm_r ~caps (Filename.concat path name))
+        (Ox_caps.Cap_sys.readdir ~caps path);
+      Ox_caps.Cap_unix.rmdir ~caps path
+  | _ -> Ox_caps.Cap_unix.unlink ~caps path
 
-let with_root f =
-  let root = Filename.temp_file "pie-history" "" in
-  Sys.remove root;
-  Unix.mkdir root 0o700;
-  Fun.protect ~finally:(fun () -> rm_r root) (fun () -> f root)
+let with_root
+    ~(caps :
+       < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.tmp ; .. >) f
+    =
+  let root = Ox_caps.Cap_stdlib.Filename.temp_file ~caps "pie-history" "" in
+  Ox_caps.Cap_sys.remove ~caps root;
+  Ox_caps.Cap_unix.mkdir ~caps root 0o700;
+  Fun.protect ~finally:(fun () -> rm_r ~caps root) (fun () -> f root)
 
 let with_umask mask f =
   let previous = Unix.umask mask in
@@ -88,8 +91,11 @@ let finished ?(id = "attempt-1") ?(time = 1_700_000_001.5)
     prompt_file = None;
   }
 
-let test_round_trip () =
-  with_root (fun root ->
+let test_round_trip
+    ~(caps :
+       < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.tmp ; .. >) ()
+    =
+  with_root ~caps (fun root ->
       let path = Filename.concat root "history.jsonl" in
       let raw = transcribed ~raw_text:"hello\nnema" () in
       let retry : Pie.History.retry =
@@ -113,7 +119,7 @@ let test_round_trip () =
       in
       fail_history (Pie.History.append_transcribed ~caps ~path raw);
       fail_history (Pie.History.append_finished ~caps ~path done_);
-      let contents = read_file path in
+      let contents = read_file ~caps path in
       let lines = String.split_on_char '\n' contents in
       Alcotest.(check int) "two complete lines" 3 (List.length lines);
       Alcotest.(check string)
@@ -183,21 +189,27 @@ let test_round_trip () =
             (Option.value ~default:0. entry.finished_at = done_.time)
       | _ -> Alcotest.fail "expected one merged entry")
 
-let test_epoch_time () =
-  with_root (fun root ->
+let test_epoch_time
+    ~(caps :
+       < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.tmp ; .. >) ()
+    =
+  with_root ~caps (fun root ->
       let path = Filename.concat root "history.jsonl" in
       fail_history
         (Pie.History.append_transcribed ~caps ~path (transcribed ~time:0. ()));
-      let contents = read_file path in
+      let contents = read_file ~caps path in
       Alcotest.(check bool)
         "epoch iso" true
         (string_contains contents "1970-01-01T00:00:00.000Z"))
 
-let test_permissions () =
+let test_permissions
+    ~(caps :
+       < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.tmp ; .. >) ()
+    =
   with_umask 0 (fun () ->
-      with_root (fun root ->
+      with_root ~caps (fun root ->
           let share = Filename.concat root "share" in
-          Unix.mkdir share 0o755;
+          Ox_caps.Cap_unix.mkdir ~caps share 0o755;
           let path = Filename.concat share "pie/nested/history.jsonl" in
           fail_history
             (Pie.History.append_transcribed ~caps ~path (transcribed ()));
@@ -210,15 +222,18 @@ let test_permissions () =
             (perm (Filename.concat share "pie/nested"));
           Alcotest.(check int) "history file 0600" 0o600 (perm path)))
 
-let test_append_only () =
-  with_root (fun root ->
+let test_append_only
+    ~(caps :
+       < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.tmp ; .. >) ()
+    =
+  with_root ~caps (fun root ->
       let path = Filename.concat root "history.jsonl" in
       fail_history
         (Pie.History.append_transcribed ~caps ~path (transcribed ~id:"a" ()));
-      let first = read_file path in
+      let first = read_file ~caps path in
       fail_history
         (Pie.History.append_finished ~caps ~path (finished ~id:"a" ()));
-      let both = read_file path in
+      let both = read_file ~caps path in
       Alcotest.(check bool)
         "second append keeps the first line" true
         (String.starts_with ~prefix:first both);
@@ -226,14 +241,17 @@ let test_append_only () =
         "first write ended a line" true
         (String.ends_with ~suffix:"\n" first))
 
-let test_torn_last_line () =
-  with_root (fun root ->
+let test_torn_last_line
+    ~(caps :
+       < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.tmp ; .. >) ()
+    =
+  with_root ~caps (fun root ->
       let path = Filename.concat root "history.jsonl" in
       fail_history
         (Pie.History.append_transcribed ~caps ~path
            (transcribed ~id:"kept" ~time:10. ()));
       let fd =
-        Unix.openfile path
+        Ox_caps.Cap_unix.openfile ~caps path
           [ Unix.O_WRONLY; Unix.O_APPEND; Unix.O_CLOEXEC ]
           0o600
       in
@@ -251,25 +269,31 @@ let test_torn_last_line () =
       in
       Alcotest.(check (list string))
         "torn line does not hide later text" [ "later"; "kept" ] ids;
-      let contents = read_file path in
+      let contents = read_file ~caps path in
       Alcotest.(check bool)
         "repair newline separates the torn tail" true
         (string_contains contents (torn ^ "\n")))
 
-let test_malformed_lines_skipped () =
-  with_root (fun root ->
+let test_malformed_lines_skipped
+    ~(caps :
+       < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.tmp ; .. >) ()
+    =
+  with_root ~caps (fun root ->
       let path = Filename.concat root "history.jsonl" in
       let good =
         {|{"v":1,"event":"transcribed","id":"good","time":"2026-09-30T08:00:00.000Z","mode":"transcribe","binding":"keysym=65","glossaryPaths":[],"pass1Model":"m","pass1DurationMs":1,"rawText":"kept"}|}
       in
-      write_file path ("{not json}\n" ^ good ^ "\n{also bad}\n");
+      write_file ~caps path ("{not json}\n" ^ good ^ "\n{also bad}\n");
       let entries = fail_history (Pie.History.read ~caps ~path) in
       match entries with
       | [ entry ] -> Alcotest.(check string) "kept id" "good" entry.id
       | _ -> Alcotest.fail "malformed lines hid the valid event")
 
-let test_merge_and_order () =
-  with_root (fun root ->
+let test_merge_and_order
+    ~(caps :
+       < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.tmp ; .. >) ()
+    =
+  with_root ~caps (fun root ->
       let path = Filename.concat root "history.jsonl" in
       fail_history
         (Pie.History.append_transcribed ~caps ~path
@@ -308,26 +332,30 @@ let test_merge_and_order () =
             (string_contains line "delivered-raw-after-correction-failure")
       | _ -> Alcotest.fail "expected newer then older")
 
-let test_write_failure_is_result () =
-  with_root (fun root ->
+let test_write_failure_is_result
+    ~(caps :
+       < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.tmp ; .. >) ()
+    =
+  with_root ~caps (fun root ->
       let path = Filename.concat root "history.jsonl" in
       fail_history
         (Pie.History.append_transcribed ~caps ~path
            (transcribed ~raw_text:"keep me" ()));
-      let before = read_file path in
-      Unix.chmod path 0o644;
+      let before = read_file ~caps path in
+      Ox_caps.Cap_unix.chmod ~caps path 0o644;
       (match
          Pie.History.append_finished ~caps ~path
            (finished ~final_text:(Some "nope") ())
        with
       | Error (`History _) -> ()
       | Ok () -> Alcotest.fail "appended to a loose history file");
-      Alcotest.(check string) "loose file unchanged" before (read_file path);
+      Alcotest.(check string)
+        "loose file unchanged" before (read_file ~caps path);
       Alcotest.(check int) "mode not rewritten" 0o644 (perm path);
       let blocked = Filename.concat root "blocked" in
-      Unix.mkdir blocked 0o500;
+      Ox_caps.Cap_unix.mkdir ~caps blocked 0o500;
       Fun.protect
-        ~finally:(fun () -> Unix.chmod blocked 0o700)
+        ~finally:(fun () -> Ox_caps.Cap_unix.chmod ~caps blocked 0o700)
         (fun () ->
           match
             Pie.History.append_transcribed ~caps
@@ -337,7 +365,7 @@ let test_write_failure_is_result () =
           | Error (`History _) -> ()
           | Ok () ->
               Alcotest.fail "wrote into a directory without write permission");
-      Unix.symlink
+      Ox_caps.Cap_unix.symlink ~caps
         (Filename.concat root "secret")
         (Filename.concat root "link.jsonl");
       (match
@@ -365,8 +393,14 @@ let test_write_failure_is_result () =
       | Error (`History _) -> ()
       | Ok () -> Alcotest.fail "negative duration was stored")
 
-let test_missing_file_and_path () =
-  with_root (fun root ->
+let test_missing_file_and_path
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_root ~caps (fun root ->
       let path = Filename.concat root "missing.jsonl" in
       let entries = fail_history (Pie.History.read ~caps ~path) in
       Alcotest.(check int) "missing is empty" 0 (List.length entries);
@@ -376,7 +410,7 @@ let test_missing_file_and_path () =
         (Filename.concat (Pie.Paths.data_dir ~caps) "history.jsonl")
         (Pie.History.path ~caps))
 
-let test_binding_and_fresh_id () =
+let test_binding_and_fresh_id ~(caps : < Ox_caps.Cap.time ; .. >) () =
   Alcotest.(check string)
     "binding" "keysym=65+shift pass2"
     (Pie.History.describe_binding ~keysym:65 ~shift:true ~pass2:true);
@@ -453,11 +487,11 @@ let read_available buf fd =
   | Unix.Unix_error ((Unix.EAGAIN | Unix.EWOULDBLOCK), _, _) -> `Empty
   | Unix.Unix_error (Unix.EBADF, _, _) -> `Eof
 
-let rec drain_select ~deadline ~stdout_r ~stderr_r stdout_buf stderr_buf
-    stdout_open stderr_open =
+let rec drain_select ~(caps : < Ox_caps.Cap.time ; .. >) ~deadline ~stdout_r
+    ~stderr_r stdout_buf stderr_buf stdout_open stderr_open =
   if not (stdout_open || stderr_open) then (false, false)
   else
-    let now = Unix.gettimeofday () in
+    let now = Ox_caps.Cap_unix.gettimeofday ~caps () in
     if now >= deadline then (stdout_open, stderr_open)
     else
       let timeout = min 0.05 (deadline -. now) in
@@ -490,11 +524,18 @@ let rec drain_select ~deadline ~stdout_r ~stderr_r stdout_buf stderr_buf
         else (stderr_open, false)
       in
       if stdout_more || stderr_more then
-        drain_select ~deadline ~stdout_r ~stderr_r stdout_buf stderr_buf
+        drain_select ~caps ~deadline ~stdout_r ~stderr_r stdout_buf stderr_buf
           stdout_open stderr_open
       else (stdout_open, stderr_open)
 
-let run_pie ?(home = "") ?(data = "") args =
+let run_pie
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.signal
+       ; Ox_caps.Cap.time
+       ; .. >) ?(home = "") ?(data = "") args =
   let stdout_r, stdout_w = Unix.pipe ~cloexec:true () in
   let stderr_r, stderr_w = Unix.pipe ~cloexec:true () in
   Unix.set_nonblock stdout_r;
@@ -502,7 +543,9 @@ let run_pie ?(home = "") ?(data = "") args =
   let home = if home = "" then data else home in
   let env =
     [|
-      "PATH=" ^ Option.value ~default:"/usr/bin" (Sys.getenv_opt "PATH");
+      "PATH="
+      ^ Option.value ~default:"/usr/bin"
+          (Ox_caps.Cap_sys.getenv_opt ~caps "PATH");
       "HOME=" ^ home;
       "XDG_CONFIG_HOME=" ^ home;
       "XDG_DATA_HOME=" ^ data;
@@ -513,7 +556,7 @@ let run_pie ?(home = "") ?(data = "") args =
     |]
   in
   let pid =
-    Unix.create_process_env pie_exe
+    Ox_caps.Cap_unix.create_process_env ~caps pie_exe
       (Array.of_list (pie_exe :: args))
       env Unix.stdin stdout_w stderr_w
   in
@@ -521,22 +564,23 @@ let run_pie ?(home = "") ?(data = "") args =
   close_fd stderr_w;
   let stdout_buf = Buffer.create 256 in
   let stderr_buf = Buffer.create 256 in
-  let deadline = Unix.gettimeofday () +. child_deadline_s in
+  let deadline = Ox_caps.Cap_unix.gettimeofday ~caps () +. child_deadline_s in
   let rec wait_child stdout_open stderr_open =
     let stdout_open, stderr_open =
-      drain_select ~deadline ~stdout_r ~stderr_r stdout_buf stderr_buf
+      drain_select ~caps ~deadline ~stdout_r ~stderr_r stdout_buf stderr_buf
         stdout_open stderr_open
     in
     match Unix.waitpid [ Unix.WNOHANG ] pid with
     | 0, _ ->
-        if Unix.gettimeofday () >= deadline then (
-          (try Unix.kill pid Sys.sigkill with Unix.Unix_error _ -> ());
+        if Ox_caps.Cap_unix.gettimeofday ~caps () >= deadline then (
+          (try Ox_caps.Cap_unix.kill ~caps pid Sys.sigkill
+           with Unix.Unix_error _ -> ());
           snd (Unix.waitpid [] pid))
         else wait_child stdout_open stderr_open
     | _, status ->
         ignore
-          (drain_select ~deadline ~stdout_r ~stderr_r stdout_buf stderr_buf
-             stdout_open stderr_open);
+          (drain_select ~caps ~deadline ~stdout_r ~stderr_r stdout_buf
+             stderr_buf stdout_open stderr_open);
         status
   in
   let status =
@@ -572,12 +616,12 @@ let require_exited_nonzero run =
   | Unix.WSTOPPED n ->
       Alcotest.failf "expected normal nonzero exit, stopped %d" n
 
-let mkdir_p path =
+let mkdir_p ~(caps : < Ox_caps.Cap.fs_write ; .. >) path =
   let rec loop path =
     if path = "" || path = Filename.dirname path || Sys.file_exists path then ()
     else (
       loop (Filename.dirname path);
-      Unix.mkdir path 0o700)
+      Ox_caps.Cap_unix.mkdir ~caps path 0o700)
   in
   loop path
 
@@ -588,12 +632,15 @@ let history_jsonl =
 {"v":1,"event":"finished","id":"newer","time":"2026-09-30T09:15:08.000Z","finalText":"First line of the newest\nsecond line","pass2Model":"openrouter/google/gemini","pass2DurationMs":400,"outcome":"delivered-raw-after-correction-failure","diagnostic":"correction timed out"}
 |}
 
-let with_history ?(contents = history_jsonl) f =
-  with_root (fun data ->
+let with_history
+    ~(caps :
+       < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.tmp ; .. >)
+    ?(contents = history_jsonl) f =
+  with_root ~caps (fun data ->
       let dir = Filename.concat data "pie" in
-      Unix.mkdir dir 0o700;
+      Ox_caps.Cap_unix.mkdir ~caps dir 0o700;
       if contents <> "" then
-        write_file (Filename.concat dir "history.jsonl") contents;
+        write_file ~caps (Filename.concat dir "history.jsonl") contents;
       f data)
 
 let listing_text =
@@ -601,13 +648,23 @@ let listing_text =
    First line of the newest\n\
    2026-09-30 08:00:00  transcribe  delivered  Hello Nema\n"
 
-let test_cli_list () =
-  with_history (fun data ->
-      let run = run_pie ~data [ "history" ] in
+let test_cli_list
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.signal
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_history ~caps (fun data ->
+      let run = run_pie ~caps ~data [ "history" ] in
       require_exited_zero run;
       Alcotest.(check string) "stderr empty" "" run.stderr;
       Alcotest.(check string) "newest first dict-zzju" listing_text run.stdout;
-      let limited = run_pie ~data [ "history"; "--limit"; "1" ] in
+      let limited = run_pie ~caps ~data [ "history"; "--limit"; "1" ] in
       require_exited_zero limited;
       Alcotest.(check string)
         "limit"
@@ -615,9 +672,19 @@ let test_cli_list () =
          delivered-raw-after-correction-failure  First line of the newest\n"
         limited.stdout)
 
-let test_cli_json () =
-  with_history (fun data ->
-      let run = run_pie ~data [ "history"; "--json" ] in
+let test_cli_json
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.signal
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_history ~caps (fun data ->
+      let run = run_pie ~caps ~data [ "history"; "--json" ] in
       require_exited_zero run;
       Alcotest.(check string) "stderr empty" "" run.stderr;
       match Yojson.Safe.from_string run.stdout with
@@ -652,24 +719,36 @@ let test_cli_json () =
                   (Yojson.Safe.Util.member "window" older)))
       | _ -> Alcotest.failf "expected two JSON entries, got %s" run.stdout)
 
-let test_cli_show () =
-  with_history (fun data ->
-      let last = run_pie ~data [ "history"; "show" ] in
+let test_cli_show
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.signal
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_history ~caps (fun data ->
+      let last = run_pie ~caps ~data [ "history"; "show" ] in
       require_exited_zero last;
       Alcotest.(check string)
         "show last exact" "First line of the newest\nsecond line\n" last.stdout;
       Alcotest.(check string) "show stderr empty" "" last.stderr;
-      let by_id = run_pie ~data [ "history"; "show"; "older" ] in
+      let by_id = run_pie ~caps ~data [ "history"; "show"; "older" ] in
       require_exited_zero by_id;
       Alcotest.(check string) "show id" "Hello Nema\n" by_id.stdout;
-      let raw = run_pie ~data [ "history"; "show"; "--raw"; "last" ] in
+      let raw = run_pie ~caps ~data [ "history"; "show"; "--raw"; "last" ] in
       require_exited_zero raw;
       Alcotest.(check string) "show raw" "raw newest\n" raw.stdout;
-      let raw_after = run_pie ~data [ "history"; "show"; "newer"; "--raw" ] in
+      let raw_after =
+        run_pie ~caps ~data [ "history"; "show"; "newer"; "--raw" ]
+      in
       require_exited_zero raw_after;
       Alcotest.(check string)
         "show raw after id" "raw newest\n" raw_after.stdout;
-      let json = run_pie ~data [ "history"; "show"; "older"; "--json" ] in
+      let json = run_pie ~caps ~data [ "history"; "show"; "older"; "--json" ] in
       require_exited_zero json;
       match Yojson.Safe.from_string json.stdout with
       | `Assoc _ as entry ->
@@ -686,60 +765,92 @@ let test_cli_show () =
                (Yojson.Safe.Util.member "rawText" entry))
       | _ -> Alcotest.fail "show --json was not an object")
 
-let test_cli_errors_and_empty () =
-  with_history (fun data ->
-      let missing = run_pie ~data [ "history"; "show"; "no-such" ] in
+let test_cli_errors_and_empty
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.signal
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_history ~caps (fun data ->
+      let missing = run_pie ~caps ~data [ "history"; "show"; "no-such" ] in
       ignore (require_exited_nonzero missing);
       Alcotest.(check string) "unknown stdout empty" "" missing.stdout;
       Alcotest.(check bool)
         "unknown id named" true
         (string_contains missing.stderr "unknown history entry no-such");
-      let both = run_pie ~data [ "history"; "show"; "--raw"; "--json" ] in
+      let both = run_pie ~caps ~data [ "history"; "show"; "--raw"; "--json" ] in
       ignore (require_exited_nonzero both);
       Alcotest.(check bool)
         "raw and json rejected" true
         (string_contains both.stderr "--raw and --json");
-      let bad_limit = run_pie ~data [ "history"; "--limit"; "0" ] in
+      let bad_limit = run_pie ~caps ~data [ "history"; "--limit"; "0" ] in
       ignore (require_exited_nonzero bad_limit);
       Alcotest.(check bool)
         "limit usage" true
         (string_contains (bad_limit.stderr ^ bad_limit.stdout) "positive"));
-  with_history ~contents:"" (fun data ->
-      let listed = run_pie ~data [ "history" ] in
+  with_history ~caps ~contents:"" (fun data ->
+      let listed = run_pie ~caps ~data [ "history" ] in
       require_exited_zero listed;
       Alcotest.(check string) "empty list" "" listed.stdout;
-      let json = run_pie ~data [ "history"; "--json" ] in
+      let json = run_pie ~caps ~data [ "history"; "--json" ] in
       require_exited_zero json;
       Alcotest.(check string) "empty json" "[]\n" json.stdout;
       Alcotest.(check bool)
         "listing does not create the file" false
         (Sys.file_exists (Filename.concat data "pie/history.jsonl"));
-      let shown = run_pie ~data [ "history"; "show" ] in
+      let shown = run_pie ~caps ~data [ "history"; "show" ] in
       ignore (require_exited_nonzero shown);
       Alcotest.(check string) "empty show stdout" "" shown.stdout;
       Alcotest.(check bool)
         "empty show message" true
         (string_contains shown.stderr "no history"))
 
-let test_cli_uses_xdg_data_home () =
-  with_root (fun home ->
-      with_root (fun data ->
+let test_cli_uses_xdg_data_home
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.signal
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_root ~caps (fun home ->
+      with_root ~caps (fun data ->
           let decoy = Filename.concat home ".local/share/pie" in
-          mkdir_p decoy;
-          write_file (Filename.concat decoy "history.jsonl") "DECOY\n";
+          mkdir_p ~caps decoy;
+          write_file ~caps (Filename.concat decoy "history.jsonl") "DECOY\n";
           let real_dir = Filename.concat data "pie" in
-          Unix.mkdir real_dir 0o700;
-          write_file (Filename.concat real_dir "history.jsonl") history_jsonl;
-          let run = run_pie ~home ~data [ "history"; "show"; "older" ] in
+          Ox_caps.Cap_unix.mkdir ~caps real_dir 0o700;
+          write_file ~caps
+            (Filename.concat real_dir "history.jsonl")
+            history_jsonl;
+          let run = run_pie ~caps ~home ~data [ "history"; "show"; "older" ] in
           require_exited_zero run;
           Alcotest.(check string) "xdg data not home" "Hello Nema\n" run.stdout;
           Alcotest.(check bool)
             "decoy ignored" false
             (string_contains run.stdout "DECOY")))
 
-let test_cli_help () =
-  with_root (fun data ->
-      let run = run_pie ~data [ "history"; "--help" ] in
+let test_cli_help
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.signal
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_root ~caps (fun data ->
+      let run = run_pie ~caps ~data [ "history"; "--help" ] in
       require_exited_zero run;
       let help = run.stdout ^ run.stderr in
       Alcotest.(check bool)
@@ -749,12 +860,17 @@ let test_cli_help () =
         "help mentions limit" true
         (string_contains help "limit"))
 
-let test_audio_path_is_optional () =
+let test_audio_path_is_optional
+    ~(caps :
+       < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.tmp ; .. >) ()
+    =
   (* dict-z1ax: old lines still read; show JSON carries the archive path. *)
-  with_root (fun root ->
+  with_root ~caps (fun root ->
       let path = Filename.concat root "history.jsonl" in
       let channel =
-        open_out_gen [ Open_creat; Open_wronly; Open_trunc ] 0o600 path
+        Ox_caps.Cap_stdlib.open_out_gen ~caps
+          [ Open_creat; Open_wronly; Open_trunc ]
+          0o600 path
       in
       Fun.protect
         ~finally:(fun () -> close_out_noerr channel)
@@ -802,10 +918,13 @@ let test_audio_path_is_optional () =
         "show json" true
         (Yojson.Safe.Util.member "audioPath" json = `String "/a/old.wav"))
 
-let test_delivery_round_trip () =
+let test_delivery_round_trip
+    ~(caps :
+       < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.tmp ; .. >) ()
+    =
   List.iter
     (fun delivery ->
-      with_root (fun root ->
+      with_root ~caps (fun root ->
           let path = Filename.concat root "history.jsonl" in
           fail_history
             (Pie.History.append_transcribed ~caps ~path (transcribed ()));
@@ -832,8 +951,11 @@ let test_delivery_round_trip () =
           | _ -> Alcotest.fail "expected one history entry"))
     [ Pie.History.Pasted; Pie.History.Clipboard ]
 
-let test_old_delivery_fields_absent () =
-  with_root (fun root ->
+let test_old_delivery_fields_absent
+    ~(caps :
+       < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.tmp ; .. >) ()
+    =
+  with_root ~caps (fun root ->
       let path = Filename.concat root "history.jsonl" in
       fail_history (Pie.History.append_transcribed ~caps ~path (transcribed ()));
       fail_history (Pie.History.append_finished ~caps ~path (finished ()));
@@ -852,12 +974,12 @@ let test_old_delivery_fields_absent () =
                  fields)
         | value -> value
       in
-      read_file path |> String.split_on_char '\n'
+      read_file ~caps path |> String.split_on_char '\n'
       |> List.filter (fun line -> line <> "")
       |> List.map (fun line ->
           Yojson.Safe.from_string line |> old_event |> Yojson.Safe.to_string)
       |> fun lines ->
-      write_file path (String.concat "\n" lines ^ "\n");
+      write_file ~caps path (String.concat "\n" lines ^ "\n");
       match fail_history (Pie.History.read ~caps ~path) with
       | [ entry ] ->
           Alcotest.(check bool)
@@ -873,8 +995,11 @@ let test_old_delivery_fields_absent () =
                 })
       | _ -> Alcotest.fail "expected one legacy history entry")
 
-let test_ignored_capture () =
-  with_root (fun root ->
+let test_ignored_capture
+    ~(caps :
+       < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.tmp ; .. >) ()
+    =
+  with_root ~caps (fun root ->
       let path = Filename.concat root "history.jsonl" in
       let capture : Pie.History.ignored_capture =
         { held_ms = 3001; duration_ms = 3251; peak = 0.001; rms = 0.0005 }
@@ -941,56 +1066,77 @@ let test_ignored_capture () =
           { capture with rms = -0.1 };
         ])
 
-let () =
+let main
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.signal
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) =
   Alcotest.run "history"
     [
       ( "store",
         [
           Alcotest.test_case "dict-t6ab ignored reason roundtrip and old lines"
-            `Quick test_ignored_capture;
+            `Quick
+            (test_ignored_capture ~caps);
           Alcotest.test_case "dict-ib9n delivery and window id round trip"
-            `Quick test_delivery_round_trip;
+            `Quick
+            (test_delivery_round_trip ~caps);
           Alcotest.test_case "dict-ib9n older history has no delivery or id"
-            `Quick test_old_delivery_fields_absent;
+            `Quick
+            (test_old_delivery_fields_absent ~caps);
           Alcotest.test_case
             "append and read round trip dict-dozi dict-3dqh dict-s0jv" `Quick
-            test_round_trip;
+            (test_round_trip ~caps);
           Alcotest.test_case "epoch time encodes as UTC ISO dict-s0jv" `Quick
-            test_epoch_time;
+            (test_epoch_time ~caps);
           Alcotest.test_case "file 0600 and directory 0700 dict-b18k" `Quick
-            test_permissions;
-          Alcotest.test_case "append only dict-b18k" `Quick test_append_only;
+            (test_permissions ~caps);
+          Alcotest.test_case "append only dict-b18k" `Quick
+            (test_append_only ~caps);
           Alcotest.test_case "torn last line skipped and repaired dict-b18k"
-            `Quick test_torn_last_line;
+            `Quick
+            (test_torn_last_line ~caps);
           Alcotest.test_case "malformed lines skipped dict-b18k" `Quick
-            test_malformed_lines_skipped;
+            (test_malformed_lines_skipped ~caps);
           Alcotest.test_case
             "merge and newest first dict-3dqh dict-s0jv dict-zzju" `Quick
-            test_merge_and_order;
+            (test_merge_and_order ~caps);
           Alcotest.test_case "write failure is a result dict-6frx dict-b18k"
-            `Quick test_write_failure_is_result;
+            `Quick
+            (test_write_failure_is_result ~caps);
           Alcotest.test_case "missing file and default path dict-b18k" `Quick
-            test_missing_file_and_path;
+            (test_missing_file_and_path ~caps);
           Alcotest.test_case "binding description and fresh id dict-s0jv" `Quick
-            test_binding_and_fresh_id;
+            (test_binding_and_fresh_id ~caps);
           Alcotest.test_case "listing truncation dict-zzju" `Quick
             test_listing_truncation;
           Alcotest.test_case
             "audio path is optional and shown in json dict-z1ax" `Quick
-            test_audio_path_is_optional;
+            (test_audio_path_is_optional ~caps);
         ] );
       ( "cli",
         [
           Alcotest.test_case "pie history lists newest dict-zzju" `Quick
-            test_cli_list;
-          Alcotest.test_case "pie history --json dict-z87z" `Quick test_cli_json;
+            (test_cli_list ~caps);
+          Alcotest.test_case "pie history --json dict-z87z" `Quick
+            (test_cli_json ~caps);
           Alcotest.test_case
             "pie history show last raw and json dict-5xmu dict-z87z" `Quick
-            test_cli_show;
+            (test_cli_show ~caps);
           Alcotest.test_case "unknown id and empty history dict-5xmu dict-b18k"
-            `Quick test_cli_errors_and_empty;
+            `Quick
+            (test_cli_errors_and_empty ~caps);
           Alcotest.test_case "history path is XDG_DATA_HOME dict-b18k" `Quick
-            test_cli_uses_xdg_data_home;
-          Alcotest.test_case "history help dict-zzju" `Quick test_cli_help;
+            (test_cli_uses_xdg_data_home ~caps);
+          Alcotest.test_case "history help dict-zzju" `Quick
+            (test_cli_help ~caps);
         ] );
     ]
+
+let () = main ~caps:(Ox_test.powerbox ())

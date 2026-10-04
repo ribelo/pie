@@ -1,28 +1,45 @@
 open Build_record_lib
 
-let usage () =
-  prerr_endline
+let usage ~(caps : < Ox_caps.Cap.exit ; Ox_caps.Cap.stderr ; .. >) () =
+  Ox_caps.Cap_stdlib.prerr_endline ~caps
     "pie_build_record --root DIR --build-dir DIR --output PATH [--target PATH]";
-  exit 2
+  Ox_caps.Cap_stdlib.exit ~caps 2
 
-let need i =
-  if i + 1 >= Array.length Sys.argv then usage () else Sys.argv.(i + 1)
+let need ~(caps : < Ox_caps.Cap.exit ; Ox_caps.Cap.stderr ; .. >) i =
+  if i + 1 >= Array.length Sys.argv then usage ~caps () else Sys.argv.(i + 1)
 
-let rec arg i root build_dir output target =
+let rec arg ~(caps : < Ox_caps.Cap.exit ; Ox_caps.Cap.stderr ; .. >) i root
+    build_dir output target =
   if i >= Array.length Sys.argv then (root, build_dir, output, target)
   else
     match Sys.argv.(i) with
-    | "--root" -> arg (i + 2) (Some (need i)) build_dir output target
-    | "--build-dir" -> arg (i + 2) root (Some (need i)) output target
-    | "--output" -> arg (i + 2) root build_dir (Some (need i)) target
-    | "--target" -> arg (i + 2) root build_dir output (need i)
-    | _ -> usage ()
+    | "--root" ->
+        arg ~caps (i + 2) (Some (need ~caps i)) build_dir output target
+    | "--build-dir" ->
+        arg ~caps (i + 2) root (Some (need ~caps i)) output target
+    | "--output" ->
+        arg ~caps (i + 2) root build_dir (Some (need ~caps i)) target
+    | "--target" -> arg ~caps (i + 2) root build_dir output (need ~caps i)
+    | _ -> usage ~caps ()
 
-let () =
+let main
+    ~(caps :
+       < Ox_caps.Cap.chdir
+       ; Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.exit
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.tmp
+       ; .. >) =
   let root, build_dir, output, target =
-    arg 1 None None None "packages/pie/bin/pie.exe"
+    arg ~caps 1 None None None "packages/pie/bin/pie.exe"
   in
   match (root, build_dir, output) with
   | Some root, Some build_dir, Some output ->
-      ignore (Provenance.write_record ~root ~build_dir ~target ~output ())
-  | _ -> usage ()
+      ignore (Provenance.write_record ~caps ~root ~build_dir ~target ~output ())
+  | _ -> usage ~caps ()
+
+let () = main ~caps:(Ox_test.powerbox ())

@@ -1,10 +1,9 @@
 (* Live, non-delivering replay through the production retry adapter.
    Prints only duration, outcome and retry metadata, never provider text.
    PIE_LIVE_EVIDENCE_DIR optionally retains bodies in a private scratch archive. *)
-let caps = Ox_test.powerbox ()
 
-let read_file path =
-  let input = open_in_bin path in
+let read_file ~(caps : < Ox_caps.Cap.fs_read ; .. >) path =
+  let input = Ox_caps.Cap_stdlib.open_in_bin ~caps path in
   Fun.protect
     ~finally:(fun () -> close_in_noerr input)
     (fun () -> really_input_string input (in_channel_length input))
@@ -16,17 +15,25 @@ let wav_bytes pcm =
   in
   Bytes.cat header pcm
 
-let () =
+let main
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exit
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.stdout
+       ; .. >) =
   let argc = Array.length Sys.argv in
   if argc < 5 || argc > 7 then (
-    prerr_endline
+    Ox_caps.Cap_stdlib.prerr_endline ~caps
       "usage: live_one_pass AUDIO_FILE pcm|wav|mp3 PROMPT_FILE GLOSSARY_FILE \
        [MODEL] [PROVIDER]";
-    exit 64);
-  let audio = Bytes.of_string (read_file Sys.argv.(1)) in
+    Ox_caps.Cap_stdlib.exit ~caps 64);
+  let audio = Bytes.of_string (read_file ~caps Sys.argv.(1)) in
   let format = Sys.argv.(2) in
-  let prompt_template = read_file Sys.argv.(3) in
-  let glossary = read_file Sys.argv.(4) in
+  let prompt_template = read_file ~caps Sys.argv.(3) in
+  let glossary = read_file ~caps Sys.argv.(4) in
   let model = if argc > 5 then Sys.argv.(5) else "google/gemini-3.8-flash" in
   let provider_order =
     if argc > 6 then [ Sys.argv.(6) ] else [ "Google AI Studio" ]
@@ -76,8 +83,8 @@ let () =
         Pie.Stt.Correction.Mp3
           { mp3 = audio; wav = wav_bytes (Bytes.of_string pcm) }
     | _ ->
-        prerr_endline "format must be pcm, wav or mp3";
-        exit 64
+        Ox_caps.Cap_stdlib.prerr_endline ~caps "format must be pcm, wav or mp3";
+        Ox_caps.Cap_stdlib.exit ~caps 64
   in
   let logger =
     Ox_observability.Logger.create ~service:"pie-live-one-pass" ~clock
@@ -86,8 +93,8 @@ let () =
         (Ox_observability.Logger.Reporter.journal (Eio.Stdenv.stderr env))
       ()
   in
-  let on_response ~first body =
-    match Sys.getenv_opt "PIE_LIVE_EVIDENCE_DIR" with
+  let on_response ~caps ~first body =
+    match Ox_caps.Cap_sys.getenv_opt ~caps "PIE_LIVE_EVIDENCE_DIR" with
     | None -> ()
     | Some dir -> (
         match
@@ -95,7 +102,9 @@ let () =
             ~id:"live-one-pass" ~first body
         with
         | Ok _ -> ()
-        | Error _ -> prerr_endline "private replay evidence write failed")
+        | Error _ ->
+            Ox_caps.Cap_stdlib.prerr_endline ~caps
+              "private replay evidence write failed")
   in
   let started = Eio.Time.now clock in
   let report =
@@ -103,18 +112,25 @@ let () =
       ~logger ~model ~prompt_template ~transcript:Pie.Stt.Correction.audio_cue
       ~upload ~provider_order ~glossary ~language:"Polish"
       ~source_language:"Polish" ~target_language:"English"
-      ~reasoning_effort:"low" ~on_response ~timeout:(Ox.Duration.seconds 120) ()
+      ~reasoning_effort:"low" ~on_response:(on_response ~caps)
+      ~timeout:(Ox.Duration.seconds 120) ()
   in
   let ms = int_of_float ((Eio.Time.now clock -. started) *. 1000.) in
   (match report.retry with
-  | None -> Printf.printf "ms=%d retry=false " ms
+  | None -> Ox_caps.Cap_stdlib.printf ~caps "ms=%d retry=false " ms
   | Some retry ->
-      Printf.printf "ms=%d retry=true first=%s format=%s effort=%s " ms
+      Ox_caps.Cap_stdlib.printf ~caps
+        "ms=%d retry=true first=%s format=%s effort=%s " ms
         retry.first_diagnostic
         (Option.value retry.audio_format ~default:"text")
         (Option.value retry.reasoning_effort ~default:"default"));
   match report.result with
-  | Ok text -> Printf.printf "outcome=ok bytes=%d\n%!" (String.length text)
+  | Ok text ->
+      Ox_caps.Cap_stdlib.printf ~caps "outcome=ok bytes=%d\n%!"
+        (String.length text)
   | Error failure ->
-      Printf.printf "outcome=%s\n%!" (Pie.Stt.Correction.diagnostic failure);
-      exit 1
+      Ox_caps.Cap_stdlib.printf ~caps "outcome=%s\n%!"
+        (Pie.Stt.Correction.diagnostic failure);
+      Ox_caps.Cap_stdlib.exit ~caps 1
+
+let () = main ~caps:(Ox_test.powerbox ())

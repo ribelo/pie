@@ -77,7 +77,7 @@ run_gate() {
   return "$ec"
 }
 run_gate build dune build --root "$pie_root" --build-dir "$build" --only-packages pie @all
-# The wrapper builds @install and production bin @check in _build for typed evidence.
+# The wrapper builds @install and @check in _build for fresh typed evidence.
 run_gate caps-gate "$pie_root/scripts/caps-gate"
 run_gate fmt dune build --root "$pie_root" --build-dir "$build" --only-packages pie @fmt
 

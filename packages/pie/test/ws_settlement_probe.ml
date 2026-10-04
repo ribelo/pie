@@ -1,12 +1,11 @@
-let caps = Ox_test.powerbox () (* ^pcaps-n1rg *)
-
 (* Temporary control: measures descriptor and runtime-worker settlement for
    realtime WebSocket operations against the installed Ox artifact.
    Loopback only; no provider traffic. Not part of the registered suite. *)
 
 open Pie
 
-let fd_count () = Array.length (Sys.readdir "/proc/self/fd")
+let fd_count ~(caps : < Ox_caps.Cap.fs_read ; .. >) () =
+  Array.length (Ox_caps.Cap_sys.readdir ~caps "/proc/self/fd")
 
 let tcp_port = function
   | `Tcp (_, port) -> port
@@ -111,8 +110,8 @@ let start_server ~sw ~net ~mode =
 let url port =
   Printf.sprintf "ws://127.0.0.1:%d/v1/realtime?model=gpt-realtime-2" port
 
-let set_url port =
-  Unix.putenv "CODEX_REALTIME_BASE_URL_OVERRIDE"
+let set_url ~(caps : < Ox_caps.Cap.env ; .. >) port =
+  Ox_caps.Cap_unix.putenv ~caps "CODEX_REALTIME_BASE_URL_OVERRIDE"
     (Printf.sprintf "ws://127.0.0.1:%d" port)
 
 let direct_close ~sw ~net ~clock ~url =
@@ -126,79 +125,98 @@ let direct_close ~sw ~net ~clock ~url =
       | Ok session ->
           Result.map_error (fun _ -> ()) (Ox_ai_realtime.Session.close session))
 
-let pie_buffered ~sw ~net ~clock =
+let pie_buffered
+    ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.time ; .. >)
+    ~sw ~net ~clock =
   Stt.Codex_realtime.transcribe_pass1 ~caps ~sw ~net ~clock
     ~model:"gpt-live-transcribe" ~language:"pl" ~sample_rate:16000
     (Bytes.make 3200 '\000')
 
-let report ~clock ~label ~index ~held =
+let report ~(caps : < Ox_caps.Cap.fs_read ; Ox_caps.Cap.stdout ; .. >) ~clock
+    ~label ~index ~held =
   Eio.Time.sleep clock 0.05;
-  let raw = fd_count () in
-  Printf.printf "%-30s %2d raw=%3d held=%2d adjusted=%3d\n%!" label index raw
-    !held
+  let raw = fd_count ~caps () in
+  Ox_caps.Cap_stdlib.printf ~caps "%-30s %2d raw=%3d held=%2d adjusted=%3d\n%!"
+    label index raw !held
     (raw - !held - 1)
 
-let run_operation ~clock ~label ~index ~held operation =
-  let started = Unix.gettimeofday () in
+let run_operation
+    ~(caps :
+       < Ox_caps.Cap.fs_read ; Ox_caps.Cap.stdout ; Ox_caps.Cap.time ; .. >)
+    ~clock ~label ~index ~held operation =
+  let started = Ox_caps.Cap_unix.gettimeofday ~caps () in
   let result = operation () in
-  let elapsed = (Unix.gettimeofday () -. started) *. 1000. in
-  report ~clock ~label ~index ~held;
-  Printf.printf "    %s exit=%s (%.0fms)\n%!" label
+  let elapsed = (Ox_caps.Cap_unix.gettimeofday ~caps () -. started) *. 1000. in
+  report ~caps ~clock ~label ~index ~held;
+  Ox_caps.Cap_stdlib.printf ~caps "    %s exit=%s (%.0fms)\n%!" label
     (match result with Ok _ -> "Ok" | Error _ -> "Error")
     elapsed
 
-let main () =
+let main
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.stdout
+       ; Ox_caps.Cap.time
+       ; .. >) () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let net = Eio.Stdenv.net env in
   let clock = Eio.Stdenv.clock env in
-  Unix.putenv "OPENAI_API_KEY" "test-token";
+  Ox_caps.Cap_unix.putenv ~caps "OPENAI_API_KEY" "test-token";
   let sessions = 12 in
-  let direct_control ~label ~mode ~scoped =
+  let direct_control ~caps ~label ~mode ~scoped =
     let port, held, release = start_server ~sw ~net ~mode in
-    Printf.printf "=== %s (base fd=%d) ===\n%!" label (fd_count ());
+    Ox_caps.Cap_stdlib.printf ~caps "=== %s (base fd=%d) ===\n%!" label
+      (fd_count ~caps ());
     for index = 1 to sessions do
       (if scoped then
          Eio.Switch.run (fun op_sw ->
              direct_close ~sw:op_sw ~net ~clock ~url:(url port))
        else direct_close ~sw ~net ~clock ~url:(url port))
       |> ignore;
-      report ~clock ~label ~index ~held
+      report ~caps ~clock ~label ~index ~held
     done;
     release ()
   in
-  direct_control ~label:"direct-close/long-lived-sw" ~mode:Gated ~scoped:false;
-  direct_control ~label:"direct-close/op-switch" ~mode:Gated ~scoped:true;
-  let pie_control ~label ~mode ~scoped =
+  direct_control ~caps ~label:"direct-close/long-lived-sw" ~mode:Gated
+    ~scoped:false;
+  direct_control ~caps ~label:"direct-close/op-switch" ~mode:Gated ~scoped:true;
+  let pie_control ~caps ~label ~mode ~scoped =
     let port, held, release = start_server ~sw ~net ~mode in
-    set_url port;
-    Printf.printf "=== %s (base fd=%d) ===\n%!" label (fd_count ());
+    set_url ~caps port;
+    Ox_caps.Cap_stdlib.printf ~caps "=== %s (base fd=%d) ===\n%!" label
+      (fd_count ~caps ());
     for index = 1 to sessions do
       let operation () =
         if scoped then
-          Eio.Switch.run (fun op_sw -> pie_buffered ~sw:op_sw ~net ~clock)
-        else pie_buffered ~sw ~net ~clock
+          Eio.Switch.run (fun op_sw -> pie_buffered ~caps ~sw:op_sw ~net ~clock)
+        else pie_buffered ~caps ~sw ~net ~clock
       in
-      run_operation ~clock ~label ~index ~held operation
+      run_operation ~caps ~clock ~label ~index ~held operation
     done;
     Eio.Time.sleep clock 0.1;
     release ()
   in
-  pie_control ~label:"pie-error/long-lived-sw" ~mode:Error_frame ~scoped:false;
-  pie_control ~label:"pie-error/op-switch" ~mode:Error_frame ~scoped:true;
-  pie_control ~label:"pie-error/peer-close" ~mode:Error_close ~scoped:false;
+  pie_control ~caps ~label:"pie-error/long-lived-sw" ~mode:Error_frame
+    ~scoped:false;
+  pie_control ~caps ~label:"pie-error/op-switch" ~mode:Error_frame ~scoped:true;
+  pie_control ~caps ~label:"pie-error/peer-close" ~mode:Error_close
+    ~scoped:false;
   let port, held, release = start_server ~sw ~net ~mode:Gated in
-  set_url port;
-  Printf.printf "=== pie-stalled-cancel (base fd=%d) ===\n%!" (fd_count ());
+  set_url ~caps port;
+  Ox_caps.Cap_stdlib.printf ~caps "=== pie-stalled-cancel (base fd=%d) ===\n%!"
+    (fd_count ~caps ());
   for index = 1 to 4 do
     let operation () =
       try
         Eio.Time.with_timeout_exn clock 0.3 (fun () ->
-            pie_buffered ~sw ~net ~clock)
+            pie_buffered ~caps ~sw ~net ~clock)
       with Eio.Time.Timeout -> Error (`Stt_error "local cancel")
     in
-    run_operation ~clock ~label:"pie-stalled-cancel" ~index ~held operation
+    run_operation ~caps ~clock ~label:"pie-stalled-cancel" ~index ~held
+      operation
   done;
   release ()
 
-let () = main ()
+let () = main ~caps:(Ox_test.powerbox ()) ()

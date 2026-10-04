@@ -1,24 +1,36 @@
-let caps = Ox_test.powerbox () (* ^pcaps-n1rg *)
+(* ^pcaps-n1rg *)
 
 module S = Pie.Assistant_service.Server
 
-let with_temp_dir f =
-  let dir = Filename.temp_file "pie-control-socket" "" in
-  Sys.remove dir;
-  Unix.mkdir dir 0o700;
+let with_temp_dir
+    ~(caps :
+       < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.tmp ; .. >) f
+    =
+  let dir =
+    Ox_caps.Cap_stdlib.Filename.temp_file ~caps "pie-control-socket" ""
+  in
+  Ox_caps.Cap_sys.remove ~caps dir;
+  Ox_caps.Cap_unix.mkdir ~caps dir 0o700;
   Fun.protect
     ~finally:(fun () ->
       Array.iter
         (fun name ->
-          try Sys.remove (Filename.concat dir name) with Sys_error _ -> ())
-        (try Sys.readdir dir with Sys_error _ -> [||]);
-      try Unix.rmdir dir with Unix.Unix_error _ -> ())
+          try Ox_caps.Cap_sys.remove ~caps (Filename.concat dir name)
+          with Sys_error _ -> ())
+        (try Ox_caps.Cap_sys.readdir ~caps dir with Sys_error _ -> [||]);
+      try Ox_caps.Cap_unix.rmdir ~caps dir with Unix.Unix_error _ -> ())
     (fun () -> f dir)
 
 let socket_in dir = Filename.concat dir "control.sock"
 let persist_in dir = Filename.concat dir "recording.json"
 
-let coordinator dir =
+let coordinator
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; .. >) dir =
   Pie.Recording.Coordinator.create ~caps ~persist_path:(persist_in dir) ()
 
 exception Start_error of S.error
@@ -34,7 +46,10 @@ let category = function
   | `Probe_failed -> S.err_stale_probe_failed
   | `Bind_failed _ -> "bind-failed"
 
-let start_in ~sw env ~socket_path ?budget coordinator =
+let start_in
+    ~(caps :
+       < Ox_caps.Cap.env ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.network ; .. >)
+    ~sw env ~socket_path ?budget coordinator =
   match
     S.start ~caps ~sw ~fs:(Eio.Stdenv.fs env) ~net:(Eio.Stdenv.net env)
       ~clock:(Eio.Stdenv.clock env) ~socket_path ?budget coordinator
@@ -63,51 +78,91 @@ let send_status ~sw env socket_path =
       let reader = Eio.Buf_read.of_flow ~max_size:65536 flow in
       Eio.Buf_read.line reader)
 
-let test_regular_file_preserved () =
-  with_temp_dir @@ fun dir ->
+let test_regular_file_preserved
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun dir ->
   let socket_path = socket_in dir in
-  let oc = open_out socket_path in
+  let oc = Ox_caps.Cap_stdlib.open_out ~caps socket_path in
   output_string oc "sentinel";
   close_out oc;
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   expect_error S.err_endpoint_conflict (fun () ->
-      start_in ~sw env ~socket_path (coordinator dir));
-  let ic = open_in socket_path in
+      start_in ~caps ~sw env ~socket_path (coordinator ~caps dir));
+  let ic = Ox_caps.Cap_stdlib.open_in ~caps socket_path in
   let body = input_line ic in
   close_in ic;
   Alcotest.(check string) "sentinel preserved" "sentinel" body
 
-let test_live_listener_conflict () =
-  with_temp_dir @@ fun dir ->
+let test_live_listener_conflict
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun dir ->
   let socket_path = socket_in dir in
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  start_in ~sw env ~socket_path (coordinator dir);
+  start_in ~caps ~sw env ~socket_path (coordinator ~caps dir);
   Eio.Switch.run @@ fun sw2 ->
   expect_error S.err_lock_conflict (fun () ->
-      start_in ~sw:sw2 env ~socket_path (coordinator dir));
+      start_in ~caps ~sw:sw2 env ~socket_path (coordinator ~caps dir));
   let line = send_status ~sw env socket_path in
   Alcotest.(check bool) "first listener reachable" true (String.length line > 0)
 
-let test_stale_socket_recovered () =
-  with_temp_dir @@ fun dir ->
+let test_stale_socket_recovered
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun dir ->
   let socket_path = socket_in dir in
-  let fd = Unix.socket ~cloexec:true Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+  let fd =
+    Ox_caps.Cap_unix.socket ~caps ~cloexec:true Unix.PF_UNIX Unix.SOCK_STREAM 0
+  in
   Unix.bind fd (Unix.ADDR_UNIX socket_path);
   Unix.close fd;
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  start_in ~sw env ~socket_path (coordinator dir);
+  start_in ~caps ~sw env ~socket_path (coordinator ~caps dir);
   let line = send_status ~sw env socket_path in
   Alcotest.(check bool) "recovered listener" true (String.length line > 0)
 
-let test_racing_processes () =
-  with_temp_dir @@ fun dir ->
+let test_racing_processes
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exit
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun dir ->
   let socket_path = socket_in dir in
   let ready_r, ready_w = Unix.pipe () in
   let lifetime_r, lifetime_w = Unix.pipe () in
-  match Unix.fork () with
+  match Ox_caps.Cap_unix.fork ~caps () with
   | 0 ->
       Unix.close ready_r;
       Unix.close lifetime_w;
@@ -115,7 +170,7 @@ let test_racing_processes () =
         try
           Eio_main.run (fun env ->
               Eio.Switch.run (fun sw ->
-                  start_in ~sw env ~socket_path (coordinator dir);
+                  start_in ~caps ~sw env ~socket_path (coordinator ~caps dir);
                   ignore (Unix.write ready_w (Bytes.of_string "r") 0 1);
                   Unix.close ready_w;
                   (* Stay owner until the parent finishes, without blocking
@@ -127,7 +182,7 @@ let test_racing_processes () =
         with _ -> 1
       in
       Unix.close lifetime_r;
-      exit code
+      Ox_caps.Cap_stdlib.exit ~caps code
   | child ->
       Unix.close ready_w;
       Unix.close lifetime_r;
@@ -143,7 +198,7 @@ let test_racing_processes () =
             Alcotest.fail "child failed before listener readiness";
           Eio_main.run @@ fun env ->
           Eio.Switch.run @@ fun sw ->
-          match start_in ~sw env ~socket_path (coordinator dir) with
+          match start_in ~caps ~sw env ~socket_path (coordinator ~caps dir) with
           | () -> Alcotest.fail "second process bound the live endpoint"
           | exception Start_error reason ->
               let category = category reason in
@@ -152,69 +207,115 @@ let test_racing_processes () =
                 (category = S.err_lock_conflict
                 || category = S.err_active_listener))
 
-let test_old_owner_retirement () =
-  with_temp_dir @@ fun dir ->
+let test_old_owner_retirement
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun dir ->
   let socket_path = socket_in dir in
   Eio_main.run @@ fun env ->
   ( Eio.Switch.run @@ fun sw ->
-    start_in ~sw env ~socket_path (coordinator dir);
+    start_in ~caps ~sw env ~socket_path (coordinator ~caps dir);
     Eio.Switch.run @@ fun sw2 ->
     expect_error S.err_lock_conflict (fun () ->
-        start_in ~sw:sw2 env ~socket_path (coordinator dir)) );
+        start_in ~caps ~sw:sw2 env ~socket_path (coordinator ~caps dir)) );
   Eio.Switch.run @@ fun sw ->
-  start_in ~sw env ~socket_path (coordinator dir);
+  start_in ~caps ~sw env ~socket_path (coordinator ~caps dir);
   let line = send_status ~sw env socket_path in
   Alcotest.(check bool)
     "replacement listener reachable" true
     (String.length line > 0)
 
-let test_unsafe_dir () =
-  with_temp_dir @@ fun dir ->
-  Unix.chmod dir 0o777;
+let test_unsafe_dir
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun dir ->
+  Ox_caps.Cap_unix.chmod ~caps dir 0o777;
   let socket_path = socket_in dir in
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   expect_error S.err_unsafe_runtime_dir (fun () ->
-      start_in ~sw env ~socket_path (coordinator dir))
+      start_in ~caps ~sw env ~socket_path (coordinator ~caps dir))
 
-let test_inaccessible_dir () =
-  with_temp_dir @@ fun parent ->
+let test_inaccessible_dir
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun parent ->
   let not_dir = Filename.concat parent "notdir" in
-  let oc = open_out not_dir in
+  let oc = Ox_caps.Cap_stdlib.open_out ~caps not_dir in
   close_out oc;
   let socket_path = Filename.concat not_dir "control.sock" in
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   expect_error S.err_inaccessible_runtime_dir (fun () ->
-      start_in ~sw env ~socket_path (coordinator parent))
+      start_in ~caps ~sw env ~socket_path (coordinator ~caps parent))
 
-let test_never_newline_expires () =
-  with_temp_dir @@ fun dir ->
+let test_never_newline_expires
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun dir ->
   let socket_path = socket_in dir in
   let budget = { S.peer_timeout_s = 0.05 } in
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  start_in ~sw env ~socket_path ~budget (coordinator dir);
+  start_in ~caps ~sw env ~socket_path ~budget (coordinator ~caps dir);
   let flow = Eio.Net.connect ~sw (Eio.Stdenv.net env) (`Unix socket_path) in
   Fun.protect
     ~finally:(fun () -> try Eio.Flow.close flow with _ -> ())
     (fun () ->
       Eio.Flow.write flow [ Cstruct.of_string "no-newline" ];
-      let started = Unix.gettimeofday () in
+      let started = Ox_caps.Cap_unix.gettimeofday ~caps () in
       let reader = Eio.Buf_read.of_flow ~max_size:65536 flow in
       (match Eio.Buf_read.line reader with
       | _ -> ()
       | exception End_of_file -> ()
       | exception _ -> ());
-      let elapsed = Unix.gettimeofday () -. started in
+      let elapsed = Ox_caps.Cap_unix.gettimeofday ~caps () -. started in
       Alcotest.(check bool)
         "expired within whole-peer budget" true (elapsed < 0.8))
 
-let test_shutdown_unlinks_owned_socket () =
-  with_temp_dir @@ fun dir ->
+let test_shutdown_unlinks_owned_socket
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun dir ->
   let socket_path = socket_in dir in
   Eio_main.run @@ fun env ->
-  (Eio.Switch.run @@ fun sw -> start_in ~sw env ~socket_path (coordinator dir));
+  ( Eio.Switch.run @@ fun sw ->
+    start_in ~caps ~sw env ~socket_path (coordinator ~caps dir) );
   Alcotest.(check bool)
     "owned socket removed" false
     (Sys.file_exists socket_path);
@@ -222,8 +323,8 @@ let test_shutdown_unlinks_owned_socket () =
     "lockfile remains" true
     (Sys.file_exists (socket_path ^ ".lock"))
 
-let fd_count () =
-  let dir = Unix.opendir "/proc/self/fd" in
+let fd_count ~(caps : < Ox_caps.Cap.fs_read ; .. >) () =
+  let dir = Ox_caps.Cap_unix.opendir ~caps "/proc/self/fd" in
   let rec loop n =
     match Unix.readdir dir with
     | exception End_of_file ->
@@ -238,33 +339,51 @@ let connect_partial ~sw env socket_path =
   Eio.Flow.write flow [ Cstruct.of_string "partial-without-newline" ];
   flow
 
-let test_failed_start_releases_registry () =
-  with_temp_dir @@ fun dir ->
+let test_failed_start_releases_registry
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun dir ->
   let socket_path = socket_in dir in
-  let oc = open_out socket_path in
+  let oc = Ox_caps.Cap_stdlib.open_out ~caps socket_path in
   output_string oc "keep-me";
   close_out oc;
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   expect_error S.err_endpoint_conflict (fun () ->
-      start_in ~sw env ~socket_path (coordinator dir));
-  let ic = open_in socket_path in
+      start_in ~caps ~sw env ~socket_path (coordinator ~caps dir));
+  let ic = Ox_caps.Cap_stdlib.open_in ~caps socket_path in
   let body = input_line ic in
   close_in ic;
   Alcotest.(check string) "no destructive replacement" "keep-me" body;
-  Sys.remove socket_path;
-  start_in ~sw env ~socket_path (coordinator dir);
+  Ox_caps.Cap_sys.remove ~caps socket_path;
+  start_in ~caps ~sw env ~socket_path (coordinator ~caps dir);
   let line = send_status ~sw env socket_path in
   Alcotest.(check bool)
     "second start after failed claim" true
     (String.length line > 0)
 
-let test_permit_released_on_parse_fail () =
-  with_temp_dir @@ fun dir ->
+let test_permit_released_on_parse_fail
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun dir ->
   let socket_path = socket_in dir in
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  start_in ~sw env ~socket_path (coordinator dir);
+  start_in ~caps ~sw env ~socket_path (coordinator ~caps dir);
   let flow = Eio.Net.connect ~sw (Eio.Stdenv.net env) (`Unix socket_path) in
   Fun.protect
     ~finally:(fun () -> try Eio.Flow.close flow with _ -> ())
@@ -277,12 +396,21 @@ let test_permit_released_on_parse_fail () =
   let line = send_status ~sw env socket_path in
   Alcotest.(check bool) "status after parse fail" true (String.length line > 0)
 
-let test_client_cancellation_retires_handler () =
-  with_temp_dir @@ fun dir ->
+let test_client_cancellation_retires_handler
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun dir ->
   let socket_path = socket_in dir in
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  start_in ~sw env ~socket_path (coordinator dir);
+  start_in ~caps ~sw env ~socket_path (coordinator ~caps dir);
   (try
      Eio.Switch.run @@ fun client_sw ->
      let flow =
@@ -296,27 +424,45 @@ let test_client_cancellation_retires_handler () =
     "status after client cancel" true
     (String.length line > 0)
 
-let test_shutdown_with_stalled_handlers () =
-  with_temp_dir @@ fun dir ->
+let test_shutdown_with_stalled_handlers
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun dir ->
   let socket_path = socket_in dir in
   Eio_main.run @@ fun env ->
   ( Eio.Switch.run @@ fun sw ->
-    start_in ~sw env ~socket_path (coordinator dir);
+    start_in ~caps ~sw env ~socket_path (coordinator ~caps dir);
     let _stalled = List.init 4 (fun _ -> connect_partial ~sw env socket_path) in
     () );
   Alcotest.(check bool)
     "socket removed with stalled handlers" false
     (Sys.file_exists socket_path)
 
-let test_capacity_saturation () =
-  with_temp_dir @@ fun dir ->
+let test_capacity_saturation
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun dir ->
   let socket_path = socket_in dir in
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  start_in ~sw env ~socket_path (coordinator dir);
-  let before = fd_count () in
+  start_in ~caps ~sw env ~socket_path (coordinator ~caps dir);
+  let before = fd_count ~caps () in
   let stalled = List.init 16 (fun _ -> connect_partial ~sw env socket_path) in
-  let during = fd_count () in
+  let during = fd_count ~caps () in
   Alcotest.(check bool) "accepted fds bounded" true (during - before <= 40);
   let finished = ref false in
   let waiter, resolve = Eio.Promise.create () in
@@ -330,15 +476,29 @@ let test_capacity_saturation () =
   Alcotest.(check bool) "17th handler runs after a slot frees" true !finished;
   List.iter (fun flow -> try Eio.Flow.close flow with _ -> ()) stalled
 
-let test_saturated_foreign_listener_not_stale () =
-  with_temp_dir @@ fun dir ->
+let test_saturated_foreign_listener_not_stale
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun dir ->
   let socket_path = socket_in dir in
-  let foreign = Unix.socket ~cloexec:true Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+  let foreign =
+    Ox_caps.Cap_unix.socket ~caps ~cloexec:true Unix.PF_UNIX Unix.SOCK_STREAM 0
+  in
   Unix.bind foreign (Unix.ADDR_UNIX socket_path);
   Unix.listen foreign 1;
   let fillers =
     List.init 8 (fun _ ->
-        let c = Unix.socket ~cloexec:true Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+        let c =
+          Ox_caps.Cap_unix.socket ~caps ~cloexec:true Unix.PF_UNIX
+            Unix.SOCK_STREAM 0
+        in
         Unix.set_nonblock c;
         (try Unix.connect c (Unix.ADDR_UNIX socket_path) with
         | Unix.Unix_error ((Unix.EINPROGRESS | Unix.EAGAIN), _, _) -> ()
@@ -353,7 +513,7 @@ let test_saturated_foreign_listener_not_stale () =
     (fun () ->
       Eio_main.run @@ fun env ->
       Eio.Switch.run @@ fun sw ->
-      (match start_in ~sw env ~socket_path (coordinator dir) with
+      (match start_in ~caps ~sw env ~socket_path (coordinator ~caps dir) with
       | () -> Alcotest.fail "saturated foreign listener treated as stale"
       | exception Start_error reason ->
           let category = category reason in
@@ -368,23 +528,41 @@ let test_saturated_foreign_listener_not_stale () =
       | { st_kind = Unix.S_SOCK; _ } -> ()
       | _ -> Alcotest.fail "foreign listener replaced")
 
-let test_equivalent_path_spellings () =
-  with_temp_dir @@ fun dir ->
+let test_equivalent_path_spellings
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun dir ->
   let socket_path = socket_in dir in
   let alias = Filename.concat dir "./control.sock" in
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  start_in ~sw env ~socket_path (coordinator dir);
+  start_in ~caps ~sw env ~socket_path (coordinator ~caps dir);
   Eio.Switch.run @@ fun sw2 ->
   expect_error S.err_lock_conflict (fun () ->
-      start_in ~sw:sw2 env ~socket_path:alias (coordinator dir))
+      start_in ~caps ~sw:sw2 env ~socket_path:alias (coordinator ~caps dir))
 
-let test_oversize_line_malformed_then_status () =
-  with_temp_dir @@ fun dir ->
+let test_oversize_line_malformed_then_status
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun dir ->
   let socket_path = socket_in dir in
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  start_in ~sw env ~socket_path (coordinator dir);
+  start_in ~caps ~sw env ~socket_path (coordinator ~caps dir);
   let flow = Eio.Net.connect ~sw (Eio.Stdenv.net env) (`Unix socket_path) in
   Fun.protect
     ~finally:(fun () -> try Eio.Flow.close flow with _ -> ())
@@ -400,13 +578,22 @@ let test_oversize_line_malformed_then_status () =
   let line = send_status ~sw env socket_path in
   Alcotest.(check bool) "status after oversize" true (String.length line > 0)
 
-let test_client_cancel_releases_fd () =
-  with_temp_dir @@ fun dir ->
+let test_client_cancel_releases_fd
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun dir ->
   let socket_path = socket_in dir in
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  start_in ~sw env ~socket_path (coordinator dir);
-  let before = fd_count () in
+  start_in ~caps ~sw env ~socket_path (coordinator ~caps dir);
+  let before = fd_count ~caps () in
   (try
      Eio.Switch.run @@ fun client_sw ->
      let flow =
@@ -416,84 +603,129 @@ let test_client_cancel_releases_fd () =
      raise Exit
    with Exit -> ());
   Eio.Time.sleep (Eio.Stdenv.clock env) 0.05;
-  let after = fd_count () in
+  let after = fd_count ~caps () in
   Alcotest.(check bool)
     "physical fds retired after client cancel" true
     (after <= before + 2);
   let line = send_status ~sw env socket_path in
   Alcotest.(check bool) "status after fd retire" true (String.length line > 0)
 
-let test_cleanup_continues_after_unlink_failure () =
-  with_temp_dir @@ fun dir ->
+let test_cleanup_continues_after_unlink_failure
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun dir ->
   let socket_path = socket_in dir in
   Eio_main.run @@ fun env ->
   let raised = ref None in
   (try
      Eio.Switch.run @@ fun sw ->
-     start_in ~sw env ~socket_path (coordinator dir);
-     Unix.chmod dir 0o500
+     start_in ~caps ~sw env ~socket_path (coordinator ~caps dir);
+     Ox_caps.Cap_unix.chmod ~caps dir 0o500
    with exn -> raised := Some exn);
-  Unix.chmod dir 0o700;
+  Ox_caps.Cap_unix.chmod ~caps dir 0o700;
   Alcotest.(check bool) "unlink failure surfaced" true (!raised <> None);
   Eio.Switch.run @@ fun sw ->
-  start_in ~sw env ~socket_path (coordinator dir);
+  start_in ~caps ~sw env ~socket_path (coordinator ~caps dir);
   let line = send_status ~sw env socket_path in
   Alcotest.(check bool)
     "registry and lock released after cleanup defect" true
     (String.length line > 0)
 
-let test_cancel_before_peer_deadline () =
-  with_temp_dir @@ fun dir ->
+let test_cancel_before_peer_deadline
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun dir ->
   let socket_path = socket_in dir in
   let budget = { S.peer_timeout_s = 5.0 } in
-  let started = Unix.gettimeofday () in
+  let started = Ox_caps.Cap_unix.gettimeofday ~caps () in
   Eio_main.run @@ fun env ->
   (try
      Eio.Switch.run @@ fun sw ->
-     start_in ~sw env ~socket_path ~budget (coordinator dir);
+     start_in ~caps ~sw env ~socket_path ~budget (coordinator ~caps dir);
      ignore (connect_partial ~sw env socket_path);
      raise Exit
    with Exit -> ());
-  let elapsed = Unix.gettimeofday () -. started in
+  let elapsed = Ox_caps.Cap_unix.gettimeofday ~caps () -. started in
   Alcotest.(check bool) "settled well before peer budget" true (elapsed < 1.0);
   Alcotest.(check bool)
     "owned socket gone after cancel" false
     (Sys.file_exists socket_path)
 
-let test_hardlinked_lock_rejected () =
-  with_temp_dir @@ fun dir ->
+let test_hardlinked_lock_rejected
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun dir ->
   let socket_path = socket_in dir in
   let lock = socket_path ^ ".lock" in
   let other = Filename.concat dir "other.lock" in
-  let oc = open_out lock in
+  let oc = Ox_caps.Cap_stdlib.open_out ~caps lock in
   close_out oc;
-  Unix.chmod lock 0o600;
-  Unix.link lock other;
+  Ox_caps.Cap_unix.chmod ~caps lock 0o600;
+  Ox_caps.Cap_unix.link ~caps lock other;
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   expect_error S.err_lock_identity (fun () ->
-      start_in ~sw env ~socket_path (coordinator dir));
+      start_in ~caps ~sw env ~socket_path (coordinator ~caps dir));
   Alcotest.(check bool) "hardlinked lock preserved" true (Sys.file_exists lock)
 
-let test_symlink_lock_rejected () =
-  with_temp_dir @@ fun dir ->
+let test_symlink_lock_rejected
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun dir ->
   let socket_path = socket_in dir in
   let target = Filename.concat dir "other" in
-  let oc = open_out target in
+  let oc = Ox_caps.Cap_stdlib.open_out ~caps target in
   close_out oc;
-  Unix.symlink target (socket_path ^ ".lock");
+  Ox_caps.Cap_unix.symlink ~caps target (socket_path ^ ".lock");
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   expect_error S.err_lock_identity (fun () ->
-      start_in ~sw env ~socket_path (coordinator dir));
+      start_in ~caps ~sw env ~socket_path (coordinator ~caps dir));
   Alcotest.(check bool)
     "symlink lock preserved" true
     (match Unix.lstat (socket_path ^ ".lock") with
     | { st_kind = Unix.S_LNK; _ } -> true
     | _ -> false)
 
-let test_status_while_persistence_waits () =
-  with_temp_dir @@ fun dir ->
+let test_status_while_persistence_waits
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun dir ->
   let socket_path = socket_in dir in
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
@@ -518,7 +750,7 @@ let test_status_while_persistence_waits () =
     | Started attempt -> attempt
     | _ -> Alcotest.fail "capture admission rejected"
   in
-  start_in ~sw env ~socket_path c;
+  start_in ~caps ~sw env ~socket_path c;
   hold := true;
   Eio.Fiber.fork ~sw (fun () ->
       ignore (Pie.Recording.Coordinator.set_phase c attempt Processing);
@@ -538,8 +770,17 @@ let test_status_while_persistence_waits () =
         "microphone already released" false
         (body |> member "active" |> to_bool))
 
-let test_actions_while_state_writer_waits () =
-  with_temp_dir @@ fun dir ->
+let test_actions_while_state_writer_waits
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun dir ->
   let executed = Atomic.make [] in
   Eio_main.run @@ fun env ->
   Eio.Switch.run (fun sw ->
@@ -568,7 +809,7 @@ let test_actions_while_state_writer_waits () =
           ~persist_io ()
       in
       let socket_path = socket_in dir in
-      start_in ~sw env ~socket_path c;
+      start_in ~caps ~sw env ~socket_path c;
       hold := true;
       (match
          Pie.Recording.Coordinator.try_start_processing c Ptt_transcribe ()
@@ -611,7 +852,10 @@ let test_actions_while_state_writer_waits () =
             (body |> member "processing" |> to_int)));
   Alcotest.(check (list int))
     "bounded coalescing and shutdown drain" [ 1; 2; 4 ] (Atomic.get executed);
-  let body = In_channel.with_open_text (persist_in dir) In_channel.input_all in
+  let body =
+    Ox_caps.Cap_stdlib.In_channel.with_open_text ~caps (persist_in dir)
+      In_channel.input_all
+  in
   let open Yojson.Safe.Util in
   Alcotest.(check bool)
     "latest projection persisted" true
@@ -652,57 +896,72 @@ let test_state_writer_failure_reporting () =
   | () -> Alcotest.fail "startup failure swallowed"
   | exception Exit -> ()
 
-let () =
+let main
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exit
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) =
   Alcotest.run "control_socket_ownership"
     [
       ( "ownership",
         [
           Alcotest.test_case "regular file preserved" `Quick
-            test_regular_file_preserved;
+            (test_regular_file_preserved ~caps);
           Alcotest.test_case "live listener conflict" `Quick
-            test_live_listener_conflict;
+            (test_live_listener_conflict ~caps);
           Alcotest.test_case "stale socket recovered" `Quick
-            test_stale_socket_recovered;
-          Alcotest.test_case "racing processes" `Quick test_racing_processes;
+            (test_stale_socket_recovered ~caps);
+          Alcotest.test_case "racing processes" `Quick
+            (test_racing_processes ~caps);
           Alcotest.test_case "old owner retirement" `Quick
-            test_old_owner_retirement;
-          Alcotest.test_case "unsafe dir" `Quick test_unsafe_dir;
-          Alcotest.test_case "inaccessible dir" `Quick test_inaccessible_dir;
+            (test_old_owner_retirement ~caps);
+          Alcotest.test_case "unsafe dir" `Quick (test_unsafe_dir ~caps);
+          Alcotest.test_case "inaccessible dir" `Quick
+            (test_inaccessible_dir ~caps);
           Alcotest.test_case "never newline expires" `Quick
-            test_never_newline_expires;
+            (test_never_newline_expires ~caps);
           Alcotest.test_case "shutdown unlinks owned socket" `Quick
-            test_shutdown_unlinks_owned_socket;
+            (test_shutdown_unlinks_owned_socket ~caps);
           Alcotest.test_case "symlink lock rejected" `Quick
-            test_symlink_lock_rejected;
+            (test_symlink_lock_rejected ~caps);
           Alcotest.test_case "failed start releases registry" `Quick
-            test_failed_start_releases_registry;
+            (test_failed_start_releases_registry ~caps);
           Alcotest.test_case "permit released on parse fail" `Quick
-            test_permit_released_on_parse_fail;
+            (test_permit_released_on_parse_fail ~caps);
           Alcotest.test_case "client cancellation retires handler" `Quick
-            test_client_cancellation_retires_handler;
+            (test_client_cancellation_retires_handler ~caps);
           Alcotest.test_case "shutdown with stalled handlers" `Quick
-            test_shutdown_with_stalled_handlers;
+            (test_shutdown_with_stalled_handlers ~caps);
           Alcotest.test_case "capacity saturation bounded" `Quick
-            test_capacity_saturation;
+            (test_capacity_saturation ~caps);
           Alcotest.test_case "saturated foreign listener not stale" `Quick
-            test_saturated_foreign_listener_not_stale;
+            (test_saturated_foreign_listener_not_stale ~caps);
           Alcotest.test_case "equivalent path spellings denied" `Quick
-            test_equivalent_path_spellings;
+            (test_equivalent_path_spellings ~caps);
           Alcotest.test_case "hardlinked lock rejected" `Quick
-            test_hardlinked_lock_rejected;
+            (test_hardlinked_lock_rejected ~caps);
           Alcotest.test_case "oversize line then healthy status" `Quick
-            test_oversize_line_malformed_then_status;
+            (test_oversize_line_malformed_then_status ~caps);
           Alcotest.test_case "client cancel releases fd" `Quick
-            test_client_cancel_releases_fd;
+            (test_client_cancel_releases_fd ~caps);
           Alcotest.test_case "cleanup continues after unlink failure" `Quick
-            test_cleanup_continues_after_unlink_failure;
+            (test_cleanup_continues_after_unlink_failure ~caps);
           Alcotest.test_case "cancel before peer deadline" `Quick
-            test_cancel_before_peer_deadline;
+            (test_cancel_before_peer_deadline ~caps);
           Alcotest.test_case "status while persistence waits" `Quick
-            test_status_while_persistence_waits;
+            (test_status_while_persistence_waits ~caps);
           Alcotest.test_case "actions while state writer waits" `Quick
-            test_actions_while_state_writer_waits;
+            (test_actions_while_state_writer_waits ~caps);
           Alcotest.test_case "state writer failure reporting" `Quick
             test_state_writer_failure_reporting;
         ] );
     ]
+
+let () = main ~caps:(Ox_test.powerbox ())

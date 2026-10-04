@@ -1,26 +1,28 @@
-let caps = Ox_test.powerbox () (* ^pcaps-n1rg *)
+(* ^pcaps-n1rg *)
 
 (* PIE023 untrusted local bus boundary. Never the desktop session bus. *)
 
 module Monitor = Pie.Keyboard.Monitor
 
-let rec rm_rf path =
+let rec rm_rf ~(caps : < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; .. >) path
+    =
   match Unix.lstat path with
   | exception Unix.Unix_error (Unix.ENOENT, _, _) -> ()
   | { Unix.st_kind = Unix.S_DIR; _ } -> (
-      (match Sys.readdir path with
+      (match Ox_caps.Cap_sys.readdir ~caps path with
       | names ->
           Array.iter
             (fun name ->
               if name <> "." && name <> ".." then
-                rm_rf (Filename.concat path name))
+                rm_rf ~caps (Filename.concat path name))
             names
       | exception Sys_error _ -> ());
-      try Unix.rmdir path with Unix.Unix_error _ -> ())
-  | _ -> ( try Unix.unlink path with Unix.Unix_error _ -> ())
+      try Ox_caps.Cap_unix.rmdir ~caps path with Unix.Unix_error _ -> ())
+  | _ -> (
+      try Ox_caps.Cap_unix.unlink ~caps path with Unix.Unix_error _ -> ())
 
-let fd_count () =
-  let dir = Unix.opendir "/proc/self/fd" in
+let fd_count ~(caps : < Ox_caps.Cap.fs_read ; .. >) () =
+  let dir = Ox_caps.Cap_unix.opendir ~caps "/proc/self/fd" in
   Fun.protect
     ~finally:(fun () -> Unix.closedir dir)
     (fun () ->
@@ -32,30 +34,37 @@ let fd_count () =
       in
       loop 0 - 1)
 
-let isolate_process_env () =
-  let root = Filename.temp_file "pie-keyboard-bus-home" "" in
-  Sys.remove root;
-  Unix.mkdir root 0o700;
+let isolate_process_env
+    ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.tmp ; .. >)
+    () =
+  let root =
+    Ox_caps.Cap_stdlib.Filename.temp_file ~caps "pie-keyboard-bus-home" ""
+  in
+  Ox_caps.Cap_sys.remove ~caps root;
+  Ox_caps.Cap_unix.mkdir ~caps root 0o700;
   let mkdir_env key rel =
     let path = Filename.concat root rel in
-    Unix.mkdir path 0o700;
-    Unix.putenv key path;
+    Ox_caps.Cap_unix.mkdir ~caps path 0o700;
+    Ox_caps.Cap_unix.putenv ~caps key path;
     path
   in
-  Unix.putenv "HOME" root;
+  Ox_caps.Cap_unix.putenv ~caps "HOME" root;
   ignore (mkdir_env "XDG_CONFIG_HOME" "config");
   ignore (mkdir_env "XDG_DATA_HOME" "data");
   let runtime = mkdir_env "XDG_RUNTIME_DIR" "runtime" in
-  Unix.putenv "TMPDIR" root;
-  Unix.putenv "TMP" root;
-  Unix.putenv "DBUS_SESSION_BUS_ADDRESS"
+  Ox_caps.Cap_unix.putenv ~caps "TMPDIR" root;
+  Ox_caps.Cap_unix.putenv ~caps "TMP" root;
+  Ox_caps.Cap_unix.putenv ~caps "DBUS_SESSION_BUS_ADDRESS"
     ("unix:path=" ^ Filename.concat runtime "no-session-bus")
 
-let with_sandbox f =
-  let dir = Filename.temp_file "pie-keyboard-bus" "" in
-  Sys.remove dir;
-  Unix.mkdir dir 0o700;
-  Fun.protect ~finally:(fun () -> rm_rf dir) (fun () -> f dir)
+let with_sandbox
+    ~(caps :
+       < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.tmp ; .. >) f
+    =
+  let dir = Ox_caps.Cap_stdlib.Filename.temp_file ~caps "pie-keyboard-bus" "" in
+  Ox_caps.Cap_sys.remove ~caps dir;
+  Ox_caps.Cap_unix.mkdir ~caps dir 0o700;
+  Fun.protect ~finally:(fun () -> rm_rf ~caps dir) (fun () -> f dir)
 
 let contains ~needle haystack =
   let needle_len = String.length needle in
@@ -118,8 +127,9 @@ let test_address_invalid_percent () =
     (fun () -> Monitor.parse_bus_address "unix:path=/a%zz")
     "percent"
 
-let test_abstract_sockaddr_leading_nul () =
-  Unix.putenv "DBUS_SESSION_BUS_ADDRESS" "unix:abstract=pie-boundary";
+let test_abstract_sockaddr_leading_nul ~(caps : < Ox_caps.Cap.env ; .. >) () =
+  Ox_caps.Cap_unix.putenv ~caps "DBUS_SESSION_BUS_ADDRESS"
+    "unix:abstract=pie-boundary";
   match Monitor.session_bus_sockaddr ~caps () with
   | `Unix path ->
       Alcotest.(check bool)
@@ -224,13 +234,15 @@ let reply_member flow ~server_serial msg =
         ~sender:Monitor.dbus_service
   | _ -> ()
 
-let with_fake ~sw ~net ~clock ~dir script f =
+let with_fake ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.fs_write ; .. >) ~sw ~net
+    ~clock ~dir script f =
   let path = Filename.concat dir "bus" in
-  (try Unix.unlink path with Unix.Unix_error (Unix.ENOENT, _, _) -> ());
+  (try Ox_caps.Cap_unix.unlink ~caps path
+   with Unix.Unix_error (Unix.ENOENT, _, _) -> ());
   let listening =
     Eio.Net.listen ~sw ~reuse_addr:true ~backlog:8 net (`Unix path)
   in
-  Unix.putenv "DBUS_SESSION_BUS_ADDRESS" ("unix:path=" ^ path);
+  Ox_caps.Cap_unix.putenv ~caps "DBUS_SESSION_BUS_ADDRESS" ("unix:path=" ^ path);
   let closed, resolve_closed = Eio.Promise.create () in
   Eio.Fiber.fork ~sw (fun () ->
       Fun.protect
@@ -302,15 +314,21 @@ let expect_input_lost ~label result =
         Alcotest.failf "%s: expected Input_lost, got %s" label
           (show_cause cause)
 
-let test_stalled_setup_times_out () =
-  with_sandbox @@ fun dir ->
-  Pie_test_runtime.run @@ fun env ->
+let test_stalled_setup_times_out
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_sandbox ~caps @@ fun dir ->
+  Pie_test_runtime.run ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
   let process_mgr = Eio.Stdenv.process_mgr env in
-  with_fake ~sw ~net ~clock ~dir park_auth (fun ~await_conn ->
-      let baseline = fd_count () in
+  with_fake ~caps ~sw ~net ~clock ~dir park_auth (fun ~await_conn ->
+      let baseline = fd_count ~caps () in
       let result =
         run_direct (fun () ->
             Monitor.with_monitor_budgets ~caps ~budgets:short_budgets ~sw ~net
@@ -328,21 +346,28 @@ let test_stalled_setup_times_out () =
             Alcotest.failf "expected Setup_timeout, got %s" (show_cause cause)
       | Ox.Exit.Success _ -> Alcotest.fail "stalled setup succeeded");
       await_conn ();
-      Alcotest.(check int) "timeout closed the flow" baseline (fd_count ()))
+      Alcotest.(check int)
+        "timeout closed the flow" baseline (fd_count ~caps ()))
 
-let test_unwatch_budget_still_closes () =
-  with_sandbox @@ fun dir ->
-  Pie_test_runtime.run @@ fun env ->
+let test_unwatch_budget_still_closes
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_sandbox ~caps @@ fun dir ->
+  Pie_test_runtime.run ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
   let process_mgr = Eio.Stdenv.process_mgr env in
-  with_fake ~sw ~net ~clock ~dir
+  with_fake ~caps ~sw ~net ~clock ~dir
     (fun flow ->
       complete_watch flow;
       drain_until_eof flow)
     (fun ~await_conn ->
-      let baseline = fd_count () in
+      let baseline = fd_count ~caps () in
       let result =
         run_direct (fun () ->
             Monitor.with_monitor_budgets ~caps
@@ -359,20 +384,26 @@ let test_unwatch_budget_still_closes () =
       | Ox.Exit.Failure cause ->
           Alcotest.failf "unwatch budget failed consumer %s" (show_cause cause));
       await_conn ();
-      Alcotest.(check int) "unwatch budget closed" baseline (fd_count ()))
+      Alcotest.(check int) "unwatch budget closed" baseline (fd_count ~caps ()))
 
 (* A stop (cancellation of the monitor's user) must end as a pure interruption: the
    unwatch in release used to observe the cancellation and raise out of the finalizer,
    which the Door rendered as a defect and exit 2 on every service stop (found at the
    eta-next cut-over, 2026-09-28). *)
-let test_stop_is_clean_interruption () =
-  with_sandbox @@ fun dir ->
-  Pie_test_runtime.run @@ fun env ->
+let test_stop_is_clean_interruption
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_sandbox ~caps @@ fun dir ->
+  Pie_test_runtime.run ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
   let process_mgr = Eio.Stdenv.process_mgr env in
-  with_fake ~sw ~net ~clock ~dir
+  with_fake ~caps ~sw ~net ~clock ~dir
     (fun flow ->
       complete_watch flow;
       drain_until_eof flow)
@@ -432,14 +463,20 @@ let noc_body ~name ~old_owner ~new_owner =
   Monitor.add_dbus_string buf new_owner;
   Buffer.contents buf
 
-let test_wrong_sender_is_ignored () =
-  with_sandbox @@ fun dir ->
-  Pie_test_runtime.run @@ fun env ->
+let test_wrong_sender_is_ignored
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_sandbox ~caps @@ fun dir ->
+  Pie_test_runtime.run ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
   let process_mgr = Eio.Stdenv.process_mgr env in
-  with_fake ~sw ~net ~clock ~dir
+  with_fake ~caps ~sw ~net ~clock ~dir
     (fun flow ->
       complete_watch flow;
       Monitor.write flow
@@ -467,14 +504,20 @@ let test_wrong_sender_is_ignored () =
       | Ox.Exit.Failure cause ->
           Alcotest.failf "wrong sender test failed %s" (show_cause cause))
 
-let test_expected_sender_is_accepted () =
-  with_sandbox @@ fun dir ->
-  Pie_test_runtime.run @@ fun env ->
+let test_expected_sender_is_accepted
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_sandbox ~caps @@ fun dir ->
+  Pie_test_runtime.run ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
   let process_mgr = Eio.Stdenv.process_mgr env in
-  with_fake ~sw ~net ~clock ~dir
+  with_fake ~caps ~sw ~net ~clock ~dir
     (fun flow ->
       complete_watch flow;
       Monitor.write flow
@@ -504,14 +547,20 @@ let test_expected_sender_is_accepted () =
       | Ox.Exit.Failure cause ->
           Alcotest.failf "expected sender failed %s" (show_cause cause))
 
-let test_owner_change_is_input_lost () =
-  with_sandbox @@ fun dir ->
-  Pie_test_runtime.run @@ fun env ->
+let test_owner_change_is_input_lost
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_sandbox ~caps @@ fun dir ->
+  Pie_test_runtime.run ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
   let process_mgr = Eio.Stdenv.process_mgr env in
-  with_fake ~sw ~net ~clock ~dir
+  with_fake ~caps ~sw ~net ~clock ~dir
     (fun flow ->
       complete_watch flow;
       Monitor.write flow
@@ -538,13 +587,19 @@ let test_owner_change_is_input_lost () =
       await_conn ();
       expect_input_lost ~label:"owner change" result)
 
-let test_owner_loss_during_setup () =
-  with_sandbox @@ fun dir ->
-  Pie_test_runtime.run @@ fun env ->
+let test_owner_loss_during_setup
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_sandbox ~caps @@ fun dir ->
+  Pie_test_runtime.run ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
-  with_fake ~sw ~net ~clock ~dir
+  with_fake ~caps ~sw ~net ~clock ~dir
     (fun flow ->
       ignore (read_auth_line flow);
       Monitor.write flow "OK 0123456789abcdef0123456789abcdef\r\n";
@@ -574,14 +629,20 @@ let test_owner_loss_during_setup () =
       await_conn ();
       expect_input_lost ~label:"owner loss during setup" result)
 
-let test_noc_wrong_sender_ignored () =
-  with_sandbox @@ fun dir ->
-  Pie_test_runtime.run @@ fun env ->
+let test_noc_wrong_sender_ignored
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_sandbox ~caps @@ fun dir ->
+  Pie_test_runtime.run ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
   let process_mgr = Eio.Stdenv.process_mgr env in
-  with_fake ~sw ~net ~clock ~dir
+  with_fake ~caps ~sw ~net ~clock ~dir
     (fun flow ->
       complete_watch flow;
       Monitor.write flow
@@ -627,8 +688,8 @@ let test_production_budget_is_ten_seconds () =
     "unwatch ms" 250
     (Ox.Duration.to_ms Monitor.production_budgets.unwatch)
 
-let test_auth_line_limits () =
-  Pie_test_runtime.run @@ fun _env ->
+let test_auth_line_limits ~(caps : < Ox_caps.Cap.env ; .. >) () =
+  Pie_test_runtime.run ~caps @@ fun _env ->
   let try_line n =
     let src = Eio.Flow.string_source (String.make n 'A' ^ "\r\n") in
     String.length (Monitor.read_crlf_line src)
@@ -793,13 +854,19 @@ let test_path_requires_object_signature () =
         (Monitor.parse_message_bytes (Bytes.of_string (Buffer.contents header))))
     "signature"
 
-let test_forged_get_name_owner_sender () =
-  with_sandbox @@ fun dir ->
-  Pie_test_runtime.run @@ fun env ->
+let test_forged_get_name_owner_sender
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_sandbox ~caps @@ fun dir ->
+  Pie_test_runtime.run ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
-  with_fake ~sw ~net ~clock ~dir
+  with_fake ~caps ~sw ~net ~clock ~dir
     (fun flow ->
       ignore (read_auth_line flow);
       Monitor.write flow "OK 0123456789abcdef0123456789abcdef\r\n";
@@ -875,25 +942,36 @@ let wait_reply flow serial =
   in
   loop ()
 
-let test_isolated_dbus_daemon_optional () =
-  match Unix.system "command -v dbus-daemon >/dev/null 2>&1" with
+let test_isolated_dbus_daemon_optional
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.signal
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  match
+    Ox_caps.Cap_unix.system ~caps "command -v dbus-daemon >/dev/null 2>&1"
+  with
   | Unix.WEXITED 0 ->
-      with_sandbox @@ fun dir ->
+      with_sandbox ~caps @@ fun dir ->
       let path = Filename.concat dir "bus" in
       let addr = "unix:path=" ^ path in
       let pid =
-        Unix.create_process "dbus-daemon"
+        Ox_caps.Cap_unix.create_process ~caps "dbus-daemon"
           [| "dbus-daemon"; "--session"; "--nofork"; "--address=" ^ addr |]
           Unix.stdin Unix.stdout Unix.stderr
       in
       Fun.protect
         ~finally:(fun () ->
-          (try Unix.kill pid Sys.sigterm with _ -> ());
+          (try Ox_caps.Cap_unix.kill ~caps pid Sys.sigterm with _ -> ());
           ignore (Unix.waitpid [] pid))
         (fun () ->
           wait_exists path 40;
-          Unix.putenv "DBUS_SESSION_BUS_ADDRESS" addr;
-          Pie_test_runtime.run @@ fun env ->
+          Ox_caps.Cap_unix.putenv ~caps "DBUS_SESSION_BUS_ADDRESS" addr;
+          Pie_test_runtime.run ~caps @@ fun env ->
           Eio.Switch.run @@ fun sw ->
           let net = Eio.Stdenv.net env in
           let clock = Eio.Stdenv.clock env in
@@ -994,8 +1072,17 @@ let test_isolated_dbus_daemon_optional () =
                 (show_cause cause))
   | _ -> ()
 
-let () =
-  isolate_process_env ();
+let main
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.signal
+       ; Ox_caps.Cap.tmp
+       ; .. >) =
+  isolate_process_env ~caps ();
   Alcotest.run "keyboard-bus-boundary"
     [
       ( "address",
@@ -1017,7 +1104,7 @@ let () =
           Alcotest.test_case "invalid percent-encoding" `Quick
             test_address_invalid_percent;
           Alcotest.test_case "abstract sockaddr has leading NUL" `Quick
-            test_abstract_sockaddr_leading_nul;
+            (test_abstract_sockaddr_leading_nul ~caps);
         ] );
       ( "framing",
         [
@@ -1027,7 +1114,7 @@ let () =
             `Quick test_parse_oversize_before_alloc;
           Alcotest.test_case "truncated string" `Quick test_truncated_string;
           Alcotest.test_case "AUTH line 4095/4096/4097" `Quick
-            test_auth_line_limits;
+            (test_auth_line_limits ~caps);
           Alcotest.test_case "noncanonical boolean" `Quick
             test_noncanonical_boolean_is_malformed;
           Alcotest.test_case "short KeyEvent body" `Quick
@@ -1052,30 +1139,33 @@ let () =
       ( "timeouts",
         [
           Alcotest.test_case "stalled setup times out and closes" `Quick
-            test_stalled_setup_times_out;
+            (test_stalled_setup_times_out ~caps);
           Alcotest.test_case "stop is a clean interruption" `Quick
-            test_stop_is_clean_interruption;
+            (test_stop_is_clean_interruption ~caps);
           Alcotest.test_case "unwatch budget still closes" `Quick
-            test_unwatch_budget_still_closes;
+            (test_unwatch_budget_still_closes ~caps);
         ] );
       ( "identity",
         [
           Alcotest.test_case "wrong sender is not a key event" `Quick
-            test_wrong_sender_is_ignored;
+            (test_wrong_sender_is_ignored ~caps);
           Alcotest.test_case "pinned owner key event is accepted" `Quick
-            test_expected_sender_is_accepted;
+            (test_expected_sender_is_accepted ~caps);
           Alcotest.test_case "owner change is input loss" `Quick
-            test_owner_change_is_input_lost;
+            (test_owner_change_is_input_lost ~caps);
           Alcotest.test_case "owner loss during setup is input loss" `Quick
-            test_owner_loss_during_setup;
+            (test_owner_loss_during_setup ~caps);
           Alcotest.test_case "NameOwnerChanged from non-bus is ignored" `Quick
-            test_noc_wrong_sender_ignored;
+            (test_noc_wrong_sender_ignored ~caps);
           Alcotest.test_case "forged GetNameOwner sender is rejected" `Quick
-            test_forged_get_name_owner_sender;
+            (test_forged_get_name_owner_sender ~caps);
         ] );
       ( "isolated-bus",
         [
           Alcotest.test_case "private dbus-daemon Hello/GetNameOwner/Watch"
-            `Quick test_isolated_dbus_daemon_optional;
+            `Quick
+            (test_isolated_dbus_daemon_optional ~caps);
         ] );
     ]
+
+let () = main ~caps:(Ox_test.powerbox ())

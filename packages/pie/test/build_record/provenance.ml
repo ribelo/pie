@@ -8,8 +8,8 @@ let contains needle hay =
   in
   loop 0
 
-let read_process cmd =
-  let ic = Unix.open_process_in cmd in
+let read_process ~(caps : < Ox_caps.Cap.exec ; Ox_caps.Cap.fork ; .. >) cmd =
+  let ic = Ox_caps.Cap_unix.open_process_in ~caps cmd in
   Fun.protect
     ~finally:(fun () -> ignore (Unix.close_process_in ic))
     (fun () ->
@@ -22,19 +22,19 @@ let read_process cmd =
        with End_of_file -> ());
       String.trim (Buffer.contents b))
 
-let sha256_file path =
-  let out = read_process (Filename.quote_command "sha256sum" [ path ]) in
+let sha256_file ~(caps : < Ox_caps.Cap.exec ; Ox_caps.Cap.fork ; .. >) path =
+  let out = read_process ~caps (Filename.quote_command "sha256sum" [ path ]) in
   match String.split_on_char ' ' out with
   | hash :: _ -> hash
   | [] -> failwith ("sha256sum failed: " ^ path)
 
-let embedded_build_identity build_dir =
+let embedded_build_identity ~(caps : < Ox_caps.Cap.fs_read ; .. >) build_dir =
   let path =
     Filename.concat build_dir "default/packages/pie/build_identity.ml"
   in
   if not (Sys.file_exists path) then `Null
   else
-    let channel = open_in path in
+    let channel = Ox_caps.Cap_stdlib.open_in ~caps path in
     Fun.protect
       ~finally:(fun () -> close_in_noerr channel)
       (fun () ->
@@ -53,26 +53,29 @@ let embedded_build_identity build_dir =
             `Assoc [ ("commit", `String commit); ("time", `String time) ]
         | _ -> failwith "generated build identity is incomplete")
 
-let ocaml_version () = read_process "ocaml -version"
-let dune_version () = read_process "dune --version"
+let ocaml_version ~(caps : < Ox_caps.Cap.exec ; Ox_caps.Cap.fork ; .. >) () =
+  read_process ~caps "ocaml -version"
 
-let git_head root =
+let dune_version ~(caps : < Ox_caps.Cap.exec ; Ox_caps.Cap.fork ; .. >) () =
+  read_process ~caps "dune --version"
+
+let git_head ~(caps : < Ox_caps.Cap.exec ; Ox_caps.Cap.fork ; .. >) root =
   if Sys.file_exists (Filename.concat root ".git") then
-    read_process
+    read_process ~caps
       (Filename.quote_command "git" [ "-C"; root; "rev-parse"; "HEAD" ])
   else "unknown"
 
-let git_dirty root =
+let git_dirty ~(caps : < Ox_caps.Cap.exec ; Ox_caps.Cap.fork ; .. >) root =
   if not (Sys.file_exists (Filename.concat root ".git")) then true
   else
     let st =
-      read_process
+      read_process ~caps
         (Filename.quote_command "git" [ "-C"; root; "status"; "--porcelain" ])
     in
     st <> ""
 
-let rec collect_files acc dir =
-  match Unix.opendir dir with
+let rec collect_files ~(caps : < Ox_caps.Cap.fs_read ; .. >) acc dir =
+  match Ox_caps.Cap_unix.opendir ~caps dir with
   | exception Unix.Unix_error (Unix.ENOENT, _, _) -> acc
   | dh ->
       Fun.protect
@@ -87,7 +90,7 @@ let rec collect_files acc dir =
                 match Unix.lstat path with
                 | { Unix.st_kind = Unix.S_DIR; _ } ->
                     if String.length name > 0 && name.[0] = '.' then loop acc
-                    else loop (collect_files acc path)
+                    else loop (collect_files ~caps acc path)
                 | { Unix.st_kind = Unix.S_REG; _ } -> loop (path :: acc)
                 | _ -> loop acc)
           in
@@ -103,25 +106,33 @@ let relative_to root path =
     String.sub path n (String.length path - n)
   else path
 
-let fingerprint_files root paths =
+let fingerprint_files
+    ~(caps :
+       < Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) root paths =
   let rels =
     paths
     |> List.map (fun p -> (relative_to root p, p))
     |> List.sort (fun (a, _) (b, _) -> String.compare a b)
   in
-  let lines = List.map (fun (rel, abs) -> sha256_file abs ^ "  " ^ rel) rels in
-  let tmp = Filename.temp_file "pie-fp" "" in
+  let lines =
+    List.map (fun (rel, abs) -> sha256_file ~caps abs ^ "  " ^ rel) rels
+  in
+  let tmp = Ox_caps.Cap_stdlib.Filename.temp_file ~caps "pie-fp" "" in
   Fun.protect
-    ~finally:(fun () -> try Unix.unlink tmp with _ -> ())
+    ~finally:(fun () -> try Ox_caps.Cap_unix.unlink ~caps tmp with _ -> ())
     (fun () ->
-      let oc = open_out_bin tmp in
+      let oc = Ox_caps.Cap_stdlib.open_out_bin ~caps tmp in
       List.iter
         (fun line ->
           output_string oc line;
           output_char oc '\n')
         lines;
       close_out oc;
-      sha256_file tmp)
+      sha256_file ~caps tmp)
 
 let config_inputs root =
   [
@@ -135,25 +146,35 @@ let config_inputs root =
       let p = Filename.concat root n in
       if Sys.file_exists p then Some p else None)
 
-let source_paths root =
-  collect_files [] (Filename.concat root "packages/pie") @ config_inputs root
+let source_paths ~(caps : < Ox_caps.Cap.fs_read ; .. >) root =
+  collect_files ~caps [] (Filename.concat root "packages/pie")
+  @ config_inputs root
 
-let source_fingerprint root = fingerprint_files root (source_paths root)
+let source_fingerprint
+    ~(caps :
+       < Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) root =
+  fingerprint_files ~caps root (source_paths ~caps root)
 
-let ocamlpath_dirs () =
-  match Sys.getenv_opt "OCAMLPATH" with
+let ocamlpath_dirs ~(caps : < Ox_caps.Cap.env ; .. >) () =
+  match Ox_caps.Cap_sys.getenv_opt ~caps "OCAMLPATH" with
   | None | Some "" -> []
   | Some p -> String.split_on_char ':' p |> List.filter (( <> ) "")
 
-let caml_ld_dirs () =
-  match Sys.getenv_opt "CAML_LD_LIBRARY_PATH" with
+let caml_ld_dirs ~(caps : < Ox_caps.Cap.env ; .. >) () =
+  match Ox_caps.Cap_sys.getenv_opt ~caps "CAML_LD_LIBRARY_PATH" with
   | None | Some "" -> []
   | Some p -> String.split_on_char ':' p |> List.filter (( <> ) "")
 
-let find_ox_cmxa_env () =
-  ocamlpath_dirs ()
+let find_ox_cmxa_env ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; .. >) ()
+    =
+  ocamlpath_dirs ~caps ()
   |> List.concat_map (fun dir ->
-      match Sys.readdir dir with
+      match Ox_caps.Cap_sys.readdir ~caps dir with
       | exception _ -> []
       | names ->
           Array.to_list names
@@ -167,15 +188,15 @@ let find_ox_cmxa_env () =
                 in
                 if Sys.file_exists p then Some p else None))
 
-let find_tls_stub () =
-  caml_ld_dirs ()
+let find_tls_stub ~(caps : < Ox_caps.Cap.env ; .. >) () =
+  caml_ld_dirs ~caps ()
   |> List.find_map (fun dir ->
       let stub = Filename.concat dir "dllox_http_stubs.so" in
       if Sys.file_exists stub then Some stub else None)
 
-let hash_map paths =
+let hash_map ~(caps : < Ox_caps.Cap.exec ; Ox_caps.Cap.fork ; .. >) paths =
   paths
-  |> List.map (fun p -> (p, sha256_file p))
+  |> List.map (fun p -> (p, sha256_file ~caps p))
   |> List.sort (fun (a, _) (b, _) -> String.compare a b)
 
 let tokenize_command line =
@@ -262,8 +283,8 @@ let companion_archive cmxa =
     failwith ("missing companion archive: " ^ archive);
   archive
 
-let stub_archives_in dir =
-  match Sys.readdir dir with
+let stub_archives_in ~(caps : < Ox_caps.Cap.fs_read ; .. >) dir =
+  match Ox_caps.Cap_sys.readdir ~caps dir with
   | exception _ -> []
   | names ->
       Array.to_list names
@@ -273,8 +294,8 @@ let stub_archives_in dir =
             Some (Filename.concat dir name)
           else None)
 
-let package_stub_archives dir =
-  match stub_archives_in dir with
+let package_stub_archives ~(caps : < Ox_caps.Cap.fs_read ; .. >) dir =
+  match stub_archives_in ~caps dir with
   | [] -> []
   | [ path ] -> [ path ]
   | many ->
@@ -282,11 +303,13 @@ let package_stub_archives dir =
         ("ambiguous native C stub archives in " ^ dir ^ ": "
        ^ String.concat ", " many)
 
-let package_native_inputs cmxa =
-  companion_archive cmxa :: package_stub_archives (Filename.dirname cmxa)
+let package_native_inputs ~(caps : < Ox_caps.Cap.fs_read ; .. >) cmxa =
+  companion_archive cmxa :: package_stub_archives ~caps (Filename.dirname cmxa)
 
-let visible_native_inputs cmxa_paths =
-  List.concat_map (fun cmxa -> cmxa :: package_native_inputs cmxa) cmxa_paths
+let visible_native_inputs ~(caps : < Ox_caps.Cap.fs_read ; .. >) cmxa_paths =
+  List.concat_map
+    (fun cmxa -> cmxa :: package_native_inputs ~caps cmxa)
+    cmxa_paths
 
 let known_tls_cmxa_name = "ox_http.cmxa"
 let known_tls_stub_name = "libox_http_stubs.a"
@@ -310,8 +333,8 @@ let linked_tls_stub_archive cmxa_paths =
 
 type file_id = { name : string; path : string; sha256 : string }
 
-let id_of_path path =
-  { name = Filename.basename path; path; sha256 = sha256_file path }
+let id_of_path ~(caps : < Ox_caps.Cap.exec ; Ox_caps.Cap.fork ; .. >) path =
+  { name = Filename.basename path; path; sha256 = sha256_file ~caps path }
 
 let file_id_json e : Yojson.Safe.t =
   `Assoc
@@ -321,7 +344,7 @@ let file_id_json e : Yojson.Safe.t =
       ("sha256", `String e.sha256);
     ]
 
-let unique_candidate dir =
+let unique_candidate ~(caps : < Ox_caps.Cap.fs_write ; .. >) dir =
   let rec loop n =
     if n > 1024 then failwith "could not allocate provenance candidate"
     else
@@ -330,34 +353,39 @@ let unique_candidate dir =
           (Printf.sprintf ".pie-prov-%d-%d.json" (Unix.getpid ()) n)
       in
       match
-        Unix.openfile path [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL ] 0o600
+        Ox_caps.Cap_unix.openfile_write ~caps path
+          [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL ]
+          0o600
       with
       | fd -> (path, fd)
       | exception Unix.Unix_error (Unix.EEXIST, _, _) -> loop (n + 1)
   in
   loop 0
 
-let atomic_write path contents =
+let atomic_write ~(caps : < Ox_caps.Cap.fs_write ; .. >) path contents =
   let dir = Filename.dirname path in
-  let cand, fd = unique_candidate dir in
+  let cand, fd = unique_candidate ~caps dir in
   let oc = Unix.out_channel_of_descr fd in
   let published = ref false in
   Fun.protect
     ~finally:(fun () ->
       (try close_out_noerr oc with _ -> ());
-      if not !published then try Unix.unlink cand with _ -> ())
+      if not !published then
+        try Ox_caps.Cap_unix.unlink ~caps cand with _ -> ())
     (fun () ->
       output_string oc contents;
       flush oc;
       close_out oc;
-      Unix.rename cand path;
+      Ox_caps.Cap_unix.rename ~caps cand path;
       published := true)
 
-let default_dune_build ~root ~build_dir ~target ~verbose_log () =
+let default_dune_build
+    ~(caps : < Ox_caps.Cap.chdir ; Ox_caps.Cap.exec ; Ox_caps.Cap.fork ; .. >)
+    ~root ~build_dir ~target ~verbose_log () =
   let old = Unix.getcwd () in
-  Unix.chdir root;
+  Ox_caps.Cap_unix.chdir ~caps root;
   Fun.protect
-    ~finally:(fun () -> Unix.chdir old)
+    ~finally:(fun () -> Ox_caps.Cap_unix.chdir ~caps old)
     (fun () ->
       let cmd =
         Filename.quote_command "dune"
@@ -375,19 +403,30 @@ let default_dune_build ~root ~build_dir ~target ~verbose_log () =
         "DUNE_CACHE=disabled " ^ cmd ^ " > " ^ Filename.quote verbose_log
         ^ " 2>&1"
       in
-      match Unix.system redirected with
+      match Ox_caps.Cap_unix.system ~caps redirected with
       | Unix.WEXITED 0 -> ()
       | Unix.WEXITED n -> failwith ("dune build exited " ^ string_of_int n)
       | _ -> failwith "dune build failed")
 
-let write_record ~root ~build_dir ~target ~output ?run_build () =
-  let source_before = source_fingerprint root in
-  let ox_cmxa_env = find_ox_cmxa_env () in
-  let ox_env_before = hash_map (visible_native_inputs ox_cmxa_env) in
+let write_record
+    ~(caps :
+       < Ox_caps.Cap.chdir
+       ; Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) ~root ~build_dir ~target ~output ?run_build () =
+  let source_before = source_fingerprint ~caps root in
+  let ox_cmxa_env = find_ox_cmxa_env ~caps () in
+  let ox_env_before =
+    hash_map ~caps (visible_native_inputs ~caps ox_cmxa_env)
+  in
   let stub_before =
-    match find_tls_stub () with
+    match find_tls_stub ~caps () with
     | None -> None
-    | Some p -> Some (p, sha256_file p)
+    | Some p -> Some (p, sha256_file ~caps p)
   in
   let binary_path =
     Filename.concat build_dir (Filename.concat "default" target)
@@ -397,7 +436,7 @@ let write_record ~root ~build_dir ~target ~output ?run_build () =
   | None ->
       if Sys.file_exists build_dir then
         failwith ("build-dir already exists: " ^ build_dir);
-      default_dune_build ~root ~build_dir ~target
+      default_dune_build ~caps ~root ~build_dir ~target
         ~verbose_log:(build_dir ^ ".verbose.log")
         ());
   let log =
@@ -407,7 +446,7 @@ let write_record ~root ~build_dir ~target ~output ?run_build () =
   if not (Sys.file_exists binary_path) then
     failwith ("binary missing after build: " ^ binary_path);
   if not (Sys.file_exists log) then failwith ("dune log missing: " ^ log);
-  let ic = open_in_bin log in
+  let ic = Ox_caps.Cap_stdlib.open_in_bin ~caps log in
   let log_text =
     Fun.protect
       ~finally:(fun () -> close_in_noerr ic)
@@ -424,19 +463,21 @@ let write_record ~root ~build_dir ~target ~output ?run_build () =
     (fun p ->
       if not (Sys.file_exists p) then failwith ("linked archive missing: " ^ p))
     linked_paths;
-  let linked_native = visible_native_inputs linked_paths in
+  let linked_native = visible_native_inputs ~caps linked_paths in
   List.iter
     (fun p ->
       if not (Sys.file_exists p) then failwith ("native input missing: " ^ p))
     linked_native;
-  let source_after = source_fingerprint root in
+  let source_after = source_fingerprint ~caps root in
   if not (String.equal source_before source_after) then
     failwith "source bytes changed during build; provenance record refused";
-  let ox_env_after = hash_map (visible_native_inputs (find_ox_cmxa_env ())) in
+  let ox_env_after =
+    hash_map ~caps (visible_native_inputs ~caps (find_ox_cmxa_env ~caps ()))
+  in
   if ox_env_before <> ox_env_after then
     failwith "Ox archives changed during build; provenance record refused";
-  (match (stub_before, find_tls_stub ()) with
-  | Some (p, h), Some p2 when p = p2 && sha256_file p2 <> h ->
+  (match (stub_before, find_tls_stub ~caps ()) with
+  | Some (p, h), Some p2 when p = p2 && sha256_file ~caps p2 <> h ->
       failwith "TLS stub changed during build; provenance record refused"
   | Some (p, _), Some p2 when p <> p2 ->
       failwith "TLS stub path changed during build; provenance record refused"
@@ -445,23 +486,23 @@ let write_record ~root ~build_dir ~target ~output ?run_build () =
   List.iter
     (fun p ->
       match List.assoc_opt p ox_env_before with
-      | Some h when h = sha256_file p -> ()
+      | Some h when h = sha256_file ~caps p -> ()
       | Some _ -> failwith ("linked Ox archive changed during build: " ^ p)
       | None -> failwith ("linked Ox archive had no pre-build hash: " ^ p))
     linked_native;
-  let linked = List.map id_of_path linked_paths in
+  let linked = List.map (id_of_path ~caps) linked_paths in
   let companions =
-    List.map id_of_path (List.map companion_archive linked_paths)
+    List.map (id_of_path ~caps) (List.map companion_archive linked_paths)
   in
   let tls_native =
-    Option.map id_of_path (linked_tls_stub_archive linked_paths)
+    Option.map (id_of_path ~caps) (linked_tls_stub_archive linked_paths)
   in
-  let stublibs = Option.map id_of_path (find_tls_stub ()) in
+  let stublibs = Option.map (id_of_path ~caps) (find_tls_stub ~caps ()) in
   let json =
     `Assoc
       [
-        ("compiler", `String (ocaml_version ()));
-        ("dune", `String (dune_version ()));
+        ("compiler", `String (ocaml_version ~caps ()));
+        ("dune", `String (dune_version ~caps ()));
         ( "build",
           `Assoc
             [
@@ -472,8 +513,8 @@ let write_record ~root ~build_dir ~target ~output ?run_build () =
         ( "pie_source",
           `Assoc
             [
-              ("head", `String (git_head root));
-              ("dirty", `Bool (git_dirty root));
+              ("head", `String (git_head ~caps root));
+              ("dirty", `Bool (git_dirty ~caps root));
               ("fingerprint", `String source_after);
             ] );
         ("linked_native_archives", `List (List.map file_id_json linked));
@@ -486,11 +527,11 @@ let write_record ~root ~build_dir ~target ~output ?run_build () =
           `Assoc
             [
               ("path", `String binary_path);
-              ("sha256", `String (sha256_file binary_path));
-              ("build_identity", embedded_build_identity build_dir);
+              ("sha256", `String (sha256_file ~caps binary_path));
+              ("build_identity", embedded_build_identity ~caps build_dir);
             ] );
       ]
     |> Yojson.Safe.pretty_to_string
   in
-  atomic_write output (json ^ "\n");
+  atomic_write ~caps output (json ^ "\n");
   binary_path

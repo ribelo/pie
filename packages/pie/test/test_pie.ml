@@ -1,10 +1,10 @@
-let caps = Ox_test.powerbox () (* ^pcaps-n1rg *)
+(* ^pcaps-n1rg *)
 
 open Pie
 open Ox.Result.Syntax
 
-let run_test f =
-  Pie_test_runtime.run @@ fun env ->
+let run_test ~(caps : < Ox_caps.Cap.env ; .. >) f =
+  Pie_test_runtime.run ~caps @@ fun env ->
   Eio.Time.with_timeout_exn (Eio.Stdenv.clock env) 15. (fun () -> f env)
 
 let sync f = Ok (f ())
@@ -153,16 +153,18 @@ let test_server_info_command () =
   let pkt = Pulse.Commands.build_get_server_info_command () in
   Alcotest.(check bool) "server info tag > 0" true (pkt.tag > 0)
 
-let restore_dbus_env old =
+let restore_dbus_env ~(caps : < Ox_caps.Cap.env ; .. >) old =
   match old with
-  | Some v -> Unix.putenv "DBUS_SESSION_BUS_ADDRESS" v
-  | None -> Unix.putenv "DBUS_SESSION_BUS_ADDRESS" ""
+  | Some v -> Ox_caps.Cap_unix.putenv ~caps "DBUS_SESSION_BUS_ADDRESS" v
+  | None -> Ox_caps.Cap_unix.putenv ~caps "DBUS_SESSION_BUS_ADDRESS" ""
 
-let test_keyboard_monitor_session_bus_path_abstract_socket () =
-  let old = Sys.getenv_opt "DBUS_SESSION_BUS_ADDRESS" in
-  Unix.putenv "DBUS_SESSION_BUS_ADDRESS" "unix:abstract=/tmp/dbus-abstract";
+let test_keyboard_monitor_session_bus_path_abstract_socket
+    ~(caps : < Ox_caps.Cap.env ; .. >) () =
+  let old = Ox_caps.Cap_sys.getenv_opt ~caps "DBUS_SESSION_BUS_ADDRESS" in
+  Ox_caps.Cap_unix.putenv ~caps "DBUS_SESSION_BUS_ADDRESS"
+    "unix:abstract=/tmp/dbus-abstract";
   Fun.protect
-    ~finally:(fun () -> restore_dbus_env old)
+    ~finally:(fun () -> restore_dbus_env ~caps old)
     (fun () ->
       match Pie.Keyboard.Monitor.session_bus_path ~caps () with
       | exception Pie.Keyboard.Monitor.Unsupported_input msg ->
@@ -213,9 +215,18 @@ let test_keyboard_dbus_key_event_parse () =
       Alcotest.(check int) "keycode" 68 event.keycode
   | None -> Alcotest.fail "expected D-Bus KeyEvent"
 
-let test_recording_coordinator_transitions () =
-  run_test @@ fun _ ->
-  let path = Filename.temp_file "pie-recording" ".json" in
+let test_recording_coordinator_transitions
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  run_test ~caps @@ fun _ ->
+  let path =
+    Ox_caps.Cap_stdlib.Filename.temp_file ~caps "pie-recording" ".json"
+  in
   let coordinator = Recording.Coordinator.create ~caps ~persist_path:path () in
   let initial = Recording.Coordinator.snapshot coordinator in
   Alcotest.(check bool) "enabled" true initial.enabled;
@@ -244,13 +255,23 @@ let test_recording_coordinator_transitions () =
    with
   | Recording.Coordinator.Disabled -> ()
   | _ -> Alcotest.fail "expected disabled");
-  Sys.remove path
+  Ox_caps.Cap_sys.remove ~caps path
 
-let test_recording_coordinator_release_preserves_newer_same_mode_attempt () =
-  run_test @@ fun _ ->
-  let path = Filename.temp_file "pie-recording-identity" ".json" in
+let test_recording_coordinator_release_preserves_newer_same_mode_attempt
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  run_test ~caps @@ fun _ ->
+  let path =
+    Ox_caps.Cap_stdlib.Filename.temp_file ~caps "pie-recording-identity" ".json"
+  in
   Fun.protect
-    ~finally:(fun () -> if Sys.file_exists path then Sys.remove path)
+    ~finally:(fun () ->
+      if Sys.file_exists path then Ox_caps.Cap_sys.remove ~caps path)
     (fun () ->
       let coordinator =
         Recording.Coordinator.create ~caps ~persist_path:path ()
@@ -483,13 +504,14 @@ let pulse_record_stream_body stream_index =
   Pulse.Protocol.Tag_struct_writer.add_format_info writer 0 [];
   Pulse.Protocol.Tag_struct_writer.finalize writer
 
-let pulse_test_server ~sw ~net name handler =
+let pulse_test_server ~(caps : < Ox_caps.Cap.fs_write ; .. >) ~sw ~net name
+    handler =
   let socket_path =
     Filename.concat
       (Filename.get_temp_dir_name ())
       (Printf.sprintf "pie-pulse-%s-%d.sock" name (Unix.getpid ()))
   in
-  (try Sys.remove socket_path with Sys_error _ -> ());
+  (try Ox_caps.Cap_sys.remove ~caps socket_path with Sys_error _ -> ());
   let socket =
     Eio.Net.listen ~sw ~reuse_addr:true ~backlog:1 net (`Unix socket_path)
   in
@@ -500,15 +522,18 @@ let pulse_test_server ~sw ~net name handler =
   socket_path
 
 (* pulse-l1qs, pulse-vm4c, pulse-qoto *)
-let test_pulse_client_set_client_name_error_is_typed () =
-  run_test @@ fun env ->
+let test_pulse_client_set_client_name_error_is_typed
+    ~(caps :
+       < Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; .. >) ()
+    =
+  run_test ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let socket_path =
     Filename.concat
       (Filename.get_temp_dir_name ())
       (Printf.sprintf "pie-pulse-%d.sock" (Unix.getpid ()))
   in
-  (try Sys.remove socket_path with Sys_error _ -> ());
+  (try Ox_caps.Cap_sys.remove ~caps socket_path with Sys_error _ -> ());
   let socket =
     Eio.Net.listen ~sw ~reuse_addr:true ~backlog:1 (Eio.Stdenv.net env)
       (`Unix socket_path)
@@ -572,11 +597,15 @@ let test_pulse_default_request_timeout () =
     "record stream capacity" 64 Pulse.Client.record_stream_capacity
 
 (* pulse-gu09, pulse-b7kt, pulse-6qr7 *)
-let test_pulse_client_correlates_concurrent_replies () =
-  run_test @@ fun env ->
+let test_pulse_client_correlates_concurrent_replies
+    ~(caps :
+       < Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; .. >) ()
+    =
+  run_test ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let socket_path =
-    pulse_test_server ~sw ~net:(Eio.Stdenv.net env) "concurrent" (fun flow ->
+    pulse_test_server ~caps ~sw ~net:(Eio.Stdenv.net env) "concurrent"
+      (fun flow ->
         pulse_server_handshake flow;
         let first = pulse_read_command flow in
         let second = pulse_read_command flow in
@@ -625,12 +654,15 @@ let test_pulse_client_correlates_concurrent_replies () =
         cause
 
 (* pulse-h303, pulse-wipy, pulse-ow5o, pulse-xqrb *)
-let test_pulse_client_drops_late_reply_after_timeout () =
-  run_test @@ fun env ->
+let test_pulse_client_drops_late_reply_after_timeout
+    ~(caps :
+       < Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; .. >) ()
+    =
+  run_test ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let socket_path =
-    pulse_test_server ~sw ~net:(Eio.Stdenv.net env) "late" (fun flow ->
+    pulse_test_server ~caps ~sw ~net:(Eio.Stdenv.net env) "late" (fun flow ->
         pulse_server_handshake flow;
         let timed_out = pulse_read_command flow in
         Eio.Time.sleep clock 0.015;
@@ -665,11 +697,15 @@ let test_pulse_client_drops_late_reply_after_timeout () =
         cause
 
 (* pulse-33fc *)
-let test_pulse_client_rejects_malformed_error_payload () =
-  run_test @@ fun env ->
+let test_pulse_client_rejects_malformed_error_payload
+    ~(caps :
+       < Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; .. >) ()
+    =
+  run_test ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let socket_path =
-    pulse_test_server ~sw ~net:(Eio.Stdenv.net env) "malformed" (fun flow ->
+    pulse_test_server ~caps ~sw ~net:(Eio.Stdenv.net env) "malformed"
+      (fun flow ->
         let auth = pulse_read_command flow in
         pulse_write_response flow auth Pulse.Defs.Pa_command.reply
           (pulse_u32 Pulse.Defs.pa_native_protocol_version);
@@ -696,11 +732,14 @@ let test_pulse_client_rejects_malformed_error_payload () =
   | Ok () -> Alcotest.fail "malformed command error was accepted"
 
 (* pulse-if62, pulse-rla0, pulse-blrc *)
-let test_pulse_reader_failure_fails_pending_command () =
-  run_test @@ fun env ->
+let test_pulse_reader_failure_fails_pending_command
+    ~(caps :
+       < Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; .. >) ()
+    =
+  run_test ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let socket_path =
-    pulse_test_server ~sw ~net:(Eio.Stdenv.net env) "reader-failure"
+    pulse_test_server ~caps ~sw ~net:(Eio.Stdenv.net env) "reader-failure"
       (fun flow ->
         pulse_server_handshake flow;
         ignore (pulse_read_command flow);
@@ -723,13 +762,17 @@ let test_pulse_reader_failure_fails_pending_command () =
   | Ok _ -> Alcotest.fail "pending command survived reader failure"
 
 (* pulse-o36o *)
-let test_pulse_scope_end_disconnects_pending_command () =
-  run_test @@ fun env ->
+let test_pulse_scope_end_disconnects_pending_command
+    ~(caps :
+       < Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; .. >) ()
+    =
+  run_test ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let request_seen, resolve_request_seen = Eio.Promise.create () in
   let command_exit, resolve_command_exit = Eio.Promise.create () in
   let socket_path =
-    pulse_test_server ~sw ~net:(Eio.Stdenv.net env) "scope-end" (fun flow ->
+    pulse_test_server ~caps ~sw ~net:(Eio.Stdenv.net env) "scope-end"
+      (fun flow ->
         pulse_server_handshake flow;
         ignore (pulse_read_command flow);
         Eio.Promise.resolve resolve_request_seen ();
@@ -763,11 +806,14 @@ let test_pulse_scope_end_disconnects_pending_command () =
   | Ok _ -> Alcotest.fail "pending command survived client scope release"
 
 (* pulse-bc14, pulse-ngc5, pulse-9bc5, pulse-7ny7, pulse-bsa1 *)
-let test_pulse_record_stream_drains_before_reader_failure () =
-  run_test @@ fun env ->
+let test_pulse_record_stream_drains_before_reader_failure
+    ~(caps :
+       < Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; .. >) ()
+    =
+  run_test ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let socket_path =
-    pulse_test_server ~sw ~net:(Eio.Stdenv.net env) "stream" (fun flow ->
+    pulse_test_server ~caps ~sw ~net:(Eio.Stdenv.net env) "stream" (fun flow ->
         pulse_server_handshake flow;
         let create = pulse_read_command flow in
         let create_reply =
@@ -812,11 +858,14 @@ let test_pulse_record_stream_drains_before_reader_failure () =
   Alcotest.(check (list string))
     "buffered chunks" [ "one"; "two" ] (List.rev !seen)
 
-let test_pulse_record_stream_preserves_pcm_chunk_bytes () =
-  run_test @@ fun env ->
+let test_pulse_record_stream_preserves_pcm_chunk_bytes
+    ~(caps :
+       < Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; .. >) ()
+    =
+  run_test ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let socket_path =
-    pulse_test_server ~sw ~net:(Eio.Stdenv.net env) "pcm" (fun flow ->
+    pulse_test_server ~caps ~sw ~net:(Eio.Stdenv.net env) "pcm" (fun flow ->
         pulse_server_handshake flow;
         let create = pulse_read_command flow in
         let create_reply =
@@ -866,11 +915,14 @@ let test_pulse_record_stream_preserves_pcm_chunk_bytes () =
     "second chunk isolated from first mutation" "BBBB" (Bytes.to_string second)
 
 (* pulse-tg9e, pulse-4kja *)
-let test_pulse_record_cleanup_preserves_body_result () =
-  run_test @@ fun env ->
+let test_pulse_record_cleanup_preserves_body_result
+    ~(caps :
+       < Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; .. >) ()
+    =
+  run_test ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let socket_path =
-    pulse_test_server ~sw ~net:(Eio.Stdenv.net env) "cleanup" (fun flow ->
+    pulse_test_server ~caps ~sw ~net:(Eio.Stdenv.net env) "cleanup" (fun flow ->
         pulse_server_handshake flow;
         let create = pulse_read_command flow in
         pulse_write_response flow create Pulse.Defs.Pa_command.reply
@@ -939,8 +991,10 @@ let test_daemon_contract_response () =
 
 (* ox_ipc refuses a socket whose directory other users can write (e.g. /tmp), so each
    daemon test binds inside a private 0700 directory. *)
-let private_socket_dir =
-  lazy (Filename.temp_dir ~perms:0o700 "pie-daemon-test" "")
+let make_private_socket_dir ~(caps : < Ox_caps.Cap.tmp ; .. >) =
+  lazy
+    (Ox_caps.Cap_stdlib.Filename.temp_dir ~caps ~perms:0o700 "pie-daemon-test"
+       "")
 
 let expect_listener_start = function
   | Ok () -> ()
@@ -949,13 +1003,21 @@ let expect_listener_start = function
 (* A runtime directory left 0755 (by Fs.mkdir_p ~caps under the service umask, or by the v1
    daemon) is Pie's own: the server tightens it to 0700 instead of failing with
    "unsafe runtime directory" (found at the eta-next cut-over, 2026-09-28). *)
-let test_daemon_server_tightens_runtime_dir () =
-  run_test @@ fun env ->
+let test_daemon_server_tightens_runtime_dir ~private_socket_dir
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; .. >) () =
+  run_test ~caps @@ fun env ->
   let runtime =
     Filename.concat (Lazy.force private_socket_dir) "loose-runtime"
   in
-  (try Unix.mkdir runtime 0o755 with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
-  Unix.chmod runtime 0o755;
+  (try Ox_caps.Cap_unix.mkdir ~caps runtime 0o755
+   with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
+  Ox_caps.Cap_unix.chmod ~caps runtime 0o755;
   let socket_path = Filename.concat runtime "control.sock" in
   let persist_path = Filename.concat runtime "recording.json" in
   let coordinator = Pie.Recording.Coordinator.create ~caps ~persist_path () in
@@ -971,8 +1033,15 @@ let test_daemon_server_tightens_runtime_dir () =
     "runtime dir tightened" 0o700
     ((Unix.stat runtime).Unix.st_perm land 0o777)
 
-let test_daemon_server_state () =
-  run_test @@ fun env ->
+let test_daemon_server_state ~private_socket_dir
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; .. >) () =
+  run_test ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let socket_path =
     Filename.concat
@@ -984,8 +1053,8 @@ let test_daemon_server_state () =
       (Filename.get_temp_dir_name ())
       (Printf.sprintf "pie-daemon-%d.json" (Unix.getpid ()))
   in
-  (try Sys.remove socket_path with Sys_error _ -> ());
-  (try Sys.remove persist_path with Sys_error _ -> ());
+  (try Ox_caps.Cap_sys.remove ~caps socket_path with Sys_error _ -> ());
+  (try Ox_caps.Cap_sys.remove ~caps persist_path with Sys_error _ -> ());
   let coordinator = Pie.Recording.Coordinator.create ~caps ~persist_path () in
   let effort = ref "low" in
   expect_listener_start
@@ -1037,10 +1106,17 @@ let test_daemon_server_state () =
         | Some (`Bool b) -> b
         | _ -> false)
   | _ -> Alcotest.fail "toggle should return enabled=true");
-  try Sys.remove persist_path with Sys_error _ -> ()
+  try Ox_caps.Cap_sys.remove ~caps persist_path with Sys_error _ -> ()
 
-let test_daemon_server_action_handler () =
-  run_test @@ fun env ->
+let test_daemon_server_action_handler ~private_socket_dir
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; .. >) () =
+  run_test ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let socket_path =
     Filename.concat
@@ -1052,8 +1128,8 @@ let test_daemon_server_action_handler () =
       (Filename.get_temp_dir_name ())
       (Printf.sprintf "pie-daemon-action-%d.json" (Unix.getpid ()))
   in
-  (try Sys.remove socket_path with Sys_error _ -> ());
-  (try Sys.remove persist_path with Sys_error _ -> ());
+  (try Ox_caps.Cap_sys.remove ~caps socket_path with Sys_error _ -> ());
+  (try Ox_caps.Cap_sys.remove ~caps persist_path with Sys_error _ -> ());
   let coordinator = Pie.Recording.Coordinator.create ~caps ~persist_path () in
   let seen = ref [] in
   let action_handler action =
@@ -1114,10 +1190,17 @@ let test_daemon_server_action_handler () =
         | Some (`String s) -> s
         | _ -> "")
   | _ -> Alcotest.fail "expected action response object");
-  try Sys.remove persist_path with Sys_error _ -> ()
+  try Ox_caps.Cap_sys.remove ~caps persist_path with Sys_error _ -> ()
 
-let test_daemon_server_unknown_meeting_method () =
-  run_test @@ fun env ->
+let test_daemon_server_unknown_meeting_method ~private_socket_dir
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; .. >) () =
+  run_test ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let socket_path =
     Filename.concat
@@ -1129,8 +1212,8 @@ let test_daemon_server_unknown_meeting_method () =
       (Filename.get_temp_dir_name ())
       (Printf.sprintf "pie-daemon-%d.json" (Unix.getpid ()))
   in
-  (try Sys.remove socket_path with Sys_error _ -> ());
-  (try Sys.remove persist_path with Sys_error _ -> ());
+  (try Ox_caps.Cap_sys.remove ~caps socket_path with Sys_error _ -> ());
+  (try Ox_caps.Cap_sys.remove ~caps persist_path with Sys_error _ -> ());
   let coordinator = Pie.Recording.Coordinator.create ~caps ~persist_path () in
   ignore
     (Pie.Recording.Coordinator.try_start coordinator
@@ -1168,9 +1251,9 @@ let test_daemon_server_unknown_meeting_method () =
     "ptt admission unchanged" true
     (Pie.Recording.Coordinator.snapshot coordinator)
       .Pie.Recording.Coordinator.active;
-  try Sys.remove persist_path with Sys_error _ -> ()
+  try Ox_caps.Cap_sys.remove ~caps persist_path with Sys_error _ -> ()
 
-let test_codex_realtime_url_builders () =
+let test_codex_realtime_url_builders ~(caps : < Ox_caps.Cap.env ; .. >) () =
   let transcribe_url =
     Stt.Codex_realtime.build_realtime_url ~caps
       ~base_url:"wss://api.openai.com/" ~mode:Stt.Codex_realtime.Transcription
@@ -1327,7 +1410,7 @@ let test_speech_operation_deadline_policy () =
 
 (* Both calls enter the real provider boundary. The server accepts a local socket
    but sends no response, while Ox_test advances the clock used by Ox_http. *)
-let stalled_openrouter_call ~seconds call =
+let stalled_openrouter_call ~(caps : < Ox_caps.Cap.env ; .. >) ~seconds call =
   Ox_test.run (fun env sw ->
       let socket =
         Eio.Net.listen ~sw ~reuse_addr:true ~backlog:1 env#net
@@ -1344,16 +1427,21 @@ let stalled_openrouter_call ~seconds call =
           let _flow, _addr = Eio.Net.accept ~sw:conn_sw socket in
           Eio.Promise.resolve resolve_accepted ();
           Eio.Fiber.await_cancel ());
-      let previous_url = Sys.getenv_opt "OPENROUTER_BASE_URL" in
-      let previous_key = Sys.getenv_opt "OPENROUTER_API_KEY" in
-      Unix.putenv "OPENROUTER_BASE_URL"
+      let previous_url =
+        Ox_caps.Cap_sys.getenv_opt ~caps "OPENROUTER_BASE_URL"
+      in
+      let previous_key =
+        Ox_caps.Cap_sys.getenv_opt ~caps "OPENROUTER_API_KEY"
+      in
+      Ox_caps.Cap_unix.putenv ~caps "OPENROUTER_BASE_URL"
         (Printf.sprintf "http://127.0.0.1:%d" port);
-      Unix.putenv "OPENROUTER_API_KEY" "pie-local-deadline-test";
+      Ox_caps.Cap_unix.putenv ~caps "OPENROUTER_API_KEY"
+        "pie-local-deadline-test";
       Fun.protect
         ~finally:(fun () ->
-          Unix.putenv "OPENROUTER_BASE_URL"
+          Ox_caps.Cap_unix.putenv ~caps "OPENROUTER_BASE_URL"
             (Option.value previous_url ~default:"");
-          Unix.putenv "OPENROUTER_API_KEY"
+          Ox_caps.Cap_unix.putenv ~caps "OPENROUTER_API_KEY"
             (Option.value previous_key ~default:""))
         (fun () ->
           let completed, resolve_completed = Eio.Promise.create () in
@@ -1544,25 +1632,31 @@ let run_realtime_error_ws_server ~clock flow =
     {|{"type":"error","error":{"message":"boom","code":"bad_request"}}|};
   drain_ws_until_client_eof ~clock flow
 
-let write_file path contents =
-  let oc = open_out_bin path in
+let write_file ~(caps : < Ox_caps.Cap.fs_write ; .. >) path contents =
+  let oc = Ox_caps.Cap_stdlib.open_out_bin ~caps path in
   Fun.protect
     ~finally:(fun () -> close_out_noerr oc)
     (fun () -> output_string oc contents)
 
-let temp_dir prefix =
-  let path = Filename.temp_file prefix "" in
-  Sys.remove path;
-  Unix.mkdir path 0o700;
+let temp_dir ~(caps : < Ox_caps.Cap.fs_write ; Ox_caps.Cap.tmp ; .. >) prefix =
+  let path = Ox_caps.Cap_stdlib.Filename.temp_file ~caps prefix "" in
+  Ox_caps.Cap_sys.remove ~caps path;
+  Ox_caps.Cap_unix.mkdir ~caps path 0o700;
   path
 
-let require_store dir =
+let require_store
+    ~(caps :
+       < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.time ; .. >)
+    dir =
   match Recording.Retry_store.Active.open_store ~caps ~root:dir with
   | Ok store -> store
   | Error (`Retry_store msg) -> Alcotest.fail msg
 
-let require_owner ~dir ~coordinator ~attempt mode =
-  let store = require_store dir in
+let require_owner
+    ~(caps :
+       < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.time ; .. >)
+    ~dir ~coordinator ~attempt mode =
+  let store = require_store ~caps dir in
   match
     Assistant.Service.create_attempt_owner ~store ~coordinator ~attempt mode
   with
@@ -1586,9 +1680,15 @@ let peek_none store =
   | Ok (Some _) -> false
   | Error (`Retry_store msg) -> Alcotest.fail msg
 
-let test_retry_store_retains_and_discards_recordings () =
-  let dir = temp_dir "pie-retry-store" in
-  let store = require_store dir in
+let test_retry_store_retains_and_discards_recordings
+    ~(caps :
+       < Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  let dir = temp_dir ~caps "pie-retry-store" in
+  let store = require_store ~caps dir in
   let writer =
     match
       Recording.Retry_store.Active.open_audio_writer store
@@ -1623,9 +1723,9 @@ let test_retry_store_retains_and_discards_recordings () =
     | { st_kind = Unix.S_DIR; _ } ->
         Array.iter
           (fun n -> if n <> "." && n <> ".." then rm (Filename.concat path n))
-          (Sys.readdir path);
-        Unix.rmdir path
-    | _ -> Unix.unlink path
+          (Ox_caps.Cap_sys.readdir ~caps path);
+        Ox_caps.Cap_unix.rmdir ~caps path
+    | _ -> Ox_caps.Cap_unix.unlink ~caps path
   in
   rm dir
 
@@ -1696,26 +1796,35 @@ let openrouter_clip_config () : Pie.Config.Stt.t =
       ];
   }
 
-let rec remove_dir dir =
+let rec remove_dir ~(caps : < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; .. >)
+    dir =
   match Unix.lstat dir with
   | { st_kind = Unix.S_DIR; _ } ->
       Array.iter
         (fun name ->
           if name <> "." && name <> ".." then
-            remove_dir (Filename.concat dir name))
-        (Sys.readdir dir);
-      Unix.rmdir dir
-  | _ -> Unix.unlink dir
+            remove_dir ~caps (Filename.concat dir name))
+        (Ox_caps.Cap_sys.readdir ~caps dir);
+      Ox_caps.Cap_unix.rmdir ~caps dir
+  | _ -> Ox_caps.Cap_unix.unlink ~caps dir
 
 let settle_attempt owner () : (unit, Ptt_loop.error) result =
   match Assistant.Service.settle_attempt owner with
   | Ok () -> Ok ()
   | Error (`Ptt_error message) -> Error (`Ptt_error message)
 
-let test_failed_processing_retains_captured_audio () =
-  run_test @@ fun env ->
+let test_failed_processing_retains_captured_audio
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  run_test ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  let dir = temp_dir "pie-failed-capture" in
+  let dir = temp_dir ~caps "pie-failed-capture" in
   let persist_path = Filename.concat dir "recording-state.json" in
   let coordinator = Recording.Coordinator.create ~caps ~persist_path () in
   let attempt =
@@ -1727,7 +1836,7 @@ let test_failed_processing_retains_captured_audio () =
     | _ -> Alcotest.fail "expected the attempt to be admitted"
   in
   let owner =
-    require_owner ~dir ~coordinator ~attempt Assistant.Service.Transcribe
+    require_owner ~caps ~dir ~coordinator ~attempt Assistant.Service.Transcribe
   in
   let stt _config _mode _bytes = Error (`Ptt_error "STT unavailable") in
   let deliver _config _mode _target _text = Ok Pie.History.Pasted in
@@ -1755,16 +1864,24 @@ let test_failed_processing_retains_captured_audio () =
   Alcotest.(check bool)
     "failed finish releases admission" false
     (Recording.Coordinator.snapshot coordinator).Recording.Coordinator.active;
-  let store = require_store dir in
+  let store = require_store ~caps dir in
   Alcotest.(check string)
     "retained published Audio" "captured-audio"
     (Bytes.to_string (peek_audio_bytes store));
-  remove_dir dir
+  remove_dir ~caps dir
 
-let test_setup_failure_releases_admission_and_preserves_error () =
-  run_test @@ fun env ->
+let test_setup_failure_releases_admission_and_preserves_error
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  run_test ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  let dir = temp_dir "pie-setup-failure" in
+  let dir = temp_dir ~caps "pie-setup-failure" in
   let persist_path = Filename.concat dir "recording-state.json" in
   let coordinator = Recording.Coordinator.create ~caps ~persist_path () in
   let attempt =
@@ -1776,7 +1893,7 @@ let test_setup_failure_releases_admission_and_preserves_error () =
     | _ -> Alcotest.fail "expected the attempt to be admitted"
   in
   let owner =
-    require_owner ~dir ~coordinator ~attempt Assistant.Service.Transcribe
+    require_owner ~caps ~dir ~coordinator ~attempt Assistant.Service.Transcribe
   in
   let operation () =
     Assistant.Service.run_acquired_attempt ~sw ~attempt
@@ -1794,19 +1911,27 @@ let test_setup_failure_releases_admission_and_preserves_error () =
     (Recording.Coordinator.snapshot coordinator).Recording.Coordinator.active;
   Alcotest.(check bool)
     "setup failure does not publish" true
-    (peek_none (require_store dir));
+    (peek_none (require_store ~caps dir));
   (match
      Recording.Coordinator.try_start coordinator
        Recording.Coordinator.Ptt_transcribe ()
    with
   | Recording.Coordinator.Started _ -> ()
   | _ -> Alcotest.fail "expected a subsequent attempt after setup failure");
-  remove_dir dir
+  remove_dir ~caps dir
 
-let test_settle_attempt_construction_does_not_run_duties () =
-  run_test @@ fun env ->
+let test_settle_attempt_construction_does_not_run_duties
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  run_test ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  let dir = temp_dir "pie-settle-blueprint" in
+  let dir = temp_dir ~caps "pie-settle-blueprint" in
   let persist_path = Filename.concat dir "recording-state.json" in
   let coordinator = Recording.Coordinator.create ~caps ~persist_path () in
   let attempt =
@@ -1818,9 +1943,9 @@ let test_settle_attempt_construction_does_not_run_duties () =
     | _ -> Alcotest.fail "expected the attempt to be admitted"
   in
   let owner =
-    require_owner ~dir ~coordinator ~attempt Assistant.Service.Transcribe
+    require_owner ~caps ~dir ~coordinator ~attempt Assistant.Service.Transcribe
   in
-  let store = require_store dir in
+  let store = require_store ~caps dir in
   let handle =
     Assistant.Service.attempt_handle owner
       {
@@ -1866,13 +1991,21 @@ let test_settle_attempt_construction_does_not_run_duties () =
     (Recording.Coordinator.snapshot coordinator).Recording.Coordinator.active;
   Alcotest.(check bool)
     "repeated cleanup still unpublished" true (peek_none store);
-  remove_dir dir
+  remove_dir ~caps dir
 
-let test_buffered_clip_cancellation_settles_after_offer () =
-  run_test @@ fun env ->
+let test_buffered_clip_cancellation_settles_after_offer
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  run_test ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
-  let dir = temp_dir "pie-clip-cancel" in
+  let dir = temp_dir ~caps "pie-clip-cancel" in
   let persist_path = Filename.concat dir "recording-state.json" in
   let coordinator = Recording.Coordinator.create ~caps ~persist_path () in
   let observed = ref None in
@@ -1936,13 +2069,21 @@ let test_buffered_clip_cancellation_settles_after_offer () =
      kind of cancellation). *)
   Alcotest.(check bool)
     "unrequested cancellation publishes the captured audio" false
-    (peek_none (require_store dir));
-  remove_dir dir
+    (peek_none (require_store ~caps dir));
+  remove_dir ~caps dir
 
-let test_buffered_clip_defect_settles_after_offer () =
-  run_test @@ fun env ->
+let test_buffered_clip_defect_settles_after_offer
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  run_test ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  let dir = temp_dir "pie-clip-defect" in
+  let dir = temp_dir ~caps "pie-clip-defect" in
   let persist_path = Filename.concat dir "recording-state.json" in
   let coordinator = Recording.Coordinator.create ~caps ~persist_path () in
   let pcm_bytes = Bytes.of_string "captured-audio" in
@@ -1978,22 +2119,31 @@ let test_buffered_clip_defect_settles_after_offer () =
   Alcotest.(check bool)
     "defect releases admission" false
     (Recording.Coordinator.snapshot coordinator).Recording.Coordinator.active;
-  (match Recording.Retry_store.Active.peek (require_store dir) with
+  (match Recording.Retry_store.Active.peek (require_store ~caps dir) with
   | Ok (Some (Recording.Retry_store.Active.Audio { generation; _ })) -> (
       match
-        Recording.Retry_store.Active.load_audio (require_store dir) generation
+        Recording.Retry_store.Active.load_audio (require_store ~caps dir)
+          generation
       with
       | Ok retained ->
           Alcotest.(check bytes)
             "dict-u5xj defect retains exact audio" pcm_bytes retained
       | Error (`Retry_store message) -> Alcotest.fail message)
   | _ -> Alcotest.fail "dict-u5xj defect must retain an audio candidate");
-  remove_dir dir
+  remove_dir ~caps dir
 
-let test_on_press_construction_does_not_admit () =
-  run_test @@ fun env ->
+let test_on_press_construction_does_not_admit
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  run_test ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  let dir = temp_dir "pie-on-press-construct" in
+  let dir = temp_dir ~caps "pie-on-press-construct" in
   let persist_path = Filename.concat dir "recording-state.json" in
   let coordinator = Recording.Coordinator.create ~caps ~persist_path () in
   Alcotest.(check bool)
@@ -2012,12 +2162,20 @@ let test_on_press_construction_does_not_admit () =
   Alcotest.(check bool)
     "constructing on_press does not admit without execution" false
     (Recording.Coordinator.snapshot coordinator).Recording.Coordinator.active;
-  remove_dir dir
+  remove_dir ~caps dir
 
-let test_on_press_execution_admits () =
-  run_test @@ fun env ->
+let test_on_press_execution_admits
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  run_test ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  let dir = temp_dir "pie-on-press-exec" in
+  let dir = temp_dir ~caps "pie-on-press-exec" in
   let persist_path = Filename.concat dir "recording-state.json" in
   let coordinator = Recording.Coordinator.create ~caps ~persist_path () in
   let blueprint () =
@@ -2043,12 +2201,20 @@ let test_on_press_execution_admits () =
   Alcotest.(check bool)
     "execution admits" true
     (Recording.Coordinator.snapshot coordinator).Recording.Coordinator.active;
-  remove_dir dir
+  remove_dir ~caps dir
 
-let test_on_press_busy_and_disabled_at_execution () =
-  run_test @@ fun env ->
+let test_on_press_busy_and_disabled_at_execution
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  run_test ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  let dir = temp_dir "pie-on-press-busy" in
+  let dir = temp_dir ~caps "pie-on-press-busy" in
   let persist_path = Filename.concat dir "recording-state.json" in
   let coordinator = Recording.Coordinator.create ~caps ~persist_path () in
   let net = Eio.Stdenv.net env in
@@ -2107,13 +2273,20 @@ let test_on_press_busy_and_disabled_at_execution () =
   Alcotest.(check bool)
     "execution after enable admits" true
     (Recording.Coordinator.snapshot coordinator).Recording.Coordinator.active;
-  remove_dir dir
+  remove_dir ~caps dir
 
-let test_on_press_constructor_failure_releases_without_clearing_other_attempt ()
-    =
-  run_test @@ fun env ->
+let test_on_press_constructor_failure_releases_without_clearing_other_attempt
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  run_test ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  let dir = temp_dir "pie-on-press-ctor" in
+  let dir = temp_dir ~caps "pie-on-press-ctor" in
   let persist_path = Filename.concat dir "recording-state.json" in
   let coordinator = Recording.Coordinator.create ~caps ~persist_path () in
   let config =
@@ -2175,7 +2348,7 @@ let test_on_press_constructor_failure_releases_without_clearing_other_attempt ()
     "failed construction did not clear the later attempt" true
     (Recording.Coordinator.attempt_mode other
     = Recording.Coordinator.Ptt_transcribe);
-  remove_dir dir
+  remove_dir ~caps dir
 
 let even_hold_pcm = Bytes.of_string "captured-audio"
 
@@ -2197,10 +2370,18 @@ let assert_busy coordinator =
   | Recording.Coordinator.Started _ ->
       Alcotest.fail "admission released before outer scope finalizer"
 
-let test_attempt_handle_finish_holds_until_outer_settle () =
-  run_test @@ fun env ->
+let test_attempt_handle_finish_holds_until_outer_settle
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  run_test ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  let dir = temp_dir "pie-hold-finish" in
+  let dir = temp_dir ~caps "pie-hold-finish" in
   let persist_path = Filename.concat dir "recording-state.json" in
   let coordinator = Recording.Coordinator.create ~caps ~persist_path () in
   let attempt =
@@ -2212,7 +2393,7 @@ let test_attempt_handle_finish_holds_until_outer_settle () =
     | _ -> Alcotest.fail "expected the attempt to be admitted"
   in
   let owner =
-    require_owner ~dir ~coordinator ~attempt Assistant.Service.Transcribe
+    require_owner ~caps ~dir ~coordinator ~attempt Assistant.Service.Transcribe
   in
   let entered, resolve_entered = Eio.Promise.create () in
   let held, resolve_held = Eio.Promise.create () in
@@ -2256,13 +2437,21 @@ let test_attempt_handle_finish_holds_until_outer_settle () =
   | _ -> Alcotest.fail "expected admission free after outer settle");
   Alcotest.(check bool)
     "finish abort does not publish" true
-    (peek_none (require_store dir));
-  remove_dir dir
+    (peek_none (require_store ~caps dir));
+  remove_dir ~caps dir
 
-let test_attempt_handle_cancel_holds_until_outer_settle () =
-  run_test @@ fun env ->
+let test_attempt_handle_cancel_holds_until_outer_settle
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  run_test ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  let dir = temp_dir "pie-hold-cancel" in
+  let dir = temp_dir ~caps "pie-hold-cancel" in
   let persist_path = Filename.concat dir "recording-state.json" in
   let coordinator = Recording.Coordinator.create ~caps ~persist_path () in
   let attempt =
@@ -2274,7 +2463,7 @@ let test_attempt_handle_cancel_holds_until_outer_settle () =
     | _ -> Alcotest.fail "expected the attempt to be admitted"
   in
   let owner =
-    require_owner ~dir ~coordinator ~attempt Assistant.Service.Transcribe
+    require_owner ~caps ~dir ~coordinator ~attempt Assistant.Service.Transcribe
   in
   let entered, resolve_entered = Eio.Promise.create () in
   let held, resolve_held = Eio.Promise.create () in
@@ -2313,13 +2502,20 @@ let test_attempt_handle_cancel_holds_until_outer_settle () =
   | _ -> Alcotest.fail "expected admission free after outer settle");
   Alcotest.(check bool)
     "cancel abort does not publish" true
-    (peek_none (require_store dir));
-  remove_dir dir
+    (peek_none (require_store ~caps dir));
+  remove_dir ~caps dir
 
-let test_recording_coordinator_persist_error_swallowed () =
-  let base = temp_dir "pie-coordinator-persist" in
+let test_recording_coordinator_persist_error_swallowed
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  let base = temp_dir ~caps "pie-coordinator-persist" in
   let path = Filename.concat base "recording.json" in
-  write_file path "not a directory";
+  write_file ~caps path "not a directory";
   let persist_path = Filename.concat path "nested.json" in
   (* create persists its initial state. When the target is unwritable (here the
      parent component is a regular file, not a directory), create must fail
@@ -2330,9 +2526,18 @@ let test_recording_coordinator_persist_error_swallowed () =
       Alcotest.fail "create should raise when it cannot persist initial state"
   | exception _ -> ()
 
-let test_recording_coordinator_stop_clears_error () =
-  run_test @@ fun _ ->
-  let path = Filename.temp_file "pie-recording" ".json" in
+let test_recording_coordinator_stop_clears_error
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  run_test ~caps @@ fun _ ->
+  let path =
+    Ox_caps.Cap_stdlib.Filename.temp_file ~caps "pie-recording" ".json"
+  in
   let coordinator = Recording.Coordinator.create ~caps ~persist_path:path () in
   let attempt =
     match
@@ -2348,12 +2553,13 @@ let test_recording_coordinator_stop_clears_error () =
   Alcotest.(check (option string))
     "identity release preserves last_error" (Some "stop-clears-it")
     snap_stop.Recording.Coordinator.last_error;
-  Sys.remove path
+  Ox_caps.Cap_sys.remove ~caps path
 
-let test_daemon_server_mkdir_p_silently_accepts_file () =
-  let base = temp_dir "pie-daemon-mkdir_p" in
+let test_daemon_server_mkdir_p_silently_accepts_file
+    ~(caps : < Ox_caps.Cap.fs_write ; Ox_caps.Cap.tmp ; .. >) () =
+  let base = temp_dir ~caps "pie-daemon-mkdir_p" in
   let file_path = Filename.concat base "not-a-dir" in
-  write_file file_path "block";
+  write_file ~caps file_path "block";
   (* Bug: Daemon.Server.mkdir_p is a duplicate of the old buggy mkdir_p that
      checks Sys.file_exists without Sys.is_directory. When called on an
      existing regular file it silently returns () instead of raising EEXIST.
@@ -2417,11 +2623,17 @@ let test_daemon_contract_pause_rejects_non_object () =
   | Error label -> Alcotest.(check string) "not-object" "not-object" label
   | Ok _ -> Alcotest.fail "Pause scalar must be a protocol error"
 
-let test_stt_config_whitespace_app_id_not_trimmed () =
-  run_test @@ fun env ->
-  let dir = temp_dir "pie-stt-config-whitespace" in
+let test_stt_config_whitespace_app_id_not_trimmed
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  run_test ~caps @@ fun env ->
+  let dir = temp_dir ~caps "pie-stt-config-whitespace" in
   let config_path = Filename.concat dir "stt.toml" in
-  write_file config_path
+  write_file ~caps config_path
     {toml|
 
 [[newline_rules]]
@@ -2436,7 +2648,7 @@ action = "ctrl-j"
     Pie.Config.Stt.load ~caps ~fs:(Eio.Stdenv.fs env)
       ~source:(`Explicit config_path) ()
   with
-  | Error _ -> remove_dir dir
+  | Error _ -> remove_dir ~caps dir
   | Ok _ ->
       Alcotest.fail "whitespace-only app_id should be rejected, not loaded"
 
@@ -2452,7 +2664,7 @@ let json_string name json =
   | `String value -> value
   | _ -> Alcotest.failf "expected JSON string field: %s" name
 
-let test_assistant_startup_config_json () =
+let test_assistant_startup_config_json ~(caps : < Ox_caps.Cap.env ; .. >) () =
   let config : Pie.Config.Stt.t =
     {
       provider = Pie.Config.Stt.Codex_realtime;
@@ -2604,7 +2816,7 @@ let test_assistant_startup_config_json () =
       Alcotest.(check string) "entry method" "paste" (json_string "method" rule)
   | _ -> Alcotest.fail "expected one text entry rule"
 
-let load_stt_config env config_path =
+let load_stt_config ~(caps : < Ox_caps.Cap.env ; .. >) env config_path =
   match
     Pie.Config.Stt.load ~caps ~fs:(Eio.Stdenv.fs env)
       ~source:(`Explicit config_path) ()
@@ -2612,11 +2824,13 @@ let load_stt_config env config_path =
   | Ok config -> config
   | Error (`Config msg) -> Alcotest.fail msg
 
-let test_stt_config_loads_toml_newline_rules () =
-  run_test @@ fun env ->
-  let dir = temp_dir "pie-stt-config" in
+let test_stt_config_loads_toml_newline_rules
+    ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.tmp ; .. >)
+    () =
+  run_test ~caps @@ fun env ->
+  let dir = temp_dir ~caps "pie-stt-config" in
   let config_path = Filename.concat dir "stt.toml" in
-  write_file config_path
+  write_file ~caps config_path
     {toml|
 provider = "openrouter"
 transcription_model = "google/gemini-3.8-flash"
@@ -2645,7 +2859,7 @@ action = "shift-enter"
 app_id = "slack"
 method = "paste"
 |toml};
-  let config = load_stt_config env config_path in
+  let config = load_stt_config ~caps env config_path in
   Alcotest.(check (float 0.00001)) "ptt rms" 0.001 config.ptt_min_capture_rms;
   Alcotest.(check (float 0.00001)) "ptt peak" 0.008 config.ptt_min_capture_peak;
   Alcotest.(check int)
@@ -2681,12 +2895,14 @@ method = "paste"
         (second.action = Pie.Input.Text_injection.Shift_enter)
   | _ -> Alcotest.fail "expected two newline rules"
 
-let test_stt_config_defaults_to_one_pass () =
-  run_test @@ fun env ->
-  let dir = temp_dir "pie-stt-config-default-model" in
+let test_stt_config_defaults_to_one_pass
+    ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.tmp ; .. >)
+    () =
+  run_test ~caps @@ fun env ->
+  let dir = temp_dir ~caps "pie-stt-config-default-model" in
   let config_path = Filename.concat dir "stt.toml" in
-  write_file config_path "schema_version = 2\n";
-  let config = load_stt_config env config_path in
+  write_file ~caps config_path "schema_version = 2\n";
+  let config = load_stt_config ~caps env config_path in
   Alcotest.(check bool)
     "default one-pass" true
     (config.pipeline = Pie.Config.Stt.One_pass);
@@ -2740,8 +2956,14 @@ let test_assistant_distinguishes_shift_right_control () =
     "shift plus right control transcribes" true
     (recognize (event 1 43 false) = Some (Pie.Ptt_loop.Press "transcribe"))
 
-let test_assistant_mod5_chords_latch () =
-  run_test @@ fun _ ->
+let test_assistant_mod5_chords_latch
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; .. >) () =
+  run_test ~caps @@ fun _ ->
   let coordinator = Pie.Recording.Coordinator.create ~caps () in
   let latch_keycode = ref None in
   let binding keysym shift : Pie.Assistant.Service.ptt_binding =
@@ -2784,24 +3006,28 @@ let test_assistant_mod5_chords_latch () =
     (recognize (event ~state:128 ~keysym:65506 ~keycode:43 ~released:true)
     = None)
 
-let test_assistant_rejects_colliding_effective_keysyms () =
-  run_test @@ fun env ->
-  let dir = temp_dir "pie-stt-config-keysyms" in
+let test_assistant_rejects_colliding_effective_keysyms
+    ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.tmp ; .. >)
+    () =
+  run_test ~caps @@ fun env ->
+  let dir = temp_dir ~caps "pie-stt-config-keysyms" in
   let config_path = Filename.concat dir "stt.toml" in
-  write_file config_path
+  write_file ~caps config_path
     "ptt_transcribe_keysym = 10\nptt_translate_keysym = 20\n";
-  let config = load_stt_config env config_path in
+  let config = load_stt_config ~caps env config_path in
   match
     Pie.Assistant.Service.effective_bindings ~ptt_transcribe_keysym:20 config
   with
   | _ -> Alcotest.fail "effective CLI and config keysyms must not collide"
   | exception Pie.Config.Stt.Config_error _ -> ()
 
-let test_stt_config_rejects_bad_title_regex () =
-  run_test @@ fun env ->
-  let dir = temp_dir "pie-stt-config" in
+let test_stt_config_rejects_bad_title_regex
+    ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.tmp ; .. >)
+    () =
+  run_test ~caps @@ fun env ->
+  let dir = temp_dir ~caps "pie-stt-config" in
   let config_path = Filename.concat dir "stt.toml" in
-  write_file config_path
+  write_file ~caps config_path
     {toml|
 
 [[newline_rules]]
@@ -2944,20 +3170,28 @@ let test_text_injection_entry_method_rules () =
        ~newline_action:Pie.Input.Text_injection.Collapse_to_space
        " first\nsecond ")
 
-let test_wayland_clipboard_paste_ignores_previous previous_types () =
-  let base = temp_dir "pie-clipboard" in
-  let old_path = Option.value ~default:"" (Sys.getenv_opt "PATH") in
-  let old_session = Sys.getenv_opt "XDG_SESSION_TYPE" in
-  let old_wayland = Sys.getenv_opt "WAYLAND_DISPLAY" in
-  let old_desktop = Sys.getenv_opt "XDG_CURRENT_DESKTOP" in
-  let old_niri = Sys.getenv_opt "NIRI_SOCKET" in
+let test_wayland_clipboard_paste_ignores_previous
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) previous_types () =
+  let base = temp_dir ~caps "pie-clipboard" in
+  let old_path =
+    Option.value ~default:"" (Ox_caps.Cap_sys.getenv_opt ~caps "PATH")
+  in
+  let old_session = Ox_caps.Cap_sys.getenv_opt ~caps "XDG_SESSION_TYPE" in
+  let old_wayland = Ox_caps.Cap_sys.getenv_opt ~caps "WAYLAND_DISPLAY" in
+  let old_desktop = Ox_caps.Cap_sys.getenv_opt ~caps "XDG_CURRENT_DESKTOP" in
+  let old_niri = Ox_caps.Cap_sys.getenv_opt ~caps "NIRI_SOCKET" in
   let shell =
     Option.value ~default:"/bin/sh" (Pie.Sh.find_executable ~caps "sh")
   in
   let script name body =
     let path = Filename.concat base name in
-    write_file path ("#!" ^ shell ^ "\nset -eu\n" ^ body);
-    Unix.chmod path 0o700
+    write_file ~caps path ("#!" ^ shell ^ "\nset -eu\n" ^ body);
+    Ox_caps.Cap_unix.chmod ~caps path 0o700
   in
   script "wl-paste"
     {script|
@@ -2978,24 +3212,28 @@ printf '%s\n' "$*" > "$PIE_CLIPBOARD_TEST_DIR/wtype-args"
     {script|
 printf '%s\n' '{"id":1,"title":"t","app_id":"app"}'
 |script};
-  Unix.putenv "PATH" (base ^ ":" ^ old_path);
-  Unix.putenv "PIE_CLIPBOARD_TEST_DIR" base;
-  Unix.putenv "PIE_CLIPBOARD_PREVIOUS_TYPES" previous_types;
-  Unix.putenv "XDG_SESSION_TYPE" "wayland";
-  Unix.putenv "WAYLAND_DISPLAY" "pie-fake";
-  Unix.putenv "XDG_CURRENT_DESKTOP" "niri";
-  Unix.putenv "NIRI_SOCKET" (Filename.concat base "niri.sock");
+  Ox_caps.Cap_unix.putenv ~caps "PATH" (base ^ ":" ^ old_path);
+  Ox_caps.Cap_unix.putenv ~caps "PIE_CLIPBOARD_TEST_DIR" base;
+  Ox_caps.Cap_unix.putenv ~caps "PIE_CLIPBOARD_PREVIOUS_TYPES" previous_types;
+  Ox_caps.Cap_unix.putenv ~caps "XDG_SESSION_TYPE" "wayland";
+  Ox_caps.Cap_unix.putenv ~caps "WAYLAND_DISPLAY" "pie-fake";
+  Ox_caps.Cap_unix.putenv ~caps "XDG_CURRENT_DESKTOP" "niri";
+  Ox_caps.Cap_unix.putenv ~caps "NIRI_SOCKET" (Filename.concat base "niri.sock");
   Fun.protect
     ~finally:(fun () ->
-      Unix.putenv "PATH" old_path;
-      Unix.putenv "PIE_CLIPBOARD_TEST_DIR" "";
-      Unix.putenv "PIE_CLIPBOARD_PREVIOUS_TYPES" "";
-      Unix.putenv "XDG_SESSION_TYPE" (Option.value old_session ~default:"");
-      Unix.putenv "WAYLAND_DISPLAY" (Option.value old_wayland ~default:"");
-      Unix.putenv "XDG_CURRENT_DESKTOP" (Option.value old_desktop ~default:"");
-      Unix.putenv "NIRI_SOCKET" (Option.value old_niri ~default:""))
+      Ox_caps.Cap_unix.putenv ~caps "PATH" old_path;
+      Ox_caps.Cap_unix.putenv ~caps "PIE_CLIPBOARD_TEST_DIR" "";
+      Ox_caps.Cap_unix.putenv ~caps "PIE_CLIPBOARD_PREVIOUS_TYPES" "";
+      Ox_caps.Cap_unix.putenv ~caps "XDG_SESSION_TYPE"
+        (Option.value old_session ~default:"");
+      Ox_caps.Cap_unix.putenv ~caps "WAYLAND_DISPLAY"
+        (Option.value old_wayland ~default:"");
+      Ox_caps.Cap_unix.putenv ~caps "XDG_CURRENT_DESKTOP"
+        (Option.value old_desktop ~default:"");
+      Ox_caps.Cap_unix.putenv ~caps "NIRI_SOCKET"
+        (Option.value old_niri ~default:""))
     (fun () ->
-      run_test @@ fun env ->
+      run_test ~caps @@ fun env ->
       Eio.Switch.run @@ fun sw ->
       let owner =
         Pie.Wayland.Clipboard.create ~caps ~sw
@@ -3035,17 +3273,17 @@ printf '%s\n' '{"id":1,"title":"t","app_id":"app"}'
             (Sys.file_exists (Filename.concat base "inspected"));
           Alcotest.(check string)
             "offered prepared transcript" "first second"
-            (In_channel.with_open_bin
+            (Ox_caps.Cap_stdlib.In_channel.with_open_bin ~caps
                (Filename.concat base "copy-stdin")
                In_channel.input_all);
           Alcotest.(check string)
             "foreground offer without a single MIME type" "--foreground\n"
-            (In_channel.with_open_bin
+            (Ox_caps.Cap_stdlib.In_channel.with_open_bin ~caps
                (Filename.concat base "copy-args")
                In_channel.input_all);
           Alcotest.(check string)
             "one ctrl-v" "-M ctrl -k v -m ctrl\n"
-            (In_channel.with_open_bin
+            (Ox_caps.Cap_stdlib.In_channel.with_open_bin ~caps
                (Filename.concat base "wtype-args")
                In_channel.input_all);
           Alcotest.(check bool)
@@ -3062,20 +3300,24 @@ printf '%s\n' '{"id":1,"title":"t","app_id":"app"}'
           Alcotest.failf "clipboard paste failed: %a" (Ox.Cause.pp pp_error)
             cause)
 
-let test_wayland_clipboard_paste_reports_offer_failure () =
-  let base = temp_dir "pie-clipboard-failure" in
-  let old_path = Option.value ~default:"" (Sys.getenv_opt "PATH") in
-  let old_session = Sys.getenv_opt "XDG_SESSION_TYPE" in
-  let old_wayland = Sys.getenv_opt "WAYLAND_DISPLAY" in
-  let old_desktop = Sys.getenv_opt "XDG_CURRENT_DESKTOP" in
-  let old_niri = Sys.getenv_opt "NIRI_SOCKET" in
+let test_wayland_clipboard_paste_reports_offer_failure
+    ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.tmp ; .. >)
+    () =
+  let base = temp_dir ~caps "pie-clipboard-failure" in
+  let old_path =
+    Option.value ~default:"" (Ox_caps.Cap_sys.getenv_opt ~caps "PATH")
+  in
+  let old_session = Ox_caps.Cap_sys.getenv_opt ~caps "XDG_SESSION_TYPE" in
+  let old_wayland = Ox_caps.Cap_sys.getenv_opt ~caps "WAYLAND_DISPLAY" in
+  let old_desktop = Ox_caps.Cap_sys.getenv_opt ~caps "XDG_CURRENT_DESKTOP" in
+  let old_niri = Ox_caps.Cap_sys.getenv_opt ~caps "NIRI_SOCKET" in
   let shell =
     Option.value ~default:"/bin/sh" (Pie.Sh.find_executable ~caps "sh")
   in
   let script name body =
     let path = Filename.concat base name in
-    write_file path ("#!" ^ shell ^ "\nset -eu\n" ^ body);
-    Unix.chmod path 0o700
+    write_file ~caps path ("#!" ^ shell ^ "\nset -eu\n" ^ body);
+    Ox_caps.Cap_unix.chmod ~caps path 0o700
   in
   script "wtype"
     {script|
@@ -3085,22 +3327,26 @@ printf '%s\n' "$*" > "$PIE_CLIPBOARD_TEST_DIR/wtype-args"
     {script|
 printf '%s\n' '{"id":1,"title":"t","app_id":"app"}'
 |script};
-  Unix.putenv "PATH" (base ^ ":" ^ old_path);
-  Unix.putenv "PIE_CLIPBOARD_TEST_DIR" base;
-  Unix.putenv "XDG_SESSION_TYPE" "wayland";
-  Unix.putenv "WAYLAND_DISPLAY" "pie-fake";
-  Unix.putenv "XDG_CURRENT_DESKTOP" "niri";
-  Unix.putenv "NIRI_SOCKET" (Filename.concat base "niri.sock");
+  Ox_caps.Cap_unix.putenv ~caps "PATH" (base ^ ":" ^ old_path);
+  Ox_caps.Cap_unix.putenv ~caps "PIE_CLIPBOARD_TEST_DIR" base;
+  Ox_caps.Cap_unix.putenv ~caps "XDG_SESSION_TYPE" "wayland";
+  Ox_caps.Cap_unix.putenv ~caps "WAYLAND_DISPLAY" "pie-fake";
+  Ox_caps.Cap_unix.putenv ~caps "XDG_CURRENT_DESKTOP" "niri";
+  Ox_caps.Cap_unix.putenv ~caps "NIRI_SOCKET" (Filename.concat base "niri.sock");
   Fun.protect
     ~finally:(fun () ->
-      Unix.putenv "PATH" old_path;
-      Unix.putenv "PIE_CLIPBOARD_TEST_DIR" "";
-      Unix.putenv "XDG_SESSION_TYPE" (Option.value old_session ~default:"");
-      Unix.putenv "WAYLAND_DISPLAY" (Option.value old_wayland ~default:"");
-      Unix.putenv "XDG_CURRENT_DESKTOP" (Option.value old_desktop ~default:"");
-      Unix.putenv "NIRI_SOCKET" (Option.value old_niri ~default:""))
+      Ox_caps.Cap_unix.putenv ~caps "PATH" old_path;
+      Ox_caps.Cap_unix.putenv ~caps "PIE_CLIPBOARD_TEST_DIR" "";
+      Ox_caps.Cap_unix.putenv ~caps "XDG_SESSION_TYPE"
+        (Option.value old_session ~default:"");
+      Ox_caps.Cap_unix.putenv ~caps "WAYLAND_DISPLAY"
+        (Option.value old_wayland ~default:"");
+      Ox_caps.Cap_unix.putenv ~caps "XDG_CURRENT_DESKTOP"
+        (Option.value old_desktop ~default:"");
+      Ox_caps.Cap_unix.putenv ~caps "NIRI_SOCKET"
+        (Option.value old_niri ~default:""))
     (fun () ->
-      run_test @@ fun env ->
+      run_test ~caps @@ fun env ->
       Eio.Switch.run @@ fun sw ->
       let owner =
         Pie.Wayland.Clipboard.create ~caps ~sw
@@ -3139,8 +3385,8 @@ printf '%s\n' '{"id":1,"title":"t","app_id":"app"}'
             "no key dispatch without a live offer" false
             (Sys.file_exists (Filename.concat base "wtype-args")))
 
-let test_ptt_loop_continues_after_finish () =
-  run_test @@ fun env ->
+let test_ptt_loop_continues_after_finish ~(caps : < Ox_caps.Cap.env ; .. >) () =
+  run_test ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let keyboard = Pie.Keyboard.Monitor.create () in
@@ -3224,8 +3470,9 @@ let test_ptt_loop_continues_after_finish () =
   | Error _ -> ()
   | Ok () -> Alcotest.fail "expected second finish to stop the test loop"
 
-let test_ptt_loop_control_stream_triggers_capture () =
-  run_test @@ fun env ->
+let test_ptt_loop_control_stream_triggers_capture
+    ~(caps : < Ox_caps.Cap.env ; .. >) () =
+  run_test ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let keyboard = Pie.Keyboard.Monitor.create () in
@@ -3285,8 +3532,9 @@ let test_ptt_loop_control_stream_triggers_capture () =
   | Error _ -> ()
   | Ok () -> Alcotest.fail "expected finish to stop the test loop"
 
-let test_ptt_loop_post_roll_repress_continues_capture () =
-  run_test @@ fun env ->
+let test_ptt_loop_post_roll_repress_continues_capture
+    ~(caps : < Ox_caps.Cap.env ; .. >) () =
+  run_test ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let keyboard = Pie.Keyboard.Monitor.create () in
@@ -3364,8 +3612,8 @@ let test_ptt_loop_post_roll_repress_continues_capture () =
   | Error _ -> ()
   | Ok () -> Alcotest.fail "expected finish to stop the test loop"
 
-let test_ptt_loop_scoped_handle_lifetime () =
-  run_test @@ fun env ->
+let test_ptt_loop_scoped_handle_lifetime ~(caps : < Ox_caps.Cap.env ; .. >) () =
+  run_test ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let keyboard = Pie.Keyboard.Monitor.create () in
@@ -3442,8 +3690,16 @@ let test_ptt_loop_scoped_handle_lifetime () =
   | Ok () ->
       Alcotest.fail "expected timeout after scoped capture returns to idle"
 
-let test_ptt_loop_rejects_busy_press_and_accepts_fresh_cycle () =
-  run_test @@ fun env ->
+let test_ptt_loop_rejects_busy_press_and_accepts_fresh_cycle
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  run_test ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let started, resolve_started = Eio.Promise.create () in
@@ -3455,7 +3711,7 @@ let test_ptt_loop_rejects_busy_press_and_accepts_fresh_cycle () =
   let calls = ref 0 in
   let finishes = ref 0 in
   let admitted = ref None in
-  let dir = temp_dir "pie-ptt-busy-finish" in
+  let dir = temp_dir ~caps "pie-ptt-busy-finish" in
   let persist_path = Filename.concat dir "recording-state.json" in
   let coordinator = Recording.Coordinator.create ~caps ~persist_path () in
   let keyboard = Pie.Keyboard.Monitor.create () in
@@ -3546,7 +3802,7 @@ let test_ptt_loop_rejects_busy_press_and_accepts_fresh_cycle () =
   in
   Alcotest.(check int) "fresh cycle after settlement is admitted" 2 !calls;
   Alcotest.(check int) "both admitted cycles finished" 2 !finishes;
-  remove_dir dir;
+  remove_dir ~caps dir;
   match result with
   | Ok () -> Alcotest.fail "expected the loop to settle by timeout"
   | Error cause ->
@@ -3554,8 +3810,9 @@ let test_ptt_loop_rejects_busy_press_and_accepts_fresh_cycle () =
         "loop ended by local timeout" true
         (cause_contains cause "timeout")
 
-let test_ptt_loop_scoped_setup_failure_allows_subsequent_press () =
-  run_test @@ fun env ->
+let test_ptt_loop_scoped_setup_failure_allows_subsequent_press
+    ~(caps : < Ox_caps.Cap.env ; .. >) () =
+  run_test ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let second_started, resolve_second_started = Eio.Promise.create () in
   let calls = ref 0 in
@@ -3619,8 +3876,16 @@ let test_ptt_loop_scoped_setup_failure_allows_subsequent_press () =
         "loop ended by local timeout" true
         (cause_contains cause "timeout")
 
-let test_ptt_loop_press_during_gated_on_press_is_not_replayed () =
-  run_test @@ fun env ->
+let test_ptt_loop_press_during_gated_on_press_is_not_replayed
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  run_test ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let entered, resolve_entered = Eio.Promise.create () in
@@ -3633,7 +3898,7 @@ let test_ptt_loop_press_during_gated_on_press_is_not_replayed () =
   let calls = ref 0 in
   let finishes = ref 0 in
   let admitted = ref None in
-  let dir = temp_dir "pie-gated-on-press" in
+  let dir = temp_dir ~caps "pie-gated-on-press" in
   let persist_path = Filename.concat dir "recording-state.json" in
   let coordinator = Recording.Coordinator.create ~caps ~persist_path () in
   let keyboard = Pie.Keyboard.Monitor.create () in
@@ -3717,9 +3982,10 @@ let test_ptt_loop_press_during_gated_on_press_is_not_replayed () =
   Alcotest.(check int) "one admitted capture finished" 1 !finishes;
   Array.iter
     (fun name ->
-      try Sys.remove (Filename.concat dir name) with Sys_error _ -> ())
-    (Sys.readdir dir);
-  Unix.rmdir dir;
+      try Ox_caps.Cap_sys.remove ~caps (Filename.concat dir name)
+      with Sys_error _ -> ())
+    (Ox_caps.Cap_sys.readdir ~caps dir);
+  Ox_caps.Cap_unix.rmdir ~caps dir;
   match result with
   | Ok () -> Alcotest.fail "expected the loop to settle by timeout"
   | Error cause ->
@@ -3738,15 +4004,23 @@ let recognize_test_key event =
        else Pie.Ptt_loop.Press "test")
   else None
 
-let test_ptt_loop_retry_admission_rejects_busy_control_cycle () =
-  run_test @@ fun env ->
+let test_ptt_loop_retry_admission_rejects_busy_control_cycle
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  run_test ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let ready, resolve_ready = Eio.Promise.create () in
   let stamped, resolve_stamped = Eio.Promise.create () in
   let arm_stamp = Atomic.make false in
   let calls = ref 0 in
   let finishes = ref 0 in
-  let dir = temp_dir "pie-ptt-retry-control" in
+  let dir = temp_dir ~caps "pie-ptt-retry-control" in
   let persist_path = Filename.concat dir "recording-state.json" in
   let coordinator = Recording.Coordinator.create ~caps ~persist_path () in
   let retry =
@@ -3832,7 +4106,7 @@ let test_ptt_loop_retry_admission_rejects_busy_control_cycle () =
   in
   Alcotest.(check int) "fresh cycle after retry release is admitted" 1 !calls;
   Alcotest.(check int) "fresh cycle finished" 1 !finishes;
-  remove_dir dir;
+  remove_dir ~caps dir;
   match result with
   | Ok () -> Alcotest.fail "expected the loop to settle by timeout"
   | Error cause ->
@@ -3840,15 +4114,23 @@ let test_ptt_loop_retry_admission_rejects_busy_control_cycle () =
         "loop ended by local timeout" true
         (cause_contains cause "timeout")
 
-let test_ptt_loop_retry_admission_rejects_busy_keyboard_cycle () =
-  run_test @@ fun env ->
+let test_ptt_loop_retry_admission_rejects_busy_keyboard_cycle
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  run_test ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let ready, resolve_ready = Eio.Promise.create () in
   let stamped, resolve_stamped = Eio.Promise.create () in
   let arm_stamp = Atomic.make false in
   let calls = ref 0 in
   let finishes = ref 0 in
-  let dir = temp_dir "pie-ptt-retry-keyboard" in
+  let dir = temp_dir ~caps "pie-ptt-retry-keyboard" in
   let persist_path = Filename.concat dir "recording-state.json" in
   let coordinator = Recording.Coordinator.create ~caps ~persist_path () in
   let retry =
@@ -3935,7 +4217,7 @@ let test_ptt_loop_retry_admission_rejects_busy_keyboard_cycle () =
   Alcotest.(check int)
     "fresh keyboard cycle after retry release is admitted" 1 !calls;
   Alcotest.(check int) "fresh keyboard cycle finished" 1 !finishes;
-  remove_dir dir;
+  remove_dir ~caps dir;
   match result with
   | Ok () -> Alcotest.fail "expected the loop to settle by timeout"
   | Error cause ->
@@ -3943,8 +4225,16 @@ let test_ptt_loop_retry_admission_rejects_busy_keyboard_cycle () =
         "loop ended by local timeout" true
         (cause_contains cause "timeout")
 
-let test_ptt_loop_failed_on_press_does_not_replay_busy_control_cycle () =
-  run_test @@ fun env ->
+let test_ptt_loop_failed_on_press_does_not_replay_busy_control_cycle
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  run_test ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let ready, resolve_ready = Eio.Promise.create () in
   let entered, resolve_entered = Eio.Promise.create () in
@@ -3954,7 +4244,7 @@ let test_ptt_loop_failed_on_press_does_not_replay_busy_control_cycle () =
   let arm_stamp = Atomic.make false in
   let calls = ref 0 in
   let finishes = ref 0 in
-  let dir = temp_dir "pie-ptt-fail-control" in
+  let dir = temp_dir ~caps "pie-ptt-fail-control" in
   let persist_path = Filename.concat dir "recording-state.json" in
   let coordinator = Recording.Coordinator.create ~caps ~persist_path () in
   let keyboard = Pie.Keyboard.Monitor.create () in
@@ -4054,7 +4344,7 @@ let test_ptt_loop_failed_on_press_does_not_replay_busy_control_cycle () =
   in
   Alcotest.(check int) "fresh cycle after failed on_press is admitted" 2 !calls;
   Alcotest.(check int) "fresh cycle finished" 1 !finishes;
-  remove_dir dir;
+  remove_dir ~caps dir;
   match result with
   | Ok () -> Alcotest.fail "expected the loop to settle by timeout"
   | Error cause ->
@@ -4062,8 +4352,16 @@ let test_ptt_loop_failed_on_press_does_not_replay_busy_control_cycle () =
         "loop ended by local timeout" true
         (cause_contains cause "timeout")
 
-let test_ptt_loop_failed_on_press_does_not_replay_busy_keyboard_cycle () =
-  run_test @@ fun env ->
+let test_ptt_loop_failed_on_press_does_not_replay_busy_keyboard_cycle
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  run_test ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let ready, resolve_ready = Eio.Promise.create () in
   let entered, resolve_entered = Eio.Promise.create () in
@@ -4073,7 +4371,7 @@ let test_ptt_loop_failed_on_press_does_not_replay_busy_keyboard_cycle () =
   let arm_stamp = Atomic.make false in
   let calls = ref 0 in
   let finishes = ref 0 in
-  let dir = temp_dir "pie-ptt-fail-keyboard" in
+  let dir = temp_dir ~caps "pie-ptt-fail-keyboard" in
   let persist_path = Filename.concat dir "recording-state.json" in
   let coordinator = Recording.Coordinator.create ~caps ~persist_path () in
   let keyboard = Pie.Keyboard.Monitor.create () in
@@ -4173,7 +4471,7 @@ let test_ptt_loop_failed_on_press_does_not_replay_busy_keyboard_cycle () =
   Alcotest.(check int)
     "fresh keyboard cycle after failed on_press is admitted" 2 !calls;
   Alcotest.(check int) "fresh keyboard cycle finished" 1 !finishes;
-  remove_dir dir;
+  remove_dir ~caps dir;
   match result with
   | Ok () -> Alcotest.fail "expected the loop to settle by timeout"
   | Error cause ->
@@ -4195,8 +4493,16 @@ let ptt_audio_with_flood_ingress_ack audio resolve_ingress =
   in
   next
 
-let test_ptt_loop_processing_keeps_input_live_during_finish () =
-  run_test @@ fun env ->
+let test_ptt_loop_processing_keeps_input_live_during_finish
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  run_test ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let ready, resolve_ready = Eio.Promise.create () in
   let started, resolve_started = Eio.Promise.create () in
@@ -4210,7 +4516,7 @@ let test_ptt_loop_processing_keeps_input_live_during_finish () =
   let calls = ref 0 in
   let finishes = ref 0 in
   let offered = ref [] in
-  let dir = temp_dir "pie-ptt-processing-live" in
+  let dir = temp_dir ~caps "pie-ptt-processing-live" in
   let persist_path = Filename.concat dir "recording-state.json" in
   let coordinator = Recording.Coordinator.create ~caps ~persist_path () in
   let keyboard = Pie.Keyboard.Monitor.create () in
@@ -4318,7 +4624,7 @@ let test_ptt_loop_processing_keeps_input_live_during_finish () =
   Alcotest.(check bool)
     "fresh capture offered only post-finish audio" true
     (List.mem '\003' !offered);
-  remove_dir dir;
+  remove_dir ~caps dir;
   match result with
   | Ok () -> Alcotest.fail "expected the loop to settle by timeout"
   | Error cause ->
@@ -4326,8 +4632,16 @@ let test_ptt_loop_processing_keeps_input_live_during_finish () =
         "loop ended by local timeout" true
         (cause_contains cause "timeout")
 
-let test_ptt_loop_processing_preserves_fresh_press_pending () =
-  run_test @@ fun env ->
+let test_ptt_loop_processing_preserves_fresh_press_pending
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  run_test ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let ready, resolve_ready = Eio.Promise.create () in
   let started, resolve_started = Eio.Promise.create () in
@@ -4337,7 +4651,7 @@ let test_ptt_loop_processing_preserves_fresh_press_pending () =
   let arm_stamp = Atomic.make false in
   let calls = ref 0 in
   let finishes = ref 0 in
-  let dir = temp_dir "pie-ptt-processing-pending" in
+  let dir = temp_dir ~caps "pie-ptt-processing-pending" in
   let persist_path = Filename.concat dir "recording-state.json" in
   let coordinator = Recording.Coordinator.create ~caps ~persist_path () in
   let admitted = ref None in
@@ -4435,7 +4749,7 @@ let test_ptt_loop_processing_preserves_fresh_press_pending () =
   Alcotest.(check int)
     "fresh press during finish handoff is admitted once" 2 !calls;
   Alcotest.(check int) "handoff cycle finished" 2 !finishes;
-  remove_dir dir;
+  remove_dir ~caps dir;
   match result with
   | Ok () -> Alcotest.fail "expected the loop to settle by timeout"
   | Error cause ->
@@ -4443,8 +4757,16 @@ let test_ptt_loop_processing_preserves_fresh_press_pending () =
         "loop ended by local timeout" true
         (cause_contains cause "timeout")
 
-let test_ptt_loop_processing_join_preserves_finish_failure () =
-  run_test @@ fun env ->
+let test_ptt_loop_processing_join_preserves_finish_failure
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  run_test ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let ready, resolve_ready = Eio.Promise.create () in
   let started, resolve_started = Eio.Promise.create () in
@@ -4454,7 +4776,7 @@ let test_ptt_loop_processing_join_preserves_finish_failure () =
   let calls = ref 0 in
   let finishes = ref 0 in
   let offered = ref [] in
-  let dir = temp_dir "pie-ptt-processing-fail" in
+  let dir = temp_dir ~caps "pie-ptt-processing-fail" in
   let persist_path = Filename.concat dir "recording-state.json" in
   let coordinator = Recording.Coordinator.create ~caps ~persist_path () in
   let keyboard = Pie.Keyboard.Monitor.create () in
@@ -4551,7 +4873,7 @@ let test_ptt_loop_processing_join_preserves_finish_failure () =
   Alcotest.(check bool)
     "next capture did not receive old flood audio" true
     (List.mem '\003' !offered);
-  remove_dir dir;
+  remove_dir ~caps dir;
   match result with
   | Ok () -> Alcotest.fail "expected the loop to settle by timeout"
   | Error cause ->
@@ -4600,8 +4922,9 @@ let run_background_cancel ~bg_exit ~body_exit ~background ~body =
           | Error _ as error -> error)
         (fun () -> record body_exit body))
 
-let test_with_background_cancels_sync_stream_take () =
-  run_test @@ fun _env ->
+let test_with_background_cancels_sync_stream_take
+    ~(caps : < Ox_caps.Cap.env ; .. >) () =
+  run_test ~caps @@ fun _env ->
   Eio.Switch.run @@ fun sw ->
   let empty = Eio.Stream.create 1 in
   let bg_exit = ref None in
@@ -4621,8 +4944,8 @@ let test_with_background_cancels_sync_stream_take () =
   assert_with_background_clean_cancel ~label:"sync-take" result !body_exit
     !bg_exit
 
-let test_with_background_cancels_never () =
-  run_test @@ fun _env ->
+let test_with_background_cancels_never ~(caps : < Ox_caps.Cap.env ; .. >) () =
+  run_test ~caps @@ fun _env ->
   Eio.Switch.run @@ fun sw ->
   let bg_exit = ref None in
   let body_exit = ref None in
@@ -4653,8 +4976,9 @@ let mostly_quiet_chunk ~peak_sample samples =
   Bytes.set_int16_le chunk 0 peak_sample;
   chunk
 
-let test_ptt_loop_ignores_short_capture_before_offering () =
-  run_test @@ fun env ->
+let test_ptt_loop_ignores_short_capture_before_offering
+    ~(caps : < Ox_caps.Cap.env ; .. >) () =
+  run_test ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let keyboard = Pie.Keyboard.Monitor.create () in
@@ -4721,8 +5045,9 @@ let test_ptt_loop_ignores_short_capture_before_offering () =
   | Ok () ->
       Alcotest.fail "expected timeout after short capture returns to idle"
 
-let test_ptt_loop_ignores_low_rms_capture_before_offering () =
-  run_test @@ fun env ->
+let test_ptt_loop_ignores_low_rms_capture_before_offering
+    ~(caps : < Ox_caps.Cap.env ; .. >) () =
+  run_test ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let keyboard = Pie.Keyboard.Monitor.create () in
@@ -4790,8 +5115,9 @@ let test_ptt_loop_ignores_low_rms_capture_before_offering () =
   | Ok () ->
       Alcotest.fail "expected timeout after low-rms capture returns to idle"
 
-let test_ptt_loop_accepts_peak_over_silence_threshold () =
-  run_test @@ fun env ->
+let test_ptt_loop_accepts_peak_over_silence_threshold
+    ~(caps : < Ox_caps.Cap.env ; .. >) () =
+  run_test ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let keyboard = Pie.Keyboard.Monitor.create () in
@@ -4863,8 +5189,9 @@ let test_ptt_loop_accepts_peak_over_silence_threshold () =
   | Ok () ->
       Alcotest.fail "expected timeout after finish failure returns to idle"
 
-let test_ptt_loop_accepts_quiet_speech_over_rms_threshold () =
-  run_test @@ fun env ->
+let test_ptt_loop_accepts_quiet_speech_over_rms_threshold
+    ~(caps : < Ox_caps.Cap.env ; .. >) () =
+  run_test ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let keyboard = Pie.Keyboard.Monitor.create () in
@@ -4936,8 +5263,9 @@ let test_ptt_loop_accepts_quiet_speech_over_rms_threshold () =
   | Ok () ->
       Alcotest.fail "expected timeout after finish failure returns to idle"
 
-let test_ptt_loop_dead_input_settles_after_release ?(recover = false) () =
-  run_test @@ fun env ->
+let test_ptt_loop_dead_input_settles_after_release
+    ~(caps : < Ox_caps.Cap.env ; .. >) ?(recover = false) () =
+  run_test ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let keyboard = Pie.Keyboard.Monitor.create () in
@@ -5112,7 +5440,17 @@ let test_process_otel_disabled () =
   let code, _, _ = run_process_door (fun _ _ -> Ok ()) in
   Alcotest.(check int) "Door runs with no OTEL exporter" 0 code
 
-let () =
+let main
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) =
+  let private_socket_dir = make_private_socket_dir ~caps in
   Alcotest.run "pie"
     [
       ( "process_door",
@@ -5163,25 +5501,25 @@ let () =
       ( "pulse_client",
         [
           Alcotest.test_case "set_client_name error is typed" `Quick
-            test_pulse_client_set_client_name_error_is_typed;
+            (test_pulse_client_set_client_name_error_is_typed ~caps);
           Alcotest.test_case "default request timeout" `Quick
             test_pulse_default_request_timeout;
           Alcotest.test_case "concurrent tagged replies" `Quick
-            test_pulse_client_correlates_concurrent_replies;
+            (test_pulse_client_correlates_concurrent_replies ~caps);
           Alcotest.test_case "late reply after timeout" `Quick
-            test_pulse_client_drops_late_reply_after_timeout;
+            (test_pulse_client_drops_late_reply_after_timeout ~caps);
           Alcotest.test_case "malformed command error" `Quick
-            test_pulse_client_rejects_malformed_error_payload;
+            (test_pulse_client_rejects_malformed_error_payload ~caps);
           Alcotest.test_case "reader failure fails pending command" `Quick
-            test_pulse_reader_failure_fails_pending_command;
+            (test_pulse_reader_failure_fails_pending_command ~caps);
           Alcotest.test_case "scope end disconnects pending command" `Quick
-            test_pulse_scope_end_disconnects_pending_command;
+            (test_pulse_scope_end_disconnects_pending_command ~caps);
           Alcotest.test_case "record stream drains on failure" `Quick
-            test_pulse_record_stream_drains_before_reader_failure;
+            (test_pulse_record_stream_drains_before_reader_failure ~caps);
           Alcotest.test_case "record stream preserves pcm chunk bytes" `Quick
-            test_pulse_record_stream_preserves_pcm_chunk_bytes;
+            (test_pulse_record_stream_preserves_pcm_chunk_bytes ~caps);
           Alcotest.test_case "record cleanup preserves body" `Quick
-            test_pulse_record_cleanup_preserves_body_result;
+            (test_pulse_record_cleanup_preserves_body_result ~caps);
         ] );
       ( "config",
         [
@@ -5198,13 +5536,13 @@ let () =
           Alcotest.test_case "provider-qualified model" `Quick
             test_stt_config_resolves_provider_qualified_model;
           Alcotest.test_case "load TOML newline rules" `Quick
-            test_stt_config_loads_toml_newline_rules;
+            (test_stt_config_loads_toml_newline_rules ~caps);
           Alcotest.test_case "default GPT Realtime 2.1 models" `Quick
-            test_stt_config_defaults_to_one_pass;
+            (test_stt_config_defaults_to_one_pass ~caps);
           Alcotest.test_case "reject invalid title regex" `Quick
-            test_stt_config_rejects_bad_title_regex;
+            (test_stt_config_rejects_bad_title_regex ~caps);
           Alcotest.test_case "whitespace app_id not trimmed" `Quick
-            test_stt_config_whitespace_app_id_not_trimmed;
+            (test_stt_config_whitespace_app_id_not_trimmed ~caps);
         ] );
       ( "text_injection",
         [
@@ -5222,18 +5560,18 @@ let () =
           Alcotest.test_case "per-app entry method" `Quick
             test_text_injection_entry_method_rules;
           Alcotest.test_case "paste ignores image-only previous offer" `Quick
-            (test_wayland_clipboard_paste_ignores_previous
+            (test_wayland_clipboard_paste_ignores_previous ~caps
                "image/png\nimage/webp\n");
           Alcotest.test_case "paste ignores text previous offer" `Quick
-            (test_wayland_clipboard_paste_ignores_previous
+            (test_wayland_clipboard_paste_ignores_previous ~caps
                "text/plain;charset=utf-8\n");
           Alcotest.test_case "paste ignores empty previous offer" `Quick
-            (test_wayland_clipboard_paste_ignores_previous "");
+            (test_wayland_clipboard_paste_ignores_previous ~caps "");
           Alcotest.test_case "paste ignores arbitrary previous offer" `Quick
-            (test_wayland_clipboard_paste_ignores_previous
+            (test_wayland_clipboard_paste_ignores_previous ~caps
                "application/octet-stream\n");
           Alcotest.test_case "paste reports a failed offer" `Quick
-            test_wayland_clipboard_paste_reports_offer_failure;
+            (test_wayland_clipboard_paste_reports_offer_failure ~caps);
         ] );
       ( "daemon_contract",
         [
@@ -5271,22 +5609,23 @@ let () =
         ] );
       ( "daemon_server",
         [
-          Alcotest.test_case "socket state" `Quick test_daemon_server_state;
+          Alcotest.test_case "socket state" `Quick
+            (test_daemon_server_state ~private_socket_dir ~caps);
           Alcotest.test_case "loose runtime dir tightened" `Quick
-            test_daemon_server_tightens_runtime_dir;
+            (test_daemon_server_tightens_runtime_dir ~private_socket_dir ~caps);
           Alcotest.test_case "action handler" `Quick
-            test_daemon_server_action_handler;
+            (test_daemon_server_action_handler ~private_socket_dir ~caps);
           Alcotest.test_case "unknown meeting method no admission" `Quick
-            test_daemon_server_unknown_meeting_method;
+            (test_daemon_server_unknown_meeting_method ~private_socket_dir ~caps);
           Alcotest.test_case "mkdir_p silent on existing file" `Quick
-            test_daemon_server_mkdir_p_silently_accepts_file;
+            (test_daemon_server_mkdir_p_silently_accepts_file ~caps);
         ] );
       ( "keyboard",
         [
           Alcotest.test_case "parse D-Bus KeyEvent" `Quick
             test_keyboard_dbus_key_event_parse;
           Alcotest.test_case "session bus path rejects abstract" `Quick
-            test_keyboard_monitor_session_bus_path_abstract_socket;
+            (test_keyboard_monitor_session_bus_path_abstract_socket ~caps);
           Alcotest.test_case "keysym_of_name rejects unknown keys" `Quick
             (fun () ->
               let keysym = Pie.Keyboard.Monitor.keysym_of_name "F11" in
@@ -5301,50 +5640,54 @@ let () =
       ( "retry_store",
         [
           Alcotest.test_case "retains failed recording until success" `Quick
-            test_retry_store_retains_and_discards_recordings;
+            (test_retry_store_retains_and_discards_recordings ~caps);
           Alcotest.test_case "processing failure retains captured audio" `Quick
-            test_failed_processing_retains_captured_audio;
+            (test_failed_processing_retains_captured_audio ~caps);
           Alcotest.test_case "setup failure releases admission" `Quick
-            test_setup_failure_releases_admission_and_preserves_error;
+            (test_setup_failure_releases_admission_and_preserves_error ~caps);
           Alcotest.test_case "settle_attempt duties run only on execution"
-            `Quick test_settle_attempt_construction_does_not_run_duties;
+            `Quick
+            (test_settle_attempt_construction_does_not_run_duties ~caps);
           Alcotest.test_case "buffered clip cancellation settles after offer"
-            `Quick test_buffered_clip_cancellation_settles_after_offer;
+            `Quick
+            (test_buffered_clip_cancellation_settles_after_offer ~caps);
           Alcotest.test_case "buffered clip defect settles after offer" `Quick
-            test_buffered_clip_defect_settles_after_offer;
+            (test_buffered_clip_defect_settles_after_offer ~caps);
           Alcotest.test_case "on_press construction does not admit" `Quick
-            test_on_press_construction_does_not_admit;
+            (test_on_press_construction_does_not_admit ~caps);
           Alcotest.test_case "on_press execution admits" `Quick
-            test_on_press_execution_admits;
+            (test_on_press_execution_admits ~caps);
           Alcotest.test_case "on_press busy and disabled at execution" `Quick
-            test_on_press_busy_and_disabled_at_execution;
+            (test_on_press_busy_and_disabled_at_execution ~caps);
           Alcotest.test_case
             "on_press constructor failure releases without clearing other"
             `Quick
-            test_on_press_constructor_failure_releases_without_clearing_other_attempt;
+            (test_on_press_constructor_failure_releases_without_clearing_other_attempt
+               ~caps);
           Alcotest.test_case
             "attempt_handle finish holds admission until outer settle" `Quick
-            test_attempt_handle_finish_holds_until_outer_settle;
+            (test_attempt_handle_finish_holds_until_outer_settle ~caps);
           Alcotest.test_case
             "attempt_handle cancel holds admission until outer settle" `Quick
-            test_attempt_handle_cancel_holds_until_outer_settle;
+            (test_attempt_handle_cancel_holds_until_outer_settle ~caps);
         ] );
       ( "recording_coordinator",
         [
           Alcotest.test_case "transitions" `Quick
-            test_recording_coordinator_transitions;
+            (test_recording_coordinator_transitions ~caps);
           Alcotest.test_case "stale release preserves newer same-mode attempt"
             `Quick
-            test_recording_coordinator_release_preserves_newer_same_mode_attempt;
+            (test_recording_coordinator_release_preserves_newer_same_mode_attempt
+               ~caps);
           Alcotest.test_case "persist error swallowed" `Quick
-            test_recording_coordinator_persist_error_swallowed;
+            (test_recording_coordinator_persist_error_swallowed ~caps);
           Alcotest.test_case "stop clears error inconsistently" `Quick
-            test_recording_coordinator_stop_clears_error;
+            (test_recording_coordinator_stop_clears_error ~caps);
         ] );
       ( "stt_codex_realtime",
         [
           Alcotest.test_case "url builders" `Quick
-            test_codex_realtime_url_builders;
+            (test_codex_realtime_url_builders ~caps);
           Alcotest.test_case "headers" `Quick test_codex_realtime_headers;
           Alcotest.test_case "receive stop modes" `Quick
             test_codex_realtime_receive_stop_modes;
@@ -5361,15 +5704,15 @@ let () =
       ( "assistant_prompt",
         [
           Alcotest.test_case "startup config report" `Quick
-            test_assistant_startup_config_json;
+            (test_assistant_startup_config_json ~caps);
           Alcotest.test_case "hot reloads PTT keysyms" `Quick
             test_assistant_hot_reloads_keysyms_and_releases_original_hold;
           Alcotest.test_case "distinguishes Shift plus Right Control" `Quick
             test_assistant_distinguishes_shift_right_control;
           Alcotest.test_case "Mod5 chords latch" `Quick
-            test_assistant_mod5_chords_latch;
+            (test_assistant_mod5_chords_latch ~caps);
           Alcotest.test_case "rejects colliding effective PTT keysyms" `Quick
-            test_assistant_rejects_colliding_effective_keysyms;
+            (test_assistant_rejects_colliding_effective_keysyms ~caps);
         ] );
       ( "ptt_capture",
         [
@@ -5393,47 +5736,51 @@ let () =
                 "postroll expired" true
                 (Pie.Ptt.Capture.post_roll_remaining_ms s2 4000.0 = 0.0));
           Alcotest.test_case "with_background cancels sync stream take" `Quick
-            test_with_background_cancels_sync_stream_take;
+            (test_with_background_cancels_sync_stream_take ~caps);
           Alcotest.test_case "with_background cancels never" `Quick
-            test_with_background_cancels_never;
+            (test_with_background_cancels_never ~caps);
           Alcotest.test_case "loop continues after finish" `Quick
-            test_ptt_loop_continues_after_finish;
+            (test_ptt_loop_continues_after_finish ~caps);
           Alcotest.test_case "control stream triggers capture" `Quick
-            test_ptt_loop_control_stream_triggers_capture;
+            (test_ptt_loop_control_stream_triggers_capture ~caps);
           Alcotest.test_case "post-roll re-press continues capture" `Quick
-            test_ptt_loop_post_roll_repress_continues_capture;
+            (test_ptt_loop_post_roll_repress_continues_capture ~caps);
           Alcotest.test_case "scoped handle lifetime" `Quick
-            test_ptt_loop_scoped_handle_lifetime;
+            (test_ptt_loop_scoped_handle_lifetime ~caps);
           Alcotest.test_case "busy finish cycle is not replayed" `Quick
-            test_ptt_loop_rejects_busy_press_and_accepts_fresh_cycle;
+            (test_ptt_loop_rejects_busy_press_and_accepts_fresh_cycle ~caps);
           Alcotest.test_case "scoped setup failure allows a later press" `Quick
-            test_ptt_loop_scoped_setup_failure_allows_subsequent_press;
+            (test_ptt_loop_scoped_setup_failure_allows_subsequent_press ~caps);
           Alcotest.test_case "press during gated on_press is not replayed"
-            `Quick test_ptt_loop_press_during_gated_on_press_is_not_replayed;
+            `Quick
+            (test_ptt_loop_press_during_gated_on_press_is_not_replayed ~caps);
           Alcotest.test_case "retry admission rejects busy control cycle" `Quick
-            test_ptt_loop_retry_admission_rejects_busy_control_cycle;
+            (test_ptt_loop_retry_admission_rejects_busy_control_cycle ~caps);
           Alcotest.test_case "retry admission rejects busy keyboard cycle"
-            `Quick test_ptt_loop_retry_admission_rejects_busy_keyboard_cycle;
+            `Quick
+            (test_ptt_loop_retry_admission_rejects_busy_keyboard_cycle ~caps);
           Alcotest.test_case "failed on_press does not replay busy control"
             `Quick
-            test_ptt_loop_failed_on_press_does_not_replay_busy_control_cycle;
+            (test_ptt_loop_failed_on_press_does_not_replay_busy_control_cycle
+               ~caps);
           Alcotest.test_case "failed on_press does not replay busy keyboard"
             `Quick
-            test_ptt_loop_failed_on_press_does_not_replay_busy_keyboard_cycle;
+            (test_ptt_loop_failed_on_press_does_not_replay_busy_keyboard_cycle
+               ~caps);
           Alcotest.test_case "processing keeps input live during finish" `Quick
-            test_ptt_loop_processing_keeps_input_live_during_finish;
+            (test_ptt_loop_processing_keeps_input_live_during_finish ~caps);
           Alcotest.test_case "processing preserves fresh press pending" `Quick
-            test_ptt_loop_processing_preserves_fresh_press_pending;
+            (test_ptt_loop_processing_preserves_fresh_press_pending ~caps);
           Alcotest.test_case "processing join preserves finish failure" `Quick
-            test_ptt_loop_processing_join_preserves_finish_failure;
+            (test_ptt_loop_processing_join_preserves_finish_failure ~caps);
           Alcotest.test_case "short capture ignored before offer" `Quick
-            test_ptt_loop_ignores_short_capture_before_offering;
+            (test_ptt_loop_ignores_short_capture_before_offering ~caps);
           Alcotest.test_case "low-rms capture ignored before offer" `Quick
-            test_ptt_loop_ignores_low_rms_capture_before_offering;
+            (test_ptt_loop_ignores_low_rms_capture_before_offering ~caps);
           Alcotest.test_case "peak over silence threshold accepted" `Quick
-            test_ptt_loop_accepts_peak_over_silence_threshold;
+            (test_ptt_loop_accepts_peak_over_silence_threshold ~caps);
           Alcotest.test_case "quiet speech over RMS threshold accepted" `Quick
-            test_ptt_loop_accepts_quiet_speech_over_rms_threshold;
+            (test_ptt_loop_accepts_quiet_speech_over_rms_threshold ~caps);
         ] );
       ( "ptt_dead_input",
         [
@@ -5452,10 +5799,11 @@ let () =
               Alcotest.(check bool) "warn after 4 zeros" true r.warn;
               Alcotest.(check bool) "dead after 4 zeros" true r.dead);
           Alcotest.test_case "dead input settles after release" `Quick
-            (fun () -> test_ptt_loop_dead_input_settles_after_release ());
+            (fun () -> test_ptt_loop_dead_input_settles_after_release ~caps ());
           Alcotest.test_case "speech after flatline is offered and accepted"
             `Quick (fun () ->
-              test_ptt_loop_dead_input_settles_after_release ~recover:true ());
+              test_ptt_loop_dead_input_settles_after_release ~caps ~recover:true
+                ());
         ] );
       ( "stt_openrouter",
         [
@@ -5514,7 +5862,7 @@ let () =
         [
           Alcotest.test_case "mkdir_p creates nested directories" `Quick
             (fun () ->
-              let base = temp_dir "pie-fs-mkdir_p" in
+              let base = temp_dir ~caps "pie-fs-mkdir_p" in
               let nested = Filename.concat base "a/b/c" in
               try
                 Pie.Fs.mkdir_p ~caps nested;
@@ -5522,10 +5870,12 @@ let () =
                   "mkdir_p should create nested directories" true
                   (Sys.file_exists nested && Sys.is_directory nested);
                 (* cleanup *)
-                (try Unix.rmdir nested with _ -> ());
-                (try Unix.rmdir (Filename.concat base "a/b") with _ -> ());
-                (try Unix.rmdir (Filename.concat base "a") with _ -> ());
-                try Unix.rmdir base with _ -> ()
+                (try Ox_caps.Cap_unix.rmdir ~caps nested with _ -> ());
+                (try Ox_caps.Cap_unix.rmdir ~caps (Filename.concat base "a/b")
+                 with _ -> ());
+                (try Ox_caps.Cap_unix.rmdir ~caps (Filename.concat base "a")
+                 with _ -> ());
+                try Ox_caps.Cap_unix.rmdir ~caps base with _ -> ()
               with
               | Unix.Unix_error (Unix.ENOENT, _, _) ->
                   (* Bug: Fs.mkdir_p ~caps only calls Unix.mkdir once, which fails when
@@ -5540,9 +5890,9 @@ let () =
                     (Printexc.to_string exn));
           Alcotest.test_case "mkdir_p should fail when path is an existing file"
             `Quick (fun () ->
-              let base = temp_dir "pie-fs-mkdir_p-file" in
+              let base = temp_dir ~caps "pie-fs-mkdir_p-file" in
               let path = Filename.concat base "existing-file" in
-              write_file path "content";
+              write_file ~caps path "content";
               try
                 Pie.Fs.mkdir_p ~caps path;
                 (* Bug: Fs.mkdir_p ~caps catches Unix.EEXIST and returns () even when the
@@ -5565,25 +5915,30 @@ let () =
         [
           Alcotest.test_case "find_executable rejects directories" `Quick
             (fun () ->
-              let base = temp_dir "pie-sh-find" in
+              let base = temp_dir ~caps "pie-sh-find" in
               let fake_dir = Filename.concat base "not-an-executable" in
-              Unix.mkdir fake_dir 0o700;
-              let old_path = Option.value ~default:"" (Sys.getenv_opt "PATH") in
-              Unix.putenv "PATH" base;
+              Ox_caps.Cap_unix.mkdir ~caps fake_dir 0o700;
+              let old_path =
+                Option.value ~default:""
+                  (Ox_caps.Cap_sys.getenv_opt ~caps "PATH")
+              in
+              Ox_caps.Cap_unix.putenv ~caps "PATH" base;
               try
                 let result = Pie.Sh.find_executable ~caps "not-an-executable" in
-                Unix.putenv "PATH" old_path;
+                Ox_caps.Cap_unix.putenv ~caps "PATH" old_path;
                 (* Bug: find_executable uses Sys.file_exists which returns true for
                 directories. It should check Sys.is_directory = false (and ideally
                 Unix.access path [X_OK]) before returning a match. *)
                 Alcotest.(check (option string))
                   "directory should not match as executable" None result;
-                Unix.rmdir fake_dir;
-                Unix.rmdir base
+                Ox_caps.Cap_unix.rmdir ~caps fake_dir;
+                Ox_caps.Cap_unix.rmdir ~caps base
               with exn ->
-                Unix.putenv "PATH" old_path;
-                Unix.rmdir fake_dir;
-                Unix.rmdir base;
+                Ox_caps.Cap_unix.putenv ~caps "PATH" old_path;
+                Ox_caps.Cap_unix.rmdir ~caps fake_dir;
+                Ox_caps.Cap_unix.rmdir ~caps base;
                 raise exn);
         ] );
     ]
+
+let () = main ~caps:(Ox_test.powerbox ())

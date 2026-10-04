@@ -1,4 +1,4 @@
-let caps = Ox_test.powerbox () (* ^pcaps-n1rg *)
+(* ^pcaps-n1rg *)
 
 (* PIE024: removed wakeword CLI/config fail before capture; PTT remains. *)
 
@@ -15,42 +15,57 @@ let string_contains hay needle =
   in
   nlen = 0 || loop 0
 
-let rec rm_rf path =
+let rec rm_rf ~(caps : < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; .. >) path
+    =
   match Unix.lstat path with
   | exception Unix.Unix_error (Unix.ENOENT, _, _) -> ()
   | { Unix.st_kind = Unix.S_DIR; _ } -> (
-      (match Sys.readdir path with
+      (match Ox_caps.Cap_sys.readdir ~caps path with
       | names ->
           Array.iter
             (fun name ->
               if name <> "." && name <> ".." then
-                rm_rf (Filename.concat path name))
+                rm_rf ~caps (Filename.concat path name))
             names
       | exception Sys_error _ -> ());
-      try Unix.rmdir path with Unix.Unix_error _ -> ())
-  | _ -> ( try Unix.unlink path with Unix.Unix_error _ -> ())
+      try Ox_caps.Cap_unix.rmdir ~caps path with Unix.Unix_error _ -> ())
+  | _ -> (
+      try Ox_caps.Cap_unix.unlink ~caps path with Unix.Unix_error _ -> ())
 
-let with_sandbox f =
-  let dir = Filename.temp_file "pie-removed-wakeword" "" in
-  Sys.remove dir;
-  Unix.mkdir dir 0o700;
-  Fun.protect ~finally:(fun () -> rm_rf dir) (fun () -> f dir)
+let with_sandbox
+    ~(caps :
+       < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.tmp ; .. >) f
+    =
+  let dir =
+    Ox_caps.Cap_stdlib.Filename.temp_file ~caps "pie-removed-wakeword" ""
+  in
+  Ox_caps.Cap_sys.remove ~caps dir;
+  Ox_caps.Cap_unix.mkdir ~caps dir 0o700;
+  Fun.protect ~finally:(fun () -> rm_rf ~caps dir) (fun () -> f dir)
 
-let write_file path contents =
-  let oc = open_out_gen [ Open_creat; Open_trunc; Open_wronly ] 0o700 path in
+let write_file ~(caps : < Ox_caps.Cap.fs_write ; .. >) path contents =
+  let oc =
+    Ox_caps.Cap_stdlib.open_out_gen ~caps
+      [ Open_creat; Open_trunc; Open_wronly ]
+      0o700 path
+  in
   Fun.protect
     ~finally:(fun () -> close_out_noerr oc)
     (fun () -> output_string oc contents)
 
-let isolate_env sandbox =
-  Unix.putenv "HOME" sandbox;
-  Unix.putenv "XDG_CONFIG_HOME" (Filename.concat sandbox "config");
-  Unix.putenv "XDG_DATA_HOME" (Filename.concat sandbox "data");
-  Unix.putenv "XDG_RUNTIME_DIR" (Filename.concat sandbox "runtime");
-  Unix.putenv "TMPDIR" sandbox;
-  Unix.putenv "TMP" sandbox
+let isolate_env ~(caps : < Ox_caps.Cap.env ; .. >) sandbox =
+  Ox_caps.Cap_unix.putenv ~caps "HOME" sandbox;
+  Ox_caps.Cap_unix.putenv ~caps "XDG_CONFIG_HOME"
+    (Filename.concat sandbox "config");
+  Ox_caps.Cap_unix.putenv ~caps "XDG_DATA_HOME" (Filename.concat sandbox "data");
+  Ox_caps.Cap_unix.putenv ~caps "XDG_RUNTIME_DIR"
+    (Filename.concat sandbox "runtime");
+  Ox_caps.Cap_unix.putenv ~caps "TMPDIR" sandbox;
+  Ox_caps.Cap_unix.putenv ~caps "TMP" sandbox
 
-let run_pie ~sandbox ~sentinel args =
+let run_pie
+    ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.exec ; Ox_caps.Cap.fork ; .. >)
+    ~sandbox ~sentinel args =
   let stdout_r, stdout_w = Unix.pipe ~cloexec:true () in
   let stderr_r, stderr_w = Unix.pipe ~cloexec:true () in
   let bin = Filename.concat sandbox "bin" in
@@ -58,7 +73,8 @@ let run_pie ~sandbox ~sentinel args =
     Array.of_list
       [
         "PATH=" ^ bin ^ ":"
-        ^ Option.value ~default:"/usr/bin" (Sys.getenv_opt "PATH");
+        ^ Option.value ~default:"/usr/bin"
+            (Ox_caps.Cap_sys.getenv_opt ~caps "PATH");
         "HOME=" ^ sandbox;
         "XDG_CONFIG_HOME=" ^ Filename.concat sandbox "config";
         "XDG_DATA_HOME=" ^ Filename.concat sandbox "data";
@@ -72,7 +88,7 @@ let run_pie ~sandbox ~sentinel args =
       ]
   in
   let pid =
-    Unix.create_process_env pie_exe
+    Ox_caps.Cap_unix.create_process_env ~caps pie_exe
       (Array.of_list (pie_exe :: args))
       env Unix.stdin stdout_w stderr_w
   in
@@ -104,16 +120,17 @@ let sentinel_script =
       "";
     ]
 
-let with_helpers sandbox f =
+let with_helpers ~(caps : < Ox_caps.Cap.fs_write ; .. >) sandbox f =
   List.iter
-    (fun name -> Unix.mkdir (Filename.concat sandbox name) 0o700)
+    (fun name ->
+      Ox_caps.Cap_unix.mkdir ~caps (Filename.concat sandbox name) 0o700)
     [ "bin"; "config"; "data"; "runtime" ];
   let sentinel = Filename.concat sandbox "sentinel" in
   List.iter
     (fun name ->
       let path = Filename.concat (Filename.concat sandbox "bin") name in
-      write_file path sentinel_script;
-      Unix.chmod path 0o700)
+      write_file ~caps path sentinel_script;
+      Ox_caps.Cap_unix.chmod ~caps path 0o700)
     [ "pactl"; "pulseaudio"; "curl"; "wget"; "busctl"; "parec" ];
   f ~sentinel
 
@@ -141,10 +158,18 @@ let advertised_as_command help name =
       && (String.length t = 0 || t.[0] <> '-'))
     (lines help)
 
-let test_help_omits_wakeword_commands () =
-  with_sandbox @@ fun sandbox ->
-  with_helpers sandbox @@ fun ~sentinel ->
-  let status, stdout, stderr = run_pie ~sandbox ~sentinel [ "--help" ] in
+let test_help_omits_wakeword_commands
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_sandbox ~caps @@ fun sandbox ->
+  with_helpers ~caps sandbox @@ fun ~sentinel ->
+  let status, stdout, stderr = run_pie ~caps ~sandbox ~sentinel [ "--help" ] in
   (match status with
   | Unix.WEXITED 0 -> ()
   | Unix.WEXITED n -> Alcotest.failf "help exit %d stderr=%s" n stderr
@@ -163,19 +188,29 @@ let test_help_omits_wakeword_commands () =
   Alcotest.(check bool)
     "sentinel unused for --help" false (Sys.file_exists sentinel)
 
-let test_removed_names_fail_before_helpers () =
-  with_sandbox @@ fun sandbox ->
-  with_helpers sandbox @@ fun ~sentinel ->
+let test_removed_names_fail_before_helpers
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_sandbox ~caps @@ fun sandbox ->
+  with_helpers ~caps sandbox @@ fun ~sentinel ->
   List.iter
     (fun name ->
-      let status, _stdout, _stderr = run_pie ~sandbox ~sentinel [ name ] in
+      let status, _stdout, _stderr =
+        run_pie ~caps ~sandbox ~sentinel [ name ]
+      in
       ignore (exited_nonzero status);
       Alcotest.(check bool)
         (name ^ " did not access Pulse/provider helpers")
         false (Sys.file_exists sentinel))
     removed_commands
 
-let load_error path =
+let load_error ~(caps : < Ox_caps.Cap.env ; .. >) path =
   Eio_main.run @@ fun env ->
   match
     Pie.Config.Stt.load ~caps ~fs:(Eio.Stdenv.fs env) ~source:(`Explicit path)
@@ -184,17 +219,23 @@ let load_error path =
   | Error (`Config msg) -> msg
   | _ -> Alcotest.fail "expected config error"
 
-let test_wakeword_settings_rejected () =
-  with_sandbox @@ fun dir ->
-  isolate_env dir;
-  Unix.mkdir (Filename.concat dir "config") 0o700;
-  Unix.mkdir (Filename.concat dir "data") 0o700;
-  Unix.mkdir (Filename.concat dir "runtime") 0o700;
+let test_wakeword_settings_rejected
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_sandbox ~caps @@ fun dir ->
+  isolate_env ~caps dir;
+  Ox_caps.Cap_unix.mkdir ~caps (Filename.concat dir "config") 0o700;
+  Ox_caps.Cap_unix.mkdir ~caps (Filename.concat dir "data") 0o700;
+  Ox_caps.Cap_unix.mkdir ~caps (Filename.concat dir "runtime") 0o700;
   List.iter
     (fun key ->
       let path = Filename.concat dir "stt.toml" in
-      write_file path (key ^ " = true\n");
-      let msg = load_error path in
+      write_file ~caps path (key ^ " = true\n");
+      let msg = load_error ~caps path in
       Alcotest.(check bool)
         (key ^ " mentions unsupported wakeword")
         true
@@ -206,14 +247,20 @@ let test_wakeword_settings_rejected () =
       "wakeword_dictation_speech_rms_threshold";
     ]
 
-let test_ptt_config_without_wakeword_loads () =
-  with_sandbox @@ fun dir ->
-  isolate_env dir;
-  Unix.mkdir (Filename.concat dir "config") 0o700;
-  Unix.mkdir (Filename.concat dir "data") 0o700;
-  Unix.mkdir (Filename.concat dir "runtime") 0o700;
+let test_ptt_config_without_wakeword_loads
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_sandbox ~caps @@ fun dir ->
+  isolate_env ~caps dir;
+  Ox_caps.Cap_unix.mkdir ~caps (Filename.concat dir "config") 0o700;
+  Ox_caps.Cap_unix.mkdir ~caps (Filename.concat dir "data") 0o700;
+  Ox_caps.Cap_unix.mkdir ~caps (Filename.concat dir "runtime") 0o700;
   let path = Filename.concat dir "stt.toml" in
-  write_file path
+  write_file ~caps path
     "ptt_min_capture_rms = 0.0\n\
      ptt_min_capture_peak = 0.0\n\
      ptt_transcribe_keysym = 65478\n\
@@ -232,21 +279,31 @@ let test_ptt_config_without_wakeword_loads () =
   Alcotest.(check int) "transcribe keysym" 65478 config.ptt_transcribe_keysym;
   Alcotest.(check int) "translate keysym" 65479 config.ptt_translate_keysym
 
-let () =
+let main
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) =
   Alcotest.run "removed-wakeword"
     [
       ( "cli",
         [
           Alcotest.test_case "help omits wakeword commands" `Quick
-            test_help_omits_wakeword_commands;
+            (test_help_omits_wakeword_commands ~caps);
           Alcotest.test_case "removed names fail before helpers" `Quick
-            test_removed_names_fail_before_helpers;
+            (test_removed_names_fail_before_helpers ~caps);
         ] );
       ( "config",
         [
           Alcotest.test_case "wakeword settings are unsupported" `Quick
-            test_wakeword_settings_rejected;
+            (test_wakeword_settings_rejected ~caps);
           Alcotest.test_case "PTT config loads without wakeword fields" `Quick
-            test_ptt_config_without_wakeword_loads;
+            (test_ptt_config_without_wakeword_loads ~caps);
         ] );
     ]
+
+let () = main ~caps:(Ox_test.powerbox ())

@@ -1,9 +1,9 @@
 (* ^nwake-9uvx: keep the posix tick alive through each operation's protected
    child cleanup, without changing production runtime ownership or stderr. *)
-let run operation =
+let run ~(caps : < Ox_caps.Cap.env ; .. >) operation =
   Eio_main.run (fun env ->
       Eio.Switch.run (fun sw ->
-          Ox_app.posix_wakeup ~sw env;
+          Ox_app.posix_wakeup ~caps ~sw env;
           operation env))
 
 (* Generic owner tests inject recognition through supported two-pass dependencies. *)

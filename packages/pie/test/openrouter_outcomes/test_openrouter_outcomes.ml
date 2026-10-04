@@ -1,4 +1,4 @@
-let caps = Ox_test.powerbox () (* ^pcaps-n1rg *)
+(* ^pcaps-n1rg *)
 let pcm = Bytes.make 320 '\001'
 let case_env = "PIE_OR_CASE"
 
@@ -67,8 +67,9 @@ let expect_ok expected result =
   | Ok text -> Alcotest.(check string) "delivered text" expected text
   | Error (`Stt_error message) -> Alcotest.failf "expected success: %s" message
 
-let env_without keys =
-  Unix.environment () |> Array.to_list
+let env_without ~(caps : < Ox_caps.Cap.env ; .. >) keys =
+  Ox_caps.Cap_unix.environment ~caps ()
+  |> Array.to_list
   |> List.filter (fun entry ->
       not
         (List.exists
@@ -79,10 +80,13 @@ let env_without keys =
            keys))
   |> Array.of_list
 
-let spawn_case name =
+let spawn_case
+    ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.exec ; Ox_caps.Cap.fork ; .. >)
+    name =
   let env =
     Array.append
-      (env_without [ "OPENROUTER_API_KEY"; "OPENROUTER_BASE_URL"; case_env ])
+      (env_without ~caps
+         [ "OPENROUTER_API_KEY"; "OPENROUTER_BASE_URL"; case_env ])
       [|
         "OPENROUTER_API_KEY=synthetic-or-outcome";
         case_env ^ "=" ^ name;
@@ -91,7 +95,8 @@ let spawn_case name =
   in
   let exe = Sys.executable_name in
   let pid =
-    Unix.create_process_env exe [| exe |] env Unix.stdin Unix.stdout Unix.stderr
+    Ox_caps.Cap_unix.create_process_env ~caps exe [| exe |] env Unix.stdin
+      Unix.stdout Unix.stderr
   in
   match snd (Unix.waitpid [] pid) with
   | Unix.WEXITED 0 -> ()
@@ -133,7 +138,7 @@ let assert_part_absent name body =
 
 (* dict-m2xr dict-wha3: buffered OpenRouter pass 1 sends language and the
    glossary prompt, and omits either field when it is absent. *)
-let run_multipart ?language ?prompt () =
+let run_multipart ~(caps : < Ox_caps.Cap.env ; .. >) ?language ?prompt () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let net = Eio.Stdenv.net env in
@@ -146,7 +151,8 @@ let run_multipart ?language ?prompt () =
     | `Tcp (_, port) -> port
     | `Unix _ -> Alcotest.fail "expected TCP listener"
   in
-  Unix.putenv "OPENROUTER_BASE_URL" (Printf.sprintf "http://127.0.0.1:%d" port);
+  Ox_caps.Cap_unix.putenv ~caps "OPENROUTER_BASE_URL"
+    (Printf.sprintf "http://127.0.0.1:%d" port);
   let captured = ref ("", "") in
   Eio.Fiber.fork ~sw (fun () ->
       Eio.Switch.run (fun conn_sw ->
@@ -163,11 +169,11 @@ let run_multipart ?language ?prompt () =
   let target, body = !captured in
   (result, target, body)
 
-let child_main name =
+let child_main ~(caps : < Ox_caps.Cap.env ; .. >) name =
   match name with
   | "multipart-both" ->
       let result, target, body =
-        run_multipart ~language:"pl" ~prompt:"Nema\nPie" ()
+        run_multipart ~caps ~language:"pl" ~prompt:"Nema\nPie" ()
       in
       expect_ok "hello-pass1" result;
       if not (contains target "/api/v1/audio/transcriptions") then
@@ -175,7 +181,7 @@ let child_main name =
       assert_part "language" "pl" body;
       assert_part "prompt" "Nema\nPie" body
   | "multipart-neither" ->
-      let result, target, body = run_multipart () in
+      let result, target, body = run_multipart ~caps () in
       expect_ok "hello-pass1" result;
       if not (contains target "/api/v1/audio/transcriptions") then
         Alcotest.failf "unexpected target %s" target;
@@ -183,9 +189,10 @@ let child_main name =
       assert_part_absent "prompt" body
   | other -> Alcotest.failf "unknown child case %s" other
 
-let () =
-  match Sys.getenv_opt case_env with
-  | Some name -> child_main name
+let main
+    ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.exec ; Ox_caps.Cap.fork ; .. >) =
+  match Ox_caps.Cap_sys.getenv_opt ~caps case_env with
+  | Some name -> child_main ~caps name
   | None ->
       Alcotest.run "openrouter_outcomes"
         [
@@ -193,9 +200,11 @@ let () =
             [
               Alcotest.test_case
                 "multipart carries language and prompt (dict-m2xr dict-wha3)"
-                `Quick (fun () -> spawn_case "multipart-both");
+                `Quick (fun () -> spawn_case ~caps "multipart-both");
               Alcotest.test_case
                 "multipart omits language and prompt when absent (dict-wha3)"
-                `Quick (fun () -> spawn_case "multipart-neither");
+                `Quick (fun () -> spawn_case ~caps "multipart-neither");
             ] );
         ]
+
+let () = main ~caps:(Ox_test.powerbox ())

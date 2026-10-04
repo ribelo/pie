@@ -4,7 +4,8 @@
    private HOME/XDG tree and a loopback fixture collector only: no provider,
    control socket, microphone or installed executable. *)
 
-let putenv = Unix.putenv [@alert "-unsafe_multidomain"]
+let putenv ~(caps : < Ox_caps.Cap.env ; .. >) =
+  Ox_caps.Cap_unix.putenv ~caps [@alert "-unsafe_multidomain"]
 
 let contains hay needle =
   let rec loop i =
@@ -22,50 +23,72 @@ let count_needle hay needle =
   in
   loop 0 0
 
-let with_captured_stderr f =
-  let tmp = Filename.temp_file "pie-local-diag" ".log" in
-  let oc = open_out tmp in
+let with_captured_stderr
+    ~(caps :
+       < Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.tmp
+       ; .. >) f =
+  let tmp =
+    Ox_caps.Cap_stdlib.Filename.temp_file ~caps "pie-local-diag" ".log"
+  in
+  let oc = Ox_caps.Cap_stdlib.open_out ~caps tmp in
   let old = Unix.dup Unix.stderr in
   Unix.dup2 (Unix.descr_of_out_channel oc) Unix.stderr;
   Fun.protect
     ~finally:(fun () ->
-      flush stderr;
+      flush (Ox_caps.Cap_stdlib.stderr ~caps);
       Unix.dup2 old Unix.stderr;
       Unix.close old;
       close_out_noerr oc)
     (fun () ->
       let result = f () in
-      flush stderr;
+      flush (Ox_caps.Cap_stdlib.stderr ~caps);
       close_out_noerr oc;
-      let body = In_channel.with_open_text tmp In_channel.input_all in
+      let body =
+        Ox_caps.Cap_stdlib.In_channel.with_open_text ~caps tmp
+          In_channel.input_all
+      in
       (result, body))
 
-let with_env bindings f =
+let with_env ~(caps : < Ox_caps.Cap.env ; .. >) bindings f =
   let previous =
-    List.map (fun (key, _) -> (key, Sys.getenv_opt key)) bindings
+    List.map
+      (fun (key, _) -> (key, Ox_caps.Cap_sys.getenv_opt ~caps key))
+      bindings
   in
-  List.iter (fun (key, value) -> putenv key value) bindings;
+  List.iter (fun (key, value) -> putenv ~caps key value) bindings;
   Fun.protect
     ~finally:(fun () ->
       List.iter
         (fun (key, old) ->
-          putenv key (match old with None -> "" | Some value -> value))
+          putenv ~caps key (match old with None -> "" | Some value -> value))
         previous)
     f
 
-let with_private_runtime f =
-  let dir = Filename.temp_file "pie-local-diag-home" "" in
-  Sys.remove dir;
-  Unix.mkdir dir 0o700;
+let with_private_runtime
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) f =
+  let dir =
+    Ox_caps.Cap_stdlib.Filename.temp_file ~caps "pie-local-diag-home" ""
+  in
+  Ox_caps.Cap_sys.remove ~caps dir;
+  Ox_caps.Cap_unix.mkdir ~caps dir 0o700;
   Fun.protect
     ~finally:(fun () ->
       Array.iter
         (fun name ->
-          try Sys.remove (Filename.concat dir name) with Sys_error _ -> ())
-        (try Sys.readdir dir with Sys_error _ -> [||]);
-      try Unix.rmdir dir with Unix.Unix_error _ -> ())
+          try Ox_caps.Cap_sys.remove ~caps (Filename.concat dir name)
+          with Sys_error _ -> ())
+        (try Ox_caps.Cap_sys.readdir ~caps dir with Sys_error _ -> [||]);
+      try Ox_caps.Cap_unix.rmdir ~caps dir with Unix.Unix_error _ -> ())
     (fun () ->
-      with_env
+      with_env ~caps
         [
           ("HOME", dir);
           ("XDG_RUNTIME_DIR", dir);
@@ -179,14 +202,26 @@ let with_collector f =
 let log_info env message =
   Ox_observability.Logger.info env.Ox_app.Env.logger message
 
-let test_success_exit () =
-  with_private_runtime @@ fun _ ->
+let test_success_exit
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_private_runtime ~caps @@ fun _ ->
   Eio_main.run @@ fun env ->
   let code, _, _ = run_door ~env (fun _env _settings _sw -> Ok ()) in
   Alcotest.(check int) "success" 0 code
 
-let test_typed_failure_exit () =
-  with_private_runtime @@ fun _ ->
+let test_typed_failure_exit
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_private_runtime ~caps @@ fun _ ->
   Eio_main.run @@ fun env ->
   let code, stderr, _ =
     run_door ~env (fun _env _settings _sw -> Error (`Stt_error "typed boom"))
@@ -198,8 +233,14 @@ let test_typed_failure_exit () =
 
 (* The Door's signal stop: an interruption it requested itself is a clean stop,
    and the root switch's finalizers have run before it returns. *)
-let test_requested_stop_exit () =
-  with_private_runtime @@ fun _ ->
+let test_requested_stop_exit
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_private_runtime ~caps @@ fun _ ->
   Eio_main.run @@ fun env ->
   let id = Ox.Interrupt_id.create () in
   let released = ref false in
@@ -217,8 +258,14 @@ let test_requested_stop_exit () =
    failure: it is classified as its own nonzero exit. (The pre-migration Pie
    runner mapped an interrupt to 130; ox_app's Door owns this mapping.)
    ^napp-f7d6 *)
-let test_anonymous_interruption_exit () =
-  with_private_runtime @@ fun _ ->
+let test_anonymous_interruption_exit
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_private_runtime ~caps @@ fun _ ->
   Eio_main.run @@ fun env ->
   let code, stderr, _ =
     run_door ~env (fun _env _settings sw ->
@@ -230,10 +277,16 @@ let test_anonymous_interruption_exit () =
     "interruption rendered" true
     (String.length (String.trim stderr) > 0)
 
-let test_default_export_off_stderr_once () =
-  with_private_runtime @@ fun _ ->
+let test_default_export_off_stderr_once
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_private_runtime ~caps @@ fun _ ->
   with_collector @@ fun ~env ~port ~bodies ->
-  with_env
+  with_env ~caps
     [
       ("PIE_OTLP", "");
       ("OTEL_EXPORTER_OTLP_ENDPOINT", Printf.sprintf "http://127.0.0.1:%d" port);
@@ -258,8 +311,14 @@ let test_default_export_off_stderr_once () =
   | _ -> Alcotest.fail "expected exactly one record");
   Alcotest.(check int) "no exporter contact" 0 (List.length !bodies)
 
-let test_filtering_retained () =
-  with_private_runtime @@ fun _ ->
+let test_filtering_retained
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_private_runtime ~caps @@ fun _ ->
   Eio_main.run @@ fun env ->
   let code, stderr, records =
     run_door ~env (fun env _settings _sw ->
@@ -275,8 +334,14 @@ let test_filtering_retained () =
   Alcotest.(check int) "info once" 1 (count_needle stderr "visible-info-line");
   Alcotest.(check int) "only the info record" 1 (List.length records)
 
-let test_redacted_field_stays_out_of_stderr () =
-  with_private_runtime @@ fun _ ->
+let test_redacted_field_stays_out_of_stderr
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_private_runtime ~caps @@ fun _ ->
   Eio_main.run @@ fun env ->
   let secret = "local-diagnostics-secret" in
   let code, stderr, records =
@@ -305,10 +370,16 @@ let test_redacted_field_stays_out_of_stderr () =
       | None -> Alcotest.fail "credential field missing from the record")
   | _ -> Alcotest.fail "expected exactly one record"
 
-let test_enabled_export_private_collector () =
-  with_private_runtime @@ fun _ ->
+let test_enabled_export_private_collector
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_private_runtime ~caps @@ fun _ ->
   with_collector @@ fun ~env ~port ~bodies ->
-  with_env
+  with_env ~caps
     [
       ("PIE_OTLP", "true");
       ("OTEL_EXPORTER_OTLP_ENDPOINT", Printf.sprintf "http://127.0.0.1:%d" port);
@@ -334,8 +405,15 @@ let test_enabled_export_private_collector () =
 
 (* An enabled exporter that cannot reach its collector leaves the local channel
    intact and its own failure visible. ^pienext-gaq3 *)
-let test_failing_export_keeps_local_diagnostics () =
-  with_private_runtime @@ fun _ ->
+let test_failing_export_keeps_local_diagnostics
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_private_runtime ~caps @@ fun _ ->
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let net = Eio.Stdenv.net env in
@@ -350,14 +428,14 @@ let test_failing_export_keeps_local_diagnostics () =
   in
   (* Nothing listens here any more, so every export is refused. *)
   Eio.Net.close socket;
-  with_env
+  with_env ~caps
     [
       ("PIE_OTLP", "true");
       ("OTEL_EXPORTER_OTLP_ENDPOINT", Printf.sprintf "http://127.0.0.1:%d" port);
     ]
   @@ fun () ->
   let (code, stderr, _), exporter_stderr =
-    with_captured_stderr (fun () ->
+    with_captured_stderr ~caps (fun () ->
         run_door ~env
           ~telemetry:(fun ~sw env _settings -> Pie.Process.telemetry ~sw env ())
           (fun env _settings _sw ->
@@ -372,26 +450,36 @@ let test_failing_export_keeps_local_diagnostics () =
     "exporter failure reported" true
     (contains exporter_stderr "Pie OTLP export failed")
 
-let () =
+let main
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.tmp
+       ; .. >) =
   Alcotest.run "local_diagnostics"
     [
       ( "process_door",
         [
-          Alcotest.test_case "success exit 0" `Quick test_success_exit;
+          Alcotest.test_case "success exit 0" `Quick (test_success_exit ~caps);
           Alcotest.test_case "typed failure exit 1" `Quick
-            test_typed_failure_exit;
+            (test_typed_failure_exit ~caps);
           Alcotest.test_case "requested stop is a clean stop" `Quick
-            test_requested_stop_exit;
+            (test_requested_stop_exit ~caps);
           Alcotest.test_case "anonymous interruption is classified" `Quick
-            test_anonymous_interruption_exit;
+            (test_anonymous_interruption_exit ~caps);
           Alcotest.test_case "export off by default, stderr once" `Quick
-            test_default_export_off_stderr_once;
-          Alcotest.test_case "filtering retained" `Quick test_filtering_retained;
+            (test_default_export_off_stderr_once ~caps);
+          Alcotest.test_case "filtering retained" `Quick
+            (test_filtering_retained ~caps);
           Alcotest.test_case "redacted field stays out of stderr" `Quick
-            test_redacted_field_stays_out_of_stderr;
+            (test_redacted_field_stays_out_of_stderr ~caps);
           Alcotest.test_case "enabled export private collector" `Quick
-            test_enabled_export_private_collector;
+            (test_enabled_export_private_collector ~caps);
           Alcotest.test_case "failing export keeps local diagnostics" `Quick
-            test_failing_export_keeps_local_diagnostics;
+            (test_failing_export_keeps_local_diagnostics ~caps);
         ] );
     ]
+
+let () = main ~caps:(Ox_test.powerbox ())

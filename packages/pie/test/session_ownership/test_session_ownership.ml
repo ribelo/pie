@@ -1,9 +1,11 @@
-let caps = Ox_test.powerbox () (* ^pcaps-n1rg *)
+(* ^pcaps-n1rg *)
 
 (* PIE002 private acceptance. Public Codex buffered/streaming. *)
 
 let ( let* ) = Result.bind
-let putenv = Unix.putenv [@alert "-unsafe_multidomain"]
+
+let putenv ~(caps : < Ox_caps.Cap.env ; .. >) =
+  Ox_caps.Cap_unix.putenv ~caps [@alert "-unsafe_multidomain"]
 
 type scenario =
   | Normal
@@ -21,8 +23,8 @@ let scenario_name = function
   | Send_failure -> "send-failure"
   | Midstream_cancel -> "midstream-cancel"
 
-let fd_count () =
-  let dir = Unix.opendir "/proc/self/fd" in
+let fd_count ~(caps : < Ox_caps.Cap.fs_read ; .. >) () =
+  let dir = Ox_caps.Cap_unix.opendir ~caps "/proc/self/fd" in
   Fun.protect
     ~finally:(fun () -> Unix.closedir dir)
     (fun () ->
@@ -158,13 +160,15 @@ let session_update =
   Pie.Stt.Codex_realtime.build_pass1_session_update ~model:"gpt-live-transcribe"
     ()
 
-let run_buffered ~sw ~net ~clock ?ca_file ~url () =
+let run_buffered ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) ~sw ~net
+    ~clock ?ca_file ~url () =
   Pie.Stt.Codex_realtime.run_realtime_session ~caps ~sw ~net ~clock ?ca_file
     ~url ~access_token:"synthetic-ownership-token"
     ~mode:Pie.Stt.Codex_realtime.Transcription ~session_update
     ~input_sample_rate:16000 pcm
 
-let run_streaming ~sw ~net ~clock ?ca_file ~url ?on_audio_pull () =
+let run_streaming ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) ~sw ~net
+    ~clock ?ca_file ~url ?on_audio_pull () =
   let supplied = ref false in
   let audio () =
     if !supplied then Ok None
@@ -216,17 +220,18 @@ let make_job () =
     resolve_hold;
   }
 
-let settle ~sw ~net ~clock ?ca_file ~url ~job scenario streaming =
+let settle ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) ~sw ~net ~clock
+    ?ca_file ~url ~job scenario streaming =
   let body () =
     match scenario with
     | Midstream_cancel ->
-        run_streaming ~sw ~net ~clock ?ca_file ~url
+        run_streaming ~caps ~sw ~net ~clock ?ca_file ~url
           ~on_audio_pull:(fun () ->
             Eio.Promise.resolve job.resolve_client_ready ())
           ()
     | _ ->
-        if streaming then run_streaming ~sw ~net ~clock ?ca_file ~url ()
-        else run_buffered ~sw ~net ~clock ?ca_file ~url ()
+        if streaming then run_streaming ~caps ~sw ~net ~clock ?ca_file ~url ()
+        else run_buffered ~caps ~sw ~net ~clock ?ca_file ~url ()
   in
   let timed () =
     try Eio.Time.with_timeout_exn clock 1.5 body
@@ -258,8 +263,8 @@ let settle ~sw ~net ~clock ?ca_file ~url ~job scenario streaming =
           ignore (timed ());
           Error (`Stt_error "expected cancel winner, body succeeded"))
 
-let classify_fds () =
-  let dir = Unix.opendir "/proc/self/fd" in
+let classify_fds ~(caps : < Ox_caps.Cap.fs_read ; .. >) () =
+  let dir = Ox_caps.Cap_unix.opendir ~caps "/proc/self/fd" in
   Fun.protect
     ~finally:(fun () -> Unix.closedir dir)
     (fun () ->
@@ -276,8 +281,8 @@ let classify_fds () =
       in
       loop [])
 
-let format_fds () =
-  classify_fds ()
+let format_fds ~(caps : < Ox_caps.Cap.fs_read ; .. >) () =
+  classify_fds ~caps ()
   |> List.map (fun (name, target) -> name ^ "->" ^ target)
   |> String.concat "; "
 
@@ -291,15 +296,16 @@ let socket_inode target =
 
 let owned_tcp_by_inode () = []
 
-let format_owned_sockets () =
-  classify_fds ()
+let format_owned_sockets ~(caps : < Ox_caps.Cap.fs_read ; .. >) () =
+  classify_fds ~caps ()
   |> List.filter_map (fun (name, target) ->
       match socket_inode target with
       | None -> None
       | Some inode -> Some (name ^ "->" ^ target ^ " inode=" ^ inode))
   |> String.concat "; "
 
-let fd_targets () = classify_fds () |> List.map snd |> List.sort String.compare
+let fd_targets ~(caps : < Ox_caps.Cap.fs_read ; .. >) () =
+  classify_fds ~caps () |> List.map snd |> List.sort String.compare
 
 let peer_inode_of flow =
   match Eio_unix.Resource.fd_opt flow with
@@ -309,19 +315,20 @@ let peer_inode_of flow =
         ~if_closed:(fun () -> None)
         (fun unix_fd -> Some (string_of_int (Unix.fstat unix_fd).st_ino))
 
-let extra_socket_inodes ~baseline =
+let extra_socket_inodes ~(caps : < Ox_caps.Cap.fs_read ; .. >) ~baseline =
   let base = List.sort_uniq String.compare baseline in
-  classify_fds ()
+  classify_fds ~caps ()
   |> List.filter_map (fun (_n, target) ->
       if List.mem target base then None else socket_inode target)
 
-let assert_held_no_client ~label ~baseline ~peer_flow ~held =
+let assert_held_no_client ~(caps : < Ox_caps.Cap.fs_read ; .. >) ~label
+    ~baseline ~peer_flow ~held =
   match Atomic.get peer_flow with
   | None -> Alcotest.failf "%s no accepted peer" label
   | Some flow ->
       if held && not (fd_is_open flow) then
         Alcotest.failf "%s peer closed before client settlement" label;
-      let extras = extra_socket_inodes ~baseline in
+      let extras = extra_socket_inodes ~caps ~baseline in
       let peer_inos =
         match peer_inode_of flow with None -> [] | Some i -> [ i ]
       in
@@ -329,13 +336,15 @@ let assert_held_no_client ~label ~baseline ~peer_flow ~held =
       if client <> [] then
         Alcotest.failf
           "%s extra client socket inodes=[%s] fds=[%s] sockets=[%s]" label
-          (String.concat "," client) (format_fds ()) (format_owned_sockets ());
+          (String.concat "," client) (format_fds ~caps ())
+          (format_owned_sockets ~caps ());
       if held && peer_inos = [] && extras = [] then
         Alcotest.failf "%s expected held peer socket, extras empty fds=[%s]"
-          label (format_fds ())
+          label (format_fds ~caps ())
 
-let assert_back_to_baseline ~label ~baseline =
-  let now = fd_targets () in
+let assert_back_to_baseline ~(caps : < Ox_caps.Cap.fs_read ; .. >) ~label
+    ~baseline =
+  let now = fd_targets ~caps () in
   let extra = List.filter (fun t -> not (List.mem t baseline)) now in
   let extra_sockets =
     List.filter
@@ -346,7 +355,8 @@ let assert_back_to_baseline ~label ~baseline =
     Alcotest.failf "%s after peer join extra sockets=[%s] fds=[%s] sockets=[%s]"
       label
       (String.concat "; " extra_sockets)
-      (format_fds ()) (format_owned_sockets ())
+      (format_fds ~caps ())
+      (format_owned_sockets ~caps ())
 
 let listen_v4 ~sw net =
   Eio.Net.listen ~sw ~reuse_addr:true ~backlog:8 net
@@ -359,8 +369,9 @@ let tcp_port socket =
 
 let close_peer flow = try Eio.Flow.close flow with _ -> ()
 
-let run_one ~sw ~net ~clock ?ca_file ~url_of_port ~serve ~baseline scenario
-    streaming =
+let run_one
+    ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.time ; .. >)
+    ~sw ~net ~clock ?ca_file ~url_of_port ~serve ~baseline scenario streaming =
   let socket = listen_v4 ~sw net in
   let port = tcp_port socket in
   let url = url_of_port port in
@@ -374,7 +385,9 @@ let run_one ~sw ~net ~clock ?ca_file ~url_of_port ~serve ~baseline scenario
           let flow, _ = Eio.Net.accept ~sw socket in
           Atomic.set peer_flow (Some flow);
           serve ~clock ~job scenario flow));
-  let result = settle ~sw ~net ~clock ?ca_file ~url ~job scenario streaming in
+  let result =
+    settle ~caps ~sw ~net ~clock ?ca_file ~url ~job scenario streaming
+  in
   (try Eio.Resource.close socket with _ -> ());
   (match result with
   | Ok () -> ()
@@ -385,11 +398,11 @@ let run_one ~sw ~net ~clock ?ca_file ~url_of_port ~serve ~baseline scenario
   let label =
     (if streaming then "streaming " else "buffered ") ^ scenario_name scenario
   in
-  assert_held_no_client ~label ~baseline ~peer_flow
+  assert_held_no_client ~caps ~label ~baseline ~peer_flow
     ~held:(scenario <> Send_failure);
   ignore (Eio.Promise.try_resolve job.resolve_hold ());
   Eio.Promise.await peer_done;
-  assert_back_to_baseline ~label ~baseline
+  assert_back_to_baseline ~caps ~label ~baseline
 
 let all_scenarios =
   [
@@ -423,49 +436,61 @@ let warm_timer ~sw clock =
   Eio.Time.sleep clock 0.02;
   hold_u
 
-let test_gates_ws () =
+let test_gates_ws
+    ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.time ; .. >)
+    () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
   let stop_timer = warm_timer ~sw clock in
-  let baseline = fd_targets () in
+  let baseline = fd_targets ~caps () in
   List.iter
     (fun scenario ->
       List.iter
         (fun streaming ->
-          run_one ~sw ~net ~clock ~url_of_port:ws_url ~serve:serve_plain
+          run_one ~caps ~sw ~net ~clock ~url_of_port:ws_url ~serve:serve_plain
             ~baseline scenario streaming)
         [ false; true ])
     all_scenarios;
   ignore (Eio.Promise.try_resolve stop_timer ())
 
-let repeat_ws ~rounds () =
+let repeat_ws
+    ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.time ; .. >)
+    ~rounds () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
   let stop_timer = warm_timer ~sw clock in
-  let baseline = fd_targets () in
+  let baseline = fd_targets ~caps () in
   for _round = 1 to rounds do
     List.iter
       (fun scenario ->
         List.iter
           (fun streaming ->
-            run_one ~sw ~net ~clock ~url_of_port:ws_url ~serve:serve_plain
+            run_one ~caps ~sw ~net ~clock ~url_of_port:ws_url ~serve:serve_plain
               ~baseline scenario streaming)
           [ false; true ])
       all_scenarios
   done;
   ignore (Eio.Promise.try_resolve stop_timer ())
 
-let with_localhost_tls f =
-  let cert = Filename.temp_file "pie-own-cert" ".pem" in
-  let key = Filename.temp_file "pie-own-key" ".pem" in
+let with_localhost_tls
+    ~(caps :
+       < Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) f =
+  let cert =
+    Ox_caps.Cap_stdlib.Filename.temp_file ~caps "pie-own-cert" ".pem"
+  in
+  let key = Ox_caps.Cap_stdlib.Filename.temp_file ~caps "pie-own-key" ".pem" in
   Fun.protect
     ~finally:(fun () ->
-      (try Sys.remove cert with _ -> ());
-      try Sys.remove key with _ -> ())
+      (try Ox_caps.Cap_sys.remove ~caps cert with _ -> ());
+      try Ox_caps.Cap_sys.remove ~caps key with _ -> ())
     (fun () ->
       let cmd =
         String.concat " "
@@ -482,7 +507,7 @@ let with_localhost_tls f =
             ">/dev/null 2>&1";
           ]
       in
-      if Sys.command cmd <> 0 then
+      if Ox_caps.Cap_sys.command ~caps cmd <> 0 then
         Alcotest.fail "failed to generate synthetic localhost TLS material";
       f cert key)
 
@@ -504,7 +529,9 @@ let serve_tls ctx ~clock ~job scenario raw =
         ~close_flow:(fun () -> Eio.Flow.close tls)
         tls)
 
-let repeat_wss_in_process ~cert ~key ~rounds =
+let repeat_wss_in_process
+    ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.time ; .. >)
+    ~cert ~key ~rounds =
   let ctx =
     Ox_http.Ox_http_tls_openssl.create_server_ctx ~certificate_chain_file:cert
       ~private_key_file:key ~alpn_protocols:[ "http/1.1" ] ()
@@ -514,21 +541,22 @@ let repeat_wss_in_process ~cert ~key ~rounds =
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
   let stop_timer = warm_timer ~sw clock in
-  let baseline = fd_targets () in
+  let baseline = fd_targets ~caps () in
   for _round = 1 to rounds do
     List.iter
       (fun scenario ->
         List.iter
           (fun streaming ->
-            run_one ~sw ~net ~clock ~ca_file:cert ~url_of_port:wss_url
+            run_one ~caps ~sw ~net ~clock ~ca_file:cert ~url_of_port:wss_url
               ~serve:(serve_tls ctx) ~baseline scenario streaming)
           [ false; true ])
       all_scenarios
   done;
   ignore (Eio.Promise.try_resolve stop_timer ())
 
-let env_without keys =
-  Unix.environment () |> Array.to_list
+let env_without ~(caps : < Ox_caps.Cap.env ; .. >) keys =
+  Ox_caps.Cap_unix.environment ~caps ()
+  |> Array.to_list
   |> List.filter (fun entry ->
       not
         (List.exists
@@ -539,11 +567,18 @@ let env_without keys =
            keys))
   |> Array.of_list
 
-let repeat_wss ~rounds () =
-  with_localhost_tls @@ fun cert key ->
+let repeat_wss
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) ~rounds () =
+  with_localhost_tls ~caps @@ fun cert key ->
   let env =
     Array.append
-      (env_without
+      (env_without ~caps
          [
            "SSL_CERT_FILE";
            "PIE_OWN_WSS_CHILD";
@@ -563,7 +598,8 @@ let repeat_wss ~rounds () =
     else Sys.executable_name
   in
   let pid =
-    Unix.create_process_env exe [| exe |] env Unix.stdin Unix.stdout Unix.stderr
+    Ox_caps.Cap_unix.create_process_env ~caps exe [| exe |] env Unix.stdin
+      Unix.stdout Unix.stderr
   in
   match snd (Unix.waitpid [] pid) with
   | Unix.WEXITED 0 -> ()
@@ -596,16 +632,25 @@ let probe_flow label flow =
           in
           Printf.sprintf "%s:rcfd=open local=%s peer=%s" label local peer)
 
-let snap label extra =
-  Printf.printf "own_diag %s count=%d extra=[%s] fds=[%s] sockets=[%s]\n%!"
-    label (fd_count ()) extra (format_fds ()) (format_owned_sockets ())
+let snap ~(caps : < Ox_caps.Cap.fs_read ; Ox_caps.Cap.stdout ; .. >) label extra
+    =
+  Ox_caps.Cap_stdlib.printf ~caps
+    "own_diag %s count=%d extra=[%s] fds=[%s] sockets=[%s]\n%!" label
+    (fd_count ~caps ()) extra (format_fds ~caps ())
+    (format_owned_sockets ~caps ())
 
-let test_fd_identity_diagnosis () =
+let test_fd_identity_diagnosis
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.stdout
+       ; Ox_caps.Cap.time
+       ; .. >) () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
-  snap "after-runtime-switch" "runtime/eventfd/pools";
+  snap ~caps "after-runtime-switch" "runtime/eventfd/pools";
   let run_held ~join_peer i =
     let socket = listen_v4 ~sw net in
     let port = tcp_port socket in
@@ -626,7 +671,7 @@ let test_fd_identity_diagnosis () =
             write_ws_text flow transcript_completed;
             Eio.Promise.await hold;
             close_peer flow));
-    let result = settle ~sw ~net ~clock ~url ~job Normal false in
+    let result = settle ~caps ~sw ~net ~clock ~url ~job Normal false in
     (try Eio.Resource.close socket with _ -> ());
     let peer = Atomic.get peer_flow in
     let peer_diag =
@@ -634,40 +679,50 @@ let test_fd_identity_diagnosis () =
       | None -> "peer=none"
       | Some flow -> probe_flow "accepted-peer" flow
     in
-    snap ("held-after-op-" ^ string_of_int i) peer_diag;
+    snap ~caps ("held-after-op-" ^ string_of_int i) peer_diag;
     (match result with
     | Ok () -> ()
     | Error cause -> Alcotest.failf "diagnosis op %d failed: %a" i pp_stt cause);
     ignore (Eio.Promise.try_resolve hold_u ());
     Eio.Promise.await peer_done;
-    snap ("after-peer-join-" ^ string_of_int i) "peer released+joined";
+    snap ~caps ("after-peer-join-" ^ string_of_int i) "peer released+joined";
     ()
   in
   run_held ~join_peer:true 0;
-  snap "after-warmup-join" "warmup peer joined";
+  snap ~caps "after-warmup-join" "warmup peer joined";
   run_held ~join_peer:true 1;
   run_held ~join_peer:true 2;
   run_held ~join_peer:true 3
 
-let () =
-  match Sys.getenv_opt "PIE_OWN_WSS_CHILD" with
+let main
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stdout
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) =
+  match Ox_caps.Cap_sys.getenv_opt ~caps "PIE_OWN_WSS_CHILD" with
   | Some "1" ->
       let cert =
-        match Sys.getenv_opt "SSL_CERT_FILE" with
+        match Ox_caps.Cap_sys.getenv_opt ~caps "SSL_CERT_FILE" with
         | Some p -> p
         | None -> failwith "wss child missing SSL_CERT_FILE"
       in
       let key =
-        match Sys.getenv_opt "PIE_OWN_TLS_KEY" with
+        match Ox_caps.Cap_sys.getenv_opt ~caps "PIE_OWN_TLS_KEY" with
         | Some p -> p
         | None -> failwith "wss child missing PIE_OWN_TLS_KEY"
       in
       let rounds =
-        match Sys.getenv_opt "PIE_OWN_ROUNDS" with
+        match Ox_caps.Cap_sys.getenv_opt ~caps "PIE_OWN_ROUNDS" with
         | Some s -> int_of_string s
         | None -> 18
       in
-      repeat_wss_in_process ~cert ~key ~rounds
+      repeat_wss_in_process ~caps ~cert ~key ~rounds
   | _ ->
       Alcotest.run "session_ownership"
         [
@@ -675,19 +730,21 @@ let () =
             [
               Alcotest.test_case
                 "fd identity warmup then 3 held-peer buffered normal" `Slow
-                test_fd_identity_diagnosis;
+                (test_fd_identity_diagnosis ~caps);
             ] );
           ( "gates",
             [
               Alcotest.test_case "buffered+streaming six scenarios localhost ws"
-                `Slow test_gates_ws;
+                `Slow (test_gates_ws ~caps);
             ] );
           ( "repeat",
             [
               Alcotest.test_case "18 rounds x 12 ops ws localhost (216)" `Slow
-                (repeat_ws ~rounds:18);
+                (repeat_ws ~caps ~rounds:18);
               Alcotest.test_case
                 "18 rounds x 12 ops wss localhost dual-SAN (216)" `Slow
-                (repeat_wss ~rounds:18);
+                (repeat_wss ~caps ~rounds:18);
             ] );
         ]
+
+let () = main ~caps:(Ox_test.powerbox ())

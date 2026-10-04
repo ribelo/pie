@@ -1,18 +1,27 @@
 #!/usr/bin/env bash
-# Pie capability gate (^pcaps-uus2): use the gate installed with this Ox build.
+# pcapslint-t4bn: require fresh compiler-backed capability evidence.
 set -euo pipefail
 cd "$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)"
 
-if ! lib_dir="$(ocamlfind query ox_caps 2>/dev/null)"; then
-  echo "caps-gate: ox_caps is not installed (ocamlfind query ox_caps failed)" >&2
-  exit 2
+# Prefer the explicit Nix output, then the findlib prefix, then PATH.
+installed=""
+if lib_dir="$(ocamlfind query ox_lint 2>/dev/null)"; then
+  installed="$lib_dir/../../bin/ox-lint"
 fi
-gate="$lib_dir/../../share/ox_caps/caps-gate"
-if [ ! -f "$gate" ]; then
-  echo "caps-gate: no gate script at $gate" >&2
+engine=""
+for candidate in "${OX_LINT:-}" "$installed" "$(command -v ox-lint 2>/dev/null || true)"; do
+  if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+    engine="$candidate"
+    break
+  fi
+done
+if [ -z "$engine" ]; then
+  echo "caps-gate: ox-lint not found; install ox_lint or set OX_LINT to its executable" >&2
   exit 2
 fi
 
-# ^pcapslint-t4bn: @check retains executable .cmt; exclude test-only probe failures.
-dune build @install @packages/pie/bin/check
-exec bash "$gate" --require-typed "$@" packages
+# @check also produces executable modules' fresh typed evidence.
+dune build @install @check
+
+# No exemptions: generators receive narrow authority from their process entry.
+exec "$engine" --caps-gate --require-typed "$@"

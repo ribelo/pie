@@ -1,4 +1,4 @@
-let caps = Ox_test.powerbox () (* ^pcaps-n1rg *)
+(* ^pcaps-n1rg *)
 
 (* PIE006: one published effective config, physical-key ownership, attempt
    thresholds sampled once. Synthetic run_with_inputs only. *)
@@ -91,21 +91,27 @@ let pp_run_error fmt = function
 let fail_cause cause =
   Alcotest.failf "workflow failed: %a" (Ox.Cause.pp pp_run_error) cause
 
-let rec rm_rf path =
+let rec rm_rf ~(caps : < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; .. >) path
+    =
   match Unix.lstat path with
   | exception Unix.Unix_error (Unix.ENOENT, _, _) -> ()
   | { Unix.st_kind = Unix.S_DIR; _ } -> (
       Array.iter
-        (fun n -> if n <> "." && n <> ".." then rm_rf (Filename.concat path n))
-        (try Sys.readdir path with Sys_error _ -> [||]);
-      try Unix.rmdir path with Unix.Unix_error _ -> ())
-  | _ -> ( try Unix.unlink path with Unix.Unix_error _ -> ())
+        (fun n ->
+          if n <> "." && n <> ".." then rm_rf ~caps (Filename.concat path n))
+        (try Ox_caps.Cap_sys.readdir ~caps path with Sys_error _ -> [||]);
+      try Ox_caps.Cap_unix.rmdir ~caps path with Unix.Unix_error _ -> ())
+  | _ -> (
+      try Ox_caps.Cap_unix.unlink ~caps path with Unix.Unix_error _ -> ())
 
-let with_dir f =
-  let dir = Filename.temp_file "pie-live-config" "" in
-  Sys.remove dir;
-  Unix.mkdir dir 0o700;
-  Fun.protect ~finally:(fun () -> rm_rf dir) (fun () -> f dir)
+let with_dir
+    ~(caps :
+       < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.tmp ; .. >) f
+    =
+  let dir = Ox_caps.Cap_stdlib.Filename.temp_file ~caps "pie-live-config" "" in
+  Ox_caps.Cap_sys.remove ~caps dir;
+  Ox_caps.Cap_unix.mkdir ~caps dir 0o700;
+  Fun.protect ~finally:(fun () -> rm_rf ~caps dir) (fun () -> f dir)
 
 type audio_cmd = Chunk of bytes | Fail of Pie.Pulse.Client.error
 
@@ -140,12 +146,21 @@ let with_workflow_background ~sw ~clock:_ workflow assertions =
   | Ok () -> ()
   | Error error -> fail_cause (Ox.Cause.Fail error)
 
-let run_live ~sw ~fs ~clock ~logger ~net ~process_mgr ~mono_clock ~dir
+let run_live
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.stdout
+       ; Ox_caps.Cap.time
+       ; .. >) ~sw ~fs ~clock ~logger ~net ~process_mgr ~mono_clock ~dir
     ~config_control ~stt ~deliver ~keyboard ~audio ?ptt_transcribe_keysym
     ?ptt_translate_keysym () =
   let socket_path = Filename.concat dir "control.sock" in
   let retry_dir = Filename.concat dir "recordings" in
-  (try Unix.mkdir retry_dir 0o700
+  (try Ox_caps.Cap_unix.mkdir ~caps retry_dir 0o700
    with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
   let inputs =
     { Pie.Assistant.Service.keyboard; audio; source_name = Some "test-source" }
@@ -164,9 +179,19 @@ let cycle ~clock ~keyboard ~audio_q ~delivered ?state ?keysym ?keycode () =
     (event ?state ?keysym ?keycode ~released:true ());
   wait_until ~clock (fun () -> Atomic.get delivered <> [])
 
-let test_cli_override_before_and_after_reload () =
-  Pie_test_runtime.run @@ fun env ->
-  with_dir (fun dir ->
+let test_cli_override_before_and_after_reload
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.stdout
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  Pie_test_runtime.run ~caps @@ fun env ->
+  with_dir ~caps (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
       let keyboard = Pie.Keyboard.Monitor.create () in
@@ -184,7 +209,7 @@ let test_cli_override_before_and_after_reload () =
         Ok Pie.History.Pasted
       in
       let workflow =
-        run_live ~sw ~fs:(Eio.Stdenv.fs env) ~clock:(Eio.Stdenv.clock env)
+        run_live ~caps ~sw ~fs:(Eio.Stdenv.fs env) ~clock:(Eio.Stdenv.clock env)
           ~logger:(test_logger env) ~net:(Eio.Stdenv.net env)
           ~process_mgr:(Eio.Stdenv.process_mgr env)
           ~mono_clock:(Eio.Stdenv.mono_clock env)
@@ -215,9 +240,19 @@ let test_cli_override_before_and_after_reload () =
           Alcotest.(check (list string))
             "file keysym is not the published binding" [] (Atomic.get delivered)))
 
-let test_physical_release_after_binding_reload () =
-  Pie_test_runtime.run @@ fun env ->
-  with_dir (fun dir ->
+let test_physical_release_after_binding_reload
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.stdout
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  Pie_test_runtime.run ~caps @@ fun env ->
+  with_dir ~caps (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
       let keyboard = Pie.Keyboard.Monitor.create () in
@@ -235,7 +270,7 @@ let test_physical_release_after_binding_reload () =
         Ok Pie.History.Pasted
       in
       let workflow =
-        run_live ~sw ~fs:(Eio.Stdenv.fs env) ~clock:(Eio.Stdenv.clock env)
+        run_live ~caps ~sw ~fs:(Eio.Stdenv.fs env) ~clock:(Eio.Stdenv.clock env)
           ~logger:(test_logger env) ~net:(Eio.Stdenv.net env)
           ~process_mgr:(Eio.Stdenv.process_mgr env)
           ~mono_clock:(Eio.Stdenv.mono_clock env)
@@ -256,9 +291,19 @@ let test_physical_release_after_binding_reload () =
             "physical keycode release after reload" [ "held" ]
             (Atomic.get delivered)))
 
-let test_modifier_reload_while_held () =
-  Pie_test_runtime.run @@ fun env ->
-  with_dir (fun dir ->
+let test_modifier_reload_while_held
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.stdout
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  Pie_test_runtime.run ~caps @@ fun env ->
+  with_dir ~caps (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
       let keyboard = Pie.Keyboard.Monitor.create () in
@@ -276,7 +321,7 @@ let test_modifier_reload_while_held () =
         Ok Pie.History.Pasted
       in
       let workflow =
-        run_live ~sw ~fs:(Eio.Stdenv.fs env) ~clock:(Eio.Stdenv.clock env)
+        run_live ~caps ~sw ~fs:(Eio.Stdenv.fs env) ~clock:(Eio.Stdenv.clock env)
           ~logger:(test_logger env) ~net:(Eio.Stdenv.net env)
           ~process_mgr:(Eio.Stdenv.process_mgr env)
           ~mono_clock:(Eio.Stdenv.mono_clock env)
@@ -297,9 +342,19 @@ let test_modifier_reload_while_held () =
             "release without new shift still ends capture" [ "shift-held" ]
             (Atomic.get delivered)))
 
-let test_mod5_latch_survives_key_release () =
-  Pie_test_runtime.run @@ fun env ->
-  with_dir (fun dir ->
+let test_mod5_latch_survives_key_release
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.stdout
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  Pie_test_runtime.run ~caps @@ fun env ->
+  with_dir ~caps (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
       let keyboard = Pie.Keyboard.Monitor.create () in
@@ -324,7 +379,7 @@ let test_mod5_latch_survives_key_release () =
           in
           loop ());
       let workflow =
-        run_live ~sw ~fs:(Eio.Stdenv.fs env) ~clock:(Eio.Stdenv.clock env)
+        run_live ~caps ~sw ~fs:(Eio.Stdenv.fs env) ~clock:(Eio.Stdenv.clock env)
           ~logger:(test_logger env) ~net:(Eio.Stdenv.net env)
           ~process_mgr:(Eio.Stdenv.process_mgr env)
           ~mono_clock:(Eio.Stdenv.mono_clock env)
@@ -356,9 +411,19 @@ let test_mod5_latch_survives_key_release () =
             "second Mod5 press finishes latch" [ "latched" ]
             (Atomic.get delivered)))
 
-let test_invalid_reload_keeps_last_good () =
-  Pie_test_runtime.run @@ fun env ->
-  with_dir (fun dir ->
+let test_invalid_reload_keeps_last_good
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.stdout
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  Pie_test_runtime.run ~caps @@ fun env ->
+  with_dir ~caps (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
       let keyboard = Pie.Keyboard.Monitor.create () in
@@ -378,7 +443,7 @@ let test_invalid_reload_keeps_last_good () =
         Ok Pie.History.Pasted
       in
       let workflow =
-        run_live ~sw ~fs:(Eio.Stdenv.fs env) ~clock:(Eio.Stdenv.clock env)
+        run_live ~caps ~sw ~fs:(Eio.Stdenv.fs env) ~clock:(Eio.Stdenv.clock env)
           ~logger:(test_logger env) ~net:(Eio.Stdenv.net env)
           ~process_mgr:(Eio.Stdenv.process_mgr env)
           ~mono_clock:(Eio.Stdenv.mono_clock env)
@@ -394,9 +459,19 @@ let test_invalid_reload_keeps_last_good () =
             "last-good after invalid reload" [ "last-good" ]
             (Atomic.get delivered)))
 
-let test_threshold_reload_does_not_change_active_attempt () =
-  Pie_test_runtime.run @@ fun env ->
-  with_dir (fun dir ->
+let test_threshold_reload_does_not_change_active_attempt
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.stdout
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  Pie_test_runtime.run ~caps @@ fun env ->
+  with_dir ~caps (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
       let keyboard = Pie.Keyboard.Monitor.create () in
@@ -412,7 +487,7 @@ let test_threshold_reload_does_not_change_active_attempt () =
         Ok Pie.History.Pasted
       in
       let workflow =
-        run_live ~sw ~fs:(Eio.Stdenv.fs env) ~clock:(Eio.Stdenv.clock env)
+        run_live ~caps ~sw ~fs:(Eio.Stdenv.fs env) ~clock:(Eio.Stdenv.clock env)
           ~logger:(test_logger env) ~net:(Eio.Stdenv.net env)
           ~process_mgr:(Eio.Stdenv.process_mgr env)
           ~mono_clock:(Eio.Stdenv.mono_clock env)
@@ -458,9 +533,19 @@ let test_held_key_survives_binding_reload_unit () =
     "physical release after reload" true
     (third = Some (Pie.Ptt_loop.Release "transcribe"))
 
-let test_failed_on_press_different_key_not_stuck () =
-  Pie_test_runtime.run @@ fun env ->
-  with_dir (fun dir ->
+let test_failed_on_press_different_key_not_stuck
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.stdout
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  Pie_test_runtime.run ~caps @@ fun env ->
+  with_dir ~caps (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
       let keyboard = Pie.Keyboard.Monitor.create () in
@@ -484,7 +569,7 @@ let test_failed_on_press_different_key_not_stuck () =
         Ok Pie.History.Pasted
       in
       let workflow =
-        run_live ~sw ~fs:(Eio.Stdenv.fs env) ~clock:(Eio.Stdenv.clock env)
+        run_live ~caps ~sw ~fs:(Eio.Stdenv.fs env) ~clock:(Eio.Stdenv.clock env)
           ~logger:(test_logger env) ~net:(Eio.Stdenv.net env)
           ~process_mgr:(Eio.Stdenv.process_mgr env)
           ~mono_clock:(Eio.Stdenv.mono_clock env)
@@ -525,9 +610,19 @@ let test_failed_on_press_different_key_not_stuck () =
             "owner key B finishes the capture once" [ "ok" ]
             (Atomic.get delivered)))
 
-let test_autorepeat_press_does_not_restart_capture () =
-  Pie_test_runtime.run @@ fun env ->
-  with_dir (fun dir ->
+let test_autorepeat_press_does_not_restart_capture
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.stdout
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  Pie_test_runtime.run ~caps @@ fun env ->
+  with_dir ~caps (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
       let keyboard = Pie.Keyboard.Monitor.create () in
@@ -541,7 +636,7 @@ let test_autorepeat_press_does_not_restart_capture () =
         Ok Pie.History.Pasted
       in
       let workflow =
-        run_live ~sw ~fs:(Eio.Stdenv.fs env) ~clock:(Eio.Stdenv.clock env)
+        run_live ~caps ~sw ~fs:(Eio.Stdenv.fs env) ~clock:(Eio.Stdenv.clock env)
           ~logger:(test_logger env) ~net:(Eio.Stdenv.net env)
           ~process_mgr:(Eio.Stdenv.process_mgr env)
           ~mono_clock:(Eio.Stdenv.mono_clock env)
@@ -557,9 +652,19 @@ let test_autorepeat_press_does_not_restart_capture () =
           Alcotest.(check (list string))
             "autorepeat is one capture" [ "once" ] (Atomic.get delivered)))
 
-let test_busy_second_key_repeat_ignored_until_keyup () =
-  Pie_test_runtime.run @@ fun env ->
-  with_dir (fun dir ->
+let test_busy_second_key_repeat_ignored_until_keyup
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.stdout
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  Pie_test_runtime.run ~caps @@ fun env ->
+  with_dir ~caps (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
       let keyboard = Pie.Keyboard.Monitor.create () in
@@ -573,7 +678,7 @@ let test_busy_second_key_repeat_ignored_until_keyup () =
         Ok Pie.History.Pasted
       in
       let workflow =
-        run_live ~sw ~fs:(Eio.Stdenv.fs env) ~clock:(Eio.Stdenv.clock env)
+        run_live ~caps ~sw ~fs:(Eio.Stdenv.fs env) ~clock:(Eio.Stdenv.clock env)
           ~logger:(test_logger env) ~net:(Eio.Stdenv.net env)
           ~process_mgr:(Eio.Stdenv.process_mgr env)
           ~mono_clock:(Eio.Stdenv.mono_clock env)
@@ -607,9 +712,19 @@ let test_busy_second_key_repeat_ignored_until_keyup () =
           Alcotest.(check (list string))
             "fresh B after keyup is accepted" [ "ok" ] (Atomic.get delivered)))
 
-let test_mod5_autorepeat_does_not_toggle_latch () =
-  Pie_test_runtime.run @@ fun env ->
-  with_dir (fun dir ->
+let test_mod5_autorepeat_does_not_toggle_latch
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.stdout
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  Pie_test_runtime.run ~caps @@ fun env ->
+  with_dir ~caps (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
       let keyboard = Pie.Keyboard.Monitor.create () in
@@ -623,7 +738,7 @@ let test_mod5_autorepeat_does_not_toggle_latch () =
         Ok Pie.History.Pasted
       in
       let workflow =
-        run_live ~sw ~fs:(Eio.Stdenv.fs env) ~clock:(Eio.Stdenv.clock env)
+        run_live ~caps ~sw ~fs:(Eio.Stdenv.fs env) ~clock:(Eio.Stdenv.clock env)
           ~logger:(test_logger env) ~net:(Eio.Stdenv.net env)
           ~process_mgr:(Eio.Stdenv.process_mgr env)
           ~mono_clock:(Eio.Stdenv.mono_clock env)
@@ -655,9 +770,19 @@ let test_mod5_autorepeat_does_not_toggle_latch () =
             "next physical Mod5 press stops latch" [ "latched" ]
             (Atomic.get delivered)))
 
-let test_service_cancellation_closes_listener () =
-  Pie_test_runtime.run @@ fun env ->
-  with_dir (fun dir ->
+let test_service_cancellation_closes_listener
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.stdout
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  Pie_test_runtime.run ~caps @@ fun env ->
+  with_dir ~caps (fun dir ->
       Eio.Switch.run @@ fun sw ->
       let clock = Eio.Stdenv.clock env in
       let keyboard = Pie.Keyboard.Monitor.create () in
@@ -667,8 +792,8 @@ let test_service_cancellation_closes_listener () =
       let stopped = Atomic.make false in
       let socket_path = Filename.concat dir "control.sock" in
       let workflow =
-        run_live ~sw ~fs:(Eio.Stdenv.fs env) ~clock ~logger:(test_logger env)
-          ~net:(Eio.Stdenv.net env)
+        run_live ~caps ~sw ~fs:(Eio.Stdenv.fs env) ~clock
+          ~logger:(test_logger env) ~net:(Eio.Stdenv.net env)
           ~process_mgr:(Eio.Stdenv.process_mgr env)
           ~mono_clock:(Eio.Stdenv.mono_clock env)
           ~dir ~config_control:{ stamp; load }
@@ -702,42 +827,57 @@ let test_cli_override_applied_to_published_record () =
     "pipeline survives override" "two-pass"
     (Pie.Config.Stt.string_of_pipeline published.pipeline)
 
-let () =
+let main
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.stdout
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) =
   Alcotest.run "live-config"
     [
       ( "publication",
         [
           Alcotest.test_case "service cancellation removes owned listener"
-            `Quick test_service_cancellation_closes_listener;
+            `Quick
+            (test_service_cancellation_closes_listener ~caps);
           Alcotest.test_case "CLI override is the published record" `Quick
             test_cli_override_applied_to_published_record;
           Alcotest.test_case "CLI override before and after reload" `Quick
-            test_cli_override_before_and_after_reload;
+            (test_cli_override_before_and_after_reload ~caps);
           Alcotest.test_case "invalid reload keeps last-good" `Quick
-            test_invalid_reload_keeps_last_good;
+            (test_invalid_reload_keeps_last_good ~caps);
         ] );
       ( "physical",
         [
           Alcotest.test_case "held key survives binding reload unit" `Quick
             test_held_key_survives_binding_reload_unit;
           Alcotest.test_case "physical release after binding reload" `Quick
-            test_physical_release_after_binding_reload;
+            (test_physical_release_after_binding_reload ~caps);
           Alcotest.test_case "modifier reload while held still releases" `Quick
-            test_modifier_reload_while_held;
+            (test_modifier_reload_while_held ~caps);
           Alcotest.test_case "Mod5 latch survives key release" `Quick
-            test_mod5_latch_survives_key_release;
+            (test_mod5_latch_survives_key_release ~caps);
           Alcotest.test_case "failed on_press does not pin a different key"
-            `Quick test_failed_on_press_different_key_not_stuck;
+            `Quick
+            (test_failed_on_press_different_key_not_stuck ~caps);
           Alcotest.test_case "autorepeat press does not restart capture" `Quick
-            test_autorepeat_press_does_not_restart_capture;
+            (test_autorepeat_press_does_not_restart_capture ~caps);
           Alcotest.test_case "busy second key repeat ignored until keyup" `Quick
-            test_busy_second_key_repeat_ignored_until_keyup;
+            (test_busy_second_key_repeat_ignored_until_keyup ~caps);
           Alcotest.test_case "Mod5 autorepeat does not toggle latch" `Quick
-            test_mod5_autorepeat_does_not_toggle_latch;
+            (test_mod5_autorepeat_does_not_toggle_latch ~caps);
         ] );
       ( "thresholds",
         [
           Alcotest.test_case "threshold reload does not change active attempt"
-            `Quick test_threshold_reload_does_not_change_active_attempt;
+            `Quick
+            (test_threshold_reload_does_not_change_active_attempt ~caps);
         ] );
     ]
+
+let () = main ~caps:(Ox_test.powerbox ())

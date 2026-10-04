@@ -1,4 +1,4 @@
-let caps = Ox_test.powerbox () (* ^pcaps-n1rg *)
+(* ^pcaps-n1rg *)
 
 module A = Pie.Recording.Retry_store.Active
 
@@ -9,32 +9,43 @@ let fail_store = function
 
 let is_busy = function Error (`Retry_store "busy") -> true | _ -> false
 
-let tmp_root () =
+let tmp_root ~(caps : < Ox_caps.Cap.fs_write ; Ox_caps.Cap.tmp ; .. >) () =
   ignore (Unix.umask 0o022);
-  let p = Filename.temp_file "pie-recov" "" in
-  Sys.remove p;
-  Unix.mkdir p 0o700;
+  let p = Ox_caps.Cap_stdlib.Filename.temp_file ~caps "pie-recov" "" in
+  Ox_caps.Cap_sys.remove ~caps p;
+  Ox_caps.Cap_unix.mkdir ~caps p 0o700;
   p
 
-let rec rm_r path =
+let rec rm_r ~(caps : < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; .. >) path
+    =
   match Unix.lstat path with
   | { st_kind = Unix.S_DIR; _ } ->
       Array.iter
-        (fun n -> if n <> "." && n <> ".." then rm_r (Filename.concat path n))
-        (Sys.readdir path);
-      Unix.rmdir path
-  | _ -> Unix.unlink path
+        (fun n ->
+          if n <> "." && n <> ".." then rm_r ~caps (Filename.concat path n))
+        (Ox_caps.Cap_sys.readdir ~caps path);
+      Ox_caps.Cap_unix.rmdir ~caps path
+  | _ -> Ox_caps.Cap_unix.unlink ~caps path
 
-let with_root f =
-  let root = tmp_root () in
+let with_root
+    ~(caps :
+       < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.tmp ; .. >) f
+    =
+  let root = tmp_root ~caps () in
   Fun.protect
-    ~finally:(fun () -> try rm_r root with _ -> ())
+    ~finally:(fun () -> try rm_r ~caps root with _ -> ())
     (fun () -> f root)
 
 let even_pcm = Bytes.of_string "ABCD"
 
-let test_umask_private () =
-  with_root (fun root ->
+let test_umask_private
+    ~(caps :
+       < Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_root ~caps (fun root ->
       let store = fail_store (A.open_store ~caps ~root) in
       let active = Filename.concat root "active" in
       let st = Unix.lstat active in
@@ -52,8 +63,14 @@ let test_umask_private () =
       Alcotest.(check bool) "lockfile kept" true (Sys.file_exists lock);
       fail_store (A.abort_writer w))
 
-let test_draft_and_sealed_unpublished () =
-  with_root (fun root ->
+let test_draft_and_sealed_unpublished
+    ~(caps :
+       < Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_root ~caps (fun root ->
       let store = fail_store (A.open_store ~caps ~root) in
       let w = fail_store (A.open_audio_writer store ~mode:Transcribe) in
       fail_store (A.append_audio w even_pcm);
@@ -66,8 +83,14 @@ let test_draft_and_sealed_unpublished () =
       | Some _ -> Alcotest.fail "sealed unpublished selected");
       fail_store (A.abort_writer w))
 
-let test_publish_audio_and_reload () =
-  with_root (fun root ->
+let test_publish_audio_and_reload
+    ~(caps :
+       < Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_root ~caps (fun root ->
       let store = fail_store (A.open_store ~caps ~root) in
       let w = fail_store (A.open_audio_writer store ~mode:Translate) in
       fail_store (A.append_audio w even_pcm);
@@ -88,8 +111,14 @@ let test_publish_audio_and_reload () =
           | _ -> Alcotest.fail "startup reload missed audio")
       | _ -> Alcotest.fail "audio not published")
 
-let test_publish_text_startup () =
-  with_root (fun root ->
+let test_publish_text_startup
+    ~(caps :
+       < Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_root ~caps (fun root ->
       let store = fail_store (A.open_store ~caps ~root) in
       let g =
         fail_store
@@ -112,8 +141,14 @@ let test_publish_text_startup () =
             (fail_store (A.load_text store2 g))
       | _ -> Alcotest.fail "text startup reload")
 
-let test_symlink_fifo_unrelated () =
-  with_root (fun root ->
+let test_symlink_fifo_unrelated
+    ~(caps :
+       < Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_root ~caps (fun root ->
       let store = fail_store (A.open_store ~caps ~root) in
       let g =
         fail_store
@@ -121,9 +156,13 @@ let test_symlink_fifo_unrelated () =
              ~dispatch_uncertain:false)
       in
       let active = Filename.concat root "active" in
-      Unix.symlink "/etc/passwd" (Filename.concat active "slot-evil");
+      Ox_caps.Cap_unix.symlink ~caps "/etc/passwd"
+        (Filename.concat active "slot-evil");
       Unix.mkfifo (Filename.concat active "fifo") 0o600;
-      let oc = open_out_bin (Filename.concat active "unrelated.pcm") in
+      let oc =
+        Ox_caps.Cap_stdlib.open_out_bin ~caps
+          (Filename.concat active "unrelated.pcm")
+      in
       output_string oc "nope";
       close_out oc;
       match fail_store (A.peek store) with
@@ -131,8 +170,14 @@ let test_symlink_fifo_unrelated () =
           ()
       | _ -> Alcotest.fail "valid candidate lost to junk")
 
-let test_generation_clear_race () =
-  with_root (fun root ->
+let test_generation_clear_race
+    ~(caps :
+       < Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_root ~caps (fun root ->
       let store = fail_store (A.open_store ~caps ~root) in
       let a =
         fail_store
@@ -152,8 +197,14 @@ let test_generation_clear_race () =
             (fail_store (A.load_text store b))
       | _ -> Alcotest.fail "late clear of A dropped B")
 
-let test_concurrent_instances_busy () =
-  with_root (fun root ->
+let test_concurrent_instances_busy
+    ~(caps :
+       < Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_root ~caps (fun root ->
       let store1 = fail_store (A.open_store ~caps ~root) in
       let store2 = fail_store (A.open_store ~caps ~root) in
       let gate = Atomic.make 0 in
@@ -188,17 +239,29 @@ let test_concurrent_instances_busy () =
       | Some (A.Text _) -> ignore busy_n
       | _ -> Alcotest.fail "no candidate after concurrent publish")
 
-let test_failed_create () =
-  let path = Filename.temp_file "pie-notdir" "" in
+let test_failed_create
+    ~(caps :
+       < Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  let path = Ox_caps.Cap_stdlib.Filename.temp_file ~caps "pie-notdir" "" in
   Fun.protect
-    ~finally:(fun () -> try Unix.unlink path with _ -> ())
+    ~finally:(fun () -> try Ox_caps.Cap_unix.unlink ~caps path with _ -> ())
     (fun () ->
       match A.open_store ~caps ~root:path with
       | Error (`Retry_store _) -> ()
       | Ok _ -> Alcotest.fail "opened store on a file")
 
-let test_odd_and_budget () =
-  with_root (fun root ->
+let test_odd_and_budget
+    ~(caps :
+       < Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_root ~caps (fun root ->
       let store = fail_store (A.open_store ~caps ~root) in
       let w = fail_store (A.open_audio_writer store ~mode:Transcribe) in
       fail_store (A.append_audio w (Bytes.of_string "A"));
@@ -224,10 +287,16 @@ let test_odd_and_budget () =
       | Ok () -> Alcotest.fail "oversize pcm appended");
       fail_store (A.abort_writer w2))
 
-let test_historical_untouched () =
-  with_root (fun root ->
+let test_historical_untouched
+    ~(caps :
+       < Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_root ~caps (fun root ->
       let sentinel = Filename.concat root "transcribe-1-2-3.pcm" in
-      let oc = open_out_bin sentinel in
+      let oc = Ox_caps.Cap_stdlib.open_out_bin ~caps sentinel in
       output_string oc "HIST";
       close_out oc;
       let store = fail_store (A.open_store ~caps ~root) in
@@ -236,7 +305,7 @@ let test_historical_untouched () =
            ~dispatch_uncertain:false)
       |> ignore;
       Alcotest.(check bool) "sentinel exists" true (Sys.file_exists sentinel);
-      let ic = open_in_bin sentinel in
+      let ic = Ox_caps.Cap_stdlib.open_in_bin ~caps sentinel in
       let s = really_input_string ic (in_channel_length ic) in
       close_in ic;
       Alcotest.(check string) "sentinel bytes" "HIST" s;
@@ -244,8 +313,14 @@ let test_historical_untouched () =
       Alcotest.(check bool) "sentinel regular" true (sst.st_kind = Unix.S_REG);
       Alcotest.(check string) "sentinel still HIST" "HIST" s)
 
-let test_success_clear () =
-  with_root (fun root ->
+let test_success_clear
+    ~(caps :
+       < Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_root ~caps (fun root ->
       let store = fail_store (A.open_store ~caps ~root) in
       let g =
         fail_store
@@ -257,8 +332,14 @@ let test_success_clear () =
       | None -> ()
       | Some _ -> Alcotest.fail "cleared candidate still visible")
 
-let test_fchmod_after_open_fails () =
-  with_root (fun root ->
+let test_fchmod_after_open_fails
+    ~(caps :
+       < Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_root ~caps (fun root ->
       let store = fail_store (A.open_store ~caps ~root) in
       match
         A.Test_hooks.with_fchmod_fail (fun () ->
@@ -267,8 +348,14 @@ let test_fchmod_after_open_fails () =
       | Error (`Retry_store _) -> ()
       | Ok _ -> Alcotest.fail "writer opened after fchmod failure")
 
-let test_close_and_unlink_both_fail () =
-  with_root (fun root ->
+let test_close_and_unlink_both_fail
+    ~(caps :
+       < Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_root ~caps (fun root ->
       let store = fail_store (A.open_store ~caps ~root) in
       let w = fail_store (A.open_audio_writer store ~mode:Transcribe) in
       fail_store (A.append_audio w even_pcm);
@@ -279,8 +366,14 @@ let test_close_and_unlink_both_fail () =
           Alcotest.(check bool) "close reported" true (String.length m > 0)
       | Ok () -> Alcotest.fail "abort swallowed close+unlink failures")
 
-let test_emfile_is_error_not_none () =
-  with_root (fun root ->
+let test_emfile_is_error_not_none
+    ~(caps :
+       < Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_root ~caps (fun root ->
       let store = fail_store (A.open_store ~caps ~root) in
       fail_store
         (A.publish_text store ~mode:Transcribe ~text:"x"
@@ -291,13 +384,22 @@ let test_emfile_is_error_not_none () =
       | Ok None -> Alcotest.fail "EMFILE became no-candidate"
       | Ok (Some _) -> Alcotest.fail "peek succeeded under EMFILE")
 
-let test_malicious_slot_symlink () =
-  with_root (fun root ->
-      let sentinel = Filename.temp_file "pie-outside" "" in
+let test_malicious_slot_symlink
+    ~(caps :
+       < Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_root ~caps (fun root ->
+      let sentinel =
+        Ox_caps.Cap_stdlib.Filename.temp_file ~caps "pie-outside" ""
+      in
       Fun.protect
-        ~finally:(fun () -> try Unix.unlink sentinel with _ -> ())
+        ~finally:(fun () ->
+          try Ox_caps.Cap_unix.unlink ~caps sentinel with _ -> ())
         (fun () ->
-          let oc = open_out_bin sentinel in
+          let oc = Ox_caps.Cap_stdlib.open_out_bin ~caps sentinel in
           output_string oc "KEEP";
           close_out oc;
           let store = fail_store (A.open_store ~caps ~root) in
@@ -308,26 +410,34 @@ let test_malicious_slot_symlink () =
           in
           let active = Filename.concat root "active" in
           let slots =
-            Sys.readdir active |> Array.to_list
+            Ox_caps.Cap_sys.readdir ~caps active
+            |> Array.to_list
             |> List.filter (fun n -> String.starts_with ~prefix:"slot-" n)
           in
           List.iter
             (fun n ->
               let slot = Filename.concat active n in
               Array.iter
-                (fun c -> Unix.unlink (Filename.concat slot c))
-                (Sys.readdir slot);
-              Unix.rmdir slot;
-              Unix.symlink (Filename.dirname sentinel) slot)
+                (fun c ->
+                  Ox_caps.Cap_unix.unlink ~caps (Filename.concat slot c))
+                (Ox_caps.Cap_sys.readdir ~caps slot);
+              Ox_caps.Cap_unix.rmdir ~caps slot;
+              Ox_caps.Cap_unix.symlink ~caps (Filename.dirname sentinel) slot)
             slots;
           fail_store (A.clear store g);
-          let ic = open_in_bin sentinel in
+          let ic = Ox_caps.Cap_stdlib.open_in_bin ~caps sentinel in
           let s = really_input_string ic (in_channel_length ic) in
           close_in ic;
           Alcotest.(check string) "outside sentinel" "KEEP" s))
 
-let test_lockfile_survives () =
-  with_root (fun root ->
+let test_lockfile_survives
+    ~(caps :
+       < Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_root ~caps (fun root ->
       let store = fail_store (A.open_store ~caps ~root) in
       let g =
         fail_store
@@ -340,8 +450,14 @@ let test_lockfile_survives () =
       in
       Alcotest.(check bool) "lock never unlinked" true (Sys.file_exists lock))
 
-let test_fsync_fail_closes_and_does_not_seal () =
-  with_root (fun root ->
+let test_fsync_fail_closes_and_does_not_seal
+    ~(caps :
+       < Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_root ~caps (fun root ->
       let store = fail_store (A.open_store ~caps ~root) in
       let w = fail_store (A.open_audio_writer store ~mode:Transcribe) in
       fail_store (A.append_audio w even_pcm);
@@ -356,8 +472,14 @@ let test_fsync_fail_closes_and_does_not_seal () =
       | None -> ()
       | Some _ -> Alcotest.fail "aborted draft still published")
 
-let test_abort_after_publish_keeps_candidate () =
-  with_root (fun root ->
+let test_abort_after_publish_keeps_candidate
+    ~(caps :
+       < Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_root ~caps (fun root ->
       let store = fail_store (A.open_store ~caps ~root) in
       let w = fail_store (A.open_audio_writer store ~mode:Transcribe) in
       fail_store (A.append_audio w even_pcm);
@@ -371,8 +493,14 @@ let test_abort_after_publish_keeps_candidate () =
             (Bytes.length (fail_store (A.load_audio store g)))
       | _ -> Alcotest.fail "abort after publish dropped candidate")
 
-let test_retire_failure_then_abort_keeps_new () =
-  with_root (fun root ->
+let test_retire_failure_then_abort_keeps_new
+    ~(caps :
+       < Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_root ~caps (fun root ->
       let store = fail_store (A.open_store ~caps ~root) in
       let w1 = fail_store (A.open_audio_writer store ~mode:Transcribe) in
       fail_store (A.append_audio w1 even_pcm);
@@ -404,8 +532,14 @@ let test_retire_failure_then_abort_keeps_new () =
           | _ -> Alcotest.fail "indexed new candidate missing after retire fail"
           ))
 
-let test_close_reuse_abort_leaves_new_fd () =
-  with_root (fun root ->
+let test_close_reuse_abort_leaves_new_fd
+    ~(caps :
+       < Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_root ~caps (fun root ->
       let store = fail_store (A.open_store ~caps ~root) in
       let w = fail_store (A.open_audio_writer store ~mode:Transcribe) in
       fail_store (A.append_audio w even_pcm);
@@ -424,8 +558,14 @@ let test_close_reuse_abort_leaves_new_fd () =
           Alcotest.fail "abort closed reused descriptor");
       try Unix.close reused with _ -> ())
 
-let test_publish_text_error_preserves_rollback () =
-  with_root (fun root ->
+let test_publish_text_error_preserves_rollback
+    ~(caps :
+       < Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_root ~caps (fun root ->
       let store = fail_store (A.open_store ~caps ~root) in
       fail_store
         (A.publish_text store ~mode:Transcribe ~text:"keep"
@@ -442,47 +582,67 @@ let test_publish_text_error_preserves_rollback () =
           Alcotest.fail ("dropped rollback into Error only: " ^ m)
       | exception _ -> ())
 
-let test_active_symlink_leaves_outside_unchanged () =
-  with_root (fun root ->
-      let outside = Filename.temp_file "pie-outside-active" "" in
-      Sys.remove outside;
-      Unix.mkdir outside 0o755;
+let test_active_symlink_leaves_outside_unchanged
+    ~(caps :
+       < Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_root ~caps (fun root ->
+      let outside =
+        Ox_caps.Cap_stdlib.Filename.temp_file ~caps "pie-outside-active" ""
+      in
+      Ox_caps.Cap_sys.remove ~caps outside;
+      Ox_caps.Cap_unix.mkdir ~caps outside 0o755;
       Fun.protect
-        ~finally:(fun () -> try rm_r outside with _ -> ())
+        ~finally:(fun () -> try rm_r ~caps outside with _ -> ())
         (fun () ->
           let sentinel = Filename.concat outside "sentinel" in
-          let oc = open_out_bin sentinel in
+          let oc = Ox_caps.Cap_stdlib.open_out_bin ~caps sentinel in
           output_string oc "KEEP";
           close_out oc;
-          Unix.symlink outside (Filename.concat root "active");
+          Ox_caps.Cap_unix.symlink ~caps outside (Filename.concat root "active");
           (match A.open_store ~caps ~root with
           | Error (`Retry_store _) -> ()
           | Ok _ -> Alcotest.fail "followed active symlink");
           let st = Unix.lstat outside in
           Alcotest.(check int) "outside mode" 0o755 (st.st_perm land 0o777);
-          let ic = open_in_bin sentinel in
+          let ic = Ox_caps.Cap_stdlib.open_in_bin ~caps sentinel in
           let s = really_input_string ic (in_channel_length ic) in
           close_in ic;
           Alcotest.(check string) "sentinel" "KEEP" s))
 
-let test_insecure_active_rejected_not_repaired () =
-  with_root (fun root ->
+let test_insecure_active_rejected_not_repaired
+    ~(caps :
+       < Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_root ~caps (fun root ->
       let active = Filename.concat root "active" in
-      Unix.mkdir active 0o755;
-      Unix.chmod active 0o755;
+      Ox_caps.Cap_unix.mkdir ~caps active 0o755;
+      Ox_caps.Cap_unix.chmod ~caps active 0o755;
       (match A.open_store ~caps ~root with
       | Error (`Retry_store _) -> ()
       | Ok _ -> Alcotest.fail "accepted insecure active");
       let st = Unix.lstat active in
       Alcotest.(check int) "left 0755" 0o755 (st.st_perm land 0o777))
 
-let test_writable_root_rejected () =
-  let root = Filename.temp_file "pie-recov-open" "" in
-  Sys.remove root;
-  Unix.mkdir root 0o775;
-  Unix.chmod root 0o775;
+let test_writable_root_rejected
+    ~(caps :
+       < Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  let root = Ox_caps.Cap_stdlib.Filename.temp_file ~caps "pie-recov-open" "" in
+  Ox_caps.Cap_sys.remove ~caps root;
+  Ox_caps.Cap_unix.mkdir ~caps root 0o775;
+  Ox_caps.Cap_unix.chmod ~caps root 0o775;
   Fun.protect
-    ~finally:(fun () -> try rm_r root with _ -> ())
+    ~finally:(fun () -> try rm_r ~caps root with _ -> ())
     (fun () ->
       (match A.open_store ~caps ~root with
       | Error (`Retry_store _) -> ()
@@ -490,23 +650,29 @@ let test_writable_root_rejected () =
       let st = Unix.lstat root in
       Alcotest.(check int) "root not chmod'd" 0o775 (st.st_perm land 0o777))
 
-let test_owned_0755_root_sentinel_unchanged () =
-  let root = Filename.temp_file "pie-recov-hist" "" in
-  Sys.remove root;
-  Unix.mkdir root 0o755;
-  Unix.chmod root 0o755;
+let test_owned_0755_root_sentinel_unchanged
+    ~(caps :
+       < Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  let root = Ox_caps.Cap_stdlib.Filename.temp_file ~caps "pie-recov-hist" "" in
+  Ox_caps.Cap_sys.remove ~caps root;
+  Ox_caps.Cap_unix.mkdir ~caps root 0o755;
+  Ox_caps.Cap_unix.chmod ~caps root 0o755;
   Fun.protect
-    ~finally:(fun () -> try rm_r root with _ -> ())
+    ~finally:(fun () -> try rm_r ~caps root with _ -> ())
     (fun () ->
       ignore (Unix.umask 0o022);
       let sentinel = Filename.concat root "transcribe-1-2-3.pcm" in
-      let oc = open_out_bin sentinel in
+      let oc = Ox_caps.Cap_stdlib.open_out_bin ~caps sentinel in
       output_string oc "HIST";
       close_out oc;
       let store = fail_store (A.open_store ~caps ~root) in
       let rst = Unix.lstat root in
       Alcotest.(check int) "root left 0755" 0o755 (rst.st_perm land 0o777);
-      let ic = open_in_bin sentinel in
+      let ic = Ox_caps.Cap_stdlib.open_in_bin ~caps sentinel in
       let s = really_input_string ic (in_channel_length ic) in
       close_in ic;
       Alcotest.(check string) "sentinel" "HIST" s;
@@ -517,59 +683,67 @@ let test_owned_0755_root_sentinel_unchanged () =
       Alcotest.(check int) "root still 0755" 0o755 (rst.st_perm land 0o777);
       ignore store)
 
-let () =
+let main
+    ~(caps :
+       < Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) =
   Alcotest.run "recovery_store"
     [
       ( "active",
         [
           Alcotest.test_case "umask 0700/0600 and lock kept" `Quick
-            test_umask_private;
+            (test_umask_private ~caps);
           Alcotest.test_case "draft and sealed unpublished excluded" `Quick
-            test_draft_and_sealed_unpublished;
+            (test_draft_and_sealed_unpublished ~caps);
           Alcotest.test_case "publish audio and startup reload" `Quick
-            test_publish_audio_and_reload;
+            (test_publish_audio_and_reload ~caps);
           Alcotest.test_case "publish text startup reload" `Quick
-            test_publish_text_startup;
+            (test_publish_text_startup ~caps);
           Alcotest.test_case "symlink fifo unrelated excluded" `Quick
-            test_symlink_fifo_unrelated;
+            (test_symlink_fifo_unrelated ~caps);
           Alcotest.test_case "late clear of old generation" `Quick
-            test_generation_clear_race;
+            (test_generation_clear_race ~caps);
           Alcotest.test_case "concurrent store instances" `Quick
-            test_concurrent_instances_busy;
+            (test_concurrent_instances_busy ~caps);
           Alcotest.test_case "failed create on non-directory" `Quick
-            test_failed_create;
+            (test_failed_create ~caps);
           Alcotest.test_case "odd pcm and byte budgets" `Quick
-            test_odd_and_budget;
+            (test_odd_and_budget ~caps);
           Alcotest.test_case "historical sentinel untouched" `Quick
-            test_historical_untouched;
-          Alcotest.test_case "success clear" `Quick test_success_clear;
+            (test_historical_untouched ~caps);
+          Alcotest.test_case "success clear" `Quick (test_success_clear ~caps);
           Alcotest.test_case "lockfile never unlinked" `Quick
-            test_lockfile_survives;
+            (test_lockfile_survives ~caps);
           Alcotest.test_case "fchmod failure after exclusive open" `Quick
-            test_fchmod_after_open_fails;
+            (test_fchmod_after_open_fails ~caps);
           Alcotest.test_case "close and unlink both fail" `Quick
-            test_close_and_unlink_both_fail;
+            (test_close_and_unlink_both_fail ~caps);
           Alcotest.test_case "EMFILE is error not no-candidate" `Quick
-            test_emfile_is_error_not_none;
+            (test_emfile_is_error_not_none ~caps);
           Alcotest.test_case "malicious slot symlink spares sentinel" `Quick
-            test_malicious_slot_symlink;
+            (test_malicious_slot_symlink ~caps);
           Alcotest.test_case "fsync failure closes without sealing" `Quick
-            test_fsync_fail_closes_and_does_not_seal;
+            (test_fsync_fail_closes_and_does_not_seal ~caps);
           Alcotest.test_case "abort after publish keeps candidate" `Quick
-            test_abort_after_publish_keeps_candidate;
+            (test_abort_after_publish_keeps_candidate ~caps);
           Alcotest.test_case "retire failure then abort keeps new" `Quick
-            test_retire_failure_then_abort_keeps_new;
+            (test_retire_failure_then_abort_keeps_new ~caps);
           Alcotest.test_case "close reuse abort leaves new fd" `Quick
-            test_close_reuse_abort_leaves_new_fd;
+            (test_close_reuse_abort_leaves_new_fd ~caps);
           Alcotest.test_case "publish_text error preserves rollback" `Quick
-            test_publish_text_error_preserves_rollback;
+            (test_publish_text_error_preserves_rollback ~caps);
           Alcotest.test_case "active symlink leaves outside unchanged" `Quick
-            test_active_symlink_leaves_outside_unchanged;
+            (test_active_symlink_leaves_outside_unchanged ~caps);
           Alcotest.test_case "insecure active rejected not repaired" `Quick
-            test_insecure_active_rejected_not_repaired;
+            (test_insecure_active_rejected_not_repaired ~caps);
           Alcotest.test_case "writable root rejected" `Quick
-            test_writable_root_rejected;
+            (test_writable_root_rejected ~caps);
           Alcotest.test_case "owned 0755 root sentinel unchanged" `Quick
-            test_owned_0755_root_sentinel_unchanged;
+            (test_owned_0755_root_sentinel_unchanged ~caps);
         ] );
     ]
+
+let () = main ~caps:(Ox_test.powerbox ())

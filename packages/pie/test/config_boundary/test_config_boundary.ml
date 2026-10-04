@@ -1,30 +1,35 @@
-let caps = Ox_test.powerbox () (* ^pcaps-n1rg *)
+(* ^pcaps-n1rg *)
 
 module Config = Pie.Config.Stt
 module Door = Ox_app.Config
 
-let with_sandbox f =
-  let dir = Filename.temp_file "pie-config-boundary" "" in
-  Sys.remove dir;
-  Unix.mkdir dir 0o700;
+let with_sandbox
+    ~(caps :
+       < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.tmp ; .. >) f
+    =
+  let dir =
+    Ox_caps.Cap_stdlib.Filename.temp_file ~caps "pie-config-boundary" ""
+  in
+  Ox_caps.Cap_sys.remove ~caps dir;
+  Ox_caps.Cap_unix.mkdir ~caps dir 0o700;
   let rec remove path =
     match (Unix.lstat path).Unix.st_kind with
     | Unix.S_DIR ->
         Array.iter
           (fun name -> remove (Filename.concat path name))
-          (Sys.readdir path);
-        Unix.rmdir path
-    | _ -> Unix.unlink path
+          (Ox_caps.Cap_sys.readdir ~caps path);
+        Ox_caps.Cap_unix.rmdir ~caps path
+    | _ -> Ox_caps.Cap_unix.unlink ~caps path
   in
   Fun.protect ~finally:(fun () -> remove dir) (fun () -> f dir)
 
-let write path body =
-  let oc = open_out_bin path in
+let write ~(caps : < Ox_caps.Cap.fs_write ; .. >) path body =
+  let oc = Ox_caps.Cap_stdlib.open_out_bin ~caps path in
   Fun.protect
     ~finally:(fun () -> close_out oc)
     (fun () -> output_string oc body)
 
-let load env path =
+let load ~(caps : < Ox_caps.Cap.env ; .. >) env path =
   Config.load ~caps ~fs:(Eio.Stdenv.fs env) ~source:(`Explicit path) ()
 
 let expect_ok = function
@@ -42,11 +47,17 @@ let expect_error ~needle = function
       Alcotest.(check bool) ("error contains " ^ needle) true !found
   | Ok _ -> Alcotest.failf "expected config error containing %s" needle
 
-let test_required_source () =
-  with_sandbox @@ fun dir ->
+let test_required_source
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_sandbox ~caps @@ fun dir ->
   Eio_main.run @@ fun env ->
   let path = Filename.concat dir "stt.toml" in
-  expect_error ~needle:"no such file" (load env path);
+  expect_error ~needle:"no such file" (load ~caps env path);
   expect_error ~needle:"no such file"
     (Config.load ~caps ~fs:(Eio.Stdenv.fs env) ~source:(`Default path) ())
 
@@ -67,12 +78,18 @@ let test_filename_and_env_path () =
     "operator path required" true
     (chosen = `Explicit "/tmp/custom.toml")
 
-let test_defaults_and_models () =
-  with_sandbox @@ fun dir ->
+let test_defaults_and_models
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_sandbox ~caps @@ fun dir ->
   Eio_main.run @@ fun env ->
   let path = Filename.concat dir "stt.toml" in
-  write path "";
-  let config = expect_ok (load env path) in
+  write ~caps path "";
+  let config = expect_ok (load ~caps env path) in
   Alcotest.(check bool)
     "default one-pass" true
     (config.pipeline = Config.One_pass);
@@ -80,20 +97,26 @@ let test_defaults_and_models () =
     "default provider" true
     (config.provider = Config.Openrouter);
   Alcotest.(check bool) "buffered" false config.streaming;
-  write path
+  write ~caps path
     "pipeline = \"two-pass\"\ncorrection_model = \"openrouter/test-model\"\n";
-  let config = expect_ok (load env path) in
+  let config = expect_ok (load ~caps env path) in
   Alcotest.(check string)
     "dedicated pass-1 model" "gpt-live-transcribe" config.transcription_model
 
-let test_invalid_settings () =
-  with_sandbox @@ fun dir ->
+let test_invalid_settings
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_sandbox ~caps @@ fun dir ->
   Eio_main.run @@ fun env ->
   let path = Filename.concat dir "stt.toml" in
   List.iter
     (fun (text, needle) ->
-      write path text;
-      expect_error ~needle (load env path))
+      write ~caps path text;
+      expect_error ~needle (load ~caps env path))
     [
       ("provider = \"unsupported\"\n", "unknown provider");
       ("wakeword_enabled = true\n", "unsupported wakeword");
@@ -104,63 +127,93 @@ let test_invalid_settings () =
       ("thinking_effort = \"ultra\"\n", "thinking_effort");
     ]
 
-let test_rules () =
-  with_sandbox @@ fun dir ->
+let test_rules
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_sandbox ~caps @@ fun dir ->
   Eio_main.run @@ fun env ->
   let path = Filename.concat dir "stt.toml" in
-  write path
+  write ~caps path
     "[[newline_rules]]\n\
      app_id = \"org.test\"\n\
      action = \"shift-enter\"\n\
      [[text_entry_rules]]\n\
      app_id = \"org.test\"\n\
      method = \"paste\"\n";
-  let config = expect_ok (load env path) in
+  let config = expect_ok (load ~caps env path) in
   Alcotest.(check int) "newline rule" 1 (List.length config.newline_rules);
   Alcotest.(check int) "entry rule" 1 (List.length config.text_entry_rules)
 
-let test_prompt_resolution () =
-  with_sandbox @@ fun dir ->
+let test_prompt_resolution
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_sandbox ~caps @@ fun dir ->
   Eio_main.run @@ fun env ->
   let path = Filename.concat dir "stt.toml" in
-  write path "";
-  let config = expect_ok (load env path) in
+  write ~caps path "";
+  let config = expect_ok (load ~caps env path) in
   Alcotest.(check string)
     "embedded one-pass prompt" Config.default_one_pass_verbatim_prompt
     (List.hd config.bindings).prompt
 
-let test_nonregular_rejected () =
-  with_sandbox @@ fun dir ->
+let test_nonregular_rejected
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_sandbox ~caps @@ fun dir ->
   Eio_main.run @@ fun env ->
   let path = Filename.concat dir "stt.toml" in
-  Unix.mkdir path 0o700;
-  expect_error ~needle:"not a regular file" (load env path);
-  Unix.rmdir path;
+  Ox_caps.Cap_unix.mkdir ~caps path 0o700;
+  expect_error ~needle:"not a regular file" (load ~caps env path);
+  Ox_caps.Cap_unix.rmdir ~caps path;
   let target = Filename.concat dir "target.toml" in
-  write target "";
-  Unix.symlink target path;
-  ignore (expect_ok (load env path))
+  write ~caps target "";
+  Ox_caps.Cap_unix.symlink ~caps target path;
+  ignore (expect_ok (load ~caps env path))
 
-let test_byte_limits () =
-  with_sandbox @@ fun dir ->
+let test_byte_limits
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_sandbox ~caps @@ fun dir ->
   Eio_main.run @@ fun env ->
   let path = Filename.concat dir "stt.toml" in
-  write path (String.make (Config.max_config_file_bytes + 1) ' ');
-  expect_error ~needle:"byte limit" (load env path);
-  write path "";
+  write ~caps path (String.make (Config.max_config_file_bytes + 1) ' ');
+  expect_error ~needle:"byte limit" (load ~caps env path);
+  write ~caps path "";
   let prompts = Filename.concat dir "prompts" in
-  Unix.mkdir prompts 0o700;
-  write
+  Ox_caps.Cap_unix.mkdir ~caps prompts 0o700;
+  write ~caps
     (Filename.concat prompts "one-pass-verbatim.md")
     (String.make (Config.max_config_file_bytes + 1) 'x');
-  expect_error ~needle:"byte limit" (load env path)
+  expect_error ~needle:"byte limit" (load ~caps env path)
 
-let test_legacy_json_hint () =
-  with_sandbox @@ fun dir ->
+let test_legacy_json_hint
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_sandbox ~caps @@ fun dir ->
   Eio_main.run @@ fun env ->
   let path = Filename.concat dir "stt.toml" in
-  write (Filename.concat dir "stt.json") "{}";
-  expect_error ~needle:"migrate legacy JSON" (load env path)
+  write ~caps (Filename.concat dir "stt.json") "{}";
+  expect_error ~needle:"migrate legacy JSON" (load ~caps env path)
 
 let test_door_spec () =
   let parse = Config.door_spec.of_yojson in
@@ -205,18 +258,24 @@ let contains needle hay =
   in
   loop 0
 
-let test_pass1_provider_prefix () =
+let test_pass1_provider_prefix
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
   let write path text =
-    write path
+    write ~caps path
       ("pipeline = \"two-pass\"\ncorrection_model = \"openrouter/test-model\"\n"
      ^ text)
   in
   (* dict-m2xr *)
-  with_sandbox @@ fun dir ->
+  with_sandbox ~caps @@ fun dir ->
   Eio_main.run @@ fun env ->
   let path = Filename.concat dir "stt.toml" in
   write path "transcription_model = \"codex-realtime/gpt-live-transcribe\"\n";
-  let config = expect_ok (load env path) in
+  let config = expect_ok (load ~caps env path) in
   let resolved =
     Config.resolve_model_provider ~default_provider:config.provider
       config.transcription_model
@@ -228,7 +287,7 @@ let test_pass1_provider_prefix () =
   write path
     "provider = \"codex-realtime\"\n\
      transcription_model = \"openrouter/microsoft/mai-transcribe-2\"\n";
-  let config = expect_ok (load env path) in
+  let config = expect_ok (load ~caps env path) in
   let resolved =
     Config.resolve_model_provider ~default_provider:config.provider
       config.transcription_model
@@ -239,53 +298,65 @@ let test_pass1_provider_prefix () =
   Alcotest.(check string)
     "openrouter model" "microsoft/mai-transcribe-2" resolved.model
 
-let test_streaming_switch () =
+let test_streaming_switch
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
   let write path text =
-    write path
+    write ~caps path
       ("pipeline = \"two-pass\"\ncorrection_model = \"openrouter/test-model\"\n"
      ^ text)
   in
   (* dict-q6xd dict-i28t *)
-  with_sandbox @@ fun dir ->
+  with_sandbox ~caps @@ fun dir ->
   Eio_main.run @@ fun env ->
   let path = Filename.concat dir "stt.toml" in
   write path "";
-  let config = expect_ok (load env path) in
+  let config = expect_ok (load ~caps env path) in
   Alcotest.(check bool) "codex streams by default" true config.streaming;
   write path "provider = \"openrouter\"\n";
-  let config = expect_ok (load env path) in
+  let config = expect_ok (load ~caps env path) in
   Alcotest.(check bool) "openrouter buffers by default" false config.streaming;
   write path "streaming = false\n";
-  let config = expect_ok (load env path) in
+  let config = expect_ok (load ~caps env path) in
   Alcotest.(check bool) "explicit buffered" false config.streaming;
   write path
     "provider = \"openrouter\"\n\
      transcription_model = \"codex-realtime/gpt-live-transcribe\"\n";
-  let config = expect_ok (load env path) in
+  let config = expect_ok (load ~caps env path) in
   Alcotest.(check bool)
     "default follows resolved pass-1 provider" true config.streaming;
   List.iter
     (fun text ->
       write path text;
-      expect_error ~needle:"openrouter" (load env path))
+      expect_error ~needle:"openrouter" (load ~caps env path))
     [
       "provider = \"openrouter\"\nstreaming = true\n";
       "transcription_model = \"openrouter/microsoft/mai-transcribe-2\"\n\
        streaming = true\n";
     ]
 
-let test_correction_settings () =
+let test_correction_settings
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
   (* dict-l4zp *)
-  with_sandbox @@ fun dir ->
+  with_sandbox ~caps @@ fun dir ->
   Eio_main.run @@ fun env ->
   let path = Filename.concat dir "stt.toml" in
-  write path
+  write ~caps path
     "pipeline = \"two-pass\"\n\
      correction_model = \"openrouter/google/gemini-3.8-flash\"\n\
      correction_reasoning_effort = \"low\"\n\
      correction_timeout_seconds = 3\n\
      correction_temperature = 0\n";
-  let config = expect_ok (load env path) in
+  let config = expect_ok (load ~caps env path) in
   (match config.correction with
   | None -> Alcotest.fail "expected correction"
   | Some correction ->
@@ -295,12 +366,12 @@ let test_correction_settings () =
         "effort" (Some "low") correction.reasoning_effort;
       Alcotest.(check (float 0.00001)) "timeout" 3. correction.timeout_seconds;
       Alcotest.(check (float 0.00001)) "temperature" 0. correction.temperature);
-  write path
+  write ~caps path
     "pipeline = \"two-pass\"\n\
      correction_model = \"google/gemini-3.8-flash\"\n\
      correction_reasoning_effort = \"none\"\n\
      correction_temperature = 2\n";
-  let config = expect_ok (load env path) in
+  let config = expect_ok (load ~caps env path) in
   (match config.correction with
   | None -> Alcotest.fail "expected bare-model correction"
   | Some correction ->
@@ -316,8 +387,8 @@ let test_correction_settings () =
         "upper temperature" 2. correction.temperature);
   List.iter
     (fun (text, needle) ->
-      write path text;
-      expect_error ~needle (load env path))
+      write ~caps path text;
+      expect_error ~needle (load ~caps env path))
     [
       ( "correction_model = \"codex-realtime/gpt-live-transcribe\"\n",
         "codex-realtime" );
@@ -331,17 +402,23 @@ let test_correction_settings () =
       ("two_pass = true\n", "replaced");
     ]
 
-let test_ptt_keys_become_bindings () =
+let test_ptt_keys_become_bindings
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
   (* dict-r5lg: key compatibility is not a pipeline. *)
-  with_sandbox @@ fun dir ->
+  with_sandbox ~caps @@ fun dir ->
   Eio_main.run @@ fun env ->
   let path = Filename.concat dir "stt.toml" in
-  write path
+  write ~caps path
     "ptt_transcribe_keysym = 11\n\
      ptt_transcribe_shift = true\n\
      ptt_translate_keysym = 12\n\
      ptt_translate_shift = true\n";
-  let config = expect_ok (load env path) in
+  let config = expect_ok (load ~caps env path) in
   Alcotest.(check int) "bindings" 2 (List.length config.bindings);
   let transcribe = transcribe_binding config in
   let translate = translate_binding config in
@@ -354,15 +431,21 @@ let test_ptt_keys_become_bindings () =
     "lookup" true
     (Config.find_binding config ~keysym:11 ~shift:true = Some transcribe)
 
-let test_bindings () =
+let test_bindings
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
   (* dict-wrbh *)
-  with_sandbox @@ fun dir ->
+  with_sandbox ~caps @@ fun dir ->
   Eio_main.run @@ fun env ->
   let path = Filename.concat dir "stt.toml" in
   let prompts = Filename.concat dir "prompts" in
-  Unix.mkdir prompts 0o700;
-  write (Filename.concat prompts "raw.md") "Raw {{glossary}}";
-  write path
+  Ox_caps.Cap_unix.mkdir ~caps prompts 0o700;
+  write ~caps (Filename.concat prompts "raw.md") "Raw {{glossary}}";
+  write ~caps path
     "pipeline = \"two-pass\"\n\
      correction_model = \"google/gemini-3.8-flash\"\n\
      ptt_transcribe_keysym = 99\n\
@@ -376,7 +459,7 @@ let test_bindings () =
      [[bindings]]\n\
      keysym = 11\n\
      mode = \"translate\"\n";
-  let config = expect_ok (load env path) in
+  let config = expect_ok (load ~caps env path) in
   Alcotest.(check int) "authoritative count" 2 (List.length config.bindings);
   Alcotest.(check int)
     "PTT transcribe follows first binding" 11 config.ptt_transcribe_keysym;
@@ -390,12 +473,12 @@ let test_bindings () =
   let translate = translate_binding config in
   Alcotest.(check bool)
     "correct defaults true when a model is set" true translate.correct;
-  write path
+  write ~caps path
     "ptt_translate_keysym = 98\n\
      [[bindings]]\n\
      keysym = 11\n\
      mode = \"transcribe\"\n";
-  let config = expect_ok (load env path) in
+  let config = expect_ok (load ~caps env path) in
   Alcotest.(check int) "one binding" 1 (List.length config.bindings);
   Alcotest.(check int)
     "missing translate keeps built-in default" 65479 config.ptt_translate_keysym;
@@ -404,8 +487,8 @@ let test_bindings () =
     (config.ptt_translate_keysym <> 98);
   List.iter
     (fun (text, needle) ->
-      write path text;
-      expect_error ~needle (load env path))
+      write ~caps path text;
+      expect_error ~needle (load ~caps env path))
     [
       ( "[[bindings]]\n\
          keysym = 11\n\
@@ -441,27 +524,33 @@ let test_bindings () =
         "correction_model" );
       ("pipeline = \"two-pass\"\n", "correction_model");
     ];
-  write path
+  write ~caps path
     "pipeline = \"two-pass\"\n\
      [[bindings]]\n\
      keysym = 11\n\
      mode = \"transcribe\"\n\
      correct = false\n";
-  let config = expect_ok (load env path) in
+  let config = expect_ok (load ~caps env path) in
   Alcotest.(check bool)
     "raw transcribe needs no model" false (transcribe_binding config).correct;
-  write path
+  write ~caps path
     "pipeline = \"two-pass\"\n[[bindings]]\nkeysym = 11\nmode = \"translate\"\n";
-  expect_error ~needle:"correction_model" (load env path)
+  expect_error ~needle:"correction_model" (load ~caps env path)
 
-let test_pass2_prompts () =
+let test_pass2_prompts
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
   (* dict-g52m dict-4faf *)
-  with_sandbox @@ fun dir ->
+  with_sandbox ~caps @@ fun dir ->
   Eio_main.run @@ fun env ->
   let path = Filename.concat dir "stt.toml" in
-  write path
+  write ~caps path
     "pipeline = \"two-pass\"\ncorrection_model = \"google/gemini-3.8-flash\"\n";
-  let config = expect_ok (load env path) in
+  let config = expect_ok (load ~caps env path) in
   let transcribe = transcribe_binding config in
   let translate = translate_binding config in
   Alcotest.(check string)
@@ -486,56 +575,62 @@ let test_pass2_prompts () =
     && contains "{{target_language}}" Config.default_correction_translate_prompt
     );
   let prompts = Filename.concat dir "prompts" in
-  Unix.mkdir prompts 0o700;
-  write
+  Ox_caps.Cap_unix.mkdir ~caps prompts 0o700;
+  write ~caps
     (Filename.concat prompts "correction.md")
     "Custom glossary {{glossary}}.";
-  write
+  write ~caps
     (Filename.concat prompts "correction-translate.md")
     "From {{source_language}} to {{target_language}} {{glossary}}";
-  let config = expect_ok (load env path) in
+  let config = expect_ok (load ~caps env path) in
   Alcotest.(check string)
     "file overrides embed" "Custom glossary {{glossary}}."
     (transcribe_binding config).prompt;
-  write (Filename.concat prompts "correction.md") "no placeholders";
-  expect_error ~needle:"{{glossary}}" (load env path);
-  write
+  write ~caps (Filename.concat prompts "correction.md") "no placeholders";
+  expect_error ~needle:"{{glossary}}" (load ~caps env path);
+  write ~caps
     (Filename.concat prompts "correction.md")
     "Custom glossary {{glossary}}.";
-  write (Filename.concat prompts "named.md") "Named {{glossary}}";
-  write path
+  write ~caps (Filename.concat prompts "named.md") "Named {{glossary}}";
+  write ~caps path
     "pipeline = \"two-pass\"\n\
      correction_model = \"google/gemini-3.8-flash\"\n\
      [[bindings]]\n\
      keysym = 11\n\
      mode = \"transcribe\"\n\
      prompt = \"named.md\"\n";
-  let config = expect_ok (load env path) in
+  let config = expect_ok (load ~caps env path) in
   Alcotest.(check string)
     "named prompt" "Named {{glossary}}" (transcribe_binding config).prompt;
-  write path
+  write ~caps path
     "pipeline = \"two-pass\"\n\
      correction_model = \"google/gemini-3.8-flash\"\n\
      [[bindings]]\n\
      keysym = 11\n\
      mode = \"transcribe\"\n\
      prompt = \"missing.md\"\n";
-  expect_error ~needle:"no such file" (load env path);
-  write
+  expect_error ~needle:"no such file" (load ~caps env path);
+  write ~caps
     (Filename.concat prompts "correction-translate.md")
     "missing a placeholder {{glossary}}";
-  write path
+  write ~caps path
     "pipeline = \"two-pass\"\ncorrection_model = \"google/gemini-3.8-flash\"\n";
-  expect_error ~needle:"{{source_language}}" (load env path)
+  expect_error ~needle:"{{source_language}}" (load ~caps env path)
 
-let test_removed_pipeline_and_keys () =
-  with_sandbox @@ fun dir ->
+let test_removed_pipeline_and_keys
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_sandbox ~caps @@ fun dir ->
   Eio_main.run @@ fun env ->
   let path = Filename.concat dir "stt.toml" in
   List.iter
     (fun (body, key) ->
-      write path body;
-      let result = load env path in
+      write ~caps path body;
+      let result = load ~caps env path in
       expect_error ~needle:key result;
       expect_error ~needle:"one-pass" result;
       expect_error ~needle:"two-pass" result)
@@ -555,18 +650,24 @@ let test_removed_pipeline_and_keys () =
     ];
   List.iter
     (fun key ->
-      write path (key ^ " = \"obsolete\"\n");
-      let result = load env path in
+      write ~caps path (key ^ " = \"obsolete\"\n");
+      let result = load ~caps env path in
       expect_error ~needle:"unknown" result;
       expect_error ~needle:key result)
     [ "transcription_prompt"; "translation_prompt" ]
 
-let test_status_json_fields () =
+let test_status_json_fields
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
   (* dict-oagf *)
-  with_sandbox @@ fun dir ->
+  with_sandbox ~caps @@ fun dir ->
   Eio_main.run @@ fun env ->
   let path = Filename.concat dir "stt.toml" in
-  write path
+  write ~caps path
     "pipeline = \"two-pass\"\n\
      streaming = true\n\
      correction_model = \"google/gemini-3.8-flash\"\n\
@@ -579,9 +680,9 @@ let test_status_json_fields () =
      correct = true\n\
      prompt = \"correction.md\"\n";
   let prompts = Filename.concat dir "prompts" in
-  Unix.mkdir prompts 0o700;
-  write (Filename.concat prompts "correction.md") "Keep {{glossary}}";
-  let config = expect_ok (load env path) in
+  Ox_caps.Cap_unix.mkdir ~caps prompts 0o700;
+  write ~caps (Filename.concat prompts "correction.md") "Keep {{glossary}}";
+  let config = expect_ok (load ~caps env path) in
   let json = Config.door_spec.yojson_of_t config in
   let member name =
     match Yojson.Safe.Util.member name json with
@@ -621,14 +722,20 @@ let test_status_json_fields () =
         (Yojson.Safe.Util.member "prompt_file" binding = `String "correction.md")
   | _ -> Alcotest.fail "expected one binding"
 
-let test_one_pass_config () =
+let test_one_pass_config
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
   (* dict-rtdw dict-gi5u dict-4y4r dict-dq3o *)
-  with_sandbox @@ fun dir ->
+  with_sandbox ~caps @@ fun dir ->
   Eio_main.run @@ fun env ->
   let path = Filename.concat dir "stt.toml" in
   let prompts = Filename.concat dir "prompts" in
-  Unix.mkdir prompts 0o700;
-  write path
+  Ox_caps.Cap_unix.mkdir ~caps prompts 0o700;
+  write ~caps path
     "pipeline = \"one-pass\"\n\
      transcription_model = \"openrouter/google/gemini-3.8-flash\"\n\
      translation_model = \"openrouter/google/gemini-3.8-flash\"\n\
@@ -647,7 +754,7 @@ let test_one_pass_config () =
      [[bindings]]\n\
      keysym = 12\n\
      mode = \"translate\"\n";
-  let config = expect_ok (load env path) in
+  let config = expect_ok (load ~caps env path) in
   Alcotest.(check string)
     "pipeline" "one-pass"
     (Config.string_of_pipeline config.pipeline);
@@ -680,12 +787,12 @@ let test_one_pass_config () =
   Alcotest.(check bool)
     "verbatim has glossary" true
     (contains "{{glossary}}" Config.default_one_pass_verbatim_prompt);
-  write (Filename.concat prompts "one-pass-verbatim.md") "no placeholders";
-  expect_error ~needle:"{{glossary}}" (load env path);
-  write
+  write ~caps (Filename.concat prompts "one-pass-verbatim.md") "no placeholders";
+  expect_error ~needle:"{{glossary}}" (load ~caps env path);
+  write ~caps
     (Filename.concat prompts "named.md")
     "Named {{glossary}} {{source_language}} {{target_language}}";
-  write path
+  write ~caps path
     "pipeline = \"one-pass\"\n\
      transcription_model = \"openrouter/google/gemini-3.8-flash\"\n\
      translation_model = \"openrouter/google/gemini-3.8-flash\"\n\
@@ -694,17 +801,17 @@ let test_one_pass_config () =
      mode = \"transcribe\"\n\
      correct = false\n\
      prompt = \"named.md\"\n";
-  let config = expect_ok (load env path) in
+  let config = expect_ok (load ~caps env path) in
   Alcotest.(check string)
     "named override"
     "Named {{glossary}} {{source_language}} {{target_language}}"
     (transcribe_binding config).prompt;
-  Unix.unlink (Filename.concat prompts "one-pass-verbatim.md");
-  write path
+  Ox_caps.Cap_unix.unlink ~caps (Filename.concat prompts "one-pass-verbatim.md");
+  write ~caps path
     "pipeline = \"one-pass\"\n\
      transcription_model = \"openrouter/google/gemini-3.8-flash\"\n\
      translation_model = \"openrouter/google/gemini-3.8-flash\"\n";
-  let config = expect_ok (load env path) in
+  let config = expect_ok (load ~caps env path) in
   Alcotest.(check (float 0.00001))
     "default timeout" Config.default_one_pass_timeout_seconds
     config.one_pass_timeout_seconds;
@@ -717,8 +824,8 @@ let test_one_pass_config () =
     (Yojson.Safe.Util.member "pipeline" json = `String "one-pass");
   List.iter
     (fun (text, needle) ->
-      write path text;
-      expect_error ~needle (load env path))
+      write ~caps path text;
+      expect_error ~needle (load ~caps env path))
     [
       ( "pipeline = \"one-pass\"\n\
          transcription_model = \"codex-realtime/gpt-live-transcribe\"\n",
@@ -739,7 +846,7 @@ let test_one_pass_config () =
       ("pipeline = \"both\"\n", "pipeline");
     ]
 
-let load_with_warnings env path =
+let load_with_warnings ~(caps : < Ox_caps.Cap.env ; .. >) env path =
   let warnings = ref [] in
   let warn message = warnings := message :: !warnings in
   let result =
@@ -773,28 +880,41 @@ let assert_paste_for window =
   | Ok _ -> Alcotest.fail "deliver copied without pasting"
   | Error _ -> Alcotest.fail "deliver failed"
 
-let test_text_entry_paste () =
-  with_sandbox @@ fun dir ->
+let test_text_entry_paste
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_sandbox ~caps @@ fun dir ->
   Eio_main.run @@ fun env ->
   let path = Filename.concat dir "stt.toml" in
-  write path "[[text_entry_rules]]\napp_id = \"org.test\"\nmethod = \"paste\"\n";
-  let config, warnings = load_with_warnings env path in
+  write ~caps path
+    "[[text_entry_rules]]\napp_id = \"org.test\"\nmethod = \"paste\"\n";
+  let config, warnings = load_with_warnings ~caps env path in
   let config = expect_ok config in
   Alcotest.(check int) "no warning" 0 (List.length warnings);
   match config.text_entry_rules with
   | [ rule ] -> Alcotest.(check bool) "paste" true (rule.method_ = Config.Paste)
   | _ -> Alcotest.fail "expected one text entry rule"
 
-let test_text_entry_type_pastes () =
-  with_sandbox @@ fun dir ->
+let test_text_entry_type_pastes
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_sandbox ~caps @@ fun dir ->
   Eio_main.run @@ fun env ->
   let path = Filename.concat dir "stt.toml" in
-  write path
+  write ~caps path
     "[[text_entry_rules]]\n\
      app_id = \"org.test\"\n\
      title_regex = \"Editor\"\n\
      method = \"type\"\n";
-  let config, warnings = load_with_warnings env path in
+  let config, warnings = load_with_warnings ~caps env path in
   let config = expect_ok config in
   let expected =
     "text_entry_rules[0] (app_id=\"org.test\", title_regex=\"Editor\"): method \
@@ -814,13 +934,19 @@ let test_text_entry_type_pastes () =
       assert_paste_for editor_window
   | _ -> Alcotest.fail "expected one text entry rule"
 
-let test_text_entry_type_title_only () =
-  with_sandbox @@ fun dir ->
+let test_text_entry_type_title_only
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_sandbox ~caps @@ fun dir ->
   Eio_main.run @@ fun env ->
   let path = Filename.concat dir "stt.toml" in
-  write path
+  write ~caps path
     "[[text_entry_rules]]\ntitle_regex = \"Editor\"\nmethod = \"type\"\n";
-  let config, warnings = load_with_warnings env path in
+  let config, warnings = load_with_warnings ~caps env path in
   let config = expect_ok config in
   let expected =
     "text_entry_rules[0] (title_regex=\"Editor\"): method \"type\" is no \
@@ -833,21 +959,34 @@ let test_text_entry_type_title_only () =
   | [ rule ] -> Alcotest.(check bool) "paste" true (rule.method_ = Config.Paste)
   | _ -> Alcotest.fail "expected one text entry rule"
 
-let test_text_entry_unknown_method () =
-  with_sandbox @@ fun dir ->
+let test_text_entry_unknown_method
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_sandbox ~caps @@ fun dir ->
   Eio_main.run @@ fun env ->
   let path = Filename.concat dir "stt.toml" in
-  write path "[[text_entry_rules]]\napp_id = \"org.test\"\nmethod = \"nope\"\n";
-  let result, warnings = load_with_warnings env path in
+  write ~caps path
+    "[[text_entry_rules]]\napp_id = \"org.test\"\nmethod = \"nope\"\n";
+  let result, warnings = load_with_warnings ~caps env path in
   expect_error ~needle:"unknown text entry method" result;
   Alcotest.(check int) "no warning on reject" 0 (List.length warnings)
 
-let test_text_entry_rules_absent () =
-  with_sandbox @@ fun dir ->
+let test_text_entry_rules_absent
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_sandbox ~caps @@ fun dir ->
   Eio_main.run @@ fun env ->
   let path = Filename.concat dir "stt.toml" in
-  write path "provider = \"openrouter\"\n";
-  let config, warnings = load_with_warnings env path in
+  write ~caps path "provider = \"openrouter\"\n";
+  let config, warnings = load_with_warnings ~caps env path in
   let config = expect_ok config in
   Alcotest.(check int) "no rules" 0 (List.length config.text_entry_rules);
   Alcotest.(check int) "no warning" 0 (List.length warnings)
@@ -876,14 +1015,20 @@ let test_default_profanity_policy () =
     (contains "Remove incidental profanity"
        Config.default_one_pass_verbatim_prompt)
 
-let test_prompt_rules () =
+let test_prompt_rules
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
   (* dict-c3nt: validate at load, then choose from the captured press window. *)
-  with_sandbox @@ fun dir ->
+  with_sandbox ~caps @@ fun dir ->
   Eio_main.run @@ fun env ->
   let path = Filename.concat dir "stt.toml" in
   let prompts = Filename.concat dir "prompts" in
-  Unix.mkdir prompts 0o700;
-  write (Filename.concat prompts "neutral.md") "Neutral {{glossary}}";
+  Ox_caps.Cap_unix.mkdir ~caps prompts 0o700;
+  write ~caps (Filename.concat prompts "neutral.md") "Neutral {{glossary}}";
   let base =
     "pipeline = \"one-pass\"\n\
      thinking_effort = \"low\"\n\
@@ -899,8 +1044,8 @@ let test_prompt_rules () =
        prompt = \"neutral.md\""
     ^ rule "app_id = \"slack\"\nmode = \"transcribe\"\nprompt = \"one-pass.md\""
   in
-  write path (base ^ rules);
-  let config = expect_ok (load env path) in
+  write ~caps path (base ^ rules);
+  let config = expect_ok (load ~caps env path) in
   let binding = transcribe_binding config in
   let window app_id title =
     Some
@@ -970,11 +1115,12 @@ let test_prompt_rules () =
     "startup rules" 2
     (List.length
        (Yojson.Safe.Util.to_list (Yojson.Safe.Util.member "prompt_rules" json)));
-  write
+  write ~caps
     (Filename.concat prompts "universal.md")
     "{{glossary}} {{source_language}} {{target_language}}";
-  write path (base ^ rule "title_regex = \"Team\"\nprompt = \"universal.md\"");
-  let universal = expect_ok (load env path) in
+  write ~caps path
+    (base ^ rule "title_regex = \"Team\"\nprompt = \"universal.md\"");
+  let universal = expect_ok (load ~caps env path) in
   Alcotest.(check string)
     "mode-less rule covers translation" "universal.md"
     (Config.select_prompt universal translated ~window:(window "other" "Team"))
@@ -989,8 +1135,8 @@ let test_prompt_rules () =
     (List.length roundtrip.prompt_rules);
   List.iter
     (fun fields ->
-      write path (base ^ rule fields);
-      expect_error ~needle:"prompt_rules[0]" (load env path))
+      write ~caps path (base ^ rule fields);
+      expect_error ~needle:"prompt_rules[0]" (load ~caps env path))
     [
       "app_id = 7\nprompt = \"neutral.md\"";
       "title_regex = 7\nprompt = \"neutral.md\"";
@@ -1005,23 +1151,29 @@ let test_prompt_rules () =
       "app_id = \"slack\"\nmode = \"translate\"\nprompt = \"neutral.md\"";
       "app_id = \"slack\"\nprompt = \"neutral.md\"";
     ];
-  write (Filename.concat prompts "neutral.md") "";
-  write path (base ^ rules);
-  expect_error ~needle:"prompt_rules[0]" (load env path);
-  write (Filename.concat prompts "neutral.md") "No placeholders";
-  expect_error ~needle:"prompt_rules[0]" (load env path)
+  write ~caps (Filename.concat prompts "neutral.md") "";
+  write ~caps path (base ^ rules);
+  expect_error ~needle:"prompt_rules[0]" (load ~caps env path);
+  write ~caps (Filename.concat prompts "neutral.md") "No placeholders";
+  expect_error ~needle:"prompt_rules[0]" (load ~caps env path)
 
-let test_release_grace () =
-  with_sandbox @@ fun dir ->
+let test_release_grace
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_sandbox ~caps @@ fun dir ->
   Eio_main.run @@ fun env ->
   let path = Filename.concat dir "stt.toml" in
-  write path "";
+  write ~caps path "";
   Alcotest.(check int)
-    "default grace" 1000 (expect_ok (load env path)).ptt_release_grace_ms;
+    "default grace" 1000 (expect_ok (load ~caps env path)).ptt_release_grace_ms;
   List.iter
     (fun ms ->
-      write path (Printf.sprintf "ptt_release_grace_ms = %d\n" ms);
-      let cfg = expect_ok (load env path) in
+      write ~caps path (Printf.sprintf "ptt_release_grace_ms = %d\n" ms);
+      let cfg = expect_ok (load ~caps env path) in
       Alcotest.(check int) "parsed grace" ms cfg.ptt_release_grace_ms;
       match Config.door_spec.yojson_of_t cfg with
       | `Assoc fields ->
@@ -1030,63 +1182,73 @@ let test_release_grace () =
             (List.assoc_opt "ptt_release_grace_ms" fields = Some (`Int ms))
       | _ -> Alcotest.fail "status is not an object")
     [ 0; 50; 3000 ];
-  write path "ptt_release_grace_ms = -1\n";
-  expect_error ~needle:"ptt_release_grace_ms" (load env path)
+  write ~caps path "ptt_release_grace_ms = -1\n";
+  expect_error ~needle:"ptt_release_grace_ms" (load ~caps env path)
 
-let () =
+let main
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) =
   Alcotest.run "config_boundary"
     [
       ( "door",
         [
           Alcotest.test_case "required default and explicit paths" `Quick
-            test_required_source;
+            (test_required_source ~caps);
           Alcotest.test_case "stt.toml path and explicit source" `Quick
             test_filename_and_env_path;
           Alcotest.test_case "defaults and model overrides" `Quick
-            test_defaults_and_models;
-          Alcotest.test_case "invalid settings" `Quick test_invalid_settings;
+            (test_defaults_and_models ~caps);
+          Alcotest.test_case "invalid settings" `Quick
+            (test_invalid_settings ~caps);
           Alcotest.test_case "dict-n3kf release grace config" `Quick
-            test_release_grace;
+            (test_release_grace ~caps);
           Alcotest.test_case "default profanity policy dict-x9pf" `Quick
             test_default_profanity_policy;
           Alcotest.test_case "destination prompt rules dict-c3nt" `Quick
-            test_prompt_rules;
-          Alcotest.test_case "typed rule arrays" `Quick test_rules;
+            (test_prompt_rules ~caps);
+          Alcotest.test_case "typed rule arrays" `Quick (test_rules ~caps);
           Alcotest.test_case "relative prompt paths and validation" `Quick
-            test_prompt_resolution;
+            (test_prompt_resolution ~caps);
           Alcotest.test_case "regular-file boundary" `Quick
-            test_nonregular_rejected;
+            (test_nonregular_rejected ~caps);
           Alcotest.test_case "1 MiB config and prompt caps" `Quick
-            test_byte_limits;
+            (test_byte_limits ~caps);
           Alcotest.test_case "legacy filename guidance" `Quick
-            test_legacy_json_hint;
+            (test_legacy_json_hint ~caps);
           Alcotest.test_case "Door spec codec" `Quick test_door_spec;
           Alcotest.test_case "dict-m2xr pass-1 provider prefix" `Quick
-            test_pass1_provider_prefix;
+            (test_pass1_provider_prefix ~caps);
           Alcotest.test_case "dict-q6xd dict-i28t streaming switch" `Quick
-            test_streaming_switch;
+            (test_streaming_switch ~caps);
           Alcotest.test_case "dict-l4zp correction settings" `Quick
-            test_correction_settings;
+            (test_correction_settings ~caps);
           Alcotest.test_case "dict-r5lg PTT keys become bindings" `Quick
-            test_ptt_keys_become_bindings;
-          Alcotest.test_case "dict-wrbh bindings" `Quick test_bindings;
+            (test_ptt_keys_become_bindings ~caps);
+          Alcotest.test_case "dict-wrbh bindings" `Quick (test_bindings ~caps);
           Alcotest.test_case "dict-g52m dict-4faf pass-2 prompts" `Quick
-            test_pass2_prompts;
+            (test_pass2_prompts ~caps);
           Alcotest.test_case
             "dict-v2qd removed pipelines and prompt keys rejected" `Quick
-            test_removed_pipeline_and_keys;
+            (test_removed_pipeline_and_keys ~caps);
           Alcotest.test_case "dict-oagf status JSON fields" `Quick
-            test_status_json_fields;
+            (test_status_json_fields ~caps);
           Alcotest.test_case "dict-rtdw/gi5u/4y4r/dq3o one-pass config" `Quick
-            test_one_pass_config;
-          Alcotest.test_case "text entry paste" `Quick test_text_entry_paste;
+            (test_one_pass_config ~caps);
+          Alcotest.test_case "text entry paste" `Quick
+            (test_text_entry_paste ~caps);
           Alcotest.test_case "retired type method pastes" `Quick
-            test_text_entry_type_pastes;
+            (test_text_entry_type_pastes ~caps);
           Alcotest.test_case "retired type method names title" `Quick
-            test_text_entry_type_title_only;
+            (test_text_entry_type_title_only ~caps);
           Alcotest.test_case "unknown text entry method" `Quick
-            test_text_entry_unknown_method;
+            (test_text_entry_unknown_method ~caps);
           Alcotest.test_case "absent text entry rules" `Quick
-            test_text_entry_rules_absent;
+            (test_text_entry_rules_absent ~caps);
         ] );
     ]
+
+let () = main ~caps:(Ox_test.powerbox ())

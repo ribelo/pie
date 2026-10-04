@@ -3,19 +3,19 @@
 (library
  (name build_record_lib)
  (modules provenance)
- (libraries unix yojson))
+ (libraries ox_caps unix yojson))
 
 (executable
  (name pie_build_record)
  (modules pie_build_record)
- (libraries build_record_lib unix))
+ (libraries build_record_lib ox_test unix))
 
 (executable
  (name preflight)
  (modules preflight)
- (libraries build_record_lib unix))
+ (libraries build_record_lib ox_test unix))
 
 (test
  (name test_build_record)
  (modules test_build_record)
- (libraries build_record_lib alcotest unix yojson))
+ (libraries build_record_lib ox_test alcotest unix yojson))

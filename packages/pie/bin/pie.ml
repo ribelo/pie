@@ -597,44 +597,40 @@ let validate_source env source _config =
     Pie.Config.Stt.load ~caps ~fs:(Eio.Stdenv.fs env.Ox_app.Env.base) ~source ()
   with
   | Ok _ -> Ok ()
-  | Error (`Config message) -> Error [ { Ox_app.Config.pointer = ""; message } ]
+  | Error (`Config message) ->
+      !startup_config_notice ();
+      Error [ { Ox_app.Config.pointer = ""; message } ]
 
 let () =
-  exit
-    (Ox_app.run_with_args ~name:"pie" ~service_command:"assistant"
-       ~version:(Pie.Build_identity.commit ^ " " ^ Pie.Build_identity.time)
-       ~diagnostic:(fun ~kind ~message ->
-         (match kind with
-         | `Config | `Validation -> !startup_config_notice ()
-         | _ -> ());
-         message)
-       ~config_file:"stt.toml" ~missing:`Required
-       ~config:Pie.Config.Stt.door_spec ~service_args
-       ~decode_with_env:(fun env json ->
-         let warn message =
-           Ox_observability.Logger.warn env.Ox_app.Env.logger message ~fields:[]
-         in
-         Pie.Config.Stt.decode ~warn json)
-       ~read_file:(fun env path ->
-         Ox_app.Config.read_regular
-           ~max_bytes:Pie.Config.Stt.max_config_file_bytes
-           Eio.Path.(Eio.Stdenv.fs env / path))
-       ~validate_source
-       ~telemetry:(fun ~sw env config -> Pie.Process.telemetry ~sw env config)
-       ~commands_with_env ~pp_err:pp_error
-       (fun env
-            source
-            config
-            (ptt_transcribe_keysym, ptt_translate_keysym)
-            sw
-          ->
-         let base = env.Ox_app.Env.base in
-         Result.map_error
-           (fun error -> (error :> cli_error))
-           (Pie.Assistant.Service.run ~caps:env.caps ~sw
-              ~fs:(Eio.Stdenv.fs base) ~net:(Eio.Stdenv.net base)
-              ~clock:(Eio.Stdenv.clock base)
-              ~mono_clock:(Eio.Stdenv.mono_clock base)
-              ~logger:env.logger
-              ~process_mgr:(Eio.Stdenv.process_mgr base)
-              ~config ~source ?ptt_transcribe_keysym ?ptt_translate_keysym ())))
+  Ox_app.run_and_exit_with_args ~name:"pie" ~service_command:"assistant"
+    ~version:(Pie.Build_identity.commit ^ " " ^ Pie.Build_identity.time)
+    ~diagnostic:(fun ~kind ~message ->
+      (match kind with
+      (* Ox also classifies runtime typed failures as Validation. Only the
+            config loader and validate_source own config-rejection notices. *)
+      | `Config -> !startup_config_notice ()
+      | _ -> ());
+      message)
+    ~config_file:"stt.toml" ~missing:`Required ~config:Pie.Config.Stt.door_spec
+    ~service_args
+    ~decode_with_env:(fun env json ->
+      let warn message =
+        Ox_observability.Logger.warn env.Ox_app.Env.logger message ~fields:[]
+      in
+      Pie.Config.Stt.decode ~warn json)
+    ~read_file:(fun env path ->
+      Ox_app.Config.read_regular ~max_bytes:Pie.Config.Stt.max_config_file_bytes
+        Eio.Path.(Eio.Stdenv.fs env / path))
+    ~validate_source
+    ~telemetry:(fun ~sw env config -> Pie.Process.telemetry ~sw env config)
+    ~commands_with_env ~pp_err:pp_error
+    (fun env source config (ptt_transcribe_keysym, ptt_translate_keysym) sw ->
+      let base = env.Ox_app.Env.base in
+      Result.map_error
+        (fun error -> (error :> cli_error))
+        (Pie.Assistant.Service.run ~caps:env.caps ~sw ~fs:(Eio.Stdenv.fs base)
+           ~net:(Eio.Stdenv.net base) ~clock:(Eio.Stdenv.clock base)
+           ~mono_clock:(Eio.Stdenv.mono_clock base)
+           ~logger:env.logger
+           ~process_mgr:(Eio.Stdenv.process_mgr base)
+           ~config ~source ?ptt_transcribe_keysym ?ptt_translate_keysym ()))

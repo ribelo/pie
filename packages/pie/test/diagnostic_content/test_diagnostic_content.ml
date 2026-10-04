@@ -1,4 +1,4 @@
-let caps = Ox_test.powerbox () (* ^pcaps-n1rg *)
+(* ^pcaps-n1rg *)
 
 (* PIE019: user markers stay out of diagnostics; intended output remains.
    Direct style: the provider call and the helper subprocesses return results,
@@ -8,7 +8,8 @@ let marker = "PIE019-UNIQUE-MARKER-7f3c9e"
 
 (* Fixtures rewrite the process environment (private PATH, provider endpoint,
    delivery path); the alert only guards against multi-domain mutation. *)
-let putenv = Unix.putenv [@alert "-unsafe_multidomain"]
+let putenv ~(caps : < Ox_caps.Cap.env ; .. >) =
+  Ox_caps.Cap_unix.putenv ~caps [@alert "-unsafe_multidomain"]
 
 let string_contains hay needle =
   let hlen = String.length hay in
@@ -18,46 +19,68 @@ let string_contains hay needle =
   in
   nlen = 0 || loop 0
 
-let rec rm_rf path =
+let rec rm_rf ~(caps : < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; .. >) path
+    =
   match Unix.lstat path with
   | exception Unix.Unix_error (Unix.ENOENT, _, _) -> ()
   | { Unix.st_kind = Unix.S_DIR; _ } -> (
-      (match Sys.readdir path with
+      (match Ox_caps.Cap_sys.readdir ~caps path with
       | names ->
           Array.iter
             (fun name ->
               if name <> "." && name <> ".." then
-                rm_rf (Filename.concat path name))
+                rm_rf ~caps (Filename.concat path name))
             names
       | exception Sys_error _ -> ());
-      try Unix.rmdir path with Unix.Unix_error _ -> ())
-  | _ -> ( try Unix.unlink path with Unix.Unix_error _ -> ())
+      try Ox_caps.Cap_unix.rmdir ~caps path with Unix.Unix_error _ -> ())
+  | _ -> (
+      try Ox_caps.Cap_unix.unlink ~caps path with Unix.Unix_error _ -> ())
 
-let with_sandbox f =
-  let dir = Filename.temp_file "pie-diagnostic-content" "" in
-  Sys.remove dir;
-  Unix.mkdir dir 0o700;
-  Fun.protect ~finally:(fun () -> rm_rf dir) (fun () -> f dir)
+let with_sandbox
+    ~(caps :
+       < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.tmp ; .. >) f
+    =
+  let dir =
+    Ox_caps.Cap_stdlib.Filename.temp_file ~caps "pie-diagnostic-content" ""
+  in
+  Ox_caps.Cap_sys.remove ~caps dir;
+  Ox_caps.Cap_unix.mkdir ~caps dir 0o700;
+  Fun.protect ~finally:(fun () -> rm_rf ~caps dir) (fun () -> f dir)
 
-let write_file path contents =
-  let oc = open_out_gen [ Open_creat; Open_trunc; Open_wronly ] 0o700 path in
+let write_file ~(caps : < Ox_caps.Cap.fs_write ; .. >) path contents =
+  let oc =
+    Ox_caps.Cap_stdlib.open_out_gen ~caps
+      [ Open_creat; Open_trunc; Open_wronly ]
+      0o700 path
+  in
   Fun.protect
     ~finally:(fun () -> close_out_noerr oc)
     (fun () -> output_string oc contents)
 
-let with_captured_stdio f =
-  let out_path = Filename.temp_file "pie-diag-stdout" ".log" in
-  let err_path = Filename.temp_file "pie-diag-stderr" ".log" in
-  let out_oc = open_out out_path in
-  let err_oc = open_out err_path in
+let with_captured_stdio
+    ~(caps :
+       < Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.stdout
+       ; Ox_caps.Cap.tmp
+       ; .. >) f =
+  let out_path =
+    Ox_caps.Cap_stdlib.Filename.temp_file ~caps "pie-diag-stdout" ".log"
+  in
+  let err_path =
+    Ox_caps.Cap_stdlib.Filename.temp_file ~caps "pie-diag-stderr" ".log"
+  in
+  let out_oc = Ox_caps.Cap_stdlib.open_out ~caps out_path in
+  let err_oc = Ox_caps.Cap_stdlib.open_out ~caps err_path in
   let old_out = Unix.dup Unix.stdout in
   let old_err = Unix.dup Unix.stderr in
   Unix.dup2 (Unix.descr_of_out_channel out_oc) Unix.stdout;
   Unix.dup2 (Unix.descr_of_out_channel err_oc) Unix.stderr;
   Fun.protect
     ~finally:(fun () ->
-      flush stdout;
-      flush stderr;
+      flush (Ox_caps.Cap_stdlib.stdout ~caps);
+      flush (Ox_caps.Cap_stdlib.stderr ~caps);
       Unix.dup2 old_out Unix.stdout;
       Unix.dup2 old_err Unix.stderr;
       Unix.close old_out;
@@ -66,15 +89,17 @@ let with_captured_stdio f =
       close_out_noerr err_oc)
     (fun () ->
       let result = f () in
-      flush stdout;
-      flush stderr;
+      flush (Ox_caps.Cap_stdlib.stdout ~caps);
+      flush (Ox_caps.Cap_stdlib.stderr ~caps);
       close_out_noerr out_oc;
       close_out_noerr err_oc;
       let stdout_body =
-        In_channel.with_open_text out_path In_channel.input_all
+        Ox_caps.Cap_stdlib.In_channel.with_open_text ~caps out_path
+          In_channel.input_all
       in
       let stderr_body =
-        In_channel.with_open_text err_path In_channel.input_all
+        Ox_caps.Cap_stdlib.In_channel.with_open_text ~caps err_path
+          In_channel.input_all
       in
       (result, stdout_body, stderr_body))
 
@@ -143,17 +168,18 @@ let pcm = Bytes.make 320 '\001'
 (* The call's own structured records go through this reporter straight into the
    captured stderr, so a diagnostic that leaks the marker is seen where the old
    logfmt tee wrote it. *)
-let stderr_logger ~clock ~mono_clock =
+let stderr_logger ~(caps : < Ox_caps.Cap.stderr ; .. >) ~clock ~mono_clock =
   Ox_observability.Logger.create ~service:"pie" ~clock ~mono_clock
     ~reporter:
-      (Ox_observability.Logger.Reporter.writer (fun line -> prerr_string line))
+      (Ox_observability.Logger.Reporter.writer (fun line ->
+           Ox_caps.Cap_stdlib.prerr_string ~caps line))
     ()
 
 let openrouter_deadline_seconds = 30
 let helper_deadline_seconds = 10.0
 
-let run_openrouter ~body ~status () =
-  Pie_test_runtime.run @@ fun env ->
+let run_openrouter ~(caps : < Ox_caps.Cap.env ; .. >) ~body ~status () =
+  Pie_test_runtime.run ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let net = Eio.Stdenv.net env in
   let clock = Eio.Stdenv.clock env in
@@ -166,8 +192,8 @@ let run_openrouter ~body ~status () =
     | `Tcp (_, port) -> port
     | `Unix _ -> Alcotest.fail "expected TCP listener"
   in
-  putenv "OPENROUTER_BASE_URL" (Printf.sprintf "http://127.0.0.1:%d" port);
-  putenv "OPENROUTER_API_KEY" "synthetic-pie019";
+  putenv ~caps "OPENROUTER_BASE_URL" (Printf.sprintf "http://127.0.0.1:%d" port);
+  putenv ~caps "OPENROUTER_API_KEY" "synthetic-pie019";
   (* A daemon: the switch cancels the fixture peer when the call under test is
      done, so it cannot hold the release open. *)
   Eio.Fiber.fork_daemon ~sw (fun () ->
@@ -191,8 +217,8 @@ let run_openrouter ~body ~status () =
   | Error (`Stt_error message) -> Error (`Stt_error message)
   | Error `Timeout -> Error (`Stt_error "openrouter-deadline")
 
-let run_helper f =
-  Pie_test_runtime.run @@ fun env ->
+let run_helper ~(caps : < Ox_caps.Cap.env ; .. >) f =
+  Pie_test_runtime.run ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   try
@@ -203,26 +229,46 @@ let run_helper f =
 let assert_absent label hay =
   Alcotest.(check bool) label false (string_contains hay marker)
 
-let with_fake_helper name script f =
-  with_sandbox @@ fun dir ->
+let with_fake_helper
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) name script f =
+  with_sandbox ~caps @@ fun dir ->
   let bin = Filename.concat dir "bin" in
-  Unix.mkdir bin 0o700;
+  Ox_caps.Cap_unix.mkdir ~caps bin 0o700;
   let helper = Filename.concat bin name in
-  write_file helper script;
-  Unix.chmod helper 0o700;
-  let old_path = Option.value ~default:"/usr/bin" (Sys.getenv_opt "PATH") in
-  putenv "PATH" (bin ^ ":" ^ old_path);
-  Fun.protect ~finally:(fun () -> putenv "PATH" old_path) (fun () -> f dir)
+  write_file ~caps helper script;
+  Ox_caps.Cap_unix.chmod ~caps helper 0o700;
+  let old_path =
+    Option.value ~default:"/usr/bin" (Ox_caps.Cap_sys.getenv_opt ~caps "PATH")
+  in
+  putenv ~caps "PATH" (bin ^ ":" ^ old_path);
+  Fun.protect
+    ~finally:(fun () -> putenv ~caps "PATH" old_path)
+    (fun () -> f dir)
 
-let test_success_keeps_text_out_of_diagnostics () =
+let test_success_keeps_text_out_of_diagnostics
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.stdout
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
   List.iter
     (fun debug ->
       (match debug with
-      | None -> ( try putenv "CAMELPIE_OPENROUTER_DEBUG" "" with _ -> ())
-      | Some value -> putenv "CAMELPIE_OPENROUTER_DEBUG" value);
+      | None -> (
+          try putenv ~caps "CAMELPIE_OPENROUTER_DEBUG" "" with _ -> ())
+      | Some value -> putenv ~caps "CAMELPIE_OPENROUTER_DEBUG" value);
       let result, stdout, stderr =
-        with_captured_stdio (fun () ->
-            run_openrouter ~body:(completed_body marker) ~status:"200 OK" ())
+        with_captured_stdio ~caps (fun () ->
+            run_openrouter ~caps ~body:(completed_body marker) ~status:"200 OK"
+              ())
       in
       (match result with
       | Ok text -> Alcotest.(check string) "delivered" marker text
@@ -232,8 +278,16 @@ let test_success_keeps_text_out_of_diagnostics () =
       assert_absent "stderr dump" stderr)
     [ None; Some "0"; Some "false"; Some "1" ]
 
-let test_provider_error_omits_body () =
-  putenv "CAMELPIE_OPENROUTER_DEBUG" "1";
+let test_provider_error_omits_body
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.stdout
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  putenv ~caps "CAMELPIE_OPENROUTER_DEBUG" "1";
   let body =
     Yojson.Safe.to_string
       (`Assoc
@@ -244,8 +298,8 @@ let test_provider_error_omits_body () =
          ])
   in
   let result, stdout, stderr =
-    with_captured_stdio (fun () ->
-        run_openrouter ~body ~status:"401 Unauthorized" ())
+    with_captured_stdio ~caps (fun () ->
+        run_openrouter ~caps ~body ~status:"401 Unauthorized" ())
   in
   (match result with
   | Ok text -> Alcotest.failf "expected provider error, got %s" text
@@ -253,11 +307,19 @@ let test_provider_error_omits_body () =
   assert_absent "stdout" stdout;
   assert_absent "stderr" stderr
 
-let test_malformed_response_omits_payload () =
-  putenv "CAMELPIE_OPENROUTER_DEBUG" "1";
+let test_malformed_response_omits_payload
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.stdout
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  putenv ~caps "CAMELPIE_OPENROUTER_DEBUG" "1";
   let result, stdout, stderr =
-    with_captured_stdio (fun () ->
-        run_openrouter ~body:marker ~status:"200 OK" ())
+    with_captured_stdio ~caps (fun () ->
+        run_openrouter ~caps ~body:marker ~status:"200 OK" ())
   in
   (match result with
   | Ok text -> Alcotest.failf "expected malformed, got %s" text
@@ -270,13 +332,21 @@ let test_parse_event_omits_payload () =
   | Ok _ -> Alcotest.fail "expected parse error"
   | Error (`Stt_error text) -> assert_absent "json error" text
 
-let test_helper_nonzero_omits_argv_and_stderr () =
-  with_fake_helper "wtype"
+let test_helper_nonzero_omits_argv_and_stderr
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.stdout
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_fake_helper ~caps "wtype"
     ("#!/bin/sh\necho " ^ marker ^ "\necho " ^ marker ^ " >&2\nexit 1\n")
   @@ fun _dir ->
   let result, stdout, stderr =
-    with_captured_stdio (fun () ->
-        run_helper (fun ~env ~sw:_ ->
+    with_captured_stdio ~caps (fun () ->
+        run_helper ~caps (fun ~env ~sw:_ ->
             Pie.Wayland.Wtype.key ~caps ~modifiers:[]
               ~process_mgr:(Eio.Stdenv.process_mgr env)
               marker))
@@ -291,13 +361,21 @@ let test_helper_nonzero_omits_argv_and_stderr () =
   assert_absent "stdout" stdout;
   assert_absent "stderr" stderr
 
-let test_notification_failure_omits_message () =
-  with_fake_helper "notify-send"
+let test_notification_failure_omits_message
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.stdout
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_fake_helper ~caps "notify-send"
     ("#!/bin/sh\necho " ^ marker ^ "\necho " ^ marker ^ " >&2\nexit 1\n")
   @@ fun _dir ->
   let result, stdout, stderr =
-    with_captured_stdio (fun () ->
-        run_helper (fun ~env ~sw:_ ->
+    with_captured_stdio ~caps (fun () ->
+        run_helper ~caps (fun ~env ~sw:_ ->
             Pie.Desktop.Notification.notify_send
               ~process_mgr:(Eio.Stdenv.process_mgr env)
               "pie" marker))
@@ -334,23 +412,37 @@ let test_server_error_omits_remote_code () =
       let diag = Pie.Stt.Codex_realtime.server_error_diagnostic code in
       assert_absent "server error diagnostic" diag
 
-let test_auth_load_omits_json_snippet () =
-  with_sandbox @@ fun dir ->
+let test_auth_load_omits_json_snippet
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_sandbox ~caps @@ fun dir ->
   let path = Filename.concat dir "auth.json" in
-  write_file path ("{\"tokens\": \"" ^ marker ^ " not-json");
+  write_file ~caps path ("{\"tokens\": \"" ^ marker ^ " not-json");
   match Pie.Stt.Codex_realtime.Codex_auth.load ~caps ~path () with
   | Ok _ -> Alcotest.fail "expected auth load failure"
   | Error (`Stt_error message) -> assert_absent "auth json snippet" message
 
-let test_large_helper_stderr_discarded () =
+let test_large_helper_stderr_discarded
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.stdout
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
   let blob = String.make 262144 'A' ^ marker in
-  with_fake_helper "wtype"
+  with_fake_helper ~caps "wtype"
     ("#!/bin/sh\nprintf '%s' " ^ Filename.quote blob ^ "\nprintf '%s' "
    ^ Filename.quote blob ^ " >&2\nexit 1\n")
   @@ fun _dir ->
   let result, stdout, stderr =
-    with_captured_stdio (fun () ->
-        run_helper (fun ~env ~sw:_ ->
+    with_captured_stdio ~caps (fun () ->
+        run_helper ~caps (fun ~env ~sw:_ ->
             Pie.Wayland.Wtype.key ~caps ~modifiers:[]
               ~process_mgr:(Eio.Stdenv.process_mgr env)
               "ok"))
@@ -383,17 +475,25 @@ let test_composite_failure_is_not_flattened () =
   | `Returned -> Alcotest.fail "Multiple flattened to Subprocess_error"
   | `Other text -> Alcotest.failf "unexpected %s" text
 
-let test_helper_success_stdout_discarded_delivery_file () =
+let test_helper_success_stdout_discarded_delivery_file
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.stdout
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
   let intended = "PIE019-INTENDED-DELIVERY" in
-  with_fake_helper "wtype"
+  with_fake_helper ~caps "wtype"
     ("#!/bin/sh\necho " ^ marker ^ "\necho " ^ marker
    ^ " >&2\nprintf '%s' \"$2\" > \"$PIE019_DELIVERY\"\nexit 0\n")
   @@ fun dir ->
   let delivery = Filename.concat dir "delivery" in
-  putenv "PIE019_DELIVERY" delivery;
+  putenv ~caps "PIE019_DELIVERY" delivery;
   let result, stdout, stderr =
-    with_captured_stdio (fun () ->
-        run_helper (fun ~env ~sw:_ ->
+    with_captured_stdio ~caps (fun () ->
+        run_helper ~caps (fun ~env ~sw:_ ->
             Pie.Wayland.Wtype.key ~caps ~modifiers:[]
               ~process_mgr:(Eio.Stdenv.process_mgr env)
               intended))
@@ -402,19 +502,30 @@ let test_helper_success_stdout_discarded_delivery_file () =
   | Ok () -> ()
   | Error (`Wtype_error message) ->
       Alcotest.failf "expected wtype success: %s" message);
-  let delivered = In_channel.with_open_text delivery In_channel.input_all in
+  let delivered =
+    Ox_caps.Cap_stdlib.In_channel.with_open_text ~caps delivery
+      In_channel.input_all
+  in
   Alcotest.(check string) "delivery file" intended delivered;
   assert_absent "stdout" stdout;
   assert_absent "stderr" stderr
 
-let test_nonexecutable_spawn_is_io_failure () =
-  with_sandbox @@ fun dir ->
+let test_nonexecutable_spawn_is_io_failure
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.stdout
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_sandbox ~caps @@ fun dir ->
   let helper = Filename.concat dir "blocked-helper" in
-  write_file helper "#!/bin/sh\necho should-not-run\n";
-  Unix.chmod helper 0o600;
+  write_file ~caps helper "#!/bin/sh\necho should-not-run\n";
+  Ox_caps.Cap_unix.chmod ~caps helper 0o600;
   let result, stdout, stderr =
-    with_captured_stdio (fun () ->
-        run_helper (fun ~env ~sw:_ ->
+    with_captured_stdio ~caps (fun () ->
+        run_helper ~caps (fun ~env ~sw:_ ->
             Pie.Sh.run
               ~process_mgr:(Eio.Stdenv.process_mgr env)
               ~prog:helper ~args:[ "--"; marker ]))
@@ -432,37 +543,49 @@ let test_nonexecutable_spawn_is_io_failure () =
   assert_absent "stdout" stdout;
   assert_absent "stderr" stderr
 
-let () =
+let main
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.stdout
+       ; Ox_caps.Cap.tmp
+       ; .. >) =
   Alcotest.run "diagnostic-content"
     [
       ( "provider",
         [
           Alcotest.test_case "success keeps marker out of diagnostics" `Quick
-            test_success_keeps_text_out_of_diagnostics;
+            (test_success_keeps_text_out_of_diagnostics ~caps);
           Alcotest.test_case "provider error omits remote body" `Quick
-            test_provider_error_omits_body;
+            (test_provider_error_omits_body ~caps);
           Alcotest.test_case "malformed response omits payload" `Quick
-            test_malformed_response_omits_payload;
+            (test_malformed_response_omits_payload ~caps);
           Alcotest.test_case "parse_event omits payload" `Quick
             test_parse_event_omits_payload;
           Alcotest.test_case "server error omits remote code" `Quick
             test_server_error_omits_remote_code;
           Alcotest.test_case "auth load omits JSON snippet" `Quick
-            test_auth_load_omits_json_snippet;
+            (test_auth_load_omits_json_snippet ~caps);
         ] );
       ( "helpers",
         [
           Alcotest.test_case "wtype success discards stdio and writes delivery"
-            `Quick test_helper_success_stdout_discarded_delivery_file;
+            `Quick
+            (test_helper_success_stdout_discarded_delivery_file ~caps);
           Alcotest.test_case "wtype failure omits argv and stderr" `Quick
-            test_helper_nonzero_omits_argv_and_stderr;
+            (test_helper_nonzero_omits_argv_and_stderr ~caps);
           Alcotest.test_case "notify-send failure omits message" `Quick
-            test_notification_failure_omits_message;
+            (test_notification_failure_omits_message ~caps);
           Alcotest.test_case "large helper stderr is discarded" `Quick
-            test_large_helper_stderr_discarded;
+            (test_large_helper_stderr_discarded ~caps);
           Alcotest.test_case "composite cancellation is not flattened" `Quick
             test_composite_failure_is_not_flattened;
           Alcotest.test_case "non-executable spawn is io-failure metadata"
-            `Quick test_nonexecutable_spawn_is_io_failure;
+            `Quick
+            (test_nonexecutable_spawn_is_io_failure ~caps);
         ] );
     ]
+
+let () = main ~caps:(Ox_test.powerbox ())

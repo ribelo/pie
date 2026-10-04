@@ -2,5 +2,5 @@
 
 (test
  (name test_removed_entrypoints)
- (libraries unix alcotest)
+ (libraries ox_test unix alcotest)
  (deps ../../bin/pie.exe))

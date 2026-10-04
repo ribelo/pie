@@ -1,4 +1,4 @@
-let caps = Ox_test.powerbox () (* ^pcaps-n1rg *)
+(* ^pcaps-n1rg *)
 
 (* PIE013 private e2e: one long-lived Service.run_with_inputs workflow over a
    private socket, retry store and synthetic audio; no provider, no keyboard, no
@@ -104,25 +104,28 @@ let test_logger env =
     ~reporter:(Ox_observability.Logger.Reporter.records (fun _ -> ()))
     ()
 
-let rec rm_rf path =
+let rec rm_rf ~(caps : < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; .. >) path
+    =
   match Unix.lstat path with
   | exception Unix.Unix_error (Unix.ENOENT, _, _) -> ()
   | { Unix.st_kind = Unix.S_DIR; _ } -> (
       Array.iter
-        (fun n -> if n <> "." && n <> ".." then rm_rf (Filename.concat path n))
-        (try Sys.readdir path with Sys_error _ -> [||]);
-      try Unix.rmdir path with Unix.Unix_error _ -> ())
-  | _ -> ( try Unix.unlink path with Unix.Unix_error _ -> ())
+        (fun n ->
+          if n <> "." && n <> ".." then rm_rf ~caps (Filename.concat path n))
+        (try Ox_caps.Cap_sys.readdir ~caps path with Sys_error _ -> [||]);
+      try Ox_caps.Cap_unix.rmdir ~caps path with Unix.Unix_error _ -> ())
+  | _ -> (
+      try Ox_caps.Cap_unix.unlink ~caps path with Unix.Unix_error _ -> ())
 
-let with_dir f =
+let with_dir ~(caps : < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; .. >) f =
   let dir =
     Filename.concat
       (Filename.get_temp_dir_name ())
       (Printf.sprintf "pie-e2e-%d" (Unix.getpid ()))
   in
-  rm_rf dir;
-  Unix.mkdir dir 0o700;
-  Fun.protect ~finally:(fun () -> rm_rf dir) (fun () -> f dir)
+  rm_rf ~caps dir;
+  Ox_caps.Cap_unix.mkdir ~caps dir 0o700;
+  Fun.protect ~finally:(fun () -> rm_rf ~caps dir) (fun () -> f dir)
 
 type audio_cmd = Chunk of bytes | Fail of Pie.Pulse.Client.error
 
@@ -139,8 +142,8 @@ let make_audio () =
 
 let offer_pcm cmd = Eio.Stream.add cmd (Chunk loud_pcm)
 
-let fd_count () =
-  let dir = Unix.opendir "/proc/self/fd" in
+let fd_count ~(caps : < Ox_caps.Cap.fs_read ; .. >) () =
+  let dir = Ox_caps.Cap_unix.opendir ~caps "/proc/self/fd" in
   Fun.protect
     ~finally:(fun () -> Unix.closedir dir)
     (fun () ->
@@ -152,21 +155,25 @@ let fd_count () =
       in
       loop 0)
 
-let slot_names retry_dir =
+let slot_names ~(caps : < Ox_caps.Cap.fs_read ; .. >) retry_dir =
   let active = Filename.concat retry_dir "active" in
   try
-    Sys.readdir active |> Array.to_list
+    Ox_caps.Cap_sys.readdir ~caps active
+    |> Array.to_list
     |> List.filter (fun n -> String.length n >= 5 && String.sub n 0 5 = "slot-")
   with Sys_error _ -> []
 
-let draft_count retry_dir =
-  slot_names retry_dir
+let draft_count ~(caps : < Ox_caps.Cap.fs_read ; .. >) retry_dir =
+  slot_names ~caps retry_dir
   |> List.filter (fun n ->
       let slot = Filename.concat (Filename.concat retry_dir "active") n in
       Sys.file_exists (Filename.concat slot "draft.pcm"))
   |> List.length
 
-let peek_meta retry_dir =
+let peek_meta
+    ~(caps :
+       < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.time ; .. >)
+    retry_dir =
   match Pie.Recording.Retry_store.Active.open_store ~caps ~root:retry_dir with
   | Error _ -> None
   | Ok store -> (
@@ -174,15 +181,21 @@ let peek_meta retry_dir =
       | Ok v -> v
       | Error _ -> None)
 
-let peek_kind retry_dir =
-  match peek_meta retry_dir with
+let peek_kind
+    ~(caps :
+       < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.time ; .. >)
+    retry_dir =
+  match peek_meta ~caps retry_dir with
   | Some (Pie.Recording.Retry_store.Active.Audio _) -> Some "audio"
   | Some (Pie.Recording.Retry_store.Active.Text { dispatch_uncertain; _ }) ->
       Some (if dispatch_uncertain then "text-uncertain" else "text")
   | None -> None
 
-let payload_bytes retry_dir =
-  match peek_meta retry_dir with
+let payload_bytes
+    ~(caps :
+       < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.time ; .. >)
+    retry_dir =
+  match peek_meta ~caps retry_dir with
   | Some (Pie.Recording.Retry_store.Active.Audio { pcm_bytes; _ }) -> pcm_bytes
   | Some (Pie.Recording.Retry_store.Active.Text { utf8_bytes; _ }) -> utf8_bytes
   | None -> 0
@@ -216,11 +229,20 @@ let idle ~net ~sw socket_path =
       && List.assoc_opt "processing" fields = Some (`Int 0)
   | _ -> false
 
-let owner_workflow ~logger ~env ~sw ~net ~process_mgr ~mono_clock ~dir
+let owner_workflow
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.stdout
+       ; Ox_caps.Cap.time
+       ; .. >) ~logger ~env ~sw ~net ~process_mgr ~mono_clock ~dir
     ~config_control ~stt ~deliver ~keyboard ~audio =
   let socket_path = Filename.concat dir "c.sock" in
   let retry_dir = Filename.concat dir "r" in
-  (try Unix.mkdir retry_dir 0o700
+  (try Ox_caps.Cap_unix.mkdir ~caps retry_dir 0o700
    with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
   let inputs =
     { Pie.Assistant.Service.keyboard; audio; source_name = Some "e2e" }
@@ -295,26 +317,30 @@ let test_ok_with_completed_lt_100_fails () =
 type stt_mode = Stt_ok | Stt_fail
 type deliver_mode = Deliver_ok | Deliver_fail
 
-let assert_settled ~label ~retry_dir ~baseline_fd ~clock ~net ~sw ~socket_path =
+let assert_settled
+    ~(caps :
+       < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.time ; .. >)
+    ~label ~retry_dir ~baseline_fd ~clock ~net ~sw ~socket_path =
   wait_until ~clock (fun () -> idle ~net ~sw socket_path);
-  let slots = slot_names retry_dir in
+  let slots = slot_names ~caps retry_dir in
   if List.length slots > 1 then
     Alcotest.failf "%s more than one slot: %d" label (List.length slots);
-  if draft_count retry_dir <> 0 then
+  if draft_count ~caps retry_dir <> 0 then
     Alcotest.failf "%s unpublished draft remains" label;
-  let bytes = payload_bytes retry_dir in
-  (match peek_kind retry_dir with
+  let bytes = payload_bytes ~caps retry_dir in
+  (match peek_kind ~caps retry_dir with
   | Some "audio" when bytes > Pie.Dictation_limits.capture_pcm_bytes ->
       Alcotest.failf "%s pcm payload %d exceeds capture cap" label bytes
   | (Some "text" | Some "text-uncertain")
     when bytes > Pie.Dictation_limits.result_utf8_bytes ->
       Alcotest.failf "%s text payload %d exceeds result cap" label bytes
   | _ -> ());
-  let now = fd_count () in
+  let now = fd_count ~caps () in
   if now <> baseline_fd then
     Alcotest.failf "%s fd drifted baseline=%d now=%d" label baseline_fd now
 
-let wait_for_recorded_pcm ~clock ~audio_q ~retry_dir =
+let wait_for_recorded_pcm ~(caps : < Ox_caps.Cap.fs_read ; .. >) ~clock ~audio_q
+    ~retry_dir =
   wait_until ~clock (fun () ->
       offer_pcm audio_q;
       List.exists
@@ -325,19 +351,29 @@ let wait_for_recorded_pcm ~clock ~audio_q ~retry_dir =
               "draft.pcm"
           in
           try (Unix.stat path).st_size > 0 with Unix.Unix_error _ -> false)
-        (slot_names retry_dir))
+        (slot_names ~caps retry_dir))
 
-let press_release ~clock ~keyboard ~audio_q ~retry_dir =
+let press_release ~(caps : < Ox_caps.Cap.fs_read ; .. >) ~clock ~keyboard
+    ~audio_q ~retry_dir =
   Pie.Keyboard.Monitor.emit keyboard (key ~released:false);
   (* Native writer admission can yield. An immediate release used to race
      that admission and never proved that this attempt consumed any PCM. *)
-  wait_for_recorded_pcm ~clock ~audio_q ~retry_dir;
+  wait_for_recorded_pcm ~caps ~clock ~audio_q ~retry_dir;
   Pie.Keyboard.Monitor.emit keyboard (key ~released:true)
 
-let test_100_settled_attempts () =
-  Pie_test_runtime.run @@ fun env ->
+let test_100_settled_attempts
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.stdout
+       ; Ox_caps.Cap.time
+       ; .. >) () =
+  Pie_test_runtime.run ~caps @@ fun env ->
   let clock = Eio.Stdenv.clock env in
-  with_dir (fun dir ->
+  with_dir ~caps (fun dir ->
       let completed = Atomic.make 0 in
       let finished = Atomic.make false in
       require_success
@@ -369,8 +405,8 @@ let test_100_settled_attempts () =
                         | Deliver_fail -> Error (`Ptt_error "inject:failed")
                       in
                       let socket_path, retry_dir, workflow =
-                        owner_workflow ~logger:(test_logger env) ~env ~sw ~net
-                          ~process_mgr ~mono_clock ~dir
+                        owner_workflow ~caps ~logger:(test_logger env) ~env ~sw
+                          ~net ~process_mgr ~mono_clock ~dir
                           ~config_control:{ stamp; load } ~stt ~deliver
                           ~keyboard ~audio
                       in
@@ -382,10 +418,10 @@ let test_100_settled_attempts () =
                                 ignore (rpc ~net ~sw socket_path status_json);
                                 true
                               with _ -> false);
-                          let baseline_fd = fd_count () in
+                          let baseline_fd = fd_count ~caps () in
                           let settle label =
-                            assert_settled ~label ~retry_dir ~baseline_fd ~clock
-                              ~net ~sw ~socket_path
+                            assert_settled ~caps ~label ~retry_dir ~baseline_fd
+                              ~clock ~net ~sw ~socket_path
                           in
                           for i = 1 to 100 do
                             let label = Printf.sprintf "op-%d" i in
@@ -394,25 +430,26 @@ let test_100_settled_attempts () =
                                 Atomic.set stt_mode Stt_fail;
                                 Atomic.set deliver_mode Deliver_ok;
                                 let n = Atomic.get stt_n in
-                                press_release ~clock ~keyboard ~audio_q
+                                press_release ~caps ~clock ~keyboard ~audio_q
                                   ~retry_dir;
                                 wait_until ~clock (fun () ->
                                     Atomic.get stt_n > n
-                                    && peek_kind retry_dir = Some "audio");
+                                    && peek_kind ~caps retry_dir = Some "audio");
                                 settle label;
                                 Alcotest.(check (option string))
                                   (label ^ " audio candidate")
-                                  (Some "audio") (peek_kind retry_dir)
+                                  (Some "audio")
+                                  (peek_kind ~caps retry_dir)
                             | 2 ->
                                 Atomic.set stt_mode Stt_ok;
                                 Atomic.set deliver_mode Deliver_fail;
                                 let n = Atomic.get deliver_n in
-                                press_release ~clock ~keyboard ~audio_q
+                                press_release ~caps ~clock ~keyboard ~audio_q
                                   ~retry_dir;
                                 wait_until ~clock (fun () ->
                                     Atomic.get deliver_n > n
                                     &&
-                                    match peek_kind retry_dir with
+                                    match peek_kind ~caps retry_dir with
                                     | Some "text" | Some "text-uncertain" ->
                                         true
                                     | _ -> false);
@@ -420,27 +457,29 @@ let test_100_settled_attempts () =
                                 Alcotest.(check bool)
                                   (label ^ " one text candidate")
                                   true
-                                  (match peek_kind retry_dir with
+                                  (match peek_kind ~caps retry_dir with
                                   | Some "text" | Some "text-uncertain" -> true
                                   | _ -> false)
                             | 3 ->
                                 Atomic.set stt_mode Stt_ok;
                                 Atomic.set deliver_mode Deliver_ok;
                                 let n = Atomic.get deliver_n in
-                                let before = peek_kind retry_dir in
-                                press_release ~clock ~keyboard ~audio_q
+                                let before = peek_kind ~caps retry_dir in
+                                press_release ~caps ~clock ~keyboard ~audio_q
                                   ~retry_dir;
                                 wait_until ~clock (fun () ->
                                     Atomic.get deliver_n > n);
                                 settle label;
                                 Alcotest.(check (option string))
                                   (label ^ " success does not clear older")
-                                  before (peek_kind retry_dir)
+                                  before
+                                  (peek_kind ~caps retry_dir)
                             | 4 ->
-                                let before = peek_kind retry_dir in
+                                let before = peek_kind ~caps retry_dir in
                                 Pie.Keyboard.Monitor.emit keyboard
                                   (key ~released:false);
-                                wait_for_recorded_pcm ~clock ~audio_q ~retry_dir;
+                                wait_for_recorded_pcm ~caps ~clock ~audio_q
+                                  ~retry_dir;
                                 ignore (rpc ~net ~sw socket_path action_pause);
                                 wait_until ~clock (fun () ->
                                     idle ~net ~sw socket_path);
@@ -452,7 +491,8 @@ let test_100_settled_attempts () =
                                 settle label;
                                 Alcotest.(check (option string))
                                   (label ^ " abort leaves older")
-                                  before (peek_kind retry_dir)
+                                  before
+                                  (peek_kind ~caps retry_dir)
                             | 0 ->
                                 let cycle = i / 5 in
                                 if cycle mod 2 = 0 then (
@@ -465,26 +505,28 @@ let test_100_settled_attempts () =
                                   Alcotest.(check bool)
                                     (label ^ " retry-fail keeps candidate")
                                     true
-                                    (peek_kind retry_dir <> None))
+                                    (peek_kind ~caps retry_dir <> None))
                                 else (
                                   Atomic.set deliver_mode Deliver_ok;
                                   Atomic.set stt_mode Stt_ok;
                                   ignore (rpc ~net ~sw socket_path action_retry);
                                   wait_until ~clock (fun () ->
-                                      peek_kind retry_dir = None);
+                                      peek_kind ~caps retry_dir = None);
                                   settle label;
                                   Alcotest.(check (option string))
                                     (label ^ " retry-success clears selected")
-                                    None (peek_kind retry_dir))
+                                    None
+                                    (peek_kind ~caps retry_dir))
                             | _ -> Alcotest.failf "%s unreachable mod" label);
                             Atomic.incr completed
                           done;
                           Atomic.set finished true;
-                          Printf.printf
+                          Ox_caps.Cap_stdlib.printf ~caps
                             "e2e_budgets 100 settled baseline_fd=%d end_fd=%d \
                              completed=%d\n\
                              %!"
-                            baseline_fd (fd_count ()) (Atomic.get completed));
+                            baseline_fd (fd_count ~caps ())
+                            (Atomic.get completed));
                       Ok ())))
          with
         | Ok exit -> exit
@@ -512,15 +554,21 @@ let status_last_error ~net ~sw socket_path =
   | Some (`String s) -> Some s
   | _ -> None
 
-let peek_generation retry_dir =
-  match peek_meta retry_dir with
+let peek_generation
+    ~(caps :
+       < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.time ; .. >)
+    retry_dir =
+  match peek_meta ~caps retry_dir with
   | Some (Active.Audio { generation; _ }) | Some (Active.Text { generation; _ })
     ->
       Some generation
   | None -> None
 
-let seed_audio retry_dir =
-  (try Unix.mkdir retry_dir 0o700
+let seed_audio
+    ~(caps :
+       < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.time ; .. >)
+    retry_dir =
+  (try Ox_caps.Cap_unix.mkdir ~caps retry_dir 0o700
    with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
   match Active.open_store ~caps ~root:retry_dir with
   | Error (`Retry_store msg) -> Alcotest.fail msg
@@ -541,8 +589,11 @@ let seed_audio retry_dir =
           | Error (`Retry_store msg) -> Alcotest.fail msg
           | Ok generation -> generation))
 
-let seed_text retry_dir text =
-  (try Unix.mkdir retry_dir 0o700
+let seed_text
+    ~(caps :
+       < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.time ; .. >)
+    retry_dir text =
+  (try Ox_caps.Cap_unix.mkdir ~caps retry_dir 0o700
    with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
   match Active.open_store ~caps ~root:retry_dir with
   | Error (`Retry_store msg) -> Alcotest.fail msg
@@ -559,37 +610,47 @@ let publish_lock_path retry_dir =
 
 type lock_save = Created_dir | Replaced of string
 
-let install_lock_dir retry_dir =
+let install_lock_dir ~(caps : < Ox_caps.Cap.fs_write ; .. >) retry_dir =
   let path = publish_lock_path retry_dir in
   let saved = path ^ ".e2e-saved" in
-  (try Unix.unlink saved with Unix.Unix_error _ -> ());
+  (try Ox_caps.Cap_unix.unlink ~caps saved with Unix.Unix_error _ -> ());
   match Unix.lstat path with
   | exception Unix.Unix_error (Unix.ENOENT, _, _) ->
-      Unix.mkdir path 0o700;
+      Ox_caps.Cap_unix.mkdir ~caps path 0o700;
       Created_dir
   | { Unix.st_kind = Unix.S_REG; _ } ->
-      Unix.rename path saved;
-      Unix.mkdir path 0o700;
+      Ox_caps.Cap_unix.rename ~caps path saved;
+      Ox_caps.Cap_unix.mkdir ~caps path 0o700;
       Replaced saved
   | { Unix.st_kind = Unix.S_DIR; _ } -> Created_dir
   | _ ->
-      Unix.unlink path;
-      Unix.mkdir path 0o700;
+      Ox_caps.Cap_unix.unlink ~caps path;
+      Ox_caps.Cap_unix.mkdir ~caps path 0o700;
       Created_dir
 
-let restore_lock retry_dir save =
+let restore_lock ~(caps : < Ox_caps.Cap.fs_write ; .. >) retry_dir save =
   let path = publish_lock_path retry_dir in
-  (try Unix.rmdir path with Unix.Unix_error _ -> ());
+  (try Ox_caps.Cap_unix.rmdir ~caps path with Unix.Unix_error _ -> ());
   match save with
   | Created_dir -> ()
   | Replaced saved -> (
-      try Unix.rename saved path with Unix.Unix_error _ -> ())
+      try Ox_caps.Cap_unix.rename ~caps saved path
+      with Unix.Unix_error _ -> ())
 
 (* One workflow lifetime on its own scope: the assertions run while the workflow
    stays live on the scope's switch. Bounded, so a regression that never settles
    fails on the deadline instead of hanging the suite. *)
-let run_e2e ?(on_stopped = fun () -> ()) ~dir ~stt ~deliver assertions =
-  Pie_test_runtime.run @@ fun env ->
+let run_e2e
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.stdout
+       ; Ox_caps.Cap.time
+       ; .. >) ?(on_stopped = fun () -> ()) ~dir ~stt ~deliver assertions =
+  Pie_test_runtime.run ~caps @@ fun env ->
   let clock = Eio.Stdenv.clock env in
   match
     Ox.Timeout.timeout ~clock (Ox.Duration.seconds 60) (fun () ->
@@ -603,7 +664,7 @@ let run_e2e ?(on_stopped = fun () -> ()) ~dir ~stt ~deliver assertions =
                let stamp () = [ Some (1, 1, 0, 0.) ] in
                let load _ = (base_config (), stamp ()) in
                let socket_path, retry_dir, workflow =
-                 owner_workflow ~logger:(test_logger env) ~env ~sw ~net
+                 owner_workflow ~caps ~logger:(test_logger env) ~env ~sw ~net
                    ~process_mgr ~mono_clock ~dir ~config_control:{ stamp; load }
                    ~stt ~deliver ~keyboard ~audio
                in
@@ -632,10 +693,19 @@ let held_callback cleanup_hold entered_u body =
       Eio.Promise.await cleanup_hold;
       body ())
 
-let test_audio_retry_held_cleanup_pause_busy () =
-  with_dir (fun dir ->
+let test_audio_retry_held_cleanup_pause_busy
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.stdout
+       ; Ox_caps.Cap.time
+       ; .. >) () =
+  with_dir ~caps (fun dir ->
       let retry_dir = Filename.concat dir "r" in
-      ignore (seed_audio retry_dir);
+      ignore (seed_audio ~caps retry_dir);
       let stt_n = Atomic.make 0 and deliver_n = Atomic.make 0 in
       let cleanup_hold, cleanup_u = Eio.Promise.create () in
       let entered, entered_u = Eio.Promise.create () in
@@ -649,7 +719,8 @@ let test_audio_retry_held_cleanup_pause_busy () =
           "retained audio retry clipboard-only" true (target = None);
         Ok Pie.History.Clipboard
       in
-      run_e2e ~dir ~stt ~deliver (fun ~clock ~net ~sw ~socket_path ~retry_dir ->
+      run_e2e ~caps ~dir ~stt ~deliver
+        (fun ~clock ~net ~sw ~socket_path ~retry_dir ->
           Fun.protect
             ~finally:(fun () -> ignore (Eio.Promise.try_resolve cleanup_u ()))
             (fun () ->
@@ -681,12 +752,21 @@ let test_audio_retry_held_cleanup_pause_busy () =
                 "pause did not cancel retry delivery" 1 (Atomic.get deliver_n);
               Alcotest.(check bool)
                 "successful retry clears selected candidate" true
-                (peek_generation retry_dir = None))))
+                (peek_generation ~caps retry_dir = None))))
 
-let test_text_retry_held_delivery_cleanup_stt_zero () =
-  with_dir (fun dir ->
+let test_text_retry_held_delivery_cleanup_stt_zero
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.stdout
+       ; Ox_caps.Cap.time
+       ; .. >) () =
+  with_dir ~caps (fun dir ->
       let retry_dir = Filename.concat dir "r" and text0 = "e2e-retained-text" in
-      ignore (seed_text retry_dir text0);
+      ignore (seed_text ~caps retry_dir text0);
       let stt_n = Atomic.make 0 and deliver_n = Atomic.make 0 in
       let cleanup_hold, cleanup_u = Eio.Promise.create () in
       let entered, entered_u = Eio.Promise.create () in
@@ -702,7 +782,8 @@ let test_text_retry_held_delivery_cleanup_stt_zero () =
         held_callback cleanup_hold entered_u (fun () ->
             Ok Pie.History.Clipboard)
       in
-      run_e2e ~dir ~stt ~deliver (fun ~clock ~net ~sw ~socket_path ~retry_dir ->
+      run_e2e ~caps ~dir ~stt ~deliver
+        (fun ~clock ~net ~sw ~socket_path ~retry_dir ->
           Fun.protect
             ~finally:(fun () -> ignore (Eio.Promise.try_resolve cleanup_u ()))
             (fun () ->
@@ -730,11 +811,20 @@ let test_text_retry_held_delivery_cleanup_stt_zero () =
                 "new capture cancelled before STT" 0 (Atomic.get stt_n);
               Alcotest.(check bool)
                 "successful text retry clears candidate" true
-                (peek_meta retry_dir = None))))
+                (peek_meta ~caps retry_dir = None))))
 
-let test_queued_retry_processing_only check_capture =
-  with_dir (fun dir ->
-      ignore (seed_audio (Filename.concat dir "r"));
+let test_queued_retry_processing_only
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.stdout
+       ; Ox_caps.Cap.time
+       ; .. >) check_capture =
+  with_dir ~caps (fun dir ->
+      ignore (seed_audio ~caps (Filename.concat dir "r"));
       let entered, entered_u = Eio.Promise.create () in
       let never, _ = Eio.Promise.create () in
       let calls = Atomic.make 0 in
@@ -756,7 +846,7 @@ let test_queued_retry_processing_only check_capture =
           "shutdown released queued processing admission" true
           (List.assoc_opt "processing" state = Some (`Int 0))
       in
-      run_e2e ~dir ~stt
+      run_e2e ~caps ~dir ~stt
         ~deliver:(fun _ _ _ _ -> Alcotest.fail "held retry must not deliver")
         ~on_stopped
         (fun ~clock ~net ~sw ~socket_path ~retry_dir:_ ->
@@ -829,10 +919,19 @@ let rec suppressed_inject_and_publish
   | Ox.Cause.Finalizer cause -> suppressed_inject_and_publish cause
   | Ox.Cause.Fail _ | Ox.Cause.Die _ | Ox.Cause.Interrupt _ -> false
 
-let test_audio_retry_delivery_and_text_publish_both_causes () =
-  with_dir (fun dir ->
+let test_audio_retry_delivery_and_text_publish_both_causes
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.stdout
+       ; Ox_caps.Cap.time
+       ; .. >) () =
+  with_dir ~caps (fun dir ->
       let retry_dir = Filename.concat dir "r" in
-      let gen0 = seed_audio retry_dir in
+      let gen0 = seed_audio ~caps retry_dir in
       let stt_n = Atomic.make 0 in
       let deliver_n = Atomic.make 0 in
       let lock_save = ref Created_dir in
@@ -842,13 +941,13 @@ let test_audio_retry_delivery_and_text_publish_both_causes () =
       in
       let deliver _ _ _target _ =
         Atomic.incr deliver_n;
-        lock_save := install_lock_dir retry_dir;
+        lock_save := install_lock_dir ~caps retry_dir;
         Error (`Ptt_error "inject:failed")
       in
       Fun.protect
-        ~finally:(fun () -> restore_lock retry_dir !lock_save)
+        ~finally:(fun () -> restore_lock ~caps retry_dir !lock_save)
         (fun () ->
-          Pie_test_runtime.run @@ fun env ->
+          Pie_test_runtime.run ~caps @@ fun env ->
           let clock = Eio.Stdenv.clock env in
           (* The workflow must report the compound failure: in v1 only an exact single
              [`Ptt_error] was a recoverable retry failure, while a [`Ptt_cause] had to
@@ -879,9 +978,10 @@ let test_audio_retry_delivery_and_text_publish_both_causes () =
                              ()
                          in
                          let socket_path, retry_dir, workflow =
-                           owner_workflow ~logger ~env ~sw ~net ~process_mgr
-                             ~mono_clock ~dir ~config_control:{ stamp; load }
-                             ~stt ~deliver ~keyboard ~audio
+                           owner_workflow ~caps ~logger ~env ~sw ~net
+                             ~process_mgr ~mono_clock ~dir
+                             ~config_control:{ stamp; load } ~stt ~deliver
+                             ~keyboard ~audio
                          in
                          let got : Pie.Ptt_loop.run_error option Atomic.t =
                            Atomic.make None
@@ -924,14 +1024,14 @@ let test_audio_retry_delivery_and_text_publish_both_causes () =
                                 %a"
                                pp_run_error error);
                          Alcotest.(check int) "stt ran" 1 (Atomic.get stt_n);
-                         (match peek_kind retry_dir with
+                         (match peek_kind ~caps retry_dir with
                          | Some "audio" -> ()
                          | other ->
                              Alcotest.failf
                                "expected audio retained after publish fail, \
                                 got %s"
                                (Option.value ~default:"none" other));
-                         (match peek_generation retry_dir with
+                         (match peek_generation ~caps retry_dir with
                          | Some g when Active.generation_equal g gen0 -> ()
                          | _ -> Alcotest.fail "audio generation replaced");
                          Ok ())))
@@ -947,28 +1047,37 @@ let test_audio_retry_delivery_and_text_publish_both_causes () =
               !observed
           else require_success exit))
 
-let test_delivery_success_clear_fail_preserves_candidate () =
-  with_dir (fun dir ->
+let test_delivery_success_clear_fail_preserves_candidate
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.stdout
+       ; Ox_caps.Cap.time
+       ; .. >) () =
+  with_dir ~caps (fun dir ->
       let retry_dir = Filename.concat dir "r" in
-      let gen0 = seed_audio retry_dir in
+      let gen0 = seed_audio ~caps retry_dir in
       let deliver_n = Atomic.make 0 in
       let lock_save = ref Created_dir in
       let stt _ _ _ = Ok "recognized" in
       let deliver _ _ _target _ =
         Atomic.incr deliver_n;
-        lock_save := install_lock_dir retry_dir;
+        lock_save := install_lock_dir ~caps retry_dir;
         Ok Pie.History.Pasted
       in
       Fun.protect
-        ~finally:(fun () -> restore_lock retry_dir !lock_save)
+        ~finally:(fun () -> restore_lock ~caps retry_dir !lock_save)
         (fun () ->
-          run_e2e ~dir ~stt ~deliver
+          run_e2e ~caps ~dir ~stt ~deliver
             (fun ~clock ~net ~sw ~socket_path ~retry_dir ->
               ignore (rpc ~net ~sw socket_path action_retry);
               wait_until ~clock (fun () ->
                   Atomic.get deliver_n >= 1 && idle ~net ~sw socket_path);
               Alcotest.(check int) "one delivery" 1 (Atomic.get deliver_n);
-              (match peek_generation retry_dir with
+              (match peek_generation ~caps retry_dir with
               | Some g when Active.generation_equal g gen0 -> ()
               | None -> Alcotest.fail "candidate cleared despite clear fail"
               | Some _ -> Alcotest.fail "candidate generation changed");
@@ -978,7 +1087,16 @@ let test_delivery_success_clear_fail_preserves_candidate () =
               | Some _ ->
                   Alcotest.(check int) "no auto-repeat" 1 (Atomic.get deliver_n))))
 
-let () =
+let main
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.network
+       ; Ox_caps.Cap.stderr
+       ; Ox_caps.Cap.stdout
+       ; Ox_caps.Cap.time
+       ; .. >) =
   Alcotest.run "end_to_end_budgets"
     [
       ( "strict",
@@ -992,22 +1110,27 @@ let () =
         [
           Alcotest.test_case
             "dict-q7we audio retry survives pause; fresh capture admitted"
-            `Quick test_audio_retry_held_cleanup_pause_busy;
+            `Quick
+            (test_audio_retry_held_cleanup_pause_busy ~caps);
           Alcotest.test_case "text retry held delivery STT stays 0" `Quick
-            test_text_retry_held_delivery_cleanup_stt_zero;
+            (test_text_retry_held_delivery_cleanup_stt_zero ~caps);
           Alcotest.test_case "audio retry delivery+publish fail keeps audio"
-            `Quick test_audio_retry_delivery_and_text_publish_both_causes;
+            `Quick
+            (test_audio_retry_delivery_and_text_publish_both_causes ~caps);
           Alcotest.test_case "dict-q7we queued retry never owns capture" `Quick
-            (fun () -> test_queued_retry_processing_only true);
+            (fun () -> test_queued_retry_processing_only ~caps true);
           Alcotest.test_case "dict-q7we shutdown releases queued retry" `Quick
-            (fun () -> test_queued_retry_processing_only false);
+            (fun () -> test_queued_retry_processing_only ~caps false);
           Alcotest.test_case "delivery success clear fail preserves candidate"
-            `Quick test_delivery_success_clear_fail_preserves_candidate;
+            `Quick
+            (test_delivery_success_clear_fail_preserves_candidate ~caps);
         ] );
       ( "plateau",
         [
           Alcotest.test_case
             "100 settled attempts one workflow retained-store+fd" `Slow
-            test_100_settled_attempts;
+            (test_100_settled_attempts ~caps);
         ] );
     ]
+
+let () = main ~caps:(Ox_test.powerbox ())

@@ -1,4 +1,4 @@
-let caps = Ox_test.powerbox () (* ^pcaps-n1rg *)
+(* ^pcaps-n1rg *)
 
 (* PIE003 soak: repeated realtime lifetimes (buffered and streaming, ws and
    wss) must settle their owned socket readers and return every descriptor they
@@ -40,8 +40,8 @@ let operation_timeout_seconds = 2
 let peer_join_timeout_seconds = 5
 let soak_timeout_seconds = 120
 
-let fd_count () =
-  let dir = Unix.opendir "/proc/self/fd" in
+let fd_count ~(caps : < Ox_caps.Cap.fs_read ; .. >) () =
+  let dir = Ox_caps.Cap_unix.opendir ~caps "/proc/self/fd" in
   Fun.protect
     ~finally:(fun () -> Unix.closedir dir)
     (fun () ->
@@ -53,8 +53,8 @@ let fd_count () =
       in
       loop 0 - 1)
 
-let classify_fds () =
-  let dir = Unix.opendir "/proc/self/fd" in
+let classify_fds ~(caps : < Ox_caps.Cap.fs_read ; .. >) () =
+  let dir = Ox_caps.Cap_unix.opendir ~caps "/proc/self/fd" in
   Fun.protect
     ~finally:(fun () -> Unix.closedir dir)
     (fun () ->
@@ -71,8 +71,8 @@ let classify_fds () =
       in
       loop [])
 
-let format_fds () =
-  classify_fds ()
+let format_fds ~(caps : < Ox_caps.Cap.fs_read ; .. >) () =
+  classify_fds ~caps ()
   |> List.map (fun (name, target) -> name ^ "->" ^ target)
   |> String.concat "; "
 
@@ -108,11 +108,11 @@ let hex_ipv4_port hex =
         (int_of_string ("0x" ^ port))
   | _ -> hex
 
-let owned_tcp_by_inode () =
+let owned_tcp_by_inode ~(caps : < Ox_caps.Cap.fs_read ; .. >) () =
   let load path =
     if not (Sys.file_exists path) then []
     else
-      let ic = open_in_bin path in
+      let ic = Ox_caps.Cap_stdlib.open_in_bin ~caps path in
       Fun.protect
         ~finally:(fun () -> close_in_noerr ic)
         (fun () ->
@@ -135,9 +135,9 @@ let owned_tcp_by_inode () =
   in
   load "/proc/self/net/tcp" @ load "/proc/self/net/tcp6"
 
-let format_owned_sockets () =
-  let rows = classify_fds () in
-  let table = owned_tcp_by_inode () in
+let format_owned_sockets ~(caps : < Ox_caps.Cap.fs_read ; .. >) () =
+  let rows = classify_fds ~caps () in
+  let table = owned_tcp_by_inode ~caps () in
   rows
   |> List.filter_map (fun (name, target) ->
       match socket_inode target with
@@ -313,13 +313,15 @@ let pcm = Bytes.make 320 '\001'
 let session_update =
   Pie.Stt.Codex_realtime.build_pass1_session_update ~model:"gpt-realtime-2" ()
 
-let run_buffered ~sw ~net ~clock ?ca_file ~url () =
+let run_buffered ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) ~sw ~net
+    ~clock ?ca_file ~url () =
   Pie.Stt.Codex_realtime.run_realtime_session ~caps ~sw ~net ~clock ?ca_file
     ~url ~access_token:"synthetic-soak-token"
     ~mode:Pie.Stt.Codex_realtime.Transcription ~session_update
     ~input_sample_rate:16000 pcm
 
-let run_streaming ~sw ~net ~clock ?ca_file ~url ?on_audio_pull () =
+let run_streaming ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) ~sw ~net
+    ~clock ?ca_file ~url ?on_audio_pull () =
   let supplied = ref false in
   let audio () =
     if !supplied then Ok None
@@ -348,17 +350,18 @@ let expect_error ~needle (outcome : outcome) =
       Error
         (`Stt_error ("unexpected error (wanted " ^ needle ^ "): soak-timeout"))
 
-let settle_op ~sw ~net ~clock ?ca_file ~url ~job scenario streaming =
+let settle_op ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) ~sw ~net
+    ~clock ?ca_file ~url ~job scenario streaming =
   let body () =
     match scenario with
     | Midstream_cancel ->
-        run_streaming ~sw ~net ~clock ?ca_file ~url
+        run_streaming ~caps ~sw ~net ~clock ?ca_file ~url
           ~on_audio_pull:(fun () ->
             Eio.Promise.resolve job.resolve_client_ready ())
           ()
     | _ ->
-        if streaming then run_streaming ~sw ~net ~clock ?ca_file ~url ()
-        else run_buffered ~sw ~net ~clock ?ca_file ~url ()
+        if streaming then run_streaming ~caps ~sw ~net ~clock ?ca_file ~url ()
+        else run_buffered ~caps ~sw ~net ~clock ?ca_file ~url ()
   in
   let timed () =
     match
@@ -415,13 +418,21 @@ let settle_op ~sw ~net ~clock ?ca_file ~url ~job scenario streaming =
 
 type tls_material = { cert : string; key : string }
 
-let with_localhost_tls f =
-  let cert = Filename.temp_file "pie-soak-cert" ".pem" in
-  let key = Filename.temp_file "pie-soak-key" ".pem" in
+let with_localhost_tls
+    ~(caps :
+       < Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) f =
+  let cert =
+    Ox_caps.Cap_stdlib.Filename.temp_file ~caps "pie-soak-cert" ".pem"
+  in
+  let key = Ox_caps.Cap_stdlib.Filename.temp_file ~caps "pie-soak-key" ".pem" in
   Fun.protect
     ~finally:(fun () ->
-      (try Sys.remove cert with _ -> ());
-      try Sys.remove key with _ -> ())
+      (try Ox_caps.Cap_sys.remove ~caps cert with _ -> ());
+      try Ox_caps.Cap_sys.remove ~caps key with _ -> ())
     (fun () ->
       let cmd =
         String.concat " "
@@ -438,7 +449,7 @@ let with_localhost_tls f =
             ">/dev/null 2>&1";
           ]
       in
-      if Sys.command cmd <> 0 then
+      if Ox_caps.Cap_sys.command ~caps cmd <> 0 then
         Alcotest.fail "failed to generate synthetic localhost TLS material";
       f { cert; key })
 
@@ -482,7 +493,7 @@ let serve_accepted ~clock ~tls_ctx socket job =
                 ~close_flow:(fun () -> Eio.Flow.close tls)
                 job.scenario tls))
 
-let log_localhost_addrs () =
+let log_localhost_addrs ~(caps : < Ox_caps.Cap.stdout ; .. >) () =
   let addrs =
     Unix.getaddrinfo "localhost" "" [ Unix.AI_SOCKTYPE Unix.SOCK_STREAM ]
   in
@@ -491,11 +502,18 @@ let log_localhost_addrs () =
     | Unix.ADDR_INET (ip, _) -> Unix.string_of_inet_addr ip
     | Unix.ADDR_UNIX path -> "unix:" ^ path
   in
-  Printf.printf "lifecycle_soak getaddrinfo localhost=[%s]\n%!"
+  Ox_caps.Cap_stdlib.printf ~caps
+    "lifecycle_soak getaddrinfo localhost=[%s]\n%!"
     (String.concat "," (List.map pp addrs))
 
-let test_repeated_realtime_fd_soak ~scheme ~host ~tls_ctx () =
-  log_localhost_addrs ();
+let test_repeated_realtime_fd_soak
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.stdout
+       ; Ox_caps.Cap.time
+       ; .. >) ~scheme ~host ~tls_ctx () =
+  log_localhost_addrs ~caps ();
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
@@ -515,10 +533,14 @@ let test_repeated_realtime_fd_soak ~scheme ~host ~tls_ctx () =
       port
   in
   let ca_file =
-    match tls_ctx with None -> None | Some _ -> Sys.getenv_opt "SSL_CERT_FILE"
+    match tls_ctx with
+    | None -> None
+    | Some _ -> Ox_caps.Cap_sys.getenv_opt ~caps "SSL_CERT_FILE"
   in
   let int_env name default =
-    match Sys.getenv_opt name with None -> default | Some s -> int_of_string s
+    match Ox_caps.Cap_sys.getenv_opt ~caps name with
+    | None -> default
+    | Some s -> int_of_string s
   in
   let warmup = int_env "PIE_SOAK_WARMUP" 8 in
   let per_scenario = int_env "PIE_SOAK_PER_SCENARIO" 34 in
@@ -572,17 +594,20 @@ let test_repeated_realtime_fd_soak ~scheme ~host ~tls_ctx () =
   let samples = ref [] in
   let op_index = ref 0 in
   let record label =
-    let n = fd_count () in
+    let n = fd_count ~caps () in
     samples := (label, n) :: !samples;
-    Printf.printf "lifecycle_soak %s %s fd=%d\n%!" scheme label n;
+    Ox_caps.Cap_stdlib.printf ~caps "lifecycle_soak %s %s fd=%d\n%!" scheme
+      label n;
     n
   in
   let progress label =
     incr op_index;
-    let n = fd_count () in
-    Printf.printf
+    let n = fd_count ~caps () in
+    Ox_caps.Cap_stdlib.printf ~caps
       "lifecycle_soak %s op=%s i=%d fd=%d sockets=[%s] peer=[%s]\n%!" scheme
-      label !op_index n (format_owned_sockets ()) !last_peer_diag
+      label !op_index n
+      (format_owned_sockets ~caps ())
+      !last_peer_diag
   in
   let join_peer job =
     match
@@ -602,7 +627,9 @@ let test_repeated_realtime_fd_soak ~scheme ~host ~tls_ctx () =
       if i = 0 then Ok ()
       else
         let job = enqueue Normal in
-        let* () = settle_op ~sw ~net ~clock ?ca_file ~url ~job Normal false in
+        let* () =
+          settle_op ~caps ~sw ~net ~clock ?ca_file ~url ~job Normal false
+        in
         let* () = join_peer job in
         progress "warmup";
         warmup_loop (i - 1)
@@ -612,7 +639,7 @@ let test_repeated_realtime_fd_soak ~scheme ~host ~tls_ctx () =
       else
         let job = enqueue scenario in
         let* () =
-          settle_op ~sw ~net ~clock ?ca_file ~url ~job scenario streaming
+          settle_op ~caps ~sw ~net ~clock ?ca_file ~url ~job scenario streaming
         in
         let* () = join_peer job in
         progress (scenario_name scenario);
@@ -623,8 +650,9 @@ let test_repeated_realtime_fd_soak ~scheme ~host ~tls_ctx () =
                (Printf.sprintf
                   "%s fd drift after op: baseline=%d now=%d fds=[%s] \
                    sockets=[%s] peer=[%s]"
-                  (scenario_name scenario) baseline n (format_fds ())
-                  (format_owned_sockets ()) !last_peer_diag))
+                  (scenario_name scenario) baseline n (format_fds ~caps ())
+                  (format_owned_sockets ~caps ())
+                  !last_peer_diag))
         else phase scenario (not streaming) (remaining - 1) baseline
     in
     let rec all remaining_scenarios baseline =
@@ -638,7 +666,7 @@ let test_repeated_realtime_fd_soak ~scheme ~host ~tls_ctx () =
               (`Stt_error
                  (Printf.sprintf
                     "%s phase did not return to baseline %d (now %d) fds=[%s]"
-                    (scenario_name scenario) baseline n (format_fds ())))
+                    (scenario_name scenario) baseline n (format_fds ~caps ())))
           else all rest baseline
     in
     let* () = warmup_loop warmup in
@@ -658,11 +686,13 @@ let test_repeated_realtime_fd_soak ~scheme ~host ~tls_ctx () =
     | Error `Timeout -> `Soak_timed_out
   in
   let dump_samples () =
-    Printf.printf "lifecycle_soak %s last_index=%d samples=%d\n%!" scheme
-      !op_index (List.length !samples);
+    Ox_caps.Cap_stdlib.printf ~caps
+      "lifecycle_soak %s last_index=%d samples=%d\n%!" scheme !op_index
+      (List.length !samples);
     List.iter
       (fun (label, n) ->
-        Printf.printf "lifecycle_soak %s %s fd=%d\n%!" scheme label n)
+        Ox_caps.Cap_stdlib.printf ~caps "lifecycle_soak %s %s fd=%d\n%!" scheme
+          label n)
       (List.rev !samples)
   in
   match outcome with
@@ -670,12 +700,14 @@ let test_repeated_realtime_fd_soak ~scheme ~host ~tls_ctx () =
       let rows = List.rev !samples in
       (match rows with
       | ("warmup", n) :: _ ->
-          Printf.printf "lifecycle_soak %s warmup_fd=%d samples=%d\n%!" scheme n
+          Ox_caps.Cap_stdlib.printf ~caps
+            "lifecycle_soak %s warmup_fd=%d samples=%d\n%!" scheme n
             (List.length rows)
       | _ -> Alcotest.fail "missing warmup sample");
       List.iter
         (fun (label, n) ->
-          Printf.printf "lifecycle_soak %s %s fd=%d\n%!" scheme label n)
+          Ox_caps.Cap_stdlib.printf ~caps "lifecycle_soak %s %s fd=%d\n%!"
+            scheme label n)
         rows
   | `Failed message ->
       dump_samples ();
@@ -685,29 +717,51 @@ let test_repeated_realtime_fd_soak ~scheme ~host ~tls_ctx () =
       Alcotest.failf "soak failed: overall timeout after %ds"
         soak_timeout_seconds
 
-let test_plain_127 () =
-  test_repeated_realtime_fd_soak ~scheme:"ws" ~host:"127.0.0.1" ~tls_ctx:None ()
+let test_plain_127
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.stdout
+       ; Ox_caps.Cap.time
+       ; .. >) () =
+  test_repeated_realtime_fd_soak ~caps ~scheme:"ws" ~host:"127.0.0.1"
+    ~tls_ctx:None ()
 
-let test_plain_localhost () =
-  test_repeated_realtime_fd_soak ~scheme:"ws" ~host:"localhost" ~tls_ctx:None ()
+let test_plain_localhost
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.stdout
+       ; Ox_caps.Cap.time
+       ; .. >) () =
+  test_repeated_realtime_fd_soak ~caps ~scheme:"ws" ~host:"localhost"
+    ~tls_ctx:None ()
 
 let tls_child_env = "PIE_SOAK_TLS_CHILD"
 let tls_key_env = "PIE_SOAK_TLS_KEY"
 
-let run_tls_soak_in_process ~cert ~key =
+let run_tls_soak_in_process
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.stdout
+       ; Ox_caps.Cap.time
+       ; .. >) ~cert ~key =
   let ctx =
     Ox_http.Ox_http_tls_openssl.create_server_ctx ~certificate_chain_file:cert
       ~private_key_file:key ~alpn_protocols:[ "http/1.1" ] ()
   in
   let host =
-    match Sys.getenv_opt "PIE_SOAK_HOST" with
+    match Ox_caps.Cap_sys.getenv_opt ~caps "PIE_SOAK_HOST" with
     | Some h -> h
     | None -> "127.0.0.1"
   in
-  test_repeated_realtime_fd_soak ~scheme:"wss" ~host ~tls_ctx:(Some ctx) ()
+  test_repeated_realtime_fd_soak ~caps ~scheme:"wss" ~host ~tls_ctx:(Some ctx)
+    ()
 
-let env_without keys =
-  Unix.environment () |> Array.to_list
+let env_without ~(caps : < Ox_caps.Cap.env ; .. >) keys =
+  Ox_caps.Cap_unix.environment ~caps ()
+  |> Array.to_list
   |> List.filter (fun entry ->
       not
         (List.exists
@@ -718,10 +772,12 @@ let env_without keys =
            keys))
   |> Array.of_list
 
-let spawn_tls_child material =
+let spawn_tls_child
+    ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.exec ; Ox_caps.Cap.fork ; .. >)
+    material =
   let env =
     Array.append
-      (env_without
+      (env_without ~caps
          [
            "SSL_CERT_FILE";
            "SSL_CERT_DIR";
@@ -744,7 +800,8 @@ let spawn_tls_child material =
     else Sys.executable_name
   in
   let pid =
-    Unix.create_process_env exe [| exe |] env Unix.stdin Unix.stdout Unix.stderr
+    Ox_caps.Cap_unix.create_process_env ~caps exe [| exe |] env Unix.stdin
+      Unix.stdout Unix.stderr
   in
   match snd (Unix.waitpid [] pid) with
   | Unix.WEXITED 0 -> ()
@@ -752,30 +809,52 @@ let spawn_tls_child material =
   | Unix.WSIGNALED s -> Alcotest.failf "tls soak child signaled %d" s
   | Unix.WSTOPPED s -> Alcotest.failf "tls soak child stopped %d" s
 
-let test_tls_soak () = with_localhost_tls spawn_tls_child
+let test_tls_soak
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_localhost_tls ~caps (spawn_tls_child ~caps)
 
-let () =
-  match Sys.getenv_opt tls_child_env with
+let main
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.stdout
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) =
+  match Ox_caps.Cap_sys.getenv_opt ~caps tls_child_env with
   | Some "1" ->
       let cert =
-        match Sys.getenv_opt "SSL_CERT_FILE" with
+        match Ox_caps.Cap_sys.getenv_opt ~caps "SSL_CERT_FILE" with
         | Some path -> path
         | None -> failwith "tls soak child missing SSL_CERT_FILE"
       in
       let key =
-        match Sys.getenv_opt tls_key_env with
+        match Ox_caps.Cap_sys.getenv_opt ~caps tls_key_env with
         | Some path -> path
         | None -> failwith "tls soak child missing PIE_SOAK_TLS_KEY"
       in
-      run_tls_soak_in_process ~cert ~key
+      run_tls_soak_in_process ~caps ~cert ~key
   | _ ->
       Alcotest.run "lifecycle_soak"
         [
           ( "fd",
             [
-              Alcotest.test_case "plain ws 127.0.0.1 short" `Slow test_plain_127;
+              Alcotest.test_case "plain ws 127.0.0.1 short" `Slow
+                (test_plain_127 ~caps);
               Alcotest.test_case "plain ws localhost short" `Slow
-                test_plain_localhost;
-              Alcotest.test_case "tls wss 127.0.0.1 short" `Slow test_tls_soak;
+                (test_plain_localhost ~caps);
+              Alcotest.test_case "tls wss 127.0.0.1 short" `Slow
+                (test_tls_soak ~caps);
             ] );
         ]
+
+let () = main ~caps:(Ox_test.powerbox ())

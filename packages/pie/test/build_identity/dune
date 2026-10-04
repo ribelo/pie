@@ -1,4 +1,4 @@
 (test
  (name test_build_identity)
- (libraries pie alcotest unix)
+ (libraries ox_test pie alcotest unix)
  (deps ../../../../scripts/build-identity.sh))

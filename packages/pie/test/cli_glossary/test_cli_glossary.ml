@@ -10,59 +10,66 @@ let string_contains hay needle =
   in
   loop 0
 
-let rec chmod_tree path =
-  (try Unix.chmod path 0o700 with Unix.Unix_error _ -> ());
+let rec chmod_tree ~(caps : < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; .. >)
+    path =
+  (try Ox_caps.Cap_unix.chmod ~caps path 0o700 with Unix.Unix_error _ -> ());
   match Unix.lstat path with
   | exception Unix.Unix_error _ -> ()
   | { Unix.st_kind = Unix.S_DIR; _ } -> (
-      match Sys.readdir path with
+      match Ox_caps.Cap_sys.readdir ~caps path with
       | exception Sys_error _ -> ()
       | names ->
           Array.iter
             (fun name ->
               if name <> "." && name <> ".." then
-                chmod_tree (Filename.concat path name))
+                chmod_tree ~caps (Filename.concat path name))
             names)
   | _ -> ()
 
-let rec rm_rf path =
+let rec rm_rf ~(caps : < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; .. >) path
+    =
   match Unix.lstat path with
   | exception Unix.Unix_error (Unix.ENOENT, _, _) -> ()
   | { Unix.st_kind = Unix.S_DIR; _ } -> (
-      (match Sys.readdir path with
+      (match Ox_caps.Cap_sys.readdir ~caps path with
       | exception Sys_error _ -> ()
       | names ->
           Array.iter
             (fun name ->
               if name <> "." && name <> ".." then
-                rm_rf (Filename.concat path name))
+                rm_rf ~caps (Filename.concat path name))
             names);
-      try Unix.rmdir path with Unix.Unix_error _ -> ())
-  | _ -> ( try Unix.unlink path with Unix.Unix_error _ -> ())
+      try Ox_caps.Cap_unix.rmdir ~caps path with Unix.Unix_error _ -> ())
+  | _ -> (
+      try Ox_caps.Cap_unix.unlink ~caps path with Unix.Unix_error _ -> ())
 
-let temp_dir name =
-  let path = Filename.temp_file name "" in
-  Sys.remove path;
-  Unix.mkdir path 0o700;
+let temp_dir ~(caps : < Ox_caps.Cap.fs_write ; Ox_caps.Cap.tmp ; .. >) name =
+  let path = Ox_caps.Cap_stdlib.Filename.temp_file ~caps name "" in
+  Ox_caps.Cap_sys.remove ~caps path;
+  Ox_caps.Cap_unix.mkdir ~caps path 0o700;
   Unix.realpath path
 
-let with_sandbox f =
-  let root = temp_dir "pie-glossary" in
+let with_sandbox
+    ~(caps :
+       < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.tmp ; .. >) f
+    =
+  let root = temp_dir ~caps "pie-glossary" in
   Fun.protect
     ~finally:(fun () ->
-      chmod_tree root;
-      rm_rf root)
+      chmod_tree ~caps root;
+      rm_rf ~caps root)
     (fun () -> f root)
 
-let rec mkdir_p path =
+let rec mkdir_p ~(caps : < Ox_caps.Cap.fs_write ; .. >) path =
   if path = "" || path = "/" || path = "." then ()
   else (
-    mkdir_p (Filename.dirname path);
-    try Unix.mkdir path 0o755 with Unix.Unix_error (Unix.EEXIST, _, _) -> ())
+    mkdir_p ~caps (Filename.dirname path);
+    try Ox_caps.Cap_unix.mkdir ~caps path 0o755
+    with Unix.Unix_error (Unix.EEXIST, _, _) -> ())
 
-let write_file path contents =
-  mkdir_p (Filename.dirname path);
-  let oc = open_out_bin path in
+let write_file ~(caps : < Ox_caps.Cap.fs_write ; .. >) path contents =
+  mkdir_p ~caps (Filename.dirname path);
+  let oc = Ox_caps.Cap_stdlib.open_out_bin ~caps path in
   Fun.protect
     ~finally:(fun () -> close_out_noerr oc)
     (fun () -> output_string oc contents)
@@ -87,11 +94,11 @@ let read_available buf fd =
   | Unix.Unix_error ((Unix.EAGAIN | Unix.EWOULDBLOCK), _, _) -> `Empty
   | Unix.Unix_error (Unix.EBADF, _, _) -> `Eof
 
-let rec drain_select ~deadline ~stdout_r ~stderr_r stdout_buf stderr_buf
-    stdout_open stderr_open =
+let rec drain_select ~(caps : < Ox_caps.Cap.time ; .. >) ~deadline ~stdout_r
+    ~stderr_r stdout_buf stderr_buf stdout_open stderr_open =
   if not (stdout_open || stderr_open) then (false, false)
   else
-    let now = Unix.gettimeofday () in
+    let now = Ox_caps.Cap_unix.gettimeofday ~caps () in
     if now >= deadline then (stdout_open, stderr_open)
     else
       let timeout = min 0.05 (deadline -. now) in
@@ -124,11 +131,18 @@ let rec drain_select ~deadline ~stdout_r ~stderr_r stdout_buf stderr_buf
         else (stderr_open, false)
       in
       if stdout_more || stderr_more then
-        drain_select ~deadline ~stdout_r ~stderr_r stdout_buf stderr_buf
+        drain_select ~caps ~deadline ~stdout_r ~stderr_r stdout_buf stderr_buf
           stdout_open stderr_open
       else (stdout_open, stderr_open)
 
-let run_pie ~runtime_dir ?(glossary = "") args =
+let run_pie
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.signal
+       ; Ox_caps.Cap.time
+       ; .. >) ~runtime_dir ?(glossary = "") args =
   let stdout_r, stdout_w = Unix.pipe ~cloexec:true () in
   let stderr_r, stderr_w = Unix.pipe ~cloexec:true () in
   Unix.set_nonblock stdout_r;
@@ -136,7 +150,9 @@ let run_pie ~runtime_dir ?(glossary = "") args =
   let env =
     Array.of_list
       [
-        "PATH=" ^ Option.value ~default:"/usr/bin" (Sys.getenv_opt "PATH");
+        "PATH="
+        ^ Option.value ~default:"/usr/bin"
+            (Ox_caps.Cap_sys.getenv_opt ~caps "PATH");
         "HOME=" ^ runtime_dir;
         "XDG_CONFIG_HOME=" ^ runtime_dir;
         "XDG_DATA_HOME=" ^ runtime_dir;
@@ -148,7 +164,7 @@ let run_pie ~runtime_dir ?(glossary = "") args =
       ]
   in
   let pid =
-    Unix.create_process_env pie_exe
+    Ox_caps.Cap_unix.create_process_env ~caps pie_exe
       (Array.of_list (pie_exe :: args))
       env Unix.stdin stdout_w stderr_w
   in
@@ -156,22 +172,23 @@ let run_pie ~runtime_dir ?(glossary = "") args =
   close_fd stderr_w;
   let stdout_buf = Buffer.create 256 in
   let stderr_buf = Buffer.create 256 in
-  let deadline = Unix.gettimeofday () +. child_deadline_s in
+  let deadline = Ox_caps.Cap_unix.gettimeofday ~caps () +. child_deadline_s in
   let rec wait_child stdout_open stderr_open =
     let stdout_open, stderr_open =
-      drain_select ~deadline ~stdout_r ~stderr_r stdout_buf stderr_buf
+      drain_select ~caps ~deadline ~stdout_r ~stderr_r stdout_buf stderr_buf
         stdout_open stderr_open
     in
     match Unix.waitpid [ Unix.WNOHANG ] pid with
     | 0, _ ->
-        if Unix.gettimeofday () >= deadline then (
-          (try Unix.kill pid Sys.sigkill with Unix.Unix_error _ -> ());
+        if Ox_caps.Cap_unix.gettimeofday ~caps () >= deadline then (
+          (try Ox_caps.Cap_unix.kill ~caps pid Sys.sigkill
+           with Unix.Unix_error _ -> ());
           snd (Unix.waitpid [] pid))
         else wait_child stdout_open stderr_open
     | _, status ->
         ignore
-          (drain_select ~deadline ~stdout_r ~stderr_r stdout_buf stderr_buf
-             stdout_open stderr_open);
+          (drain_select ~caps ~deadline ~stdout_r ~stderr_r stdout_buf
+             stderr_buf stdout_open stderr_open);
         status
   in
   let status =
@@ -210,52 +227,106 @@ let check_status run path exists lines =
     (Printf.sprintf "Path: %s\nExists: %s\nLines: %s\n" path exists lines)
     run.stdout
 
-let test_default () =
-  with_sandbox (fun root ->
+let test_default
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.signal
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_sandbox ~caps (fun root ->
       let path = Filename.concat root "pie/glossary.md" in
-      write_file path "## Tools\n- Eio — ejo\n- Dune — dun";
-      let run = run_pie ~runtime_dir:root [ "glossary" ] in
+      write_file ~caps path "## Tools\n- Eio — ejo\n- Dune — dun";
+      let run = run_pie ~caps ~runtime_dir:root [ "glossary" ] in
       check_status run path "yes" "3";
       Alcotest.(check string) "no warnings" "" run.stderr)
 
-let test_override_and_reload () =
-  with_sandbox (fun root ->
+let test_override_and_reload
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.signal
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_sandbox ~caps (fun root ->
       let path = Filename.concat root "custom.md" in
-      let run () = run_pie ~runtime_dir:root ~glossary:path [ "glossary" ] in
-      write_file path "one\n";
+      let run () =
+        run_pie ~caps ~runtime_dir:root ~glossary:path [ "glossary" ]
+      in
+      write_file ~caps path "one\n";
       check_status (run ()) path "yes" "1";
-      write_file path "one\ntwo\n";
+      write_file ~caps path "one\ntwo\n";
       check_status (run ()) path "yes" "2")
 
-let test_missing () =
-  with_sandbox (fun root ->
+let test_missing
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.signal
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_sandbox ~caps (fun root ->
       let path = Filename.concat root "pie/glossary.md" in
-      let run = run_pie ~runtime_dir:root [ "glossary" ] in
+      let run = run_pie ~caps ~runtime_dir:root [ "glossary" ] in
       check_status run path "no" "0";
       Alcotest.(check bool)
         "warning" true
         (string_contains run.stderr "Warning:"))
 
-let test_symlink_and_unreadable () =
-  with_sandbox (fun root ->
+let test_symlink_and_unreadable
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.signal
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_sandbox ~caps (fun root ->
       let path = Filename.concat root "custom.md" in
       let target = Filename.concat root "target.md" in
-      write_file target "";
-      Unix.symlink target path;
+      write_file ~caps target "";
+      Ox_caps.Cap_unix.symlink ~caps target path;
       check_status
-        (run_pie ~runtime_dir:root ~glossary:path [ "glossary" ])
+        (run_pie ~caps ~runtime_dir:root ~glossary:path [ "glossary" ])
         path "yes" "0";
-      Unix.unlink path;
-      Unix.mkdir path 0o700;
-      let run = run_pie ~runtime_dir:root ~glossary:path [ "glossary" ] in
+      Ox_caps.Cap_unix.unlink ~caps path;
+      Ox_caps.Cap_unix.mkdir ~caps path 0o700;
+      let run = run_pie ~caps ~runtime_dir:root ~glossary:path [ "glossary" ] in
       check_status run path "yes" "unavailable";
       Alcotest.(check bool)
         "warning reason" true
         (string_contains run.stderr "is a directory"))
 
-let test_help () =
-  with_sandbox (fun root ->
-      let run = run_pie ~runtime_dir:root [ "glossary"; "--help=plain" ] in
+let test_help
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.signal
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_sandbox ~caps (fun root ->
+      let run =
+        run_pie ~caps ~runtime_dir:root [ "glossary"; "--help=plain" ]
+      in
       require_exited_zero run.status;
       let help =
         run.stdout
@@ -280,26 +351,51 @@ let test_help () =
           "commands";
         ])
 
-let test_skill_retired () =
-  with_sandbox (fun root ->
-      let run = run_pie ~runtime_dir:root [ "skill"; "install" ] in
+let test_skill_retired
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.signal
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_sandbox ~caps (fun root ->
+      let run = run_pie ~caps ~runtime_dir:root [ "skill"; "install" ] in
       ignore (require_exited_nonzero run.status);
       Alcotest.(check bool)
         "unknown command" true
         (string_contains run.stderr "unknown command"))
 
-let () =
+let main
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.exec
+       ; Ox_caps.Cap.fork
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.signal
+       ; Ox_caps.Cap.time
+       ; Ox_caps.Cap.tmp
+       ; .. >) =
   Alcotest.run "CLI glossary"
     [
       ( "glossary",
         [
-          Alcotest.test_case "default path and line count" `Quick test_default;
+          Alcotest.test_case "default path and line count" `Quick
+            (test_default ~caps);
           Alcotest.test_case "override and next read" `Quick
-            test_override_and_reload;
-          Alcotest.test_case "missing file warns" `Quick test_missing;
+            (test_override_and_reload ~caps);
+          Alcotest.test_case "missing file warns" `Quick (test_missing ~caps);
           Alcotest.test_case "symlink and unreadable file" `Quick
-            test_symlink_and_unreadable;
-          Alcotest.test_case "format and maintenance help" `Quick test_help;
-          Alcotest.test_case "skill command retired" `Quick test_skill_retired;
+            (test_symlink_and_unreadable ~caps);
+          Alcotest.test_case "format and maintenance help" `Quick
+            (test_help ~caps);
+          Alcotest.test_case "skill command retired" `Quick
+            (test_skill_retired ~caps);
         ] );
     ]
+
+let () = main ~caps:(Ox_test.powerbox ())

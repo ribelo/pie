@@ -1,4 +1,4 @@
-let caps = Ox_test.powerbox () (* ^pcaps-n1rg *)
+(* ^pcaps-n1rg *)
 
 (* Isolated PIE012 chunk-invariant resampling.
    Synthetic PCM and a local fake WebSocket only. No provider, mic or secrets. *)
@@ -454,7 +454,8 @@ let audio_of_chunks chunks =
         remaining := rest;
         Ok (Some chunk)
 
-let run_streaming_sender chunks ~from_rate =
+let run_streaming_sender ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >)
+    chunks ~from_rate =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let net = Eio.Stdenv.net env in
@@ -487,7 +488,8 @@ let run_streaming_sender chunks ~from_rate =
         "audio commit before response" true !commit_before_response;
       Buffer.to_bytes captured
 
-let test_streaming_sender_matches_oracle () =
+let test_streaming_sender_matches_oracle
+    ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) () =
   let source = pcm_of_samples [| 0; 12000; -200; 400 |] in
   let from_rate = 16000 in
   let to_rate = 24000 in
@@ -504,11 +506,12 @@ let test_streaming_sender_matches_oracle () =
   in
   List.iter
     (fun chunks ->
-      let actual = run_streaming_sender chunks ~from_rate in
+      let actual = run_streaming_sender ~caps chunks ~from_rate in
       check_match "streaming sender" ~from_rate ~to_rate source actual)
     partitions
 
-let test_buffered_odd_is_stt_error () =
+let test_buffered_odd_is_stt_error
+    ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let odd = Bytes.make 1 '\x00' in
@@ -538,7 +541,8 @@ let test_buffered_odd_is_stt_error () =
         (contains rendered "odd" || contains rendered "byte")
   | Ok _ -> Alcotest.fail "expected Stt_error for buffered equal-rate odd PCM"
 
-let test_buffered_huge_rate_is_stt_error () =
+let test_buffered_huge_rate_is_stt_error
+    ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let pcm = pcm_of_samples [| 1; 2 |] in
@@ -601,7 +605,8 @@ let serve_translation_capture ~clock ~expected_bytes flow captured
   loop ();
   drain_until_eof ~clock flow
 
-let test_streaming_nonpositive_rate () =
+let test_streaming_nonpositive_rate
+    ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let operation =
@@ -619,7 +624,7 @@ let test_streaming_nonpositive_rate () =
         (contains rendered "sample rate")
   | Ok _ -> Alcotest.fail "expected Stt_error for nonpositive rate"
 
-let () =
+let main ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) =
   Alcotest.run "streaming_resampling"
     [
       ( "resampler",
@@ -650,12 +655,16 @@ let () =
       ( "sender",
         [
           Alcotest.test_case "streaming sender matches oracle for partitions"
-            `Quick test_streaming_sender_matches_oracle;
+            `Quick
+            (test_streaming_sender_matches_oracle ~caps);
           Alcotest.test_case "nonpositive rate fails at operation boundary"
-            `Quick test_streaming_nonpositive_rate;
+            `Quick
+            (test_streaming_nonpositive_rate ~caps);
           Alcotest.test_case "buffered odd PCM is Stt_error not Die" `Quick
-            test_buffered_odd_is_stt_error;
+            (test_buffered_odd_is_stt_error ~caps);
           Alcotest.test_case "buffered huge rate is Stt_error not Die" `Quick
-            test_buffered_huge_rate_is_stt_error;
+            (test_buffered_huge_rate_is_stt_error ~caps);
         ] );
     ]
+
+let () = main ~caps:(Ox_test.powerbox ())

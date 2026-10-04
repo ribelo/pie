@@ -1,27 +1,29 @@
-let caps = Ox_test.powerbox () (* ^pcaps-n1rg *)
+(* ^pcaps-n1rg *)
 
 (* Isolated PIE021 keyboard setup/input-loss ownership.
    Private Unix D-Bus fake only. No real session bus, keystrokes, or credentials. *)
 
 module Monitor = Pie.Keyboard.Monitor
 
-let rec rm_rf path =
+let rec rm_rf ~(caps : < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; .. >) path
+    =
   match Unix.lstat path with
   | exception Unix.Unix_error (Unix.ENOENT, _, _) -> ()
   | { Unix.st_kind = Unix.S_DIR; _ } -> (
-      (match Sys.readdir path with
+      (match Ox_caps.Cap_sys.readdir ~caps path with
       | names ->
           Array.iter
             (fun name ->
               if name <> "." && name <> ".." then
-                rm_rf (Filename.concat path name))
+                rm_rf ~caps (Filename.concat path name))
             names
       | exception Sys_error _ -> ());
-      try Unix.rmdir path with Unix.Unix_error _ -> ())
-  | _ -> ( try Unix.unlink path with Unix.Unix_error _ -> ())
+      try Ox_caps.Cap_unix.rmdir ~caps path with Unix.Unix_error _ -> ())
+  | _ -> (
+      try Ox_caps.Cap_unix.unlink ~caps path with Unix.Unix_error _ -> ())
 
-let fd_count () =
-  let dir = Unix.opendir "/proc/self/fd" in
+let fd_count ~(caps : < Ox_caps.Cap.fs_read ; .. >) () =
+  let dir = Ox_caps.Cap_unix.opendir ~caps "/proc/self/fd" in
   Fun.protect
     ~finally:(fun () -> Unix.closedir dir)
     (fun () ->
@@ -42,30 +44,39 @@ let contains ~needle haystack =
   in
   needle_len = 0 || scan 0
 
-let isolate_process_env () =
-  let root = Filename.temp_file "pie-keyboard-owner-home" "" in
-  Sys.remove root;
-  Unix.mkdir root 0o700;
+let isolate_process_env
+    ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.tmp ; .. >)
+    () =
+  let root =
+    Ox_caps.Cap_stdlib.Filename.temp_file ~caps "pie-keyboard-owner-home" ""
+  in
+  Ox_caps.Cap_sys.remove ~caps root;
+  Ox_caps.Cap_unix.mkdir ~caps root 0o700;
   let mkdir_env key rel =
     let path = Filename.concat root rel in
-    Unix.mkdir path 0o700;
-    Unix.putenv key path;
+    Ox_caps.Cap_unix.mkdir ~caps path 0o700;
+    Ox_caps.Cap_unix.putenv ~caps key path;
     path
   in
-  Unix.putenv "HOME" root;
+  Ox_caps.Cap_unix.putenv ~caps "HOME" root;
   ignore (mkdir_env "XDG_CONFIG_HOME" "config");
   ignore (mkdir_env "XDG_DATA_HOME" "data");
   let runtime = mkdir_env "XDG_RUNTIME_DIR" "runtime" in
-  Unix.putenv "TMPDIR" root;
-  Unix.putenv "TMP" root;
-  Unix.putenv "DBUS_SESSION_BUS_ADDRESS"
+  Ox_caps.Cap_unix.putenv ~caps "TMPDIR" root;
+  Ox_caps.Cap_unix.putenv ~caps "TMP" root;
+  Ox_caps.Cap_unix.putenv ~caps "DBUS_SESSION_BUS_ADDRESS"
     ("unix:path=" ^ Filename.concat runtime "no-session-bus")
 
-let with_sandbox f =
-  let dir = Filename.temp_file "pie-keyboard-owner" "" in
-  Sys.remove dir;
-  Unix.mkdir dir 0o700;
-  Fun.protect ~finally:(fun () -> rm_rf dir) (fun () -> f dir)
+let with_sandbox
+    ~(caps :
+       < Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.tmp ; .. >) f
+    =
+  let dir =
+    Ox_caps.Cap_stdlib.Filename.temp_file ~caps "pie-keyboard-owner" ""
+  in
+  Ox_caps.Cap_sys.remove ~caps dir;
+  Ox_caps.Cap_unix.mkdir ~caps dir 0o700;
+  Fun.protect ~finally:(fun () -> rm_rf ~caps dir) (fun () -> f dir)
 
 let show_cause cause =
   Format.asprintf "%a"
@@ -283,13 +294,15 @@ let handle_script ~on_stage script flow =
           drain_until_eof flow
       | `Hold -> drain_until_eof flow)
 
-let with_fake_bus ~sw ~net ~clock ~dir ~count script ?on_stage f =
+let with_fake_bus ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.fs_write ; .. >) ~sw
+    ~net ~clock ~dir ~count script ?on_stage f =
   let path = Filename.concat dir "bus" in
-  (try Unix.unlink path with Unix.Unix_error (Unix.ENOENT, _, _) -> ());
+  (try Ox_caps.Cap_unix.unlink ~caps path
+   with Unix.Unix_error (Unix.ENOENT, _, _) -> ());
   let listening =
     Eio.Net.listen ~sw ~reuse_addr:true ~backlog:128 net (`Unix path)
   in
-  Unix.putenv "DBUS_SESSION_BUS_ADDRESS" ("unix:path=" ^ path);
+  Ox_caps.Cap_unix.putenv ~caps "DBUS_SESSION_BUS_ADDRESS" ("unix:path=" ^ path);
   let closed = Eio.Stream.create count in
   let remaining = ref count in
   Eio.Fiber.fork ~sw (fun () ->
@@ -364,14 +377,21 @@ let expect_input_lost ~label result =
             Alcotest.failf "%s: expected input-loss/malformed defect, got %s"
               label (show_cause cause))
 
-let test_rejected_auth_fd_flat () =
-  with_sandbox @@ fun dir ->
-  Pie_test_runtime.run @@ fun env ->
+let test_rejected_auth_fd_flat
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_sandbox ~caps @@ fun dir ->
+  Pie_test_runtime.run ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
-  with_fake_bus ~sw ~net ~clock ~dir ~count:100 Reject_auth (fun ~await_conn ->
-      let baseline = fd_count () in
+  with_fake_bus ~caps ~sw ~net ~clock ~dir ~count:100 Reject_auth
+    (fun ~await_conn ->
+      let baseline = fd_count ~caps () in
       for i = 1 to 100 do
         let result =
           run_direct (fun () ->
@@ -379,7 +399,7 @@ let test_rejected_auth_fd_flat () =
         in
         expect_die ~label:(Printf.sprintf "auth %d" i) ~needle:"auth" result;
         await_conn ();
-        let after = fd_count () in
+        let after = fd_count ~caps () in
         if after > baseline then
           Alcotest.failf
             "fd grew after rejected AUTH %d: baseline=%d after=%d (no GC)" i
@@ -387,16 +407,23 @@ let test_rejected_auth_fd_flat () =
       done;
       Alcotest.(check int)
         "rejected AUTH fd count flat on long-lived switch" baseline
-        (fd_count ()))
+        (fd_count ~caps ()))
 
-let test_failed_hello_closes () =
-  with_sandbox @@ fun dir ->
-  Pie_test_runtime.run @@ fun env ->
+let test_failed_hello_closes
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_sandbox ~caps @@ fun dir ->
+  Pie_test_runtime.run ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
-  with_fake_bus ~sw ~net ~clock ~dir ~count:1 Fail_hello (fun ~await_conn ->
-      let baseline = fd_count () in
+  with_fake_bus ~caps ~sw ~net ~clock ~dir ~count:1 Fail_hello
+    (fun ~await_conn ->
+      let baseline = fd_count ~caps () in
       let result =
         run_direct (fun () ->
             Ok (ignore (Monitor.connect_and_watch ~caps ~sw ~net)))
@@ -404,16 +431,23 @@ let test_failed_hello_closes () =
       expect_die ~label:"hello" ~needle:"Hello" result;
       await_conn ();
       Alcotest.(check int)
-        "hello failure closed the flow" baseline (fd_count ()))
+        "hello failure closed the flow" baseline (fd_count ~caps ()))
 
-let test_failed_watch_closes () =
-  with_sandbox @@ fun dir ->
-  Pie_test_runtime.run @@ fun env ->
+let test_failed_watch_closes
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_sandbox ~caps @@ fun dir ->
+  Pie_test_runtime.run ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
-  with_fake_bus ~sw ~net ~clock ~dir ~count:1 Fail_watch (fun ~await_conn ->
-      let baseline = fd_count () in
+  with_fake_bus ~caps ~sw ~net ~clock ~dir ~count:1 Fail_watch
+    (fun ~await_conn ->
+      let baseline = fd_count ~caps () in
       let result =
         run_direct (fun () ->
             Ok (ignore (Monitor.connect_and_watch ~caps ~sw ~net)))
@@ -421,7 +455,7 @@ let test_failed_watch_closes () =
       expect_die ~label:"watch" ~needle:"WatchKeyboard" result;
       await_conn ();
       Alcotest.(check int)
-        "watch failure closed the flow" baseline (fd_count ()))
+        "watch failure closed the flow" baseline (fd_count ~caps ()))
 
 let rec exn_texts exn =
   match exn with
@@ -451,14 +485,21 @@ let close_then_raise flow =
   Eio.Cancel.protect (fun () -> Eio.Flow.close flow);
   failwith "synthetic-close"
 
-let test_auth_reject_combines_close_failure () =
-  with_sandbox @@ fun dir ->
-  Pie_test_runtime.run @@ fun env ->
+let test_auth_reject_combines_close_failure
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_sandbox ~caps @@ fun dir ->
+  Pie_test_runtime.run ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
-  with_fake_bus ~sw ~net ~clock ~dir ~count:1 Reject_auth (fun ~await_conn ->
-      let baseline = fd_count () in
+  with_fake_bus ~caps ~sw ~net ~clock ~dir ~count:1 Reject_auth
+    (fun ~await_conn ->
+      let baseline = fd_count ~caps () in
       let result =
         run_direct (fun () ->
             Ok
@@ -471,19 +512,25 @@ let test_auth_reject_combines_close_failure () =
         result;
       await_conn ();
       Alcotest.(check int)
-        "synthetic close still retired the fd" baseline (fd_count ()))
+        "synthetic close still retired the fd" baseline (fd_count ~caps ()))
 
-let test_auth_cancel_combines_close_failure () =
-  with_sandbox @@ fun dir ->
-  Pie_test_runtime.run @@ fun env ->
+let test_auth_cancel_combines_close_failure
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_sandbox ~caps @@ fun dir ->
+  Pie_test_runtime.run ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
   let seen, resolve_seen = Eio.Promise.create () in
-  with_fake_bus ~sw ~net ~clock ~dir ~count:1 (Park `Auth)
+  with_fake_bus ~caps ~sw ~net ~clock ~dir ~count:1 (Park `Auth)
     ~on_stage:(fun _ -> Eio.Promise.resolve resolve_seen ())
     (fun ~await_conn ->
-      let baseline = fd_count () in
+      let baseline = fd_count ~caps () in
       let result =
         run_direct (fun () ->
             Ok
@@ -500,17 +547,23 @@ let test_auth_cancel_combines_close_failure () =
         result;
       await_conn ();
       Alcotest.(check int)
-        "cancelled synthetic close retired the fd" baseline (fd_count ()))
+        "cancelled synthetic close retired the fd" baseline (fd_count ~caps ()))
 
-let test_unwatch_cancel_combines_close_failure () =
-  with_sandbox @@ fun dir ->
-  Pie_test_runtime.run @@ fun env ->
+let test_unwatch_cancel_combines_close_failure
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_sandbox ~caps @@ fun dir ->
+  Pie_test_runtime.run ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
-  with_fake_bus ~sw ~net ~clock ~dir ~count:1 (Watch_then `Hold)
+  with_fake_bus ~caps ~sw ~net ~clock ~dir ~count:1 (Watch_then `Hold)
     (fun ~await_conn ->
-      let baseline = fd_count () in
+      let baseline = fd_count ~caps () in
       let result =
         run_direct (fun () ->
             Ok
@@ -524,20 +577,26 @@ let test_unwatch_cancel_combines_close_failure () =
         result;
       await_conn ();
       Alcotest.(check int)
-        "unwatch synthetic close retired the fd" baseline (fd_count ()))
+        "unwatch synthetic close retired the fd" baseline (fd_count ~caps ()))
 
-let cancel_at_stage stage () =
-  with_sandbox @@ fun dir ->
-  Pie_test_runtime.run @@ fun env ->
+let cancel_at_stage
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) stage () =
+  with_sandbox ~caps @@ fun dir ->
+  Pie_test_runtime.run ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
   let seen, resolve_seen = Eio.Promise.create () in
-  with_fake_bus ~sw ~net ~clock ~dir ~count:1 (Park stage)
+  with_fake_bus ~caps ~sw ~net ~clock ~dir ~count:1 (Park stage)
     ~on_stage:(fun reached ->
       if reached = stage then Eio.Promise.resolve resolve_seen ())
     (fun ~await_conn ->
-      let baseline = fd_count () in
+      let baseline = fd_count ~caps () in
       let operation () =
         Ox.Concurrent.race ~sw
           [
@@ -561,23 +620,29 @@ let cancel_at_stage stage () =
           Alcotest.failf "unexpected race failure: %s" (show_cause cause));
       await_conn ();
       Alcotest.(check int)
-        "cancelled setup closed the flow" baseline (fd_count ()))
+        "cancelled setup closed the flow" baseline (fd_count ~caps ()))
 
-let test_failed_unwatch_write_still_closes () =
-  with_sandbox @@ fun dir ->
-  Pie_test_runtime.run @@ fun env ->
+let test_failed_unwatch_write_still_closes
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_sandbox ~caps @@ fun dir ->
+  Pie_test_runtime.run ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
-  with_fake_bus ~sw ~net ~clock ~dir ~count:1 (Watch_then `Eof)
+  with_fake_bus ~caps ~sw ~net ~clock ~dir ~count:1 (Watch_then `Eof)
     (fun ~await_conn ->
       let result =
         run_direct (fun () ->
             let flow = Monitor.connect_and_watch ~caps ~sw ~net in
             await_conn ();
-            let before = fd_count () in
+            let before = fd_count ~caps () in
             Monitor.unwatch_and_close flow;
-            let after = fd_count () in
+            let after = fd_count ~caps () in
             if after >= before then
               Alcotest.failf
                 "failed Unwatch write skipped close: fd before=%d after=%d"
@@ -589,14 +654,20 @@ let test_failed_unwatch_write_still_closes () =
       | Ox.Exit.Failure cause ->
           Alcotest.failf "unwatch/close raised %s" (show_cause cause))
 
-let test_unexpected_eof_fails_consumer () =
-  with_sandbox @@ fun dir ->
-  Pie_test_runtime.run @@ fun env ->
+let test_unexpected_eof_fails_consumer
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_sandbox ~caps @@ fun dir ->
+  Pie_test_runtime.run ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
   let process_mgr = Eio.Stdenv.process_mgr env in
-  with_fake_bus ~sw ~net ~clock ~dir ~count:1 (Watch_then `Eof)
+  with_fake_bus ~caps ~sw ~net ~clock ~dir ~count:1 (Watch_then `Eof)
     (fun ~await_conn ->
       let operation () =
         Ox.Timeout.timeout ~clock (Ox.Duration.seconds 2) (fun () ->
@@ -620,14 +691,20 @@ let test_unexpected_eof_fails_consumer () =
           Alcotest.(check bool) "EOF is named Input_lost" true hit
       | Ox.Exit.Success _ -> ())
 
-let test_malformed_packet_fails_consumer () =
-  with_sandbox @@ fun dir ->
-  Pie_test_runtime.run @@ fun env ->
+let test_malformed_packet_fails_consumer
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_sandbox ~caps @@ fun dir ->
+  Pie_test_runtime.run ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
   let process_mgr = Eio.Stdenv.process_mgr env in
-  with_fake_bus ~sw ~net ~clock ~dir ~count:1 (Watch_then `Malformed)
+  with_fake_bus ~caps ~sw ~net ~clock ~dir ~count:1 (Watch_then `Malformed)
     (fun ~await_conn ->
       let operation () =
         Ox.Timeout.timeout ~clock (Ox.Duration.seconds 2) (fun () ->
@@ -652,16 +729,22 @@ let test_malformed_packet_fails_consumer () =
                 Alcotest.failf "expected parse defect, got %s"
                   (show_cause cause)))
 
-let test_normal_disconnect_closes () =
-  with_sandbox @@ fun dir ->
-  Pie_test_runtime.run @@ fun env ->
+let test_normal_disconnect_closes
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_sandbox ~caps @@ fun dir ->
+  Pie_test_runtime.run ~caps @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
   let process_mgr = Eio.Stdenv.process_mgr env in
-  with_fake_bus ~sw ~net ~clock ~dir ~count:1 (Watch_then `Hold)
+  with_fake_bus ~caps ~sw ~net ~clock ~dir ~count:1 (Watch_then `Hold)
     (fun ~await_conn ->
-      let baseline = fd_count () in
+      let baseline = fd_count ~caps () in
       let result =
         run_direct (fun () ->
             Monitor.with_monitor ~caps ~sw ~net ~clock ~process_mgr
@@ -673,53 +756,65 @@ let test_normal_disconnect_closes () =
           Alcotest.failf "normal disconnect failed: %s" (show_cause cause));
       await_conn ();
       Alcotest.(check int)
-        "normal disconnect retired the flow" baseline (fd_count ()))
+        "normal disconnect retired the flow" baseline (fd_count ~caps ()))
 
-let () =
-  isolate_process_env ();
+let main
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) =
+  isolate_process_env ~caps ();
   Alcotest.run "keyboard-ownership"
     [
       ( "setup",
         [
           Alcotest.test_case
             "repeated rejected AUTH keeps fds flat on one runtime" `Quick
-            test_rejected_auth_fd_flat;
+            (test_rejected_auth_fd_flat ~caps);
           Alcotest.test_case "failed Hello closes the acquired flow" `Quick
-            test_failed_hello_closes;
+            (test_failed_hello_closes ~caps);
           Alcotest.test_case "failed WatchKeyboard closes the acquired flow"
-            `Quick test_failed_watch_closes;
+            `Quick
+            (test_failed_watch_closes ~caps);
           Alcotest.test_case
             "rejected AUTH plus close failure keeps both causes" `Quick
-            test_auth_reject_combines_close_failure;
+            (test_auth_reject_combines_close_failure ~caps);
         ] );
       ( "cancel",
         [
           Alcotest.test_case "cancel during AUTH closes the flow" `Quick
-            (cancel_at_stage `Auth);
+            (cancel_at_stage ~caps `Auth);
           Alcotest.test_case "cancel during Hello closes the flow" `Quick
-            (cancel_at_stage `Hello);
+            (cancel_at_stage ~caps `Hello);
           Alcotest.test_case "cancel during AddMatch closes the flow" `Quick
-            (cancel_at_stage `Add_match);
+            (cancel_at_stage ~caps `Add_match);
           Alcotest.test_case "cancel during WatchKeyboard closes the flow"
-            `Quick (cancel_at_stage `Watch);
+            `Quick
+            (cancel_at_stage ~caps `Watch);
           Alcotest.test_case "AUTH cancel plus close failure keeps both causes"
-            `Quick test_auth_cancel_combines_close_failure;
+            `Quick
+            (test_auth_cancel_combines_close_failure ~caps);
         ] );
       ( "release",
         [
           Alcotest.test_case "failed Unwatch write still closes" `Quick
-            test_failed_unwatch_write_still_closes;
+            (test_failed_unwatch_write_still_closes ~caps);
           Alcotest.test_case
             "Unwatch cancel plus close failure keeps both causes" `Quick
-            test_unwatch_cancel_combines_close_failure;
+            (test_unwatch_cancel_combines_close_failure ~caps);
           Alcotest.test_case "normal disconnect retires the flow" `Quick
-            test_normal_disconnect_closes;
+            (test_normal_disconnect_closes ~caps);
         ] );
       ( "input-loss",
         [
           Alcotest.test_case "unexpected EOF fails the long-lived consumer"
-            `Quick test_unexpected_eof_fails_consumer;
+            `Quick
+            (test_unexpected_eof_fails_consumer ~caps);
           Alcotest.test_case "malformed packet fails the consumer" `Quick
-            test_malformed_packet_fails_consumer;
+            (test_malformed_packet_fails_consumer ~caps);
         ] );
     ]
+
+let () = main ~caps:(Ox_test.powerbox ())

@@ -1,4 +1,4 @@
-let caps = Ox_test.powerbox () (* ^pcaps-n1rg *)
+(* ^pcaps-n1rg *)
 let ( let* ) = Result.bind
 
 let logger env =
@@ -141,13 +141,14 @@ let drain_eof flow =
   in
   loop ()
 
-let pulse_test_server ~sw ~net name handler =
+let pulse_test_server ~(caps : < Ox_caps.Cap.fs_write ; .. >) ~sw ~net name
+    handler =
   let socket_path =
     Filename.concat
       (Filename.get_temp_dir_name ())
       (Printf.sprintf "pie-pulse-live-%s-%d.sock" name (Unix.getpid ()))
   in
-  (try Sys.remove socket_path with Sys_error _ -> ());
+  (try Ox_caps.Cap_sys.remove ~caps socket_path with Sys_error _ -> ());
   let socket =
     Eio.Net.listen ~sw ~reuse_addr:true ~backlog:1 net (`Unix socket_path)
   in
@@ -157,13 +158,16 @@ let pulse_test_server ~sw ~net name handler =
           handler flow));
   socket_path
 
-let run_backpressure ~chunks ~consume () =
+let run_backpressure
+    ~(caps :
+       < Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; .. >)
+    ~chunks ~consume () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let deleted = Atomic.make false in
   let stream_index = 7 in
   let socket_path =
-    pulse_test_server ~sw ~net:(Eio.Stdenv.net env)
+    pulse_test_server ~caps ~sw ~net:(Eio.Stdenv.net env)
       ("bp-" ^ string_of_int chunks)
       (fun flow ->
         pulse_server_handshake flow;
@@ -196,19 +200,34 @@ let run_backpressure ~chunks ~consume () =
   let result = operation in
   (result, Atomic.get deleted)
 
-let test_server_info_survives chunks =
-  match run_backpressure ~chunks ~consume:false () with
+let test_server_info_survives
+    ~(caps :
+       < Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; .. >)
+    chunks =
+  match run_backpressure ~caps ~chunks ~consume:false () with
   | Ok _, true -> ()
   | Ok _, false -> Alcotest.fail "delete reply was not completed"
   | Error cause, _ ->
       Alcotest.failf "server-info failed after %d chunks: %a" chunks pp_cause
         cause
 
-let test_63_server_info () = test_server_info_survives 63
-let test_64_server_info () = test_server_info_survives 64
+let test_63_server_info
+    ~(caps :
+       < Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; .. >) ()
+    =
+  test_server_info_survives ~caps 63
 
-let test_65_overload_and_server_info () =
-  match run_backpressure ~chunks:65 ~consume:true () with
+let test_64_server_info
+    ~(caps :
+       < Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; .. >) ()
+    =
+  test_server_info_survives ~caps 64
+
+let test_65_overload_and_server_info
+    ~(caps :
+       < Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; .. >) ()
+    =
+  match run_backpressure ~caps ~chunks:65 ~consume:true () with
   | Ok (_info, (Ok _, _)), deleted ->
       Alcotest.failf "truncated stream succeeded delete=%b" deleted
   | Ok (_info, (Error cause, _chunks)), deleted ->
@@ -235,8 +254,11 @@ let test_65_overload_and_server_info () =
       Alcotest.failf "connection failed instead of stream overload: %a" pp_cause
         cause
 
-let test_65_tail_ordered_then_error () =
-  match run_backpressure ~chunks:65 ~consume:true () with
+let test_65_tail_ordered_then_error
+    ~(caps :
+       < Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; .. >) ()
+    =
+  match run_backpressure ~caps ~chunks:65 ~consume:true () with
   | Ok (_info, (Error cause, chunks)), true ->
       if List.length chunks <> 64 then
         Alcotest.failf "expected 64 admitted chunks, got %d"
@@ -258,11 +280,14 @@ let test_65_tail_ordered_then_error () =
       Alcotest.failf "expected overload after %d chunks" (List.length chunks)
   | _ -> Alcotest.fail "unexpected tail result"
 
-let test_cancel_closes_scope () =
+let test_cancel_closes_scope
+    ~(caps :
+       < Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; .. >) ()
+    =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let socket_path =
-    pulse_test_server ~sw ~net:(Eio.Stdenv.net env) "cancel" (fun flow ->
+    pulse_test_server ~caps ~sw ~net:(Eio.Stdenv.net env) "cancel" (fun flow ->
         pulse_server_handshake flow;
         let create = pulse_read_command flow in
         pulse_write_response flow create Pie.Pulse.Defs.Pa_command.reply
@@ -286,11 +311,15 @@ let test_cancel_closes_scope () =
   | Ok `Body -> Alcotest.fail "expected cancel winner"
   | Error cause -> Alcotest.failf "cancel failed: %a" pp_cause cause
 
-let test_broken_connection_disconnected () =
+let test_broken_connection_disconnected
+    ~(caps :
+       < Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; .. >) ()
+    =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let socket_path =
-    pulse_test_server ~sw ~net:(Eio.Stdenv.net env) "disconnect" (fun flow ->
+    pulse_test_server ~caps ~sw ~net:(Eio.Stdenv.net env) "disconnect"
+      (fun flow ->
         pulse_server_handshake flow;
         ignore (pulse_read_command flow);
         Eio.Flow.shutdown flow `All)
@@ -315,13 +344,16 @@ let kib n = n * 1024
 let half_mib = kib 512
 let queue_cap = Pie.Dictation_limits.queue_pcm_bytes
 
-let run_payloads ~payloads ~consume ~after () =
+let run_payloads
+    ~(caps :
+       < Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; .. >)
+    ~payloads ~consume ~after () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let deleted = Atomic.make false in
   let stream_index = 7 in
   let socket_path =
-    pulse_test_server ~sw ~net:(Eio.Stdenv.net env) "bytes" (fun flow ->
+    pulse_test_server ~caps ~sw ~net:(Eio.Stdenv.net env) "bytes" (fun flow ->
         pulse_server_handshake flow;
         let create = pulse_read_command flow in
         pulse_write_response flow create Pie.Pulse.Defs.Pa_command.reply
@@ -362,12 +394,15 @@ let run_payloads ~payloads ~consume ~after () =
   let result = operation in
   (result, Atomic.get deleted)
 
-let test_enormous_declared_payload () =
+let test_enormous_declared_payload
+    ~(caps :
+       < Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; .. >) ()
+    =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let stream_index = 7 in
   let socket_path =
-    pulse_test_server ~sw ~net:(Eio.Stdenv.net env) "huge" (fun flow ->
+    pulse_test_server ~caps ~sw ~net:(Eio.Stdenv.net env) "huge" (fun flow ->
         pulse_server_handshake flow;
         let create = pulse_read_command flow in
         pulse_write_response flow create Pie.Pulse.Defs.Pa_command.reply
@@ -406,19 +441,25 @@ let test_enormous_declared_payload () =
       Alcotest.failf "expected Protocol_error, got %a" pp_cause cause
   | Ok _ -> Alcotest.fail "enormous declared length was accepted"
 
-let test_byte_cap_then_control () =
+let test_byte_cap_then_control
+    ~(caps :
+       < Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; .. >) ()
+    =
   let payloads = [ Bytes.make half_mib 'a'; Bytes.make half_mib 'b' ] in
-  match run_payloads ~payloads ~consume:false ~after:`Control () with
+  match run_payloads ~caps ~payloads ~consume:false ~after:`Control () with
   | Ok _, true -> ()
   | Ok _, false -> Alcotest.fail "delete reply was not completed under byte cap"
   | Error cause, _ ->
       Alcotest.failf "at-cap queue lost control: %a" pp_cause cause
 
-let test_byte_cap_overload () =
+let test_byte_cap_overload
+    ~(caps :
+       < Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; .. >) ()
+    =
   let payloads =
     [ Bytes.make half_mib 'a'; Bytes.make half_mib 'b'; Bytes.make 1 'c' ]
   in
-  match run_payloads ~payloads ~consume:true ~after:`Control () with
+  match run_payloads ~caps ~payloads ~consume:true ~after:`Control () with
   | Ok (_info, (Error cause, chunks)), deleted ->
       if not deleted then Alcotest.fail "delete reply was not completed";
       let admitted = List.fold_left (fun n c -> n + Bytes.length c) 0 chunks in
@@ -444,12 +485,16 @@ let test_byte_cap_overload () =
       Alcotest.failf "connection failed instead of stream overload: %a" pp_cause
         cause
 
-let test_cancel_while_byte_full () =
+let test_cancel_while_byte_full
+    ~(caps :
+       < Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; .. >) ()
+    =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let stream_index = 3 in
   let socket_path =
-    pulse_test_server ~sw ~net:(Eio.Stdenv.net env) "byte-cancel" (fun flow ->
+    pulse_test_server ~caps ~sw ~net:(Eio.Stdenv.net env) "byte-cancel"
+      (fun flow ->
         pulse_server_handshake flow;
         let create = pulse_read_command flow in
         pulse_write_response flow create Pie.Pulse.Defs.Pa_command.reply
@@ -477,30 +522,37 @@ let test_cancel_while_byte_full () =
   | Ok `Body -> Alcotest.fail "expected cancel winner"
   | Error cause -> Alcotest.failf "cancel failed: %a" pp_cause cause
 
-let () =
+let main
+    ~(caps :
+       < Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; .. >) =
   Alcotest.run "pulse_liveness"
     [
       ( "control",
         [
           Alcotest.test_case "63 chunks then server-info" `Quick
-            test_63_server_info;
+            (test_63_server_info ~caps);
           Alcotest.test_case "64 chunks then server-info" `Quick
-            test_64_server_info;
+            (test_64_server_info ~caps);
           Alcotest.test_case "65 chunks overload distinct from disconnect"
-            `Quick test_65_overload_and_server_info;
+            `Quick
+            (test_65_overload_and_server_info ~caps);
           Alcotest.test_case "65 chunks tail then overload" `Quick
-            test_65_tail_ordered_then_error;
+            (test_65_tail_ordered_then_error ~caps);
           Alcotest.test_case "cancellation closes scope" `Quick
-            test_cancel_closes_scope;
+            (test_cancel_closes_scope ~caps);
           Alcotest.test_case "broken connection remains disconnected" `Quick
-            test_broken_connection_disconnected;
+            (test_broken_connection_disconnected ~caps);
           Alcotest.test_case "enormous declared payload rejected without body"
-            `Quick test_enormous_declared_payload;
+            `Quick
+            (test_enormous_declared_payload ~caps);
           Alcotest.test_case "variable chunks at byte cap then control lives"
-            `Quick test_byte_cap_then_control;
+            `Quick
+            (test_byte_cap_then_control ~caps);
           Alcotest.test_case "variable chunks over byte cap overload" `Quick
-            test_byte_cap_overload;
+            (test_byte_cap_overload ~caps);
           Alcotest.test_case "cancel while byte-full" `Quick
-            test_cancel_while_byte_full;
+            (test_cancel_while_byte_full ~caps);
         ] );
     ]
+
+let () = main ~caps:(Ox_test.powerbox ())
