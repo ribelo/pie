@@ -18,7 +18,7 @@ Remove the legacy pipeline value, its recognizer path, its prompt files and plac
 
 1. As a dictation user, I want the legacy pipeline gone, so that the configuration, the tests and the code carry only the two approaches I may use. ^dict-r5lg
 2. As a dictation user, I want a configuration that names the removed pipeline to be rejected with a clear message, so that nothing silently changes behaviour. ^dict-v2qd
-3. As a maintainer, I want CONTEXT.md and the spec to stop describing the legacy path, so that the vocabulary matches the code. ^dict-p6mz
+3. As a maintainer, I want GLOSSARY.md and the spec to stop describing the legacy path, so that the vocabulary matches the code. ^dict-p6mz
 
 ## Implementation decisions
 

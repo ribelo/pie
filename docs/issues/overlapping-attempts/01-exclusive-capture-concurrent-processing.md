@@ -8,7 +8,7 @@ consumer: pie
 
 ## Problem
 
-One attempt owns the whole operation from key press to settlement ("Busy" in CONTEXT.md), so a second press while a 2 to 16 s one-pass request is in flight is ignored. The user has ADHD: waiting for the previous text before starting the next sentence, or before moving to another window, is the real cost of latency. Also, a finger slipping off the push-to-talk key ends the recording, and the immediate re-press is ignored or starts a new attempt.
+One attempt owns the whole operation from key press to settlement ("Busy" in GLOSSARY.md), so a second press while a 2 to 16 s one-pass request is in flight is ignored. The user has ADHD: waiting for the previous text before starting the next sentence, or before moving to another window, is the real cost of latency. Also, a finger slipping off the push-to-talk key ends the recording, and the immediate re-press is ignored or starts a new attempt.
 
 ## Solution
 
@@ -22,7 +22,7 @@ Releasing the push-to-talk key starts a release grace of 1 s (configurable) insi
 2. As a dictation user, I want earlier texts delivered before later ones, so that overlapping attempts never scramble a message. ^dict-b1yt
 3. As a dictation user, I want a push-to-talk release followed by a press within one second to continue the same recording, so that a slipped finger does not split or lose a sentence. ^dict-n3kf
 4. As a dictation user, I want a toggle press during processing to begin a new capture, so that latching dictation flows like push-to-talk. ^dict-z8hc
-5. As a maintainer, I want "Busy", "Recording" and "Processing" in CONTEXT.md to describe the new ownership, so that the vocabulary matches the code. ^dict-d4jm
+5. As a maintainer, I want "Busy", "Recording" and "Processing" in GLOSSARY.md to describe the new ownership, so that the vocabulary matches the code. ^dict-d4jm
 
 ## Implementation decisions
 
