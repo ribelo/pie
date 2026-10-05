@@ -33,7 +33,11 @@ let with_root
     =
   let root = tmp_root ~caps () in
   Fun.protect
-    ~finally:(fun () -> try rm_r ~caps root with _ -> ())
+    ~finally:(fun () ->
+      (* Preserve the exception as data before this test classifies its outcome. *)
+      match try Result.Ok (rm_r ~caps root) with exn -> Result.Error exn with
+      | Result.Ok value -> value
+      | Result.Error _ -> ())
     (fun () -> f root)
 
 let even_pcm = Bytes.of_string "ABCD"
@@ -248,7 +252,14 @@ let test_failed_create
        ; .. >) () =
   let path = Ox_caps.Cap_stdlib.Filename.temp_file ~caps "pie-notdir" "" in
   Fun.protect
-    ~finally:(fun () -> try Ox_caps.Cap_unix.unlink ~caps path with _ -> ())
+    ~finally:(fun () ->
+      (* Preserve the exception as data before this test classifies its outcome. *)
+      match
+        try Result.Ok (Ox_caps.Cap_unix.unlink ~caps path)
+        with exn -> Result.Error exn
+      with
+      | Result.Ok value -> value
+      | Result.Error _ -> ())
     (fun () ->
       match A.open_store ~caps ~root:path with
       | Error (`Retry_store _) -> ()
@@ -397,7 +408,13 @@ let test_malicious_slot_symlink
       in
       Fun.protect
         ~finally:(fun () ->
-          try Ox_caps.Cap_unix.unlink ~caps sentinel with _ -> ())
+          (* Preserve the exception as data before this test classifies its outcome. *)
+          match
+            try Result.Ok (Ox_caps.Cap_unix.unlink ~caps sentinel)
+            with exn -> Result.Error exn
+          with
+          | Result.Ok value -> value
+          | Result.Error _ -> ())
         (fun () ->
           let oc = Ox_caps.Cap_stdlib.open_out_bin ~caps sentinel in
           output_string oc "KEEP";
@@ -556,7 +573,12 @@ let test_close_reuse_abort_leaves_new_fd
       | st -> Alcotest.(check bool) "reused fd live" true (st.st_nlink >= 0)
       | exception Unix.Unix_error (Unix.EBADF, _, _) ->
           Alcotest.fail "abort closed reused descriptor");
-      try Unix.close reused with _ -> ())
+      (* Preserve the exception as data before this test classifies its outcome. *)
+      match
+        try Result.Ok (Unix.close reused) with exn -> Result.Error exn
+      with
+      | Result.Ok value -> value
+      | Result.Error _ -> ())
 
 let test_publish_text_error_preserves_rollback
     ~(caps :
@@ -571,16 +593,20 @@ let test_publish_text_error_preserves_rollback
         (A.publish_text store ~mode:Transcribe ~text:"keep"
            ~dispatch_uncertain:false)
       |> ignore;
+      (* Preserve the exception as data before this test classifies its outcome. *)
       match
-        A.Test_hooks.with_index_open_fail (fun () ->
-            A.Test_hooks.with_unlink_fail (fun () ->
-                A.publish_text store ~mode:Translate ~text:"new"
-                  ~dispatch_uncertain:false))
+        try
+          Result.Ok
+            (A.Test_hooks.with_index_open_fail (fun () ->
+                 A.Test_hooks.with_unlink_fail (fun () ->
+                     A.publish_text store ~mode:Translate ~text:"new"
+                       ~dispatch_uncertain:false)))
+        with exn -> Result.Error exn
       with
-      | Ok _ -> Alcotest.fail "second publish succeeded"
-      | Error (`Retry_store m) ->
+      | Result.Ok (Ok _) -> Alcotest.fail "second publish succeeded"
+      | Result.Ok (Error (`Retry_store m)) ->
           Alcotest.fail ("dropped rollback into Error only: " ^ m)
-      | exception _ -> ())
+      | Result.Error _ -> ())
 
 let test_active_symlink_leaves_outside_unchanged
     ~(caps :
@@ -596,7 +622,13 @@ let test_active_symlink_leaves_outside_unchanged
       Ox_caps.Cap_sys.remove ~caps outside;
       Ox_caps.Cap_unix.mkdir ~caps outside 0o755;
       Fun.protect
-        ~finally:(fun () -> try rm_r ~caps outside with _ -> ())
+        ~finally:(fun () ->
+          (* Preserve the exception as data before this test classifies its outcome. *)
+          match
+            try Result.Ok (rm_r ~caps outside) with exn -> Result.Error exn
+          with
+          | Result.Ok value -> value
+          | Result.Error _ -> ())
         (fun () ->
           let sentinel = Filename.concat outside "sentinel" in
           let oc = Ox_caps.Cap_stdlib.open_out_bin ~caps sentinel in
@@ -642,7 +674,11 @@ let test_writable_root_rejected
   Ox_caps.Cap_unix.mkdir ~caps root 0o775;
   Ox_caps.Cap_unix.chmod ~caps root 0o775;
   Fun.protect
-    ~finally:(fun () -> try rm_r ~caps root with _ -> ())
+    ~finally:(fun () ->
+      (* Preserve the exception as data before this test classifies its outcome. *)
+      match try Result.Ok (rm_r ~caps root) with exn -> Result.Error exn with
+      | Result.Ok value -> value
+      | Result.Error _ -> ())
     (fun () ->
       (match A.open_store ~caps ~root with
       | Error (`Retry_store _) -> ()
@@ -662,7 +698,11 @@ let test_owned_0755_root_sentinel_unchanged
   Ox_caps.Cap_unix.mkdir ~caps root 0o755;
   Ox_caps.Cap_unix.chmod ~caps root 0o755;
   Fun.protect
-    ~finally:(fun () -> try rm_r ~caps root with _ -> ())
+    ~finally:(fun () ->
+      (* Preserve the exception as data before this test classifies its outcome. *)
+      match try Result.Ok (rm_r ~caps root) with exn -> Result.Error exn with
+      | Result.Ok value -> value
+      | Result.Error _ -> ())
     (fun () ->
       ignore (Unix.umask 0o022);
       let sentinel = Filename.concat root "transcribe-1-2-3.pcm" in

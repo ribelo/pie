@@ -201,7 +201,13 @@ let reply_member flow ~server_serial msg =
         hello_unique
   | Some "GetNameOwner" ->
       let requested =
-        try Monitor.parse_string_body msg.body with _ -> Monitor.a11y_service
+        (* Preserve the exception as data before this test classifies its outcome. *)
+        match
+          try Result.Ok (Monitor.parse_string_body msg.body)
+          with exn -> Result.Error exn
+        with
+        | Result.Ok value -> value
+        | Result.Error _ -> Monitor.a11y_service
       in
       let value =
         if requested = Monitor.dbus_service then bus_unique else a11y_owner
@@ -314,7 +320,14 @@ let with_fake_bus ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.fs_write ; .. >) ~sw
              Eio.Switch.run @@ fun conn_sw ->
              let flow, _ = Eio.Net.accept ~sw:conn_sw listening in
              Fun.protect
-               ~finally:(fun () -> try Eio.Flow.close flow with _ -> ())
+               ~finally:(fun () ->
+                 (* Preserve the exception as data before this test classifies its outcome. *)
+                 match
+                   try Result.Ok (Eio.Flow.close flow)
+                   with exn -> Result.Error exn
+                 with
+                 | Result.Ok value -> value
+                 | Result.Error _ -> ())
                (fun () ->
                  try handle_script ~on_stage script flow with
                  | End_of_file -> ()

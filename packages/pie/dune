@@ -17,6 +17,7 @@
 (library
  (name pie)
  (public_name pie)
+ (private_modules config_failure)
  (libraries
   ox
   ox_ai

@@ -1594,12 +1594,21 @@ let run_realtime_capture_session_update flow captured =
   in
   write_ws_switching_response flow key;
   let update_json = read_ws_text flow in
-  (match Yojson.Safe.from_string update_json with
-  | exception _ -> ()
-  | json -> captured := json);
+  (* Preserve the exception as data before this test classifies its outcome. *)
+  (match
+     try Result.Ok (Yojson.Safe.from_string update_json)
+     with exn -> Result.Error exn
+   with
+  | Result.Error _ -> ()
+  | Result.Ok json -> captured := json);
   write_ws_text flow {|{"type":"session.updated"}|};
   write_ws_close flow;
-  try Eio.Flow.shutdown flow `Send with _ -> ()
+  (* Preserve the exception as data before this test classifies its outcome. *)
+  match
+    try Result.Ok (Eio.Flow.shutdown flow `Send) with exn -> Result.Error exn
+  with
+  | Result.Ok value -> value
+  | Result.Error _ -> ()
 
 let run_realtime_error_ws_server ~clock flow =
   let head = read_http_head flow in
@@ -2521,10 +2530,14 @@ let test_recording_coordinator_persist_error_swallowed
      parent component is a regular file, not a directory), create must fail
      loudly instead of silently swallowing the error and handing back a
      coordinator whose state file was never written. *)
-  match Recording.Coordinator.create ~caps ~persist_path () with
-  | _coordinator ->
+  (* Preserve the exception as data before this test classifies its outcome. *)
+  match
+    try Result.Ok (Recording.Coordinator.create ~caps ~persist_path ())
+    with exn -> Result.Error exn
+  with
+  | Result.Ok _coordinator ->
       Alcotest.fail "create should raise when it cannot persist initial state"
-  | exception _ -> ()
+  | Result.Error _ -> ()
 
 let test_recording_coordinator_stop_clears_error
     ~(caps :
@@ -2564,13 +2577,20 @@ let test_daemon_server_mkdir_p_silently_accepts_file
      checks Sys.file_exists without Sys.is_directory. When called on an
      existing regular file it silently returns () instead of raising EEXIST.
      Fs.mkdir_p ~caps was fixed but this copy was missed. *)
-  try
-    Pie.Assistant_service.Server.mkdir_p ~caps file_path;
-    Alcotest.fail
-      "mkdir_p should raise EEXIST for an existing file, not silently return"
+  (* Preserve the exception as data before this test classifies its outcome. *)
+  match
+    try
+      Result.Ok
+        (Pie.Assistant_service.Server.mkdir_p ~caps file_path;
+         Alcotest.fail
+           "mkdir_p should raise EEXIST for an existing file, not silently \
+            return")
+    with exn -> Result.Error exn
   with
-  | Unix.Unix_error (Unix.EEXIST, _, _) -> ()
-  | exn -> Alcotest.failf "unexpected exception: %s" (Printexc.to_string exn)
+  | Result.Ok value -> value
+  | Result.Error (Unix.Unix_error (Unix.EEXIST, _, _)) -> ()
+  | Result.Error exn ->
+      Alcotest.failf "unexpected exception: %s" (Printexc.to_string exn)
 
 let test_pulse_parse_error_code_short_payload () =
   (* Bug: parse_error_code calls Protocol.Tag_struct_reader.get_u32 without
@@ -3019,7 +3039,10 @@ let test_assistant_rejects_colliding_effective_keysyms
     Pie.Assistant.Service.effective_bindings ~ptt_transcribe_keysym:20 config
   with
   | _ -> Alcotest.fail "effective CLI and config keysyms must not collide"
-  | exception Pie.Config.Stt.Config_error _ -> ()
+  | exception exn -> (
+      match Pie.Config.Stt.config_error_message exn with
+      | Some _ -> ()
+      | None -> raise exn)
 
 let test_stt_config_rejects_bad_title_regex
     ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.tmp ; .. >)
@@ -3068,9 +3091,12 @@ let test_stt_config_resolves_provider_qualified_model () =
     resolve_model_provider ~default_provider:Codex_realtime "openrouter/"
   with
   | _ -> Alcotest.fail "expected empty provider-qualified model to fail"
-  | exception Pie.Config.Stt.Config_error msg ->
-      Alcotest.(check bool)
-        "mentions empty model" true (String.contains msg 'e')
+  | exception exn -> (
+      match Pie.Config.Stt.config_error_message exn with
+      | Some msg ->
+          Alcotest.(check bool)
+            "mentions empty model" true (String.contains msg 'e')
+      | None -> raise exn)
 
 let test_openrouter_responses_request_uses_text_and_audio () =
   let wav = Bytes.of_string "RIFF\000\000\000\000WAVE" in
@@ -5864,20 +5890,53 @@ let main
             (fun () ->
               let base = temp_dir ~caps "pie-fs-mkdir_p" in
               let nested = Filename.concat base "a/b/c" in
-              try
-                Pie.Fs.mkdir_p ~caps nested;
-                Alcotest.(check bool)
-                  "mkdir_p should create nested directories" true
-                  (Sys.file_exists nested && Sys.is_directory nested);
-                (* cleanup *)
-                (try Ox_caps.Cap_unix.rmdir ~caps nested with _ -> ());
-                (try Ox_caps.Cap_unix.rmdir ~caps (Filename.concat base "a/b")
-                 with _ -> ());
-                (try Ox_caps.Cap_unix.rmdir ~caps (Filename.concat base "a")
-                 with _ -> ());
-                try Ox_caps.Cap_unix.rmdir ~caps base with _ -> ()
+              (* Preserve the exception as data before this test classifies its outcome. *)
+              match
+                try
+                  Result.Ok
+                    (Pie.Fs.mkdir_p ~caps nested;
+                     Alcotest.(check bool)
+                       "mkdir_p should create nested directories" true
+                       (Sys.file_exists nested && Sys.is_directory nested);
+                     (* Preserve the exception as data before this test classifies its outcome. *)
+                     (* cleanup *)
+                     (match
+                        try Result.Ok (Ox_caps.Cap_unix.rmdir ~caps nested)
+                        with exn -> Result.Error exn
+                      with
+                     | Result.Ok value -> value
+                     | Result.Error _ -> ());
+                     (* Preserve the exception as data before this test classifies its outcome. *)
+                     (match
+                        try
+                          Result.Ok
+                            (Ox_caps.Cap_unix.rmdir ~caps
+                               (Filename.concat base "a/b"))
+                        with exn -> Result.Error exn
+                      with
+                     | Result.Ok value -> value
+                     | Result.Error _ -> ());
+                     (* Preserve the exception as data before this test classifies its outcome. *)
+                     (match
+                        try
+                          Result.Ok
+                            (Ox_caps.Cap_unix.rmdir ~caps
+                               (Filename.concat base "a"))
+                        with exn -> Result.Error exn
+                      with
+                     | Result.Ok value -> value
+                     | Result.Error _ -> ());
+                     (* Preserve the exception as data before this test classifies its outcome. *)
+                     match
+                       try Result.Ok (Ox_caps.Cap_unix.rmdir ~caps base)
+                       with exn -> Result.Error exn
+                     with
+                     | Result.Ok value -> value
+                     | Result.Error _ -> ())
+                with exn -> Result.Error exn
               with
-              | Unix.Unix_error (Unix.ENOENT, _, _) ->
+              | Result.Ok value -> value
+              | Result.Error (Unix.Unix_error (Unix.ENOENT, _, _)) ->
                   (* Bug: Fs.mkdir_p ~caps only calls Unix.mkdir once, which fails when
                 parent directories do not exist. It should recursively create
                 parents like the mkdir_p in Recording.Coordinator and
@@ -5885,7 +5944,7 @@ let main
                   Alcotest.fail
                     "mkdir_p raised ENOENT for nested path (bug: missing \
                      parent creation)"
-              | exn ->
+              | Result.Error exn ->
                   Alcotest.failf "unexpected exception: %s"
                     (Printexc.to_string exn));
           Alcotest.test_case "mkdir_p should fail when path is an existing file"
@@ -5893,21 +5952,26 @@ let main
               let base = temp_dir ~caps "pie-fs-mkdir_p-file" in
               let path = Filename.concat base "existing-file" in
               write_file ~caps path "content";
-              try
-                Pie.Fs.mkdir_p ~caps path;
-                (* Bug: Fs.mkdir_p ~caps catches Unix.EEXIST and returns () even when the
+              (* Preserve the exception as data before this test classifies its outcome. *)
+              match
+                try
+                  Result.Ok
+                    (Pie.Fs.mkdir_p ~caps path;
+                     (* Bug: Fs.mkdir_p ~caps catches Unix.EEXIST and returns () even when the
                 path is a regular file, not a directory. The caller then assumes
                 the path is a directory and will fail later when trying to create
                 files inside it. mkdir_p should verify the path is a directory. *)
-                Alcotest.fail
-                  "mkdir_p should not silently succeed when path is an \
-                   existing file"
+                     Alcotest.fail
+                       "mkdir_p should not silently succeed when path is an \
+                        existing file")
+                with exn -> Result.Error exn
               with
-              | Unix.Unix_error (Unix.EEXIST, _, _) ->
+              | Result.Ok value -> value
+              | Result.Error (Unix.Unix_error (Unix.EEXIST, _, _)) ->
                   (* This is the expected behavior: raise EEXIST when the path exists
                 but is not a directory. *)
                   ()
-              | exn ->
+              | Result.Error exn ->
                   Alcotest.failf "unexpected exception: %s"
                     (Printexc.to_string exn));
         ] );

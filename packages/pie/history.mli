@@ -121,11 +121,26 @@ type entry = {
     finished time. *)
 
 val path : caps:< Ox_caps.Cap.env ; .. > -> string
-(** [XDG_DATA_HOME/pie/history.jsonl], using {!Paths.data_dir}. *)
+(** [XDG_DATA_HOME/pie/history.jsonl], using {!Paths.data_dir}.
+
+    Suspension: never suspends in Pie, including native helper callbacks; the
+    path construction implementation depends on [Ox_caps], [Filename] and
+    [Stdlib]. Cancellation: not a cancellation point in Pie; native and helper
+    callback behavior depends on [Ox_caps], [Filename] and [Stdlib]. Finalizers:
+    creates no owned resource and registers no release hook. Locking: no lock is
+    acquired. *)
 
 val fresh_id : caps:< Ox_caps.Cap.time ; .. > -> unit -> string
 (** An attempt id safe to store and to pass to [pie history show]. Unique within
-    this process. *)
+    this process.
+
+    Suspension: never suspends in Pie, including native helper callbacks; the
+    native wall-time lookup and identifier construction implementation depends
+    on [Ox_caps] and [Stdlib], including [Unix]. Cancellation: not a
+    cancellation point in Pie; native and helper callback behavior depends on
+    [Ox_caps] and [Stdlib], including [Unix]. Finalizers: creates no owned
+    resource and registers no release hook. Locking: the identifier counter uses
+    an atomic increment, not a mutex. *)
 
 val describe_binding : keysym:int -> shift:bool -> pass2:bool -> string
 (** [keysym=N], plus [+shift] and [ pass2] when those flags are set. *)
@@ -135,12 +150,32 @@ val append_transcribed :
   path:string ->
   transcribed ->
   (unit, [> `History of string ]) result
+(** Suspension: never suspends in Pie, including native helper callbacks; the
+    native append and JSON encoding implementation depends on [Ox_caps], [Unix],
+    [Filename], [Yojson.Safe] and [Stdlib]; let-operator invocation delegates to
+    the local non-suspending [Result.bind] callback composition. Cancellation:
+    not a cancellation point in Pie; native and helper callback behavior depends
+    on [Ox_caps], [Unix], [Filename], [Yojson.Safe] and [Stdlib]; let-operator
+    invocation delegates to the local non-suspending [Result.bind] callback
+    composition. Finalizers: the temporary append descriptor is closed by
+    [finish] on success and handled Unix-error paths; no switch hook is
+    registered. Locking: no lock is acquired. *)
 
 val append_finished :
   caps:< Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; .. > ->
   path:string ->
   finished ->
   (unit, [> `History of string ]) result
+(** Suspension: never suspends in Pie, including native helper callbacks; the
+    native append and JSON encoding implementation depends on [Ox_caps], [Unix],
+    [Filename], [Yojson.Safe] and [Stdlib]; let-operator invocation delegates to
+    the local non-suspending [Result.bind] callback composition. Cancellation:
+    not a cancellation point in Pie; native and helper callback behavior depends
+    on [Ox_caps], [Unix], [Filename], [Yojson.Safe] and [Stdlib]; let-operator
+    invocation delegates to the local non-suspending [Result.bind] callback
+    composition. Finalizers: the temporary append descriptor is closed by
+    [finish] on success and handled Unix-error paths; no switch hook is
+    registered. Locking: no lock is acquired. *)
 
 type audio_recorded = { id : string; time : float; path : string }
 
@@ -150,7 +185,18 @@ val append_audio :
   audio_recorded ->
   (unit, [> `History of string ]) result
 (** Record the archive path after encoding. A later line wins. Does not change
-    the attempt outcome. *)
+    the attempt outcome.
+
+    Suspension: never suspends in Pie, including native helper callbacks; the
+    native append and JSON encoding implementation depends on [Ox_caps], [Unix],
+    [Filename], [Yojson.Safe] and [Stdlib]; let-operator invocation delegates to
+    the local non-suspending [Result.bind] callback composition. Cancellation:
+    not a cancellation point in Pie; native and helper callback behavior depends
+    on [Ox_caps], [Unix], [Filename], [Yojson.Safe] and [Stdlib]; let-operator
+    invocation delegates to the local non-suspending [Result.bind] callback
+    composition. Finalizers: the temporary append descriptor is closed by
+    [finish] on success and handled Unix-error paths; no switch hook is
+    registered. Locking: no lock is acquired. *)
 
 val read :
   caps:< Ox_caps.Cap.fs_read ; .. > ->
@@ -158,7 +204,18 @@ val read :
   (entry list, [> `History of string ]) result
 (** Newest first. Does not create the file. A symbolic link is refused. A
     regular file is read even when its mode is looser than 0600, so a transcript
-    can still be recovered. *)
+    can still be recovered.
+
+    Suspension: never suspends in Pie, including native helper callbacks; the
+    native file reads and JSON decoding implementation depends on [Ox_caps],
+    [Unix], [In_channel], [Yojson.Safe] and [Stdlib]; let-operator invocation
+    delegates to the local non-suspending [Result.bind] callback composition.
+    Cancellation: not a cancellation point in Pie; native and helper callback
+    behavior depends on [Ox_caps], [Unix], [In_channel], [Yojson.Safe] and
+    [Stdlib]; let-operator invocation delegates to the local non-suspending
+    [Result.bind] callback composition. Finalizers: the opened input channel is
+    closed by [Fun.protect] on return or exception; no switch hook is
+    registered. Locking: no lock is acquired. *)
 
 val format_listing_line : entry -> string
 (** Local time ([YYYY-MM-DD HH:MM:SS]), mode, outcome, and the first line of

@@ -303,16 +303,16 @@ let run ?control ?on_press_binding ?(on_capture_failure = fun _ -> Ok ())
                 finish_capture ~thresholds mode handle started_at capture_state
                   offered chunks acc
               else
-                (* Neither branch returns an [Error]: the first to settle is the value. A
-                   defect in either is raised as it is, not mapped to a typed error. *)
-                let* next =
-                  Ox.Concurrent.race_first ~sw
-                    [
-                      (fun () ->
-                        Eio.Time.Mono.sleep mono_clock (remaining /. 1000.0);
-                        Ok `Timeout);
-                      (fun () -> Ok (`Item (take_input ())));
-                    ]
+                (* Preserve the monotonic, millisecond capture budget. The deadline
+                   cancels and awaits the input read; defects still propagate. *)
+                let next =
+                  match
+                    Ox.Timeout.timeout_mono ~clock:mono_clock
+                      (Ox.Duration.of_seconds (remaining /. 1000.0))
+                      (fun () -> Ok (`Item (take_input ())))
+                  with
+                  | Ok item -> item
+                  | Error `Timeout -> `Timeout
                 in
                 handle_active_event capture_state dead_input offered chunks acc
                   next

@@ -54,6 +54,12 @@ val detect_session :
   caps:< Ox_caps.Cap.env ; .. > ->
   unit ->
   (session_type, ([> `Injection_error of string ] as 'err)) Stdlib.result
+(** Suspension: never suspends in Pie, including native helper callbacks; the
+    environment lookup and executable search implementation depends on
+    [Ox_caps], [Unix], [Filename] and [Stdlib]. Cancellation: not a cancellation
+    point in Pie; native and helper callback behavior depends on [Ox_caps],
+    [Unix], [Filename] and [Stdlib]. Finalizers: creates no owned resource and
+    registers no release hook. Locking: no lock is acquired. *)
 
 type injection_error =
   [ `Clipboard_error of string
@@ -98,4 +104,14 @@ val inject :
     [wl-paste --no-newline --type text/plain;charset=utf-8]. A paste key is sent
     only after a read returns exactly the offered text, polling every 20 ms for
     at most 1000 ms. Otherwise the offer stays on the clipboard and the outcome
-    is [Clipboard_only]. *)
+    is [Clipboard_only].
+
+    Suspension: may suspend while [Eio.Process] runs injection/focus
+    subprocesses; native executable and environment lookup depend on [Ox_caps],
+    [Unix] and [Stdlib]. Cancellation: propagates [Eio.Cancel.Cancelled] and
+    [Eio.Exn.Multiple]; ordinary subprocess errors become injection errors;
+    dependency behavior depends on [Eio.Process]. Finalizers: subprocess
+    lifecycle is delegated to [Eio.Process]; no Pie switch hook is registered.
+    Locking: no Pie mutex is acquired; dependency locking is outside Pie.
+    Cancellation safety: unsafe because progress is lost if text or focus was
+    already changed; retry may inject duplicate text. *)

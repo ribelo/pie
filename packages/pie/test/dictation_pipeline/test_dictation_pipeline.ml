@@ -432,7 +432,8 @@ let test_cli_collision () =
     Pie.Assistant.Service.with_cli_overrides ~ptt_transcribe_keysym:65480 config
   with
   | _ -> Alcotest.fail "collision must be rejected"
-  | exception C.Config_error _ -> ()
+  | exception exn -> (
+      match C.config_error_message exn with Some _ -> () | None -> raise exn)
 
 let test_mod5_binding () =
   let first = binding ~correct:false () in

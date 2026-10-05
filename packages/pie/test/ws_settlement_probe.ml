@@ -81,11 +81,27 @@ let handle_connection ~mode ~release flow =
   | Gated -> ());
   match mode with
   | Error_close -> (
-      (try Eio.Flow.shutdown flow `Send with _ -> ());
-      try Eio.Flow.close flow with _ -> ())
+      (* Preserve the exception as data before this test classifies its outcome. *)
+      (match
+         try Result.Ok (Eio.Flow.shutdown flow `Send)
+         with exn -> Result.Error exn
+       with
+      | Result.Ok value -> value
+      | Result.Error _ -> ());
+      (* Preserve the exception as data before this test classifies its outcome. *)
+      match
+        try Result.Ok (Eio.Flow.close flow) with exn -> Result.Error exn
+      with
+      | Result.Ok value -> value
+      | Result.Error _ -> ())
   | Gated | Error_frame -> (
       Eio.Promise.await release;
-      try Eio.Flow.close flow with _ -> ())
+      (* Preserve the exception as data before this test classifies its outcome. *)
+      match
+        try Result.Ok (Eio.Flow.close flow) with exn -> Result.Error exn
+      with
+      | Result.Ok value -> value
+      | Result.Error _ -> ())
 
 let start_server ~sw ~net ~mode =
   let socket =
@@ -170,11 +186,13 @@ let main
     Ox_caps.Cap_stdlib.printf ~caps "=== %s (base fd=%d) ===\n%!" label
       (fd_count ~caps ());
     for index = 1 to sessions do
-      (if scoped then
-         Eio.Switch.run (fun op_sw ->
-             direct_close ~sw:op_sw ~net ~clock ~url:(url port))
-       else direct_close ~sw ~net ~clock ~url:(url port))
-      |> ignore;
+      (* This probe reports descriptor/child retention after closing, independently of the close outcome. *)
+      let _close_result =
+        if scoped then
+          Eio.Switch.run (fun op_sw ->
+              direct_close ~sw:op_sw ~net ~clock ~url:(url port))
+        else direct_close ~sw ~net ~clock ~url:(url port)
+      in
       report ~caps ~clock ~label ~index ~held
     done;
     release ()

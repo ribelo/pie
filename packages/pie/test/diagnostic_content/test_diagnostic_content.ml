@@ -263,7 +263,13 @@ let test_success_keeps_text_out_of_diagnostics
     (fun debug ->
       (match debug with
       | None -> (
-          try putenv ~caps "CAMELPIE_OPENROUTER_DEBUG" "" with _ -> ())
+          (* Preserve the exception as data before this test classifies its outcome. *)
+          match
+            try Result.Ok (putenv ~caps "CAMELPIE_OPENROUTER_DEBUG" "")
+            with exn -> Result.Error exn
+          with
+          | Result.Ok value -> value
+          | Result.Error _ -> ())
       | Some value -> putenv ~caps "CAMELPIE_OPENROUTER_DEBUG" value);
       let result, stdout, stderr =
         with_captured_stdio ~caps (fun () ->
@@ -464,12 +470,17 @@ let test_composite_failure_is_not_flattened () =
       [ (Failure ("cleanup " ^ marker), bt); (Failure "other", bt) ]
   in
   match
-    try
-      ignore (Pie.Sh.failure_message ~prog:"wtype" multiple);
-      `Returned
+    (* Preserve the exception as data before this test classifies its outcome. *)
+    match
+      try
+        Result.Ok
+          (ignore (Pie.Sh.failure_message ~prog:"wtype" multiple);
+           `Returned)
+      with exn -> Result.Error exn
     with
-    | Eio.Exn.Multiple _ -> `Rethrown
-    | exn -> `Other (Printexc.to_string exn)
+    | Result.Ok value -> value
+    | Result.Error (Eio.Exn.Multiple _) -> `Rethrown
+    | Result.Error exn -> `Other (Printexc.to_string exn)
   with
   | `Rethrown -> ()
   | `Returned -> Alcotest.fail "Multiple flattened to Subprocess_error"

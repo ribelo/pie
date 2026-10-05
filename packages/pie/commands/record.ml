@@ -206,7 +206,10 @@ let run ~caps ~sw:_ ~net ~clock ~logger ~output_path ~duration_sec
   let cleanup_pending = ref true in
   Fun.protect
     ~finally:(fun () ->
-      if !cleanup_pending then ignore (cleanup io published owned))
+      if !cleanup_pending then
+        (* Normal completion merges cleanup errors below; unwinding preserves the original exception. *)
+        let _cleanup_result = cleanup io published owned in
+        ())
     (fun () ->
       let work : (unit, run_error) result =
         let* () =

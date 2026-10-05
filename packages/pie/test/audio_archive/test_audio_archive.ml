@@ -548,7 +548,7 @@ let rpc ~net ~sw socket_path body =
       Eio.Flow.copy_string (body ^ "\n") socket;
       Eio.Buf_read.of_flow ~max_size:65536 socket |> Eio.Buf_read.line)
 
-let run_attempt
+let run_attempt_reported
     ~(caps :
        < Ox_caps.Cap.env
        ; Ox_caps.Cap.fs_read
@@ -557,7 +557,7 @@ let run_attempt
        ; Ox_caps.Cap.stderr
        ; Ox_caps.Cap.stdout
        ; Ox_caps.Cap.time
-       ; .. >) ~env ~dir ~retention ~pass1 ~deliver ~during =
+       ; .. >) ~report ~env ~dir ~retention ~pass1 ~deliver ~during =
   let clock = Eio.Stdenv.clock env in
   let net = Eio.Stdenv.net env in
   let audio_dir = Filename.concat dir "audio" in
@@ -577,7 +577,7 @@ let run_attempt
   let logger =
     Ox_observability.Logger.create ~service:"audio-archive-test" ~clock
       ~mono_clock:(Eio.Stdenv.mono_clock env)
-      ~reporter:(Ox_observability.Logger.Reporter.writer ignore)
+      ~reporter:(Ox_observability.Logger.Reporter.writer report)
       ()
   in
   let next_id = ref 0 in
@@ -633,6 +633,10 @@ let run_attempt
   with
   | Ok () -> ()
   | Error _ -> Alcotest.fail "service workflow failed"
+
+let run_attempt ~caps ~env ~dir ~retention ~pass1 ~deliver ~during =
+  run_attempt_reported ~caps ~report:ignore ~env ~dir ~retention ~pass1 ~deliver
+    ~during
 
 let offer ~(caps : < Ox_caps.Cap.fs_read ; .. >) ~clock ~audio_q ~retry_dir =
   wait_until ~clock (fun () ->
@@ -988,6 +992,57 @@ let test_retry_by_id
             (Some (Bytes.to_string clip))
             !seen))
 
+(* pcapslint-t4bn: the service is cancelled only after its archive process starts. *)
+let test_archive_worker_cancellation ~caps () =
+  Pie_test_runtime.run ~caps @@ fun env ->
+  with_root ~caps (fun dir ->
+      let entered = Filename.concat dir "encoder-entered" in
+      let bin =
+        install_ffmpeg ~caps ~root:dir
+          ~body:
+            (Printf.sprintf "#!/bin/sh\n: > %s\nexec sleep 30\n"
+               (Filename.quote entered))
+      in
+      with_env ~caps
+        [ ("PIE_FFMPEG", Filename.concat bin "ffmpeg") ]
+        (fun () ->
+          let warnings = ref [] in
+          let delivered = ref false in
+          let audio_dir = Filename.concat dir "audio" in
+          run_attempt_reported ~caps ~env ~dir ~retention:24.
+            ~report:(fun line ->
+              if contains line "audio archive failed" then
+                warnings := line :: !warnings)
+            ~pass1:(fun _ -> Ok "raw words")
+            ~deliver:(fun _ _ _ _ ->
+              delivered := true;
+              Ok Pie.History.Pasted)
+            ~during:(fun
+                ~clock
+                ~net:_
+                ~sw:_
+                ~keyboard
+                ~audio_q
+                ~retry_dir
+                ~socket_path:_
+                ~audio_dir:_
+                ~history_path:_
+              ->
+              Eio.Time.sleep clock 0.2;
+              Pie.Keyboard.Monitor.emit keyboard (key ~released:false);
+              offer ~caps ~clock ~audio_q ~retry_dir;
+              Pie.Keyboard.Monitor.emit keyboard (key ~released:true);
+              wait_until ~clock (fun () ->
+                  !delivered && Sys.file_exists entered));
+          Alcotest.(check bool)
+            "encoder was running before real cancellation" true
+            (Sys.file_exists entered);
+          Alcotest.(check (list string))
+            "cancellation is not an archive warning" [] !warnings;
+          Alcotest.(check (list string))
+            "cancelled encoder published no archive" []
+            (archive_names ~caps audio_dir)))
+
 let main
     ~(caps :
        < Ox_caps.Cap.env
@@ -1027,6 +1082,9 @@ let main
             (test_archive_after_failure ~caps);
           Alcotest.test_case "no archive after cancel dict-1y3i" `Quick
             (test_no_archive_after_cancel ~caps);
+          Alcotest.test_case
+            "pcapslint-t4bn archive worker propagates cancellation" `Quick
+            (test_archive_worker_cancellation ~caps);
           Alcotest.test_case "retention 0 archives nothing dict-1y3i" `Quick
             (test_retention_zero_archives_nothing ~caps);
           Alcotest.test_case

@@ -20,7 +20,14 @@ val encode_timeout_s : float
     cannot outlive the service switch. *)
 
 val dir : caps:< Ox_caps.Cap.env ; .. > -> string
-(** [XDG_DATA_HOME/pie/audio]. *)
+(** [XDG_DATA_HOME/pie/audio].
+
+    Suspension: never suspends in Pie, including native helper callbacks; the
+    native archive path and executable lookup implementation depends on
+    [Ox_caps], [Unix], [Filename] and [Stdlib]. Cancellation: not a cancellation
+    point in Pie; native and helper callback behavior depends on [Ox_caps],
+    [Unix], [Filename] and [Stdlib]. Finalizers: creates no owned resource and
+    registers no release hook. Locking: no lock is acquired. *)
 
 val is_safe_id : string -> bool
 (** A single path component: no separators, not [.] or [..], at most 128
@@ -29,7 +36,14 @@ val is_safe_id : string -> bool
 val resolve_ffmpeg : caps:< Ox_caps.Cap.env ; .. > -> string option
 (** [PIE_FFMPEG] when that variable is a non-empty path. A missing or
     non-executable [PIE_FFMPEG] is [None] and does not fall back to [PATH]. When
-    the variable is unset or blank, [ffmpeg] on [PATH]. *)
+    the variable is unset or blank, [ffmpeg] on [PATH].
+
+    Suspension: never suspends in Pie, including native helper callbacks; the
+    native archive path and executable lookup implementation depends on
+    [Ox_caps], [Unix], [Filename] and [Stdlib]. Cancellation: not a cancellation
+    point in Pie; native and helper callback behavior depends on [Ox_caps],
+    [Unix], [Filename] and [Stdlib]. Finalizers: creates no owned resource and
+    registers no release hook. Locking: no lock is acquired. *)
 
 val destination : dir:string -> id:string -> ext:[ `Opus | `Wav ] -> string
 (** [dir/id.opus] or [dir/id.wav]. Does not check that [id] is safe. *)
@@ -37,7 +51,14 @@ val destination : dir:string -> id:string -> ext:[ `Opus | `Wav ] -> string
 val predict_path :
   caps:< Ox_caps.Cap.env ; .. > -> dir:string -> id:string -> string
 (** The path {!store} tries first: Opus when {!resolve_ffmpeg} finds an encoder,
-    WAV otherwise. An encoder failure still writes WAV. *)
+    WAV otherwise. An encoder failure still writes WAV.
+
+    Suspension: never suspends in Pie, including native helper callbacks; the
+    native archive path and executable lookup implementation depends on
+    [Ox_caps], [Unix], [Filename] and [Stdlib]. Cancellation: not a cancellation
+    point in Pie; native and helper callback behavior depends on [Ox_caps],
+    [Unix], [Filename] and [Stdlib]. Finalizers: creates no owned resource and
+    registers no release hook. Locking: no lock is acquired. *)
 
 type located = { path : string; ext : [ `Opus | `Wav ] }
 
@@ -47,7 +68,14 @@ val locate :
   id:string ->
   (located, string) result
 (** [Error] names the problem: unknown id, no file, a symbolic link, or no
-    decoder for an Opus file when no WAV sibling exists. *)
+    decoder for an Opus file when no WAV sibling exists.
+
+    Suspension: never suspends in Pie, including native helper callbacks; the
+    native archive path and executable lookup implementation depends on
+    [Ox_caps], [Unix], [Filename] and [Stdlib]. Cancellation: not a cancellation
+    point in Pie; native and helper callback behavior depends on [Ox_caps],
+    [Unix], [Filename] and [Stdlib]. Finalizers: creates no owned resource and
+    registers no release hook. Locking: no lock is acquired. *)
 
 val encode_mp3 :
   caps:< Ox_caps.Cap.env ; .. > ->
@@ -56,7 +84,20 @@ val encode_mp3 :
   (bytes, string) result
 (** Encode 16 kHz mono s16le PCM to a 32 kbit/s MP3 in memory with the encoder
     {!resolve_ffmpeg} finds, for upload to a provider. [Error] names the problem
-    (no encoder, encoder failure); the caller falls back to WAV. *)
+    (no encoder, encoder failure); the caller falls back to WAV.
+
+    Suspension: may suspend in protected [Fs.blocking] native file operations
+    and [Eio.Process] encoding; execution depends on [Eio.Process],
+    [Ox_blocking] and native [Unix] calls. Cancellation: propagates external
+    [Eio.Cancel.Cancelled] and [Eio.Exn.Multiple]; [Fs.blocking] protects native
+    operations through physical completion; dependency behavior depends on
+    [Eio.Process] and [Ox_blocking]. Finalizers: native descriptors are closed
+    and temporary encode paths are cleaned on handled exit paths; subprocess
+    lifecycle is delegated to [Eio.Process]; blocking-pool teardown is delegated
+    to [Fs.blocking] and [Ox_blocking]. Locking: no Pie mutex is acquired;
+    dependency locking is outside Pie. Cancellation safety: unsafe because
+    progress is lost when encoding or file publication is interrupted; completed
+    filesystem effects are not rolled back. *)
 
 val store :
   caps:< Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; .. > ->
@@ -66,7 +107,23 @@ val store :
   bytes ->
   (string, string) result
 (** Encode 16 kHz mono s16le PCM to Opus, or WAV when no encoder is found or
-    encoding fails. Returns the path written. *)
+    encoding fails. Returns the path written.
+
+    Suspension: may suspend in protected [Fs.blocking] native file operations
+    and [Eio.Process] encoding; execution depends on [Eio.Process],
+    [Ox_blocking] and native [Unix] calls. Cancellation: propagates external
+    [Eio.Cancel.Cancelled] and [Eio.Exn.Multiple]; [Fs.blocking] protects native
+    operations through physical completion; dependency behavior depends on
+    [Eio.Process] and [Ox_blocking]. Finalizers: native descriptors are closed
+    and temporary encode paths are cleaned on handled exit paths; subprocess
+    lifecycle is delegated to [Eio.Process]; blocking-pool teardown is delegated
+    to [Fs.blocking] and [Ox_blocking]. Locking: no Pie mutex is acquired;
+    dependency locking is outside Pie. Cancellation safety: unsafe because
+    progress is lost when encoding or file publication is interrupted; completed
+    filesystem effects are not rolled back.
+
+    Raises [Assert_failure] if the blocking-pool shutdown invariant is violated.
+*)
 
 val store_response :
   caps:< Ox_caps.Cap.fs_write ; .. > ->
@@ -77,7 +134,18 @@ val store_response :
   (string, string) result
 (** Store private provider evidence next to audio, atomically at 0600. [first]
     selects [.response-1.json], otherwise [.response.json]. The same retention
-    policy prunes both. Bodies are private data, never diagnostics. *)
+    policy prunes both. Bodies are private data, never diagnostics.
+
+    Suspension: never suspends in Pie, including native helper callbacks; the
+    native private-file creation and replacement implementation depends on
+    [Ox_caps], [Unix], [Filename] and [Stdlib]; let-operator invocation
+    delegates to the local non-suspending [Result.bind] callback composition.
+    Cancellation: not a cancellation point in Pie; native and helper callback
+    behavior depends on [Ox_caps], [Unix], [Filename] and [Stdlib]; let-operator
+    invocation delegates to the local non-suspending [Result.bind] callback
+    composition. Finalizers: the temporary file descriptor is closed before
+    rename; handled file errors remove the temporary path; no switch hook is
+    registered. Locking: no lock is acquired. *)
 
 val load :
   caps:< Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; .. > ->
@@ -85,7 +153,19 @@ val load :
   path:string ->
   (bytes, string) result
 (** Decode Opus with the same encoder to 16 kHz mono s16le, or read a WAV
-    written by {!store}. Refuses symbolic links. *)
+    written by {!store}. Refuses symbolic links.
+
+    Suspension: may suspend while protected [Fs.blocking] reads native audio and
+    [Eio.Process] decodes it; execution depends on [Ox_blocking], [Eio.Process]
+    and [Unix]. Cancellation: propagates external [Eio.Cancel.Cancelled] and
+    [Eio.Exn.Multiple]; native blocking work is protected through physical
+    completion; dependency behavior depends on [Ox_blocking] and [Eio.Process].
+    Finalizers: native input channels are closed by [Fun.protect]; decoding
+    subprocess cleanup is delegated to [Eio.Process] and the blocking pool to
+    [Fs.blocking]. Locking: no Pie mutex is acquired; dependency locking is
+    outside Pie. Cancellation safety: safe to re-run the read-only load; it does
+    not publish archive data, and subprocess cleanup depends on [Eio.Process].
+*)
 
 val prune :
   caps:< Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; .. > ->
@@ -95,4 +175,11 @@ val prune :
   (int, string) result
 (** Delete expired archive files. [retention_hours <= 0] deletes nothing and
     does not require the directory to exist. Returns how many files were
-    removed. *)
+    removed.
+
+    Suspension: never suspends in Pie, including native helper callbacks; the
+    native archive-directory traversal and unlink implementation depends on
+    [Ox_caps], [Unix], [Filename] and [Stdlib]. Cancellation: not a cancellation
+    point in Pie; native and helper callback behavior depends on [Ox_caps],
+    [Unix], [Filename] and [Stdlib]. Finalizers: creates no owned resource and
+    registers no release hook. Locking: no lock is acquired. *)

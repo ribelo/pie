@@ -434,7 +434,8 @@ let test_invalid_reload_keeps_last_good
       let stamp () = [ Some (1, 1, Atomic.get gen, 0.) ] in
       let load _ =
         if Atomic.get fail_reload then
-          raise (Pie.Config.Stt.Config_error "synthetic reload failure");
+          raise
+            (Pie.Config.Stt.For_test.config_error "synthetic reload failure");
         (base_config (), stamp ())
       in
       let stt _ _ _ = Ok "last-good" in

@@ -160,7 +160,9 @@ let opus_args output =
   ]
 
 let failure_text ~ffmpeg exn =
-  try Sh.failure_message ~prog:ffmpeg exn with _ -> Printexc.to_string exn
+  try Sh.failure_message ~prog:ffmpeg exn with
+  | Eio.Cancel.Cancelled _ as cancelled -> raise cancelled
+  | _ -> Printexc.to_string exn
 
 let encode_opus ~process_mgr ~ffmpeg ~caps path pcm =
   let tmp = temp_name path in

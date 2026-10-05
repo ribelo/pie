@@ -60,4 +60,23 @@ val run :
   (unit, run_error) result
 (** Run exclusive capture with detached processing in a supervised child scope.
     Processing survives capture handoff and pause, but cancellation or failure
-    of the loop also cancels its remaining workers. *)
+    of the loop also cancels its remaining workers.
+
+    Suspension: may suspend in input/condition waits, queue mutex acquisition,
+    the monotonic deadline and capture callbacks; callback and supervision
+    behavior depends on caller callbacks, [Ox.Scope], [Ox.Concurrent],
+    [Ox.Timeout], [Ox.Duration] and [Eio]. Cancellation: propagates external
+    [Eio.Cancel.Cancelled]; the monotonic capture deadline is classified as a
+    timeout event; callback behavior depends on caller callbacks and [Ox.Scope].
+    Finalizers: the supervised child scope cancels and awaits detached attempts
+    before return; capture cleanup depends on handle callbacks and [Ox.Scope].
+    Locking: queue mutation uses [Eio.Mutex] with [Fun.protect] unlock;
+    condition waits release/reacquire it; caller capture callbacks run outside
+    the queue mutex. Cancellation safety: unsafe because progress is lost for
+    in-flight capture and attempt work; this loop does not replay consumed
+    inputs.
+
+    Raises [Assert_failure] if the already-filtered [Skip] state reaches capture
+    startup.
+
+    A poisoned queue mutex can raise [Eio.Mutex.Poisoned]. *)

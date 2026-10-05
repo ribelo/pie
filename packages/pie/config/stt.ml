@@ -74,7 +74,15 @@ type t = {
   one_pass_timeout_seconds : float;
 }
 
-exception Config_error of string
+exception Config_error = Config_failure.Config_error
+
+let config_error_message = function
+  | Config_error message -> Some message
+  | _ -> None
+
+module For_test = struct
+  let config_error message = Config_error message
+end
 
 type resolved_model = { provider : provider; model : string }
 

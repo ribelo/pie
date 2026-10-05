@@ -237,10 +237,13 @@ let with_fixture ~(caps : < Ox_caps.Cap.env ; .. >) ~reply ?(extra_replies = [])
                       (* The client closes on timeout; that read is end-of-file,
                      not a test failure. *)
                       try
-                        ignore
-                          (Eio.Time.with_timeout clock 2.0 (fun () ->
-                               ignore (Eio.Flow.single_read flow scratch);
-                               Ok ()))
+                        (* The fixture waits for client closure; the callback success value is not an assertion. *)
+                        let _closure_result =
+                          Eio.Time.with_timeout clock 2.0 (fun () ->
+                              ignore (Eio.Flow.single_read flow scratch);
+                              Ok ())
+                        in
+                        ()
                       with End_of_file | Eio.Io _ -> ()))))
         (reply :: extra_replies));
   Eio.Fiber.yield ();

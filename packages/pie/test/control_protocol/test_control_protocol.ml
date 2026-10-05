@@ -217,7 +217,13 @@ let serve_one ~(caps : < Ox_caps.Cap.fs_write ; Ox_caps.Cap.network ; .. >)
         in
         let client, _ = accept_loop () in
         Fun.protect
-          ~finally:(fun () -> try Unix.close client with _ -> ())
+          ~finally:(fun () ->
+            (* Preserve the exception as data before this test classifies its outcome. *)
+            match
+              try Result.Ok (Unix.close client) with exn -> Result.Error exn
+            with
+            | Result.Ok value -> value
+            | Result.Error _ -> ())
           (fun () ->
             Unix.clear_nonblock client;
             let buf = Bytes.create 1024 in
@@ -251,7 +257,13 @@ let with_temp_dir
 let request_op ~(caps : < Ox_caps.Cap.network ; .. >) ~socket_path req =
   let client = Ox_caps.Cap_unix.socket ~caps Unix.PF_UNIX Unix.SOCK_STREAM 0 in
   Fun.protect
-    ~finally:(fun () -> try Unix.close client with _ -> ())
+    ~finally:(fun () ->
+      (* Preserve the exception as data before this test classifies its outcome. *)
+      match
+        try Result.Ok (Unix.close client) with exn -> Result.Error exn
+      with
+      | Result.Ok value -> value
+      | Result.Error _ -> ())
     (fun () ->
       Unix.connect client (Unix.ADDR_UNIX socket_path);
       let payload =
@@ -274,8 +286,18 @@ let run_op_roundtrip
   let server, worker = serve_one ~caps ~socket_path reply in
   Fun.protect
     ~finally:(fun () ->
-      (try Unix.close server with _ -> ());
-      (try Thread.join worker with _ -> ());
+      (* Preserve the exception as data before this test classifies its outcome. *)
+      (match
+         try Result.Ok (Unix.close server) with exn -> Result.Error exn
+       with
+      | Result.Ok value -> value
+      | Result.Error _ -> ());
+      (* Preserve the exception as data before this test classifies its outcome. *)
+      (match
+         try Result.Ok (Thread.join worker) with exn -> Result.Error exn
+       with
+      | Result.Ok value -> value
+      | Result.Error _ -> ());
       try Ox_caps.Cap_unix.unlink ~caps socket_path
       with Unix.Unix_error _ -> ())
     (fun () ->

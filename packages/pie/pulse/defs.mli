@@ -6,8 +6,22 @@ val pa_no_tag : int
 val pa_native_cookie_length : int
 val pa_native_protocol_version : int
 val pa_volume_norm : int
+
 val pa_default_socket_path : caps:< Ox_caps.Cap.env ; .. > -> string
+(** Suspension: never suspends in Pie, including native helper callbacks; the
+    environment lookup and path construction implementation depends on
+    [Ox_caps], [Filename] and [Stdlib]. Cancellation: not a cancellation point
+    in Pie; native and helper callback behavior depends on [Ox_caps], [Filename]
+    and [Stdlib]. Finalizers: creates no owned resource and registers no release
+    hook. Locking: no lock is acquired. *)
+
 val pa_default_cookie_path : caps:< Ox_caps.Cap.env ; .. > -> string
+(** Suspension: never suspends in Pie, including native helper callbacks; the
+    environment lookup and path construction implementation depends on
+    [Ox_caps], [Filename] and [Stdlib]. Cancellation: not a cancellation point
+    in Pie; native and helper callback behavior depends on [Ox_caps], [Filename]
+    and [Stdlib]. Finalizers: creates no owned resource and registers no release
+    hook. Locking: no lock is acquired. *)
 
 type pa_stream_descriptor = {
   length : int;

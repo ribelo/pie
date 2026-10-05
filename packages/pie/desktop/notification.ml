@@ -36,5 +36,9 @@ let report ~notify ~log event title message =
 let emit ~caps ~process_mgr event title message =
   report event title message
     ~notify:(fun title message ->
-      ignore (notify_warning ~caps ~process_mgr title message))
+      (* [notify_warning] prints failures to stderr and always returns [Ok ()]. *)
+      let _notification_result =
+        notify_warning ~caps ~process_mgr title message
+      in
+      ())
     ~log:(fun message -> Ox_caps.Cap_stdlib.eprintf ~caps "%s\n%!" message)

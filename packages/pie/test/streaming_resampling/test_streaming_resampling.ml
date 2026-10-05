@@ -394,7 +394,13 @@ let drain_until_eof ~clock flow =
     | exception End_of_file -> ()
     | exception Eio.Io _ -> ()
   in
-  try Eio.Time.with_timeout_exn clock 2.0 loop with _ -> ()
+  (* Preserve the exception as data before this test classifies its outcome. *)
+  match
+    try Result.Ok (Eio.Time.with_timeout_exn clock 2.0 loop)
+    with exn -> Result.Error exn
+  with
+  | Result.Ok value -> value
+  | Result.Error _ -> ()
 
 let write_ws_switching_response flow key =
   let response =
@@ -423,9 +429,13 @@ let serve_audio_capture ~clock flow captured commit_before_response =
     | Close -> ()
     | Other -> loop committed
     | Text payload -> (
-        match Yojson.Safe.from_string payload with
-        | exception _ -> loop committed
-        | `Assoc fields -> (
+        (* Preserve the exception as data before this test classifies its outcome. *)
+        match
+          try Result.Ok (Yojson.Safe.from_string payload)
+          with exn -> Result.Error exn
+        with
+        | Result.Error _ -> loop committed
+        | Result.Ok (`Assoc fields) -> (
             match List.assoc_opt "type" fields with
             | Some (`String "input_audio_buffer.append") ->
                 if committed then Alcotest.fail "audio append after commit";
@@ -441,7 +451,7 @@ let serve_audio_capture ~clock flow captured commit_before_response =
                 write_ws_close flow;
                 drain_until_eof ~clock flow
             | _ -> loop committed)
-        | _ -> loop committed)
+        | Result.Ok _ -> loop committed)
   in
   loop false
 
@@ -521,25 +531,28 @@ let test_buffered_odd_is_stt_error
       ~access_token:"synthetic-resampling-token" ~mode:Codex.Transcription
       ~input_sample_rate:rate odd
   in
-  (match run 16000 with
-  | exception exn ->
+  (* Preserve the exception as data before this test classifies its outcome. *)
+  (match try Result.Ok (run 16000) with exn -> Result.Error exn with
+  | Result.Error exn ->
       Alcotest.failf "buffered odd must not Die: %s" (Printexc.to_string exn)
-  | Error error ->
+  | Result.Ok (Error error) ->
       let rendered = Format.asprintf "%a" pp_stt error in
       Alcotest.(check bool)
         "buffered odd is Stt_error" true
         (contains rendered "odd" || contains rendered "byte")
-  | Ok _ -> Alcotest.fail "expected Stt_error for buffered odd PCM");
-  match run 24000 with
-  | exception exn ->
+  | Result.Ok (Ok _) -> Alcotest.fail "expected Stt_error for buffered odd PCM");
+  (* Preserve the exception as data before this test classifies its outcome. *)
+  match try Result.Ok (run 24000) with exn -> Result.Error exn with
+  | Result.Error exn ->
       Alcotest.failf "buffered equal-rate odd must not Die: %s"
         (Printexc.to_string exn)
-  | Error error ->
+  | Result.Ok (Error error) ->
       let rendered = Format.asprintf "%a" pp_stt error in
       Alcotest.(check bool)
         "buffered equal-rate odd is Stt_error" true
         (contains rendered "odd" || contains rendered "byte")
-  | Ok _ -> Alcotest.fail "expected Stt_error for buffered equal-rate odd PCM"
+  | Result.Ok (Ok _) ->
+      Alcotest.fail "expected Stt_error for buffered equal-rate odd PCM"
 
 let test_buffered_huge_rate_is_stt_error
     ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) () =
@@ -552,15 +565,16 @@ let test_buffered_huge_rate_is_stt_error
       ~access_token:"synthetic-resampling-token" ~mode:Codex.Transcription
       ~input_sample_rate:max_int pcm
   in
-  match operation with
-  | exception exn ->
+  (* Preserve the exception as data before this test classifies its outcome. *)
+  match try Result.Ok operation with exn -> Result.Error exn with
+  | Result.Error exn ->
       Alcotest.failf "huge rate must not Die: %s" (Printexc.to_string exn)
-  | Error error ->
+  | Result.Ok (Error error) ->
       let rendered = Format.asprintf "%a" pp_stt error in
       Alcotest.(check bool)
         "typed huge-rate error" true
         (String.length rendered > 0)
-  | Ok _ -> Alcotest.fail "expected Stt_error for huge sample rate"
+  | Result.Ok (Ok _) -> Alcotest.fail "expected Stt_error for huge sample rate"
 
 let is_audio_append type_name =
   String.equal type_name "input_audio_buffer.append"
@@ -588,9 +602,13 @@ let serve_translation_capture ~clock ~expected_bytes flow captured
     | Close -> ()
     | Other -> loop ()
     | Text payload -> (
-        match Yojson.Safe.from_string payload with
-        | exception _ -> loop ()
-        | `Assoc fields -> (
+        (* Preserve the exception as data before this test classifies its outcome. *)
+        match
+          try Result.Ok (Yojson.Safe.from_string payload)
+          with exn -> Result.Error exn
+        with
+        | Result.Error _ -> loop ()
+        | Result.Ok (`Assoc fields) -> (
             match List.assoc_opt "type" fields with
             | Some (`String type_name) when is_audio_append type_name ->
                 (match List.assoc_opt "audio" fields with
@@ -600,7 +618,7 @@ let serve_translation_capture ~clock ~expected_bytes flow captured
                 | _ -> Alcotest.fail "translation append missing audio");
                 loop ()
             | _ -> loop ())
-        | _ -> loop ())
+        | Result.Ok _ -> loop ())
   in
   loop ();
   drain_until_eof ~clock flow

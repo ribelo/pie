@@ -38,10 +38,26 @@ val resolve :
   caps:< Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; .. > ->
   unit ->
   t
-(** Read the global glossary anew for this attempt. *)
+(** Read the global glossary anew for this attempt.
+
+    Suspension: never suspends in Pie, including native helper callbacks; the
+    native glossary reads, parsing and path lookup implementation depends on
+    [Ox_caps], [Unix], [Sys], [Filename] and [Stdlib]. Cancellation: not a
+    cancellation point in Pie; native and helper callback behavior depends on
+    [Ox_caps], [Unix], [Sys], [Filename] and [Stdlib]. Finalizers: temporary
+    file descriptors are closed by [Fun.protect]; no switch hook is registered.
+    Locking: no lock is acquired. *)
 
 val status :
   caps:< Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; .. > ->
   unit ->
   status
-(** Inspect the same file used by [resolve], without changing it. *)
+(** Inspect the same file used by [resolve], without changing it.
+
+    Suspension: never suspends in Pie, including native helper callbacks; the
+    native glossary reads, parsing and path lookup implementation depends on
+    [Ox_caps], [Unix], [Sys], [Filename] and [Stdlib]. Cancellation: not a
+    cancellation point in Pie; native and helper callback behavior depends on
+    [Ox_caps], [Unix], [Sys], [Filename] and [Stdlib]. Finalizers: temporary
+    file descriptors are closed by [Fun.protect]; no switch hook is registered.
+    Locking: no lock is acquired. *)

@@ -115,8 +115,20 @@ let test_partition_identical
   let right = s16le [ 3000; 4000 ] in
   let a = temp_wav "whole" in
   let b = temp_wav "parts" in
-  (try Ox_caps.Cap_sys.remove ~caps a with _ -> ());
-  (try Ox_caps.Cap_sys.remove ~caps b with _ -> ());
+  (* Preserve the exception as data before this test classifies its outcome. *)
+  (match
+     try Result.Ok (Ox_caps.Cap_sys.remove ~caps a)
+     with exn -> Result.Error exn
+   with
+  | Result.Ok value -> value
+  | Result.Error _ -> ());
+  (* Preserve the exception as data before this test classifies its outcome. *)
+  (match
+     try Result.Ok (Ox_caps.Cap_sys.remove ~caps b)
+     with exn -> Result.Error exn
+   with
+  | Result.Ok value -> value
+  | Result.Error _ -> ());
   (match run ~caps ~output_path:a ~duration_sec:1. ~chunks:[ whole ] () with
   | Ok () -> ()
   | Error c -> Alcotest.failf "whole: %s" (cause_text c));
@@ -137,7 +149,13 @@ let test_header_negotiated_rate
        ; Ox_caps.Cap.stdout
        ; .. >) () =
   let path = temp_wav "rate" in
-  (try Ox_caps.Cap_sys.remove ~caps path with _ -> ());
+  (* Preserve the exception as data before this test classifies its outcome. *)
+  (match
+     try Result.Ok (Ox_caps.Cap_sys.remove ~caps path)
+     with exn -> Result.Error exn
+   with
+  | Result.Ok value -> value
+  | Result.Error _ -> ());
   (match
      run ~caps ~output_path:path ~duration_sec:1. ~rate:48000
        ~chunks:[ s16le [ 1; 2 ] ]
@@ -158,7 +176,13 @@ let test_duration_before_acquire
        ; .. >) duration_sec =
   let acquired = Atomic.make false in
   let path = temp_wav "dur" in
-  (try Ox_caps.Cap_sys.remove ~caps path with _ -> ());
+  (* Preserve the exception as data before this test classifies its outcome. *)
+  (match
+     try Result.Ok (Ox_caps.Cap_sys.remove ~caps path)
+     with exn -> Result.Error exn
+   with
+  | Result.Ok value -> value
+  | Result.Error _ -> ());
   let dest_existed = Sys.file_exists path in
   let result =
     Eio_main.run @@ fun env ->
@@ -280,7 +304,13 @@ let test_completed_one_wav
        ; Ox_caps.Cap.stdout
        ; .. >) () =
   let path = temp_wav "ok" in
-  (try Ox_caps.Cap_sys.remove ~caps path with _ -> ());
+  (* Preserve the exception as data before this test classifies its outcome. *)
+  (match
+     try Result.Ok (Ox_caps.Cap_sys.remove ~caps path)
+     with exn -> Result.Error exn
+   with
+  | Result.Ok value -> value
+  | Result.Error _ -> ());
   match
     run ~caps ~output_path:path ~duration_sec:1. ~chunks:[ s16le [ 5; 6 ] ] ()
   with
@@ -311,7 +341,13 @@ let test_collision_leaves_other_candidate
        ; Ox_caps.Cap.stdout
        ; .. >) () =
   let path = temp_wav "coll" in
-  (try Ox_caps.Cap_sys.remove ~caps path with _ -> ());
+  (* Preserve the exception as data before this test classifies its outcome. *)
+  (match
+     try Result.Ok (Ox_caps.Cap_sys.remove ~caps path)
+     with exn -> Result.Error exn
+   with
+  | Result.Ok value -> value
+  | Result.Error _ -> ());
   let other =
     Filename.concat (Filename.dirname path)
       (Printf.sprintf ".%s.pie-record.%d.0" (Filename.basename path)
@@ -370,7 +406,13 @@ let test_rename_fail_does_not_close_sentinel
   let wrote = Unix.write_substring sentinel "X" 0 1 in
   Alcotest.(check int) "sentinel still writable" 1 wrote;
   Unix.close sentinel;
-  (try Ox_caps.Cap_sys.remove ~caps sentinel_path with _ -> ());
+  (* Preserve the exception as data before this test classifies its outcome. *)
+  (match
+     try Result.Ok (Ox_caps.Cap_sys.remove ~caps sentinel_path)
+     with exn -> Result.Error exn
+   with
+  | Result.Ok value -> value
+  | Result.Error _ -> ());
   let ic = Ox_caps.Cap_stdlib.open_in_bin ~caps path in
   let old = really_input_string ic (in_channel_length ic) in
   close_in ic;
@@ -466,7 +508,13 @@ let test_long_stream_size
        ; Ox_caps.Cap.stdout
        ; .. >) () =
   let path = temp_wav "long" in
-  (try Ox_caps.Cap_sys.remove ~caps path with _ -> ());
+  (* Preserve the exception as data before this test classifies its outcome. *)
+  (match
+     try Result.Ok (Ox_caps.Cap_sys.remove ~caps path)
+     with exn -> Result.Error exn
+   with
+  | Result.Ok value -> value
+  | Result.Error _ -> ());
   let chunks = List.init 1000 (fun i -> s16le [ i land 0x7fff ]) in
   (match run ~caps ~output_path:path ~duration_sec:1. ~chunks () with
   | Ok () -> ()
@@ -506,7 +554,13 @@ let test_placeholder_write_failure
        ; Ox_caps.Cap.stdout
        ; .. >) () =
   let path = temp_wav "ph" in
-  (try Ox_caps.Cap_sys.remove ~caps path with _ -> ());
+  (* Preserve the exception as data before this test classifies its outcome. *)
+  (match
+     try Result.Ok (Ox_caps.Cap_sys.remove ~caps path)
+     with exn -> Result.Error exn
+   with
+  | Result.Ok value -> value
+  | Result.Error _ -> ());
   let acquired = Atomic.make false in
   let writes = Atomic.make 0 in
   let io =
@@ -584,8 +638,20 @@ let test_defer_two_runs
        ; .. >) () =
   let a = temp_wav "d1" in
   let b = temp_wav "d2" in
-  (try Ox_caps.Cap_sys.remove ~caps a with _ -> ());
-  (try Ox_caps.Cap_sys.remove ~caps b with _ -> ());
+  (* Preserve the exception as data before this test classifies its outcome. *)
+  (match
+     try Result.Ok (Ox_caps.Cap_sys.remove ~caps a)
+     with exn -> Result.Error exn
+   with
+  | Result.Ok value -> value
+  | Result.Error _ -> ());
+  (* Preserve the exception as data before this test classifies its outcome. *)
+  (match
+     try Result.Ok (Ox_caps.Cap_sys.remove ~caps b)
+     with exn -> Result.Error exn
+   with
+  | Result.Ok value -> value
+  | Result.Error _ -> ());
   (match
      run ~caps ~output_path:a ~duration_sec:1. ~chunks:[ s16le [ 1; 2 ] ] ()
    with
@@ -608,7 +674,13 @@ let test_close_once_construction_does_not_clear_claim
       (Filename.get_temp_dir_name ())
       (Printf.sprintf ".pie-closeonce-%d" (Unix.getpid ()))
   in
-  (try Ox_caps.Cap_sys.remove ~caps cand with _ -> ());
+  (* Preserve the exception as data before this test classifies its outcome. *)
+  (match
+     try Result.Ok (Ox_caps.Cap_sys.remove ~caps cand)
+     with exn -> Result.Error exn
+   with
+  | Result.Ok value -> value
+  | Result.Error _ -> ());
   let fd = (unix_io ~caps).open_excl cand in
   let state : Pie.Commands.Record.candidate =
     { path = cand; fd; close_pending = true; data_length = 0; rate = 16000 }

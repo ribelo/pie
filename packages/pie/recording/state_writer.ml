@@ -7,7 +7,9 @@ let create ~sw ~on_error () =
     | None -> false
     | Some write ->
         pending := None;
-        (try Fs.blocking write with exn -> on_error exn);
+        (try Fs.blocking write with
+        | Eio.Cancel.Cancelled _ as exn -> raise exn
+        | exn -> on_error exn);
         true
   in
   let rec drain () = if write_pending () then drain () in

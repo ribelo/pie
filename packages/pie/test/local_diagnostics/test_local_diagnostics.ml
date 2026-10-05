@@ -182,9 +182,22 @@ let with_collector f =
         | exception Eio.Io _ -> ()
         | flow, _ ->
             Fun.protect
-              ~finally:(fun () -> try Eio.Flow.close flow with _ -> ())
+              ~finally:(fun () ->
+                (* Preserve the exception as data before this test classifies its outcome. *)
+                match
+                  try Result.Ok (Eio.Flow.close flow)
+                  with exn -> Result.Error exn
+                with
+                | Result.Ok value -> value
+                | Result.Error _ -> ())
               (fun () ->
-                (try bodies := read_http_body flow :: !bodies with _ -> ());
+                (* Preserve the exception as data before this test classifies its outcome. *)
+                (match
+                   try Result.Ok (bodies := read_http_body flow :: !bodies)
+                   with exn -> Result.Error exn
+                 with
+                | Result.Ok value -> value
+                | Result.Error _ -> ());
                 Eio.Flow.copy_string
                   "HTTP/1.1 200 OK\r\n\
                    Content-Length: 0\r\n\

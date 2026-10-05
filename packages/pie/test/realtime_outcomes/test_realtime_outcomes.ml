@@ -159,9 +159,13 @@ let serve ?(close_peer = write_ws_close) ~saw_audio script flow =
     | Close -> ()
     | Other -> loop stage
     | Text payload -> (
-        match Yojson.Safe.from_string payload with
-        | exception _ -> loop stage
-        | `Assoc fields -> (
+        (* Preserve the exception as data before this test classifies its outcome. *)
+        match
+          try Result.Ok (Yojson.Safe.from_string payload)
+          with exn -> Result.Error exn
+        with
+        | Result.Error _ -> loop stage
+        | Result.Ok (`Assoc fields) -> (
             match List.assoc_opt "type" fields with
             | Some (`String "session.update") ->
                 List.iter (write_ws_text flow) script.after_session_update;
@@ -184,7 +188,7 @@ let serve ?(close_peer = write_ws_close) ~saw_audio script flow =
                   close_peer flow);
                 loop `Audio
             | _ -> loop stage)
-        | _ -> loop stage)
+        | Result.Ok _ -> loop stage)
   in
   loop `Init
 
@@ -220,7 +224,13 @@ let run_session_with ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) ?tls
             Eio.Flow.copy_string "\x17\x03\x03\x00" raw;
             Eio.Flow.close raw
       in
-      try serve ~close_peer ~saw_audio script flow with _ -> ());
+      (* Preserve the exception as data before this test classifies its outcome. *)
+      match
+        try Result.Ok (serve ~close_peer ~saw_audio script flow)
+        with exn -> Result.Error exn
+      with
+      | Result.Ok value -> value
+      | Result.Error _ -> ());
   let scheme = if Option.is_some tls then "wss" else "ws" in
   let ca_file = Option.map snd tls in
   let url = Printf.sprintf "%s://127.0.0.1:%d" scheme port in
@@ -486,7 +496,10 @@ let serve_recording ~terminal ~frames ~request flow =
         | _ -> ());
         loop ()
   in
-  try loop () with _ -> ()
+  (* Preserve the exception as data before this test classifies its outcome. *)
+  match try Result.Ok (loop ()) with exn -> Result.Error exn with
+  | Result.Ok value -> value
+  | Result.Error _ -> ()
 
 let with_saved_env ~(caps : < Ox_caps.Cap.env ; .. >) pairs f =
   let saved =
@@ -514,10 +527,16 @@ let run_peer ~(caps : < Ox_caps.Cap.env ; .. >) ~terminal client =
   in
   let port = tcp_port (Eio.Net.listening_addr socket) in
   Eio.Fiber.fork ~sw (fun () ->
-      try
-        let flow, _ = Eio.Net.accept ~sw socket in
-        serve_recording ~terminal ~frames ~request flow
-      with _ -> ());
+      (* Preserve the exception as data before this test classifies its outcome. *)
+      match
+        try
+          Result.Ok
+            (let flow, _ = Eio.Net.accept ~sw socket in
+             serve_recording ~terminal ~frames ~request flow)
+        with exn -> Result.Error exn
+      with
+      | Result.Ok value -> value
+      | Result.Error _ -> ());
   let result =
     with_saved_env ~caps
       [

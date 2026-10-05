@@ -123,7 +123,14 @@ let fingerprint_files
   in
   let tmp = Ox_caps.Cap_stdlib.Filename.temp_file ~caps "pie-fp" "" in
   Fun.protect
-    ~finally:(fun () -> try Ox_caps.Cap_unix.unlink ~caps tmp with _ -> ())
+    ~finally:(fun () ->
+      (* Preserve the exception as data before this test classifies its outcome. *)
+      match
+        try Result.Ok (Ox_caps.Cap_unix.unlink ~caps tmp)
+        with exn -> Result.Error exn
+      with
+      | Result.Ok value -> value
+      | Result.Error _ -> ())
     (fun () ->
       let oc = Ox_caps.Cap_stdlib.open_out_bin ~caps tmp in
       List.iter
@@ -174,9 +181,13 @@ let find_ox_cmxa_env ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; .. >) ()
     =
   ocamlpath_dirs ~caps ()
   |> List.concat_map (fun dir ->
-      match Ox_caps.Cap_sys.readdir ~caps dir with
-      | exception _ -> []
-      | names ->
+      (* Preserve the exception as data before this test classifies its outcome. *)
+      match
+        try Result.Ok (Ox_caps.Cap_sys.readdir ~caps dir)
+        with exn -> Result.Error exn
+      with
+      | Result.Error _ -> []
+      | Result.Ok names ->
           Array.to_list names
           |> List.filter_map (fun name ->
               let lower = String.lowercase_ascii name in
@@ -284,9 +295,13 @@ let companion_archive cmxa =
   archive
 
 let stub_archives_in ~(caps : < Ox_caps.Cap.fs_read ; .. >) dir =
-  match Ox_caps.Cap_sys.readdir ~caps dir with
-  | exception _ -> []
-  | names ->
+  (* Preserve the exception as data before this test classifies its outcome. *)
+  match
+    try Result.Ok (Ox_caps.Cap_sys.readdir ~caps dir)
+    with exn -> Result.Error exn
+  with
+  | Result.Error _ -> []
+  | Result.Ok names ->
       Array.to_list names
       |> List.filter_map (fun name ->
           let lower = String.lowercase_ascii name in
@@ -369,9 +384,20 @@ let atomic_write ~(caps : < Ox_caps.Cap.fs_write ; .. >) path contents =
   let published = ref false in
   Fun.protect
     ~finally:(fun () ->
-      (try close_out_noerr oc with _ -> ());
+      (* Preserve the exception as data before this test classifies its outcome. *)
+      (match
+         try Result.Ok (close_out_noerr oc) with exn -> Result.Error exn
+       with
+      | Result.Ok value -> value
+      | Result.Error _ -> ());
       if not !published then
-        try Ox_caps.Cap_unix.unlink ~caps cand with _ -> ())
+        (* Preserve the exception as data before this test classifies its outcome. *)
+        match
+          try Result.Ok (Ox_caps.Cap_unix.unlink ~caps cand)
+          with exn -> Result.Error exn
+        with
+        | Result.Ok value -> value
+        | Result.Error _ -> ())
     (fun () ->
       output_string oc contents;
       flush oc;

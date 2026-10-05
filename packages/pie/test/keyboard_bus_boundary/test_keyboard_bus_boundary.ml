@@ -220,7 +220,13 @@ let reply_member flow ~server_serial msg =
       reply_string flow ~serial:server_serial ~reply_serial:msg.serial ":1.1"
   | Some "GetNameOwner" ->
       let requested =
-        try Monitor.parse_string_body msg.body with _ -> Monitor.a11y_service
+        (* Preserve the exception as data before this test classifies its outcome. *)
+        match
+          try Result.Ok (Monitor.parse_string_body msg.body)
+          with exn -> Result.Error exn
+        with
+        | Result.Ok value -> value
+        | Result.Error _ -> Monitor.a11y_service
       in
       let value =
         if requested = Monitor.dbus_service then bus_unique else a11y_owner
@@ -251,7 +257,14 @@ let with_fake ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.fs_write ; .. >) ~sw ~net
           Eio.Switch.run @@ fun conn_sw ->
           let flow, _ = Eio.Net.accept ~sw:conn_sw listening in
           Fun.protect
-            ~finally:(fun () -> try Eio.Flow.close flow with _ -> ())
+            ~finally:(fun () ->
+              (* Preserve the exception as data before this test classifies its outcome. *)
+              match
+                try Result.Ok (Eio.Flow.close flow)
+                with exn -> Result.Error exn
+              with
+              | Result.Ok value -> value
+              | Result.Error _ -> ())
             (fun () ->
               try script flow with
               | End_of_file -> ()
@@ -876,8 +889,13 @@ let test_forged_get_name_owner_sender
         match msg.Monitor.member with
         | Some "GetNameOwner" ->
             let requested =
-              try Monitor.parse_string_body msg.body
-              with _ -> Monitor.a11y_service
+              (* Preserve the exception as data before this test classifies its outcome. *)
+              match
+                try Result.Ok (Monitor.parse_string_body msg.body)
+                with exn -> Result.Error exn
+              with
+              | Result.Ok value -> value
+              | Result.Error _ -> Monitor.a11y_service
             in
             if requested = Monitor.a11y_service then
               reply_string flow ~serial ~reply_serial:msg.serial ~sender:":1.99"
@@ -971,7 +989,13 @@ let test_isolated_dbus_daemon_optional
       in
       Fun.protect
         ~finally:(fun () ->
-          (try Ox_caps.Cap_unix.kill ~caps pid Sys.sigterm with _ -> ());
+          (* Preserve the exception as data before this test classifies its outcome. *)
+          (match
+             try Result.Ok (Ox_caps.Cap_unix.kill ~caps pid Sys.sigterm)
+             with exn -> Result.Error exn
+           with
+          | Result.Ok value -> value
+          | Result.Error _ -> ());
           ignore (Unix.waitpid [] pid))
         (fun () ->
           wait_exists path 40;
@@ -987,11 +1011,24 @@ let test_isolated_dbus_daemon_optional
           Eio.Fiber.fork ~sw (fun () ->
               Fun.protect
                 ~finally:(fun () ->
-                  try Eio.Promise.resolve resolve_peer_done () with _ -> ())
+                  (* Preserve the exception as data before this test classifies its outcome. *)
+                  match
+                    try Result.Ok (Eio.Promise.resolve resolve_peer_done ())
+                    with exn -> Result.Error exn
+                  with
+                  | Result.Ok value -> value
+                  | Result.Error _ -> ())
                 (fun () ->
                   let flow = Eio.Net.connect ~sw net (`Unix path) in
                   Fun.protect
-                    ~finally:(fun () -> try Eio.Flow.close flow with _ -> ())
+                    ~finally:(fun () ->
+                      (* Preserve the exception as data before this test classifies its outcome. *)
+                      match
+                        try Result.Ok (Eio.Flow.close flow)
+                        with exn -> Result.Error exn
+                      with
+                      | Result.Ok value -> value
+                      | Result.Error _ -> ())
                     (fun () ->
                       let uid_s = string_of_int (Unix.getuid ()) in
                       let uid =
@@ -1050,8 +1087,14 @@ let test_isolated_dbus_daemon_optional
           let result =
             Fun.protect
               ~finally:(fun () ->
-                (try Eio.Promise.resolve resolve_release () with _ -> ());
-                Eio.Promise.await peer_done)
+                (* Preserve the exception as data before this test classifies its outcome. *)
+                (match
+                   try Result.Ok (Eio.Promise.resolve resolve_release ())
+                   with exn -> Result.Error exn
+                 with
+                | Result.Ok value -> value
+                | Result.Error _ -> ());
+                Eio.Cancel.protect (fun () -> Eio.Promise.await peer_done))
               (fun () ->
                 run_direct (fun () ->
                     Monitor.with_monitor_budgets ~caps

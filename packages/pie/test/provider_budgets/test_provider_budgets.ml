@@ -343,11 +343,17 @@ let run_buffered ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) ~mode
     ~session_update ~script_handshake ~script_append pcm_bytes =
   with_listening @@ fun ~sw ~net ~clock ~logger ~url ~socket ->
   Eio.Fiber.fork ~sw (fun () ->
-      try
-        let flow, _ = Eio.Net.accept ~sw socket in
-        serve_script ~after_handshake:script_handshake ~after_update:[ updated ]
-          ~after_append:script_append flow
-      with _ -> ());
+      (* Preserve the exception as data before this test classifies its outcome. *)
+      match
+        try
+          Result.Ok
+            (let flow, _ = Eio.Net.accept ~sw socket in
+             serve_script ~after_handshake:script_handshake
+               ~after_update:[ updated ] ~after_append:script_append flow)
+        with exn -> Result.Error exn
+      with
+      | Result.Ok value -> value
+      | Result.Error _ -> ());
   let operation =
     Codex.run_realtime_session ~caps ~sw ~net ~clock ~url
       ~access_token:"synthetic" ~mode ~session_update ~input_sample_rate:16000
@@ -441,21 +447,27 @@ let test_offer_after_provider_failure
     ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) () =
   with_listening @@ fun ~sw ~net ~clock ~logger ~url ~socket ->
   Eio.Fiber.fork ~sw (fun () ->
-      try
-        let flow, _ = Eio.Net.accept ~sw socket in
-        handshake flow;
-        let rec wait () =
-          match read_ws_frame flow with
-          | exception End_of_file -> ()
-          | Close -> ()
-          | Other -> wait ()
-          | Text _ ->
-              write_ws_text flow
-                {|{"type":"error","error":{"message":"SECRET","code":"bad"}}|};
-              write_ws_close flow
-        in
-        wait ()
-      with _ -> ());
+      (* Preserve the exception as data before this test classifies its outcome. *)
+      match
+        try
+          Result.Ok
+            (let flow, _ = Eio.Net.accept ~sw socket in
+             handshake flow;
+             let rec wait () =
+               match read_ws_frame flow with
+               | exception End_of_file -> ()
+               | Close -> ()
+               | Other -> wait ()
+               | Text _ ->
+                   write_ws_text flow
+                     {|{"type":"error","error":{"message":"SECRET","code":"bad"}}|};
+                   write_ws_close flow
+             in
+             wait ())
+        with exn -> Result.Error exn
+      with
+      | Result.Ok value -> value
+      | Result.Error _ -> ());
   match
     run_offer ~caps ~logger ~url ~sw ~net ~clock (fun handle ->
         let rec spin n =
@@ -485,12 +497,18 @@ let test_closed_after_success
     ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) () =
   with_listening @@ fun ~sw ~net ~clock ~logger ~url ~socket ->
   Eio.Fiber.fork ~sw (fun () ->
-      try
-        let flow, _ = Eio.Net.accept ~sw socket in
-        serve_script ~after_handshake:[ created ] ~after_update:[ updated ]
-          ~after_append:[ json_final "hello" ]
-          flow
-      with _ -> ());
+      (* Preserve the exception as data before this test classifies its outcome. *)
+      match
+        try
+          Result.Ok
+            (let flow, _ = Eio.Net.accept ~sw socket in
+             serve_script ~after_handshake:[ created ] ~after_update:[ updated ]
+               ~after_append:[ json_final "hello" ]
+               flow)
+        with exn -> Result.Error exn
+      with
+      | Result.Ok value -> value
+      | Result.Error _ -> ());
   let operation =
     Codex.with_stream_session ~caps ~sw ~net ~clock ~logger ~url
       ~access_token:"synthetic" ~mode:Codex.Transcription ~operation:"budget"

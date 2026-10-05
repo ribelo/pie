@@ -173,25 +173,26 @@ let write_state t =
           output_char oc '\n'))
 
 (* Best-effort persistence used on every state mutation: the in-memory state
-   is authoritative, so a transient write failure is logged rather than
+   is authoritative, so a transient non-cancellation write failure is logged rather than
    crashing the daemon's hot path. *)
 let persist t =
   let caps = t.caps in
-  try write_state t
-  with exn -> (
-    match t.logger with
-    | Some logger ->
-        Ox_observability.Logger.error logger
-          ~fields:
-            [
-              ("path", String t.persist_path);
-              ("error", String (Printexc.to_string exn));
-            ]
-          "failed to write recording state"
-    | None ->
-        Ox_caps.Cap_stdlib.eprintf ~caps
-          "failed to write recording state (%s): %s@." t.persist_path
-          (Printexc.to_string exn))
+  try write_state t with
+  | Eio.Cancel.Cancelled _ as exn -> raise exn
+  | exn -> (
+      match t.logger with
+      | Some logger ->
+          Ox_observability.Logger.error logger
+            ~fields:
+              [
+                ("path", String t.persist_path);
+                ("error", String (Printexc.to_string exn));
+              ]
+            "failed to write recording state"
+      | None ->
+          Ox_caps.Cap_stdlib.eprintf ~caps
+            "failed to write recording state (%s): %s@." t.persist_path
+            (Printexc.to_string exn))
 
 let create ~caps ?logger ?persist_path ?(persist_io = fun write -> write ()) ()
     =

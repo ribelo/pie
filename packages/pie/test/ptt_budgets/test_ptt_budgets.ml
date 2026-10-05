@@ -363,7 +363,13 @@ let test_item_full_cancel_settles () =
     {
       offer =
         (fun _ ->
-          (try Eio.Promise.resolve resolve_queued () with _ -> ());
+          (* Preserve the exception as data before this test classifies its outcome. *)
+          (match
+             try Result.Ok (Eio.Promise.resolve resolve_queued ())
+             with exn -> Result.Error exn
+           with
+          | Result.Ok value -> value
+          | Result.Error _ -> ());
           Eio.Promise.await stall;
           Ok ());
       finish = Pie.Ptt_loop.Buffered (fun _ -> Ok ());

@@ -130,7 +130,14 @@ type t = {
           not apply. Default {!default_one_pass_timeout_seconds}. *)
 }
 
-exception Config_error of string
+val config_error_message : exn -> string option
+(** Recognise a configuration validation failure without publishing its
+    exception constructor. *)
+
+module For_test : sig
+  val config_error : string -> exn
+  (** Construct a configuration failure for reload and validation tests. *)
+end
 
 type resolved_model = { provider : provider; model : string }
 
@@ -195,8 +202,9 @@ val string_of_newline_action : newline_action -> string
 
 val entry_method_of_string : string -> entry_method
 (** ["paste"] and the compatibility spelling ["type"] are paste. Any other value
-    raises {!Config_error}. The compatibility warning is emitted by {!load} and
-    {!decode}, which know the rule. *)
+    raises a validation failure recognised by {!config_error_message}. The
+    compatibility warning is emitted by {!load} and {!decode}, which know the
+    rule. *)
 
 val string_of_entry_method : entry_method -> string
 (** ["paste"]. *)
@@ -215,6 +223,13 @@ val door_spec : t Ox_app.Config.t
 
 val default_source :
   caps:< Ox_caps.Cap.env ; .. > -> unit -> Ox_app.Config.source
+(** Suspension: never suspends in Pie, including native helper callbacks; the
+    environment lookup and source-path construction implementation depends on
+    [Ox_caps], [Ox_app.Config], [Filename] and [Stdlib]. Cancellation: not a
+    cancellation point in Pie; native and helper callback behavior depends on
+    [Ox_caps], [Ox_app.Config], [Filename] and [Stdlib]. Finalizers: creates no
+    owned resource and registers no release hook. Locking: no lock is acquired.
+*)
 
 val source_path : Ox_app.Config.source -> string
 
@@ -228,4 +243,15 @@ val load :
   (t, Ox_app.Config.error) result
 (** [warn] receives compatibility warnings after a successful decode. The
     default ignores them. A caller that logs passes its reporter; this function
-    does not print. *)
+    does not print.
+
+    Suspension: may suspend in [Ox_app.Config] filesystem reads; custom read and
+    warning behavior depends on the [read] and [warn] callbacks. Cancellation:
+    propagates external [Eio.Cancel.Cancelled]; read and validation result
+    classification depends on [Ox_app.Config], [read] and [warn]. Finalizers:
+    read-resource cleanup is delegated to [Ox_app.Config] and [Eio.Path]; custom
+    resource cleanup depends on the [read] callback; no Pie switch hook is
+    registered. Locking: no Pie mutex is held around [read] or [warn];
+    dependency locking is outside Pie. Cancellation safety: unsafe because
+    progress is lost if [read] or [warn] has non-replayable effects; this loader
+    does not roll back callback effects. *)

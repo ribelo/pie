@@ -20,6 +20,13 @@ module Active : sig
     caps:< Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; Ox_caps.Cap.time ; .. > ->
     root:string ->
     (store, [> `Retry_store of string ]) result
+  (** Suspension: never suspends in Pie, including native helper callbacks; the
+      native recovery-directory validation and creation implementation depends
+      on [Ox_caps], [Unix], [Filename] and [Stdlib]. Cancellation: not a
+      cancellation point in Pie; native and helper callback behavior depends on
+      [Ox_caps], [Unix], [Filename] and [Stdlib]. Finalizers: the store retains
+      paths and capabilities, not an open descriptor; no release hook is
+      registered. Locking: no lock is acquired by [open_store]. *)
 
   val open_audio_writer :
     store -> mode:mode -> (writer, [> `Retry_store of string ]) result

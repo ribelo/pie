@@ -35,6 +35,21 @@ val with_client :
   ?request_timeout:Ox.Duration.t ->
   (t -> ('a, ([> `Pulse_error of error ] as 'err)) result) ->
   ('a, 'err) result
+(** Suspension: may suspend in [Eio.Net], [Eio.Flow], [Eio.Promise], protocol
+    mutex acquisition and the caller [use] callback. Cancellation: propagates
+    external [Eio.Cancel.Cancelled]; transport and callback behavior depends on
+    [Eio], [Ox.Timeout] and [use]. Finalizers: a child switch owns the socket;
+    [Fun.protect] fails pending waiters and closes it after the reader/user race
+    settles; cleanup behavior depends on [Eio.Flow]. Locking: protocol writes
+    hold a write mutex across socket I/O; record queues use a separate mutex
+    with [Fun.protect] unlock; [use] is invoked without those mutexes held.
+    Cancellation safety: unsafe because progress is lost if [use] already issued
+    protocol commands or committed caller effects; disconnect does not roll them
+    back.
+
+    Invalid Pulse protocol encoding or decoding can raise [Failure].
+
+    A failing [Fun.protect] finalizer can propagate [Fun.Finally_raised]. *)
 
 val with_record_stream :
   t ->

@@ -192,7 +192,8 @@ let test_cancellation_at_acquisition
      Eio.Fiber.fork ~sw:offer_sw (fun () ->
          Eio.Time.sleep (Eio.Stdenv.clock env) 0.05;
          raise Exit);
-     ignore (Pie.Wayland.Clipboard.offer owner payload);
+     (* This scenario asserts cancellation cleanup below, not the offer result. *)
+     let _offer_result = Pie.Wayland.Clipboard.offer owner payload in
      Eio.Time.sleep (Eio.Stdenv.clock env) 10.0
    with Exit | Eio.Cancel.Cancelled _ -> ());
   Alcotest.(check int)
@@ -283,7 +284,9 @@ let test_shutdown_settles
         ~process_mgr:(Eio.Stdenv.process_mgr env)
         ~copy_program:copy ()
     in
-    ignore (Pie.Wayland.Clipboard.offer owner "payload") );
+    (* The assertion observes switch settlement, not the offer result. *)
+    let _offer_result = Pie.Wayland.Clipboard.offer owner "payload" in
+    () );
   Alcotest.(check bool) "switch settled" true true
 
 let test_settled_before_replacement
@@ -333,7 +336,8 @@ let test_natural_exit_releases_pipes
   in
   let fds_idle = fd_count ~caps () in
   let kids_idle = child_count ~caps () in
-  ignore (Pie.Wayland.Clipboard.offer owner "payload");
+  (* This case observes descriptor and child cleanup after natural exit. *)
+  let _offer_result = Pie.Wayland.Clipboard.offer owner "payload" in
   Eio.Time.sleep (Eio.Stdenv.clock env) 0.2;
   Alcotest.(check int) "natural exit fds" fds_idle (fd_count ~caps ());
   Alcotest.(check int) "natural exit children" kids_idle (child_count ~caps ())

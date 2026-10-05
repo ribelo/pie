@@ -37,7 +37,7 @@ let load_snapshot ~caps ~fs ~source ?(warn = fun _ -> ()) attempts =
           ()
       with
       | Ok cfg -> cfg
-      | Error (`Config msg) -> raise (Config.Stt.Config_error msg)
+      | Error (`Config msg) -> raise (Config_failure.Config_error msg)
     in
     let after = stamp () in
     if before = after then (
@@ -45,7 +45,8 @@ let load_snapshot ~caps ~fs ~source ?(warn = fun _ -> ()) attempts =
       (config, after))
     else if n > 0 then retry (n - 1)
     else
-      raise (Config.Stt.Config_error "config changed repeatedly while loading")
+      raise
+        (Config_failure.Config_error "config changed repeatedly while loading")
   in
   retry attempts
 
@@ -192,11 +193,12 @@ let effective_bindings ?ptt_transcribe_keysym ?ptt_translate_keysym
   in
   if transcribe <= 0 then
     raise
-      (Config.Stt.Config_error
+      (Config_failure.Config_error
          "effective PTT transcribe keysym must be positive");
   if translate <= 0 then
     raise
-      (Config.Stt.Config_error "effective PTT translate keysym must be positive");
+      (Config_failure.Config_error
+         "effective PTT translate keysym must be positive");
   let transcribe_binding =
     { keysym = transcribe; shift = config.ptt_transcribe_shift }
   in
@@ -205,7 +207,7 @@ let effective_bindings ?ptt_transcribe_keysym ?ptt_translate_keysym
   in
   if transcribe_binding = translate_binding then
     raise
-      (Config.Stt.Config_error
+      (Config_failure.Config_error
          "effective PTT transcribe and translate bindings must differ");
   (transcribe_binding, translate_binding)
 
@@ -235,7 +237,7 @@ let with_cli_overrides ?ptt_transcribe_keysym ?ptt_translate_keysym config =
   List.iter
     (fun (binding : Config.Stt.binding) ->
       if Hashtbl.mem seen (binding.keysym, binding.shift) then
-        raise (Config.Stt.Config_error "effective PTT bindings must differ");
+        raise (Config_failure.Config_error "effective PTT bindings must differ");
       Hashtbl.add seen (binding.keysym, binding.shift) ())
     bindings;
   {
@@ -877,7 +879,8 @@ let attempt_handle owner (handle : Ptt_loop.handle) : Ptt_loop.handle =
       (fun () ->
         owner.discard_audio <- true;
         let result = handle.cancel () in
-        ignore (abort_unpublished owner);
+        (* Cancellation keeps the handle result; aborting the unpublished draft is best-effort. *)
+        let _abort_result = abort_unpublished owner in
         result);
   }
 
@@ -968,7 +971,7 @@ let production_pipeline ~caps ~sw ~net ~clock ~logger ~process_mgr =
             Ok
               (Config.Stt.resolve_model_provider
                  ~default_provider:config.provider configured)
-          with Config.Stt.Config_error _ ->
+          with Config_failure.Config_error _ ->
             Error (Stt.Correction.Provider Stt.Correction.Invalid_request)
         with
         | Error _ as error -> Stt.Correction.of_result error
@@ -1215,7 +1218,7 @@ let acquire_and_run ~caps ~sw ~net ~clock ~logger ~owner ~config ~stt ~deliver
   in
   match
     try Ok (resolved_model_for_mode config model_mode)
-    with Config.Stt.Config_error _ -> Error (`Ptt_error "config:model")
+    with Config_failure.Config_error _ -> Error (`Ptt_error "config:model")
   with
   | Error _ as error -> error
   | Ok resolved -> (
@@ -1482,11 +1485,14 @@ let action_handler ~sw ~coordinator ~send_control ~retries ~get_store
             in
             hook :=
               Eio.Switch.on_release_cancellable sw (fun () ->
-                  ignore (release ()));
+                  (* [release] removes the ownership hook and always returns [Ok ()]. *)
+                  let _release_result = release () in
+                  ());
             (match Eio.Stream.add retries (job, attempt, release) with
             | () -> ()
             | exception exn ->
-                ignore (release ());
+                (* Keep the original exception after releasing the attempt. *)
+                let _release_result = release () in
                 raise exn);
             {
               action = raw_action;
@@ -1598,7 +1604,7 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
       | Some config -> Ok (config, config_control.stamp ())
       | None -> (
           try Ok (config_control.load 3)
-          with Config.Stt.Config_error msg ->
+          with Config_failure.Config_error msg ->
             reject_config
               "Startup configuration was rejected. Check the config and \
                restart Pie.";
@@ -1610,7 +1616,7 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
         Ok
           (with_cli_overrides ?ptt_transcribe_keysym ?ptt_translate_keysym
              initial_config)
-      with Config.Stt.Config_error msg ->
+      with Config_failure.Config_error msg ->
         reject_config
           "Startup configuration was rejected. Check the config and restart \
            Pie.";
@@ -1724,7 +1730,7 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
             try
               let config, loaded_stamp = config_control.load 3 in
               `Loaded (config, loaded_stamp)
-            with Config.Stt.Config_error _ -> `Failed
+            with Config_failure.Config_error _ -> `Failed
         in
         (match result with
         | `Unchanged -> ()
@@ -1742,7 +1748,7 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
                 Ok
                   (with_cli_overrides ?ptt_transcribe_keysym
                      ?ptt_translate_keysym new_config)
-              with Config.Stt.Config_error _ -> Error ()
+              with Config_failure.Config_error _ -> Error ()
             with
             | Error () ->
                 reject_config
@@ -1819,10 +1825,10 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
                         warn_archive
                           ("audio archive history write failed: " ^ message))
             with
-            | Eio.Cancel.Cancelled _ -> ()
+            | Eio.Cancel.Cancelled _ as exn -> raise exn
             | exn ->
                 warn_archive ("audio archive failed: " ^ Printexc.to_string exn))
-      with Eio.Cancel.Cancelled _ -> ()
+      with Eio.Cancel.Cancelled _ as exn -> raise exn
     in
     let archive_hooks =
       {
@@ -2125,7 +2131,8 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
         let result =
           match get_store () with
           | Error error ->
-              ignore (release ());
+              (* The store error is the outcome; [release] always returns [Ok ()]. *)
+              let _release_result = release () in
               Error (ptt_of_retry error)
           | Ok store ->
               run_acquired_attempt ~sw ~attempt ~on_settle:release

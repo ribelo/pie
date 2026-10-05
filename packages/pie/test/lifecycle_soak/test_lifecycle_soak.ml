@@ -166,10 +166,22 @@ let probe_flow label flow =
         ~if_closed:(fun () -> label ^ ":rcfd=closed")
         (fun unix_fd ->
           let local =
-            try pp_sockaddr (Unix.getsockname unix_fd) with _ -> "?"
+            (* Preserve the exception as data before this test classifies its outcome. *)
+            match
+              try Result.Ok (pp_sockaddr (Unix.getsockname unix_fd))
+              with exn -> Result.Error exn
+            with
+            | Result.Ok value -> value
+            | Result.Error _ -> "?"
           in
           let peer =
-            try pp_sockaddr (Unix.getpeername unix_fd) with _ -> "?"
+            (* Preserve the exception as data before this test classifies its outcome. *)
+            match
+              try Result.Ok (pp_sockaddr (Unix.getpeername unix_fd))
+              with exn -> Result.Error exn
+            with
+            | Result.Ok value -> value
+            | Result.Error _ -> "?"
           in
           Printf.sprintf "%s:rcfd=open local=%s peer=%s" label local peer)
 
@@ -431,8 +443,20 @@ let with_localhost_tls
   let key = Ox_caps.Cap_stdlib.Filename.temp_file ~caps "pie-soak-key" ".pem" in
   Fun.protect
     ~finally:(fun () ->
-      (try Ox_caps.Cap_sys.remove ~caps cert with _ -> ());
-      try Ox_caps.Cap_sys.remove ~caps key with _ -> ())
+      (* Preserve the exception as data before this test classifies its outcome. *)
+      (match
+         try Result.Ok (Ox_caps.Cap_sys.remove ~caps cert)
+         with exn -> Result.Error exn
+       with
+      | Result.Ok value -> value
+      | Result.Error _ -> ());
+      (* Preserve the exception as data before this test classifies its outcome. *)
+      match
+        try Result.Ok (Ox_caps.Cap_sys.remove ~caps key)
+        with exn -> Result.Error exn
+      with
+      | Result.Ok value -> value
+      | Result.Error _ -> ())
     (fun () ->
       let cmd =
         String.concat " "

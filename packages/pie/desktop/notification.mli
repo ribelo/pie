@@ -20,9 +20,29 @@ val emit :
   string ->
   string ->
   unit
+(** Suspension: may suspend while the notification subprocess runs; execution
+    depends on [Eio.Process], and native stderr output depends on [Ox_caps] and
+    [Stdlib]. Cancellation: propagates [Eio.Cancel.Cancelled] and
+    [Eio.Exn.Multiple]; ordinary subprocess results are classified according to
+    the notification policy; dependency behavior depends on [Eio.Process].
+    Finalizers: subprocess lifecycle is delegated to [Eio.Process]; no Pie
+    switch hook is registered. Locking: no Pie mutex is acquired; dependency
+    locking is outside Pie. Cancellation safety: unsafe because progress is lost
+    if the notification was sent before cancellation; retry may display it
+    twice. *)
 
 val notify_send :
   process_mgr:_ Eio.Process.mgr -> string -> string -> (unit, error) result
+(** Suspension: may suspend while the notification subprocess runs; execution
+    depends on [Eio.Process], and native stderr output depends on [Ox_caps] and
+    [Stdlib]. Cancellation: propagates [Eio.Cancel.Cancelled] and
+    [Eio.Exn.Multiple]; ordinary subprocess results are classified according to
+    the notification policy; dependency behavior depends on [Eio.Process].
+    Finalizers: subprocess lifecycle is delegated to [Eio.Process]; no Pie
+    switch hook is registered. Locking: no Pie mutex is acquired; dependency
+    locking is outside Pie. Cancellation safety: unsafe because progress is lost
+    if the notification was sent before cancellation; retry may display it
+    twice. *)
 
 val notify_warning :
   caps:< Ox_caps.Cap.stderr ; .. > ->
@@ -30,3 +50,13 @@ val notify_warning :
   string ->
   string ->
   (unit, error) result
+(** Suspension: may suspend while the notification subprocess runs; execution
+    depends on [Eio.Process], and native stderr output depends on [Ox_caps] and
+    [Stdlib]. Cancellation: propagates [Eio.Cancel.Cancelled] and
+    [Eio.Exn.Multiple]; ordinary subprocess results are classified according to
+    the notification policy; dependency behavior depends on [Eio.Process].
+    Finalizers: subprocess lifecycle is delegated to [Eio.Process]; no Pie
+    switch hook is registered. Locking: no Pie mutex is acquired; dependency
+    locking is outside Pie. Cancellation safety: unsafe because progress is lost
+    if the notification was sent before cancellation; retry may display it
+    twice. *)

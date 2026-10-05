@@ -826,10 +826,13 @@ let with_monitor_budgets ~caps ~budgets ~sw ~net ~clock ~process_mgr:_ f =
         Fun.protect
           ~finally:(fun () -> Eio.Flow.close flow)
           (fun () ->
-            ignore
-              (Ox.Timeout.timeout ~clock budgets.unwatch (fun () ->
-                   unwatch_write ~destination:owner flow;
-                   Ok ()))))
+            (* Unwatch is best-effort within its budget; the finalizer closes the flow even on timeout. *)
+            let _unwatch_result =
+              Ox.Timeout.timeout ~clock budgets.unwatch (fun () ->
+                  unwatch_write ~destination:owner flow;
+                  Ok ())
+            in
+            ()))
   in
   Fun.protect ~finally:release @@ fun () ->
   Ox.Concurrent.with_background ~sw

@@ -120,13 +120,22 @@ let drain_peer ~clock flow =
     | _ -> loop ()
     | exception End_of_file -> ()
   in
-  try Eio.Time.with_timeout_exn clock 0.4 loop with _ -> ()
+  (* Preserve the exception as data before this test classifies its outcome. *)
+  match
+    try Result.Ok (Eio.Time.with_timeout_exn clock 0.4 loop)
+    with exn -> Result.Error exn
+  with
+  | Result.Ok value -> value
+  | Result.Error _ -> ()
 
 let handle_peer ~clock:_ scenario ~on_connected ~hold ~close_flow flow =
   upgrade flow;
   let hold_then_close () =
     Eio.Promise.await hold;
-    try close_flow () with _ -> ()
+    (* Preserve the exception as data before this test classifies its outcome. *)
+    match try Result.Ok (close_flow ()) with exn -> Result.Error exn with
+    | Result.Ok value -> value
+    | Result.Error _ -> ()
   in
   match scenario with
   | Normal ->
@@ -260,7 +269,8 @@ let settle ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) ~sw ~net ~clock
           Eio.Promise.await gate;
           Ok ())
         (fun () ->
-          ignore (timed ());
+          (* Any ordinary return loses this cancellation race, regardless of its typed outcome. *)
+          let _timed_result = timed () in
           Error (`Stt_error "expected cancel winner, body succeeded"))
 
 let classify_fds ~(caps : < Ox_caps.Cap.fs_read ; .. >) () =
@@ -367,7 +377,11 @@ let tcp_port socket =
   | `Tcp (_, port) -> port
   | `Unix _ -> Alcotest.fail "expected TCP listener"
 
-let close_peer flow = try Eio.Flow.close flow with _ -> ()
+let close_peer flow =
+  (* Preserve the exception as data before this test classifies its outcome. *)
+  match try Result.Ok (Eio.Flow.close flow) with exn -> Result.Error exn with
+  | Result.Ok value -> value
+  | Result.Error _ -> ()
 
 let run_one
     ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.time ; .. >)
@@ -388,7 +402,12 @@ let run_one
   let result =
     settle ~caps ~sw ~net ~clock ?ca_file ~url ~job scenario streaming
   in
-  (try Eio.Resource.close socket with _ -> ());
+  (* Preserve the exception as data before this test classifies its outcome. *)
+  (match
+     try Result.Ok (Eio.Resource.close socket) with exn -> Result.Error exn
+   with
+  | Result.Ok value -> value
+  | Result.Error _ -> ());
   (match result with
   | Ok () -> ()
   | Error cause ->
@@ -430,9 +449,16 @@ let wss_url port =
 let warm_timer ~sw clock =
   let hold, hold_u = Eio.Promise.create () in
   Eio.Fiber.fork ~sw (fun () ->
-      try
-        Eio.Time.with_timeout_exn clock 120.0 (fun () -> Eio.Promise.await hold)
-      with _ -> ());
+      (* Preserve the exception as data before this test classifies its outcome. *)
+      match
+        try
+          Result.Ok
+            (Eio.Time.with_timeout_exn clock 120.0 (fun () ->
+                 Eio.Promise.await hold))
+        with exn -> Result.Error exn
+      with
+      | Result.Ok value -> value
+      | Result.Error _ -> ());
   Eio.Time.sleep clock 0.02;
   hold_u
 
@@ -489,8 +515,20 @@ let with_localhost_tls
   let key = Ox_caps.Cap_stdlib.Filename.temp_file ~caps "pie-own-key" ".pem" in
   Fun.protect
     ~finally:(fun () ->
-      (try Ox_caps.Cap_sys.remove ~caps cert with _ -> ());
-      try Ox_caps.Cap_sys.remove ~caps key with _ -> ())
+      (* Preserve the exception as data before this test classifies its outcome. *)
+      (match
+         try Result.Ok (Ox_caps.Cap_sys.remove ~caps cert)
+         with exn -> Result.Error exn
+       with
+      | Result.Ok value -> value
+      | Result.Error _ -> ());
+      (* Preserve the exception as data before this test classifies its outcome. *)
+      match
+        try Result.Ok (Ox_caps.Cap_sys.remove ~caps key)
+        with exn -> Result.Error exn
+      with
+      | Result.Ok value -> value
+      | Result.Error _ -> ())
     (fun () ->
       let cmd =
         String.concat " "
@@ -620,20 +658,32 @@ let probe_flow label flow =
         ~if_closed:(fun () -> label ^ ":rcfd=closed")
         (fun unix_fd ->
           let local =
-            try
-              match Unix.getsockname unix_fd with
-              | Unix.ADDR_INET (ip, p) ->
-                  Unix.string_of_inet_addr ip ^ ":" ^ string_of_int p
-              | Unix.ADDR_UNIX path -> "unix:" ^ path
-            with _ -> "?"
+            (* Preserve the exception as data before this test classifies its outcome. *)
+            match
+              try
+                Result.Ok
+                  (match Unix.getsockname unix_fd with
+                  | Unix.ADDR_INET (ip, p) ->
+                      Unix.string_of_inet_addr ip ^ ":" ^ string_of_int p
+                  | Unix.ADDR_UNIX path -> "unix:" ^ path)
+              with exn -> Result.Error exn
+            with
+            | Result.Ok value -> value
+            | Result.Error _ -> "?"
           in
           let peer =
-            try
-              match Unix.getpeername unix_fd with
-              | Unix.ADDR_INET (ip, p) ->
-                  Unix.string_of_inet_addr ip ^ ":" ^ string_of_int p
-              | Unix.ADDR_UNIX path -> "unix:" ^ path
-            with _ -> "?"
+            (* Preserve the exception as data before this test classifies its outcome. *)
+            match
+              try
+                Result.Ok
+                  (match Unix.getpeername unix_fd with
+                  | Unix.ADDR_INET (ip, p) ->
+                      Unix.string_of_inet_addr ip ^ ":" ^ string_of_int p
+                  | Unix.ADDR_UNIX path -> "unix:" ^ path)
+              with exn -> Result.Error exn
+            with
+            | Result.Ok value -> value
+            | Result.Error _ -> "?"
           in
           Printf.sprintf "%s:rcfd=open local=%s peer=%s" label local peer)
 
@@ -677,7 +727,12 @@ let test_fd_identity_diagnosis
             Eio.Promise.await hold;
             close_peer flow));
     let result = settle ~caps ~sw ~net ~clock ~url ~job Normal false in
-    (try Eio.Resource.close socket with _ -> ());
+    (* Preserve the exception as data before this test classifies its outcome. *)
+    (match
+       try Result.Ok (Eio.Resource.close socket) with exn -> Result.Error exn
+     with
+    | Result.Ok value -> value
+    | Result.Error _ -> ());
     let peer = Atomic.get peer_flow in
     let peer_diag =
       match peer with

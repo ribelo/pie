@@ -326,7 +326,9 @@ module Codex_auth = struct
                   | Some (`Intlit exp) -> int_of_string_opt exp
                   | _ -> None)
               | _ -> None
-            with _ -> None))
+            with
+            | Eio.Cancel.Cancelled _ as exn -> raise exn
+            | _ -> None))
     | _ -> None
 
   let is_expired ?(leeway_seconds = 60) ~now token =

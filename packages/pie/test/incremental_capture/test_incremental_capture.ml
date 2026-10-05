@@ -158,7 +158,8 @@ let test_ptt_quiet_nonzero_visits_linear () =
           emit keyboard true)
     in
     let visits, copies = Pie.Audio.Pcm.Accounting.snapshot () in
-    ignore result;
+    (* The assertions below inspect finish/cancel counts and PCM accounting. *)
+    let _loop_result = result in
     (!finishes, !cancels, visits, copies)
   in
   let f32, c32, v32, copies32 = run 32 in
@@ -190,16 +191,18 @@ let test_ptt_silence_and_crossing () =
       cancel = (fun () -> Ok ());
     }
   in
-  ignore
-    (run_loop ~env ~sw ~clock ~handle ~min_duration_ms:0 ~rms:0.01 ~peak:0.01
-       ~timeout_s:8 ~audio_fn:(fun ~clock ~keyboard ~audio ->
-         Eio.Time.sleep clock 0.05;
-         emit keyboard false;
-         Eio.Stream.add audio (pcm_chunk 0 160);
-         Eio.Time.sleep clock 0.02;
-         Eio.Stream.add audio (pcm_chunk 20000 160);
-         Eio.Time.sleep clock 0.02;
-         emit keyboard true));
+  (* This case asserts capture callbacks and PCM state below, not the loop result. *)
+  let _loop_result =
+    run_loop ~env ~sw ~clock ~handle ~min_duration_ms:0 ~rms:0.01 ~peak:0.01
+      ~timeout_s:8 ~audio_fn:(fun ~clock ~keyboard ~audio ->
+        Eio.Time.sleep clock 0.05;
+        emit keyboard false;
+        Eio.Stream.add audio (pcm_chunk 0 160);
+        Eio.Time.sleep clock 0.02;
+        Eio.Stream.add audio (pcm_chunk 20000 160);
+        Eio.Time.sleep clock 0.02;
+        emit keyboard true)
+  in
   Alcotest.(check int) "crossing finishes once" 1 !finishes;
   Alcotest.(check int) "buffered concat is whole clip" (320 + 320) !last_len
 
@@ -220,14 +223,16 @@ let test_ptt_streaming_finish_does_not_concat () =
     }
   in
   Pie.Audio.Pcm.Accounting.reset ();
-  ignore
-    (run_loop ~env ~sw ~clock ~handle ~min_duration_ms:0 ~rms:0.0 ~peak:0.0
-       ~timeout_s:8 ~audio_fn:(fun ~clock ~keyboard ~audio ->
-         Eio.Time.sleep clock 0.05;
-         emit keyboard false;
-         Eio.Stream.add audio (pcm_chunk 20000 160);
-         Eio.Time.sleep clock 0.02;
-         emit keyboard true));
+  (* This case asserts capture callbacks and PCM state below, not the loop result. *)
+  let _loop_result =
+    run_loop ~env ~sw ~clock ~handle ~min_duration_ms:0 ~rms:0.0 ~peak:0.0
+      ~timeout_s:8 ~audio_fn:(fun ~clock ~keyboard ~audio ->
+        Eio.Time.sleep clock 0.05;
+        emit keyboard false;
+        Eio.Stream.add audio (pcm_chunk 20000 160);
+        Eio.Time.sleep clock 0.02;
+        emit keyboard true)
+  in
   let _visits, copies = Pie.Audio.Pcm.Accounting.snapshot () in
   Alcotest.(check int) "streaming finished" 1 !finishes;
   Alcotest.(check int) "streaming finish copies no clip" 0 copies
@@ -264,19 +269,21 @@ let test_ptt_odd_split_pair_succeeds kind =
           Ok ());
     }
   in
-  ignore
-    (run_loop ~env ~sw ~clock ~handle ~min_duration_ms:0 ~rms:0.0 ~peak:0.0
-       ~timeout_s:8 ~audio_fn:(fun ~clock ~keyboard ~audio ->
-         Eio.Time.sleep clock 0.05;
-         emit keyboard false;
-         let first = Bytes.create 321 in
-         Bytes.blit (pcm_chunk 20000 160) 0 first 0 320;
-         Bytes.set_uint8 first 320 0x10;
-         Eio.Stream.add audio first;
-         Eio.Time.sleep clock 0.02;
-         Eio.Stream.add audio (one_byte 0x20);
-         Eio.Time.sleep clock 0.02;
-         emit keyboard true));
+  (* This case asserts capture callbacks and PCM state below, not the loop result. *)
+  let _loop_result =
+    run_loop ~env ~sw ~clock ~handle ~min_duration_ms:0 ~rms:0.0 ~peak:0.0
+      ~timeout_s:8 ~audio_fn:(fun ~clock ~keyboard ~audio ->
+        Eio.Time.sleep clock 0.05;
+        emit keyboard false;
+        let first = Bytes.create 321 in
+        Bytes.blit (pcm_chunk 20000 160) 0 first 0 320;
+        Bytes.set_uint8 first 320 0x10;
+        Eio.Stream.add audio first;
+        Eio.Time.sleep clock 0.02;
+        Eio.Stream.add audio (one_byte 0x20);
+        Eio.Time.sleep clock 0.02;
+        emit keyboard true)
+  in
   Alcotest.(check int) "odd-split pair finished" 1 !finishes;
   Alcotest.(check int) "odd-split pair did not cancel" 0 !cancels
 
@@ -307,16 +314,18 @@ let test_ptt_odd_final_framing_fails kind =
           Ok ());
     }
   in
-  ignore
-    (run_loop ~env ~sw ~clock ~handle ~min_duration_ms:0 ~rms:0.0 ~peak:0.0
-       ~timeout_s:8 ~audio_fn:(fun ~clock ~keyboard ~audio ->
-         Eio.Time.sleep clock 0.05;
-         emit keyboard false;
-         Eio.Stream.add audio (pcm_chunk 20000 160);
-         Eio.Time.sleep clock 0.02;
-         Eio.Stream.add audio (one_byte 0x7f);
-         Eio.Time.sleep clock 0.02;
-         emit keyboard true));
+  (* This case asserts capture callbacks and PCM state below, not the loop result. *)
+  let _loop_result =
+    run_loop ~env ~sw ~clock ~handle ~min_duration_ms:0 ~rms:0.0 ~peak:0.0
+      ~timeout_s:8 ~audio_fn:(fun ~clock ~keyboard ~audio ->
+        Eio.Time.sleep clock 0.05;
+        emit keyboard false;
+        Eio.Stream.add audio (pcm_chunk 20000 160);
+        Eio.Time.sleep clock 0.02;
+        Eio.Stream.add audio (one_byte 0x7f);
+        Eio.Time.sleep clock 0.02;
+        emit keyboard true)
+  in
   Alcotest.(check int) "odd-final did not finish" 0 !finishes;
   Alcotest.(check bool) "odd-final cancelled owned handle" true (!cancels >= 1)
 

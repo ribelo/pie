@@ -242,31 +242,38 @@ let serve_one ~(caps : < Ox_caps.Cap.fs_write ; Ox_caps.Cap.network ; .. >)
             Thread.delay 0.01;
             accept_loop ()
         in
-        try
-          let client, _ = accept_loop () in
-          Fun.protect
-            ~finally:(fun () -> close_fd client)
-            (fun () ->
-              Unix.clear_nonblock client;
-              Unix.setsockopt_float client Unix.SO_RCVTIMEO 2.0;
-              Unix.setsockopt_float client Unix.SO_SNDTIMEO 2.0;
-              let buf = Bytes.create 1024 in
-              let rec read_line acc =
-                if string_contains acc "\n" then ()
-                else
-                  match Unix.read client buf 0 (Bytes.length buf) with
-                  | 0 -> ()
-                  | n -> read_line (acc ^ Bytes.sub_string buf 0 n)
-              in
-              read_line "";
-              let payload = Bytes.of_string (reply ^ "\n") in
-              ignore (Unix.write client payload 0 (Bytes.length payload)))
+        (* Preserve the exception as data before this test classifies its outcome. *)
+        match
+          try
+            Result.Ok
+              (let client, _ = accept_loop () in
+               Fun.protect
+                 ~finally:(fun () -> close_fd client)
+                 (fun () ->
+                   Unix.clear_nonblock client;
+                   Unix.setsockopt_float client Unix.SO_RCVTIMEO 2.0;
+                   Unix.setsockopt_float client Unix.SO_SNDTIMEO 2.0;
+                   let buf = Bytes.create 1024 in
+                   let rec read_line acc =
+                     if string_contains acc "\n" then ()
+                     else
+                       match Unix.read client buf 0 (Bytes.length buf) with
+                       | 0 -> ()
+                       | n -> read_line (acc ^ Bytes.sub_string buf 0 n)
+                   in
+                   read_line "";
+                   let payload = Bytes.of_string (reply ^ "\n") in
+                   ignore (Unix.write client payload 0 (Bytes.length payload))))
+          with exn -> Result.Error exn
         with
-        | Unix.Unix_error
-            ((Unix.EBADF | Unix.EINVAL | Unix.ECONNABORTED | Unix.EINTR), _, _)
-          ->
+        | Result.Ok value -> value
+        | Result.Error
+            (Unix.Unix_error
+               ( (Unix.EBADF | Unix.EINVAL | Unix.ECONNABORTED | Unix.EINTR),
+                 _,
+                 _ )) ->
             ()
-        | exn -> error := Some exn)
+        | Result.Error exn -> error := Some exn)
       ()
   in
   (server, worker, error)
@@ -297,7 +304,12 @@ let with_reply
   Fun.protect
     ~finally:(fun () ->
       close_fd server;
-      (try join_worker ~caps worker with _ -> ());
+      (* Preserve the exception as data before this test classifies its outcome. *)
+      (match
+         try Result.Ok (join_worker ~caps worker) with exn -> Result.Error exn
+       with
+      | Result.Ok value -> value
+      | Result.Error _ -> ());
       try Ox_caps.Cap_unix.unlink ~caps socket_path
       with Unix.Unix_error _ -> ())
     (fun () ->

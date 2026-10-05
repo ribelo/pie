@@ -66,7 +66,13 @@ let expect_error expected f =
 let send_status ~sw env socket_path =
   let flow = Eio.Net.connect ~sw (Eio.Stdenv.net env) (`Unix socket_path) in
   Fun.protect
-    ~finally:(fun () -> try Eio.Flow.close flow with _ -> ())
+    ~finally:(fun () ->
+      (* Preserve the exception as data before this test classifies its outcome. *)
+      match
+        try Result.Ok (Eio.Flow.close flow) with exn -> Result.Error exn
+      with
+      | Result.Ok value -> value
+      | Result.Error _ -> ())
     (fun () ->
       let req =
         Yojson.Safe.to_string
@@ -167,19 +173,26 @@ let test_racing_processes
       Unix.close ready_r;
       Unix.close lifetime_w;
       let code =
-        try
-          Eio_main.run (fun env ->
-              Eio.Switch.run (fun sw ->
-                  start_in ~caps ~sw env ~socket_path (coordinator ~caps dir);
-                  ignore (Unix.write ready_w (Bytes.of_string "r") 0 1);
-                  Unix.close ready_w;
-                  (* Stay owner until the parent finishes, without blocking
+        (* Preserve the exception as data before this test classifies its outcome. *)
+        match
+          try
+            Result.Ok
+              (Eio_main.run (fun env ->
+                   Eio.Switch.run (fun sw ->
+                       start_in ~caps ~sw env ~socket_path
+                         (coordinator ~caps dir);
+                       ignore (Unix.write ready_w (Bytes.of_string "r") 0 1);
+                       Unix.close ready_w;
+                       (* Stay owner until the parent finishes, without blocking
                      this child's listener scheduler. *)
-                  ignore
-                    (Pie.Fs.blocking (fun () ->
-                         Unix.read lifetime_r (Bytes.create 1) 0 1))));
-          0
-        with _ -> 1
+                       ignore
+                         (Pie.Fs.blocking (fun () ->
+                              Unix.read lifetime_r (Bytes.create 1) 0 1))));
+               0)
+          with exn -> Result.Error exn
+        with
+        | Result.Ok value -> value
+        | Result.Error _ -> 1
       in
       Unix.close lifetime_r;
       Ox_caps.Cap_stdlib.exit ~caps code
@@ -288,15 +301,24 @@ let test_never_newline_expires
   start_in ~caps ~sw env ~socket_path ~budget (coordinator ~caps dir);
   let flow = Eio.Net.connect ~sw (Eio.Stdenv.net env) (`Unix socket_path) in
   Fun.protect
-    ~finally:(fun () -> try Eio.Flow.close flow with _ -> ())
+    ~finally:(fun () ->
+      (* Preserve the exception as data before this test classifies its outcome. *)
+      match
+        try Result.Ok (Eio.Flow.close flow) with exn -> Result.Error exn
+      with
+      | Result.Ok value -> value
+      | Result.Error _ -> ())
     (fun () ->
       Eio.Flow.write flow [ Cstruct.of_string "no-newline" ];
       let started = Ox_caps.Cap_unix.gettimeofday ~caps () in
       let reader = Eio.Buf_read.of_flow ~max_size:65536 flow in
-      (match Eio.Buf_read.line reader with
-      | _ -> ()
-      | exception End_of_file -> ()
-      | exception _ -> ());
+      (* Preserve the exception as data before this test classifies its outcome. *)
+      (match
+         try Result.Ok (Eio.Buf_read.line reader) with exn -> Result.Error exn
+       with
+      | Result.Ok _ -> ()
+      | Result.Error End_of_file -> ()
+      | Result.Error _ -> ());
       let elapsed = Ox_caps.Cap_unix.gettimeofday ~caps () -. started in
       Alcotest.(check bool)
         "expired within whole-peer budget" true (elapsed < 0.8))
@@ -386,7 +408,13 @@ let test_permit_released_on_parse_fail
   start_in ~caps ~sw env ~socket_path (coordinator ~caps dir);
   let flow = Eio.Net.connect ~sw (Eio.Stdenv.net env) (`Unix socket_path) in
   Fun.protect
-    ~finally:(fun () -> try Eio.Flow.close flow with _ -> ())
+    ~finally:(fun () ->
+      (* Preserve the exception as data before this test classifies its outcome. *)
+      match
+        try Result.Ok (Eio.Flow.close flow) with exn -> Result.Error exn
+      with
+      | Result.Ok value -> value
+      | Result.Error _ -> ())
     (fun () ->
       Eio.Flow.write flow [ Cstruct.of_string "{not-json}\n" ];
       let reader = Eio.Buf_read.of_flow ~max_size:65536 flow in
@@ -467,14 +495,28 @@ let test_capacity_saturation
   let finished = ref false in
   let waiter, resolve = Eio.Promise.create () in
   Eio.Fiber.fork ~sw (fun () ->
-      (try ignore (send_status ~sw env socket_path) with _ -> ());
+      (* Preserve the exception as data before this test classifies its outcome. *)
+      (match
+         try Result.Ok (ignore (send_status ~sw env socket_path))
+         with exn -> Result.Error exn
+       with
+      | Result.Ok value -> value
+      | Result.Error _ -> ());
       finished := true;
       Eio.Promise.resolve resolve ());
   Eio.Time.sleep (Eio.Stdenv.clock env) 0.05;
   Alcotest.(check bool) "17th handler waits for a permit" false !finished;
   Eio.Promise.await waiter;
   Alcotest.(check bool) "17th handler runs after a slot frees" true !finished;
-  List.iter (fun flow -> try Eio.Flow.close flow with _ -> ()) stalled
+  List.iter
+    (fun flow ->
+      (* Preserve the exception as data before this test classifies its outcome. *)
+      match
+        try Result.Ok (Eio.Flow.close flow) with exn -> Result.Error exn
+      with
+      | Result.Ok value -> value
+      | Result.Error _ -> ())
+    stalled
 
 let test_saturated_foreign_listener_not_stale
     ~(caps :
@@ -508,8 +550,19 @@ let test_saturated_foreign_listener_not_stale
   in
   Fun.protect
     ~finally:(fun () ->
-      List.iter (fun c -> try Unix.close c with _ -> ()) fillers;
-      try Unix.close foreign with _ -> ())
+      List.iter
+        (fun c ->
+          (* Preserve the exception as data before this test classifies its outcome. *)
+          match try Result.Ok (Unix.close c) with exn -> Result.Error exn with
+          | Result.Ok value -> value
+          | Result.Error _ -> ())
+        fillers;
+      (* Preserve the exception as data before this test classifies its outcome. *)
+      match
+        try Result.Ok (Unix.close foreign) with exn -> Result.Error exn
+      with
+      | Result.Ok value -> value
+      | Result.Error _ -> ())
     (fun () ->
       Eio_main.run @@ fun env ->
       Eio.Switch.run @@ fun sw ->
@@ -565,7 +618,13 @@ let test_oversize_line_malformed_then_status
   start_in ~caps ~sw env ~socket_path (coordinator ~caps dir);
   let flow = Eio.Net.connect ~sw (Eio.Stdenv.net env) (`Unix socket_path) in
   Fun.protect
-    ~finally:(fun () -> try Eio.Flow.close flow with _ -> ())
+    ~finally:(fun () ->
+      (* Preserve the exception as data before this test classifies its outcome. *)
+      match
+        try Result.Ok (Eio.Flow.close flow) with exn -> Result.Error exn
+      with
+      | Result.Ok value -> value
+      | Result.Error _ -> ())
     (fun () ->
       let oversized = String.make 65537 'x' ^ "\n" in
       Eio.Flow.write flow [ Cstruct.of_string oversized ];
@@ -758,8 +817,9 @@ let test_status_while_persistence_waits
   Pie.Fs.blocking (fun () -> Semaphore.Binary.acquire entered);
   Fun.protect
     ~finally:(fun () ->
-      Semaphore.Binary.release released;
-      Eio.Promise.await settled)
+      Eio.Cancel.protect (fun () ->
+          Semaphore.Binary.release released;
+          Eio.Promise.await settled))
     (fun () ->
       let body = send_status ~sw env socket_path |> Yojson.Safe.from_string in
       let open Yojson.Safe.Util in
@@ -896,6 +956,117 @@ let test_state_writer_failure_reporting () =
   | () -> Alcotest.fail "startup failure swallowed"
   | exception Exit -> ()
 
+(* pcapslint-t4bn: cancel actual owning switches, not fabricated exceptions. *)
+let test_coordinator_persist_cancellation ~caps () =
+  with_temp_dir ~caps @@ fun dir ->
+  Eio_main.run @@ fun _env ->
+  let completed = ref false in
+  let saw_cancellation = ref false in
+  let published = ref None in
+  let outcome =
+    try
+      Eio.Switch.run (fun sw ->
+          let entered, signal_entered = Eio.Promise.create () in
+          let released, release = Eio.Promise.create () in
+          let settled, settle = Eio.Promise.create () in
+          let hold = ref false in
+          let persist_io write =
+            if !hold then (
+              Eio.Promise.resolve signal_entered ();
+              Eio.Promise.await released;
+              try Eio.Switch.check sw
+              with Eio.Cancel.Cancelled _ as exn ->
+                saw_cancellation := true;
+                raise exn);
+            write ()
+          in
+          let coordinator =
+            Pie.Recording.Coordinator.create ~caps
+              ~persist_path:(persist_in dir) ~persist_io ()
+          in
+          published := Some coordinator;
+          let attempt =
+            match
+              Pie.Recording.Coordinator.try_start coordinator Ptt_transcribe ()
+            with
+            | Started attempt -> attempt
+            | _ -> Alcotest.fail "capture admission rejected"
+          in
+          hold := true;
+          Eio.Fiber.fork ~sw (fun () ->
+              Fun.protect
+                ~finally:(fun () -> Eio.Promise.resolve settle ())
+                (fun () ->
+                  ignore
+                    (Pie.Recording.Coordinator.set_phase coordinator attempt
+                       Processing);
+                  completed := true));
+          Eio.Promise.await entered;
+          Eio.Switch.fail sw Exit;
+          Eio.Cancel.protect (fun () ->
+              Eio.Promise.resolve release ();
+              Eio.Promise.await settled));
+      Ok ()
+    with exn -> Result.Error exn
+  in
+  (match outcome with
+  | Error Exit -> ()
+  | Error exn -> Alcotest.fail (Printexc.to_string exn)
+  | Ok () -> Alcotest.fail "owning switch cancellation was lost");
+  Alcotest.(check bool)
+    "actual cancellation reached persist_io" true !saw_cancellation;
+  Alcotest.(check bool)
+    "cancelled persistence did not return success" false !completed;
+  let snapshot = Pie.Recording.Coordinator.snapshot (Option.get !published) in
+  Alcotest.(check int)
+    "published phase is not rolled back" 1 snapshot.processing;
+  Alcotest.(check bool)
+    "published microphone release remains committed" false snapshot.active
+
+let test_state_writer_cancellation () =
+  Eio_main.run @@ fun _env ->
+  let entered = Semaphore.Binary.make false in
+  let released = Semaphore.Binary.make false in
+  let saw_cancellation = Atomic.make false in
+  let completed = Atomic.make false in
+  let reported = ref 0 in
+  let outcome =
+    try
+      Eio.Switch.run (fun sw ->
+          let persist =
+            Pie.Recording.State_writer.create ~sw
+              ~on_error:(fun _ -> incr reported)
+              ()
+          in
+          persist (fun () -> ());
+          persist (fun () ->
+              Semaphore.Binary.release entered;
+              Semaphore.Binary.acquire released;
+              (try Eio.Switch.check sw
+               with Eio.Cancel.Cancelled _ as exn ->
+                 Atomic.set saw_cancellation true;
+                 raise exn);
+              Atomic.set completed true);
+          Fun.protect
+            ~finally:(fun () -> Semaphore.Binary.release released)
+            (fun () ->
+              Pie.Fs.blocking (fun () -> Semaphore.Binary.acquire entered);
+              Eio.Switch.fail sw Exit));
+      Ok ()
+    with exn -> Result.Error exn
+  in
+  (match outcome with
+  | Error Exit -> ()
+  | Error exn -> Alcotest.fail (Printexc.to_string exn)
+  | Ok () -> Alcotest.fail "owning switch cancellation was lost");
+  Alcotest.(check bool)
+    "native callback observed actual cancellation" true
+    (Atomic.get saw_cancellation);
+  Alcotest.(check bool)
+    "cancelled native write did not complete" false (Atomic.get completed);
+  Alcotest.(check int)
+    "cancellation is not an ordinary write failure" 0 !reported
+
 let main
     ~(caps :
        < Ox_caps.Cap.env
@@ -961,6 +1132,12 @@ let main
             (test_actions_while_state_writer_waits ~caps);
           Alcotest.test_case "state writer failure reporting" `Quick
             test_state_writer_failure_reporting;
+          Alcotest.test_case
+            "pcapslint-t4bn persist propagates real cancellation" `Quick
+            (test_coordinator_persist_cancellation ~caps);
+          Alcotest.test_case
+            "pcapslint-t4bn state writer does not classify cancellation" `Quick
+            test_state_writer_cancellation;
         ] );
     ]
 

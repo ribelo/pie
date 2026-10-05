@@ -221,8 +221,9 @@ let test_two_callers_cannot_overwrite_newest
       let result = Pie.Stt.Codex_realtime.Codex_auth.access_token ~caps () in
       Eio.Promise.resolve resolve_second result);
   Ox_caps.Cap_unix.rename ~caps tmp path;
-  ignore (Eio.Promise.await first_done);
-  ignore (Eio.Promise.await second_done);
+  (* Await both readers; the assertion is that concurrent reads leave the newest credential file intact. *)
+  let _first_token_result = Eio.Promise.await first_done in
+  let _second_token_result = Eio.Promise.await second_done in
   Alcotest.(check string) "newest file survives" newest (read_file ~caps path)
 
 let test_expired_does_not_contact_auth_endpoint
@@ -278,7 +279,11 @@ let test_cancel_leaves_no_temp_or_fd
   Eio_main.run @@ fun _env ->
   Eio.Switch.run @@ fun sw ->
   Eio.Fiber.fork ~sw (fun () ->
-      ignore (Pie.Stt.Codex_realtime.Codex_auth.access_token ~caps ()));
+      (* This case checks resource retention, not token validity. *)
+      let _token_result =
+        Pie.Stt.Codex_realtime.Codex_auth.access_token ~caps ()
+      in
+      ());
   let temps =
     Array.to_list (Ox_caps.Cap_sys.readdir ~caps dir)
     |> List.filter (fun name -> name <> "auth.json")

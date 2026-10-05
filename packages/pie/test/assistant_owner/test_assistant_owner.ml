@@ -147,8 +147,14 @@ let open_fds_for ~(caps : < Ox_caps.Cap.fs_read ; .. >) path =
     Ox_caps.Cap_sys.readdir ~caps "/proc/self/fd"
     |> Array.to_list
     |> List.filter (fun n ->
-        try Unix.readlink (Filename.concat "/proc/self/fd" n) = path
-        with _ -> false)
+        (* Preserve the exception as data before this test classifies its outcome. *)
+        match
+          try
+            Result.Ok (Unix.readlink (Filename.concat "/proc/self/fd" n) = path)
+          with exn -> Result.Error exn
+        with
+        | Result.Ok value -> value
+        | Result.Error _ -> false)
     |> List.length
   with Sys_error _ -> 0
 
@@ -341,7 +347,8 @@ let test_record_to_delivery_last_good_then_reload
       let stamp () = [ Some (1, 1, Atomic.get gen, 0.) ] in
       let load _attempts =
         if Atomic.get fail_reload then
-          raise (Pie.Config.Stt.Config_error "synthetic reload failure");
+          raise
+            (Pie.Config.Stt.For_test.config_error "synthetic reload failure");
         (base_config ~model:(Atomic.get model) (), stamp ())
       in
       let stt config _mode _bytes =
@@ -574,7 +581,9 @@ let test_cancel_waits_for_blocked_loader
                  ~sw:service_sw ~net ~process_mgr ~mono_clock ~dir
                  ~config_control:{ stamp; load } ~stt ~deliver ~keyboard ~audio
              in
-             ignore (workflow ())
+             (* This scenario checks lifecycle state after cancellation, not the workflow result. *)
+             let _workflow_result = workflow () in
+             ()
            with
           | () -> ()
           | exception Cancel_service -> ()
@@ -640,7 +649,9 @@ let test_service_stop_retains_capture
              Eio.Fiber.fork ~sw:service_sw (fun () ->
                  Eio.Promise.await recorded;
                  raise Cancel_service);
-             ignore (workflow ())
+             (* This scenario checks lifecycle state after cancellation, not the workflow result. *)
+             let _workflow_result = workflow () in
+             ()
            with
           | () -> ()
           | exception Cancel_service -> ()
@@ -792,12 +803,20 @@ let listed_stages ~(caps : < Ox_caps.Cap.fs_read ; .. >) dir =
   with Sys_error _ -> []
 
 let stage_body ~(caps : < Ox_caps.Cap.fs_read ; .. >) dir name =
-  try
-    let ic = Ox_caps.Cap_stdlib.open_in_bin ~caps (Filename.concat dir name) in
-    Fun.protect
-      ~finally:(fun () -> close_in_noerr ic)
-      (fun () -> really_input_string ic (in_channel_length ic))
-  with _ -> ""
+  (* Preserve the exception as data before this test classifies its outcome. *)
+  match
+    try
+      Result.Ok
+        (let ic =
+           Ox_caps.Cap_stdlib.open_in_bin ~caps (Filename.concat dir name)
+         in
+         Fun.protect
+           ~finally:(fun () -> close_in_noerr ic)
+           (fun () -> really_input_string ic (in_channel_length ic)))
+    with exn -> Result.Error exn
+  with
+  | Result.Ok value -> value
+  | Result.Error _ -> ""
 
 let stage_report ~(caps : < Ox_caps.Cap.fs_read ; .. >) dir =
   listed_stages ~caps dir
@@ -807,11 +826,15 @@ let stage_report ~(caps : < Ox_caps.Cap.fs_read ; .. >) dir =
   |> String.concat ","
 
 let json_event_type payload =
-  match Yojson.Safe.from_string payload with
-  | `Assoc fields -> (
+  (* Preserve the exception as data before this test classifies its outcome. *)
+  match
+    try Result.Ok (Yojson.Safe.from_string payload)
+    with exn -> Result.Error exn
+  with
+  | Result.Ok (`Assoc fields) -> (
       match List.assoc_opt "type" fields with Some (`String t) -> t | _ -> "")
-  | _ -> ""
-  | exception _ -> ""
+  | Result.Ok _ -> ""
+  | Result.Error _ -> ""
 
 type ws_frame = Text of string | Close | Other
 
@@ -1365,7 +1388,13 @@ let test_fast_tap_settles_then_next_press_delivers
           ~dir ~config_control:{ stamp; load } ~stt ~deliver ~keyboard ~audio
       in
       let status key =
-        try status_bool ~net ~sw socket_path key with _ -> false
+        (* Preserve the exception as data before this test classifies its outcome. *)
+        match
+          try Result.Ok (status_bool ~net ~sw socket_path key)
+          with exn -> Result.Error exn
+        with
+        | Result.Ok value -> value
+        | Result.Error _ -> false
       in
       with_workflow_background ~sw ~clock workflow (fun () ->
           wait_until ~clock (fun () -> status "enabled");
@@ -1417,7 +1446,13 @@ let test_pause_resume_fresh_attempt_delivers
           ~deliver ~keyboard ~audio
       in
       let status key =
-        try status_bool ~net ~sw socket_path key with _ -> false
+        (* Preserve the exception as data before this test classifies its outcome. *)
+        match
+          try Result.Ok (status_bool ~net ~sw socket_path key)
+          with exn -> Result.Error exn
+        with
+        | Result.Ok value -> value
+        | Result.Error _ -> false
       in
       with_workflow_background ~sw ~clock workflow (fun () ->
           wait_until ~clock (fun () -> status "enabled");
@@ -2555,16 +2590,27 @@ let test_successive_failures_keep_latest_only
           wait_until ~clock (fun () ->
               peek_kind ~caps retry_dir = Some "text-uncertain");
           wait_until ~clock (fun () ->
-              try
-                not
-                  (status_bool ~net:(Eio.Stdenv.net env) ~sw
-                     (Filename.concat dir "control.sock")
-                     "active")
-              with _ -> false);
+              (* Preserve the exception as data before this test classifies its outcome. *)
+              match
+                try
+                  Result.Ok
+                    (not
+                       (status_bool ~net:(Eio.Stdenv.net env) ~sw
+                          (Filename.concat dir "control.sock")
+                          "active"))
+                with exn -> Result.Error exn
+              with
+              | Result.Ok value -> value
+              | Result.Error _ -> false);
           cycle ();
           wait_until ~clock (fun () ->
-              try load_text_payload ~caps retry_dir = "second-text"
-              with _ -> false);
+              (* Preserve the exception as data before this test classifies its outcome. *)
+              match
+                try Result.Ok (load_text_payload ~caps retry_dir = "second-text")
+                with exn -> Result.Error exn
+              with
+              | Result.Ok value -> value
+              | Result.Error _ -> false);
           Alcotest.(check string)
             "latest text only" "second-text"
             (load_text_payload ~caps retry_dir)))
@@ -2960,8 +3006,13 @@ let test_owned_cancel_cleanup_defect_preserves_older
         (fun () -> Eio.Flow.copy_string "{\"method\":\"Pause\"}\n" pause_sock);
       Eio.Promise.resolve resolve_proceed ();
       wait_until ~clock (fun () ->
-          try load_text_payload ~caps retry_dir = "older-candidate"
-          with _ -> false);
+          (* Preserve the exception as data before this test classifies its outcome. *)
+          match
+            try Result.Ok (load_text_payload ~caps retry_dir = "older-candidate")
+            with exn -> Result.Error exn
+          with
+          | Result.Ok value -> value
+          | Result.Error _ -> false);
       Alcotest.(check string)
         "older candidate unchanged" "older-candidate"
         (load_text_payload ~caps retry_dir);
@@ -3116,7 +3167,8 @@ let test_admission_held_until_provider_finalizer
             match wrapped.Pie.Ptt_loop.finish with
             | Pie.Ptt_loop.Buffered f ->
                 Fun.protect
-                  ~finally:(fun () -> Eio.Promise.await held)
+                  ~finally:(fun () ->
+                    Eio.Cancel.protect (fun () -> Eio.Promise.await held))
                   (fun () ->
                     f { Pie.Ptt_loop.duration_ms = 10; pcm_bytes = loud_pcm })
             | Pie.Ptt_loop.Streaming _ ->

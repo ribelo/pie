@@ -50,7 +50,22 @@ val create :
     executes it synchronously by default. Eio callers can use [Fs.blocking], or
     [State_writer.create] to coalesce the current-state projection without
     making mutations wait for disk. Adapters must serialize writes, complete the
-    startup write before returning, and report subsequent failures. *)
+    startup write before returning, and report subsequent failures.
+
+    Suspension: may suspend in the default protected [Fs.blocking] write; custom
+    persistence behavior depends on [persist_io]. Cancellation: propagates
+    cancellation and startup write failures rather than returning an unusable
+    coordinator; callback and native dependency behavior depends on
+    [persist_io], [Ox_caps], [Unix] and [Stdlib]. Finalizers: the initial write
+    closes its output channel with [Fun.protect]; default blocking-pool teardown
+    is delegated to [Fs.blocking] and [Ox_blocking]; callback-owned resources
+    remain [persist_io] responsibility. Locking: construction allocates a mutex
+    but does not acquire it; no coordinator mutex is held around [persist_io].
+    Cancellation safety: unsafe because progress is lost if [persist_io] has
+    partially changed the state file or other external state; startup does not
+    roll back callback effects.
+
+    Initial persistence-path setup can raise [Unix.Unix_error]. *)
 
 val snapshot : t -> snapshot
 

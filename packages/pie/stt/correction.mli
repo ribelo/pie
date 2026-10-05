@@ -101,7 +101,19 @@ val run :
     replies are rejected, never pasted verbatim. Reasoning is excluded when a
     reasoning effort is configured. [on_response] receives the private complete
     body before classification, including non-2xx bodies. The transport does not
-    retry inside this single exchange. *)
+    retry inside this single exchange.
+
+    Suspension: may suspend in HTTP requests and caller [on_response]; request
+    behavior depends on [Ox_http.Client] and [Process]. Cancellation: propagates
+    external [Eio.Cancel.Cancelled]; supported HTTP failures become correction
+    failures; dependency and callback behavior depends on [Ox_http.Client] and
+    [on_response]. Finalizers: HTTP cleanup is delegated to [Ox_http.Client] and
+    its owning switch; no additional Pie release hook is registered;
+    [run_with_retry] records the first failure before starting its retry.
+    Locking: no Pie mutex is held around HTTP or [on_response]; dependency
+    locking is outside Pie. Cancellation safety: unsafe because progress is lost
+    if a provider request or [on_response] effects already occurred; retry can
+    repeat them. *)
 
 type upload = Wav of bytes | Mp3 of { mp3 : bytes; wav : bytes }
 
@@ -145,4 +157,16 @@ val run_with_retry :
     Each exchange has its own [timeout]. [on_response ~first:true] retains the
     failed first body before retry; [~first:false] retains the final body. Never
     log these bodies. The retry record contains only fixed, sanitized
-    diagnostics, including [stt:ok] on successful recovery. *)
+    diagnostics, including [stt:ok] on successful recovery.
+
+    Suspension: may suspend in HTTP requests and caller [on_response]; request
+    behavior depends on [Ox_http.Client] and [Process]. Cancellation: propagates
+    external [Eio.Cancel.Cancelled]; supported HTTP failures become correction
+    failures; dependency and callback behavior depends on [Ox_http.Client] and
+    [on_response]. Finalizers: HTTP cleanup is delegated to [Ox_http.Client] and
+    its owning switch; no additional Pie release hook is registered;
+    [run_with_retry] records the first failure before starting its retry.
+    Locking: no Pie mutex is held around HTTP or [on_response]; dependency
+    locking is outside Pie. Cancellation safety: unsafe because progress is lost
+    if a provider request or [on_response] effects already occurred; retry can
+    repeat them. *)

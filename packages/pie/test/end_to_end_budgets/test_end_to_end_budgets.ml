@@ -414,10 +414,17 @@ let test_100_settled_attempts
                           wait_until ~clock (fun () ->
                               Sys.file_exists socket_path);
                           wait_until ~clock (fun () ->
-                              try
-                                ignore (rpc ~net ~sw socket_path status_json);
-                                true
-                              with _ -> false);
+                              (* Preserve the exception as data before this test classifies its outcome. *)
+                              match
+                                try
+                                  Result.Ok
+                                    (ignore
+                                       (rpc ~net ~sw socket_path status_json);
+                                     true)
+                                with exn -> Result.Error exn
+                              with
+                              | Result.Ok value -> value
+                              | Result.Error _ -> false);
                           let baseline_fd = fd_count ~caps () in
                           let settle label =
                             assert_settled ~caps ~label ~retry_dir ~baseline_fd
@@ -671,10 +678,16 @@ let run_e2e
                with_workflow_background ~sw workflow (fun () ->
                    wait_until ~clock (fun () -> Sys.file_exists socket_path);
                    wait_until ~clock (fun () ->
-                       try
-                         ignore (rpc ~net ~sw socket_path status_json);
-                         true
-                       with _ -> false);
+                       (* Preserve the exception as data before this test classifies its outcome. *)
+                       match
+                         try
+                           Result.Ok
+                             (ignore (rpc ~net ~sw socket_path status_json);
+                              true)
+                         with exn -> Result.Error exn
+                       with
+                       | Result.Ok value -> value
+                       | Result.Error _ -> false);
                    assertions ~clock ~net ~sw ~socket_path ~retry_dir);
                on_stopped ();
                Ok ())))
