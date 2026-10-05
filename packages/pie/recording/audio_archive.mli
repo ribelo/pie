@@ -157,15 +157,19 @@ val load :
 
     Suspension: may suspend while protected [Fs.blocking] reads native audio and
     [Eio.Process] decodes it; execution depends on [Ox_blocking], [Eio.Process]
-    and [Unix]. Cancellation: propagates external [Eio.Cancel.Cancelled] and
-    [Eio.Exn.Multiple]; native blocking work is protected through physical
-    completion; dependency behavior depends on [Ox_blocking] and [Eio.Process].
-    Finalizers: native input channels are closed by [Fun.protect]; decoding
-    subprocess cleanup is delegated to [Eio.Process] and the blocking pool to
-    [Fs.blocking]. Locking: no Pie mutex is acquired; dependency locking is
-    outside Pie. Cancellation safety: safe to re-run the read-only load; it does
-    not publish archive data, and subprocess cleanup depends on [Eio.Process].
-*)
+    and [Unix]; execution of the [Ox_caps.Cap_stdlib.In_channel.with_open_bin]
+    native-read callback and the [String.iteri] WAV-header callback is delegated
+    to those helpers. Cancellation: propagates external [Eio.Cancel.Cancelled]
+    and [Eio.Exn.Multiple]; native blocking work is protected through physical
+    completion; dependency behavior depends on [Ox_blocking] and [Eio.Process];
+    cancellation behavior of the [Ox_caps.Cap_stdlib.In_channel.with_open_bin]
+    native-read callback and the [String.iteri] WAV-header callback is outside
+    Pie's checked boundary. Finalizers: native input channels are closed by
+    [Fun.protect]; decoding subprocess cleanup is delegated to [Eio.Process] and
+    the blocking pool to [Fs.blocking]. Locking: no Pie mutex is acquired;
+    dependency locking is outside Pie. Cancellation safety: safe to re-run the
+    read-only load; it does not publish archive data, and subprocess cleanup
+    depends on [Eio.Process]. *)
 
 val prune :
   caps:< Ox_caps.Cap.fs_read ; Ox_caps.Cap.fs_write ; .. > ->

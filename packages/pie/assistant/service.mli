@@ -204,10 +204,13 @@ val production_stt :
 (** Suspension: may suspend in focus lookup, protected response/archive writes,
     encoding and STT HTTP/WebSocket requests; behavior depends on [Eio],
     [Ox_http], [Ox_ai_realtime], [Ox_blocking], [Ox_caps], [Unix], [Stdlib] and
-    [Ox_observability]. Cancellation: propagates external
-    [Eio.Cancel.Cancelled]; supported provider failures become PTT errors;
-    dependency behavior depends on [Eio], [Ox_http], [Ox_ai_realtime] and
-    [Ox_blocking]. Finalizers: provider/session resources retain their supplied
+    [Ox_observability]; the indirect [Dictation.recognize] one-pass invocation
+    delegates to the pipeline [one_pass] callback. Cancellation: propagates
+    external [Eio.Cancel.Cancelled]; supported provider failures become PTT
+    errors; dependency behavior depends on [Eio], [Ox_http], [Ox_ai_realtime]
+    and [Ox_blocking]; cancellation behavior of the indirect
+    [Dictation.recognize] one-pass invocation depends on the pipeline [one_pass]
+    callback. Finalizers: provider/session resources retain their supplied
     switch/session ownership; subprocess cleanup is delegated to [Eio.Process],
     and native-pool cleanup to [Fs.blocking] and [Ox_blocking]. Locking: this
     dispatch wrapper acquires no Pie mutex; provider/session locking is
