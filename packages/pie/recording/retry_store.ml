@@ -56,18 +56,29 @@ module Active = struct
   let inject_index_open = ref false
   let inject_fsync = ref false
   let reused_fd : Unix.file_descr option ref = ref None
+  let close_fault_scope : Eio.Switch.t option ref = ref None
 
   let unix_close ~caps fd =
     if !inject_close then (
       Unix.close fd;
       (match !reused_fd with
       | Some _ -> ()
-      | None ->
-          reused_fd :=
-            Some
-              (Ox_caps.Cap_unix.openfile ~caps "/dev/null"
-                 [ Unix.O_RDONLY; Unix.O_CLOEXEC ]
-                 0));
+      | None -> (
+          let sw = Option.get !close_fault_scope in
+          let replacement =
+            Ox_caps.Cap_unix.openfile ~caps "/dev/null"
+              [ Unix.O_RDONLY; Unix.O_CLOEXEC ]
+              0
+          in
+          try
+            Eio.Switch.on_release sw (fun () ->
+                if !reused_fd = Some replacement then (
+                  reused_fd := None;
+                  Unix.close replacement));
+            reused_fd := Some replacement
+          with exn ->
+            Unix.close replacement;
+            raise exn));
       raise (Unix.Unix_error (Unix.EIO, "close", "")))
     else Unix.close fd
 
@@ -79,12 +90,6 @@ module Active = struct
     if !inject_fchmod then raise (Unix.Unix_error (Unix.EPERM, "fchmod", ""));
     Unix.fchmod fd mode
 
-  let unix_openfile ~caps path flags perm =
-    if !inject_emfile then raise (Unix.Unix_error (Unix.EMFILE, "open", path));
-    if !inject_index_open && Filename.basename path = "index.json" then
-      raise (Unix.Unix_error (Unix.EMFILE, "open", path));
-    Ox_caps.Cap_unix.openfile ~caps path flags perm
-
   let unix_fsync fd =
     if !inject_fsync then raise (Unix.Unix_error (Unix.EIO, "fsync", ""));
     Unix.fsync fd
@@ -93,6 +98,17 @@ module Active = struct
   exception Result_error of [ `Retry_store of string ]
 
   let combine primary cleanup = Multiple (primary, cleanup)
+
+  let unix_openfile ~caps path flags perm check =
+    if !inject_emfile then raise (Unix.Unix_error (Unix.EMFILE, "open", path));
+    if !inject_index_open && Filename.basename path = "index.json" then
+      raise (Unix.Unix_error (Unix.EMFILE, "open", path));
+    let fd = Ox_caps.Cap_unix.openfile ~caps path flags perm in
+    try check fd
+    with exn -> (
+      match unix_close ~caps fd with
+      | () -> raise exn
+      | exception close_exn -> raise (combine exn close_exn))
 
   let known_unix = function
     | Unix.Unix_error (e, _, _) -> err (Unix.error_message e)
@@ -293,20 +309,11 @@ module Active = struct
         || st.st_perm land 0o777 land 0o077 <> 0
         || st.st_nlink <> 1
       then raise (Unix.Unix_error (Unix.EPERM, "lock_identity", path));
-      let fd = unix_openfile ~caps path [ Unix.O_RDWR; Unix.O_CLOEXEC ] 0o600 in
-      let owned = ref true in
-      try
-        let st2 = own fd in
-        if st.st_dev <> st2.st_dev || st.st_ino <> st2.st_ino then (
-          close_owned ~caps owned fd;
-          raise (Unix.Unix_error (Unix.EPERM, "lock_identity", path)))
-        else (
-          owned := false;
+      unix_openfile ~caps path [ Unix.O_RDWR; Unix.O_CLOEXEC ] 0o600 (fun fd ->
+          let st2 = own fd in
+          if st.st_dev <> st2.st_dev || st.st_ino <> st2.st_ino then
+            raise (Unix.Unix_error (Unix.EPERM, "lock_identity", path));
           fd)
-      with exn -> (
-        match close_owned ~caps owned fd with
-        | () -> raise exn
-        | exception close_exn -> raise (combine exn close_exn))
     in
     try
       let fd =
@@ -314,21 +321,12 @@ module Active = struct
         | st -> open_existing st
         | exception Unix.Unix_error (Unix.ENOENT, _, _) -> (
             try
-              let fd =
-                unix_openfile ~caps path
-                  [ Unix.O_RDWR; Unix.O_CREAT; Unix.O_EXCL; Unix.O_CLOEXEC ]
-                  0o600
-              in
-              let owned = ref true in
-              try
-                unix_fchmod fd 0o600;
-                ignore (own fd);
-                owned := false;
-                fd
-              with exn -> (
-                match close_owned ~caps owned fd with
-                | () -> raise exn
-                | exception close_exn -> raise (combine exn close_exn))
+              unix_openfile ~caps path
+                [ Unix.O_RDWR; Unix.O_CREAT; Unix.O_EXCL; Unix.O_CLOEXEC ] 0o600
+                (fun fd ->
+                  unix_fchmod fd 0o600;
+                  ignore (own fd);
+                  fd)
             with Unix.Unix_error (Unix.EEXIST, _, _) ->
               open_existing (Unix.lstat path))
       in
@@ -385,20 +383,11 @@ module Active = struct
         | Error primary, Some cleanup -> raise (combine primary cleanup))
 
   let open_excl_0600 ~caps path =
-    let fd =
-      unix_openfile ~caps path
-        [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL; Unix.O_CLOEXEC ]
-        0o600
-    in
-    let owned = ref true in
-    try
-      unix_fchmod fd 0o600;
-      owned := false;
-      fd
-    with exn -> (
-      match close_owned ~caps owned fd with
-      | () -> raise exn
-      | exception close_exn -> raise (combine exn close_exn))
+    unix_openfile ~caps path
+      [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL; Unix.O_CLOEXEC ] 0o600
+      (fun fd ->
+        unix_fchmod fd 0o600;
+        fd)
 
   let rec collision_retry n f =
     if n <= 0 then err "could not allocate exclusive recovery slot"
@@ -596,14 +585,13 @@ module Active = struct
     | st -> (
         match
           unix_openfile ~caps path
-            [ Unix.O_RDONLY; Unix.O_NONBLOCK; Unix.O_CLOEXEC ]
-            0
+            [ Unix.O_RDONLY; Unix.O_NONBLOCK; Unix.O_CLOEXEC ] 0 (fun fd ->
+              (fd, Unix.fstat fd))
         with
         | exception Unix.Unix_error (e, _, _) -> err (Unix.error_message e)
-        | fd -> (
+        | fd, st2 -> (
             let owned = ref true in
             try
-              let st2 = Unix.fstat fd in
               if st.st_dev <> st2.st_dev || st.st_ino <> st2.st_ino then (
                 close_owned ~caps owned fd;
                 Ok None)
@@ -796,14 +784,13 @@ module Active = struct
     | st when not (owned_reg_0600 st) -> Ok Excluded
     | st when st.st_size <= 0 || st.st_size > max_bytes -> Ok Excluded
     | st -> (
-        let fd =
+        let fd, st2 =
           unix_openfile ~caps path
-            [ Unix.O_RDONLY; Unix.O_NONBLOCK; Unix.O_CLOEXEC ]
-            0
+            [ Unix.O_RDONLY; Unix.O_NONBLOCK; Unix.O_CLOEXEC ] 0 (fun fd ->
+              (fd, Unix.fstat fd))
         in
         let owned = ref true in
         try
-          let st2 = Unix.fstat fd in
           if st.st_dev <> st2.st_dev || st.st_ino <> st2.st_ino then (
             close_owned ~caps owned fd;
             Ok Excluded)
@@ -1019,9 +1006,17 @@ module Active = struct
 
     let with_fchmod_fail f = with_flag inject_fchmod f
 
-    let with_close_fail f =
-      reused_fd := None;
-      with_flag inject_close f
+    let with_close_scope ~sw f =
+      let previous = !close_fault_scope in
+      close_fault_scope := Some sw;
+      Fun.protect ~finally:(fun () -> close_fault_scope := previous) f
+
+    let with_close_fail ~sw f =
+      with_close_scope ~sw (fun () ->
+          let previous_fd = !reused_fd in
+          reused_fd := None;
+          Option.iter Unix.close previous_fd;
+          with_flag inject_close f)
 
     let take_reused_fd () =
       let fd = !reused_fd in
@@ -1033,18 +1028,19 @@ module Active = struct
     let with_index_open_fail f = with_flag inject_index_open f
     let with_fsync_fail f = with_flag inject_fsync f
 
-    let with_close_and_unlink_fail f =
-      let pc = !inject_close and pu = !inject_unlink in
-      inject_close := true;
-      inject_unlink := true;
-      match f () with
-      | v ->
-          inject_close := pc;
-          inject_unlink := pu;
-          v
-      | exception exn ->
-          inject_close := pc;
-          inject_unlink := pu;
-          raise exn
+    let with_close_and_unlink_fail ~sw f =
+      with_close_scope ~sw (fun () ->
+          let pc = !inject_close and pu = !inject_unlink in
+          inject_close := true;
+          inject_unlink := true;
+          match f () with
+          | v ->
+              inject_close := pc;
+              inject_unlink := pu;
+              v
+          | exception exn ->
+              inject_close := pc;
+              inject_unlink := pu;
+              raise exn)
   end
 end

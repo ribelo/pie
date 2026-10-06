@@ -2024,8 +2024,10 @@ let test_buffered_clip_cancellation_settles_after_offer
     let exit =
       Ox.Scope.run (fun _ ->
           let* press =
-            Pie_test_runtime.Service.on_press ~caps ~sw
-              ~net:(Eio.Stdenv.net env) ~clock ~logger:(test_logger env)
+            Pie_test_runtime.Service.on_press
+              ~mono_clock:(Eio.Stdenv.mono_clock env)
+              ~caps ~sw ~net:(Eio.Stdenv.net env) ~clock
+              ~logger:(test_logger env)
               ~stt:(fun _ _ _ -> Ok "synthetic transcript")
               ~deliver:(fun _ _ _ _ -> Ok Pie.History.Pasted)
               ~coordinator ~retry_dir:dir
@@ -2098,8 +2100,10 @@ let test_buffered_clip_defect_settles_after_offer
   let pcm_bytes = Bytes.of_string "captured-audio" in
   let operation () =
     let* press =
-      Pie_test_runtime.Service.on_press ~caps ~sw ~net:(Eio.Stdenv.net env)
-        ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env)
+      Pie_test_runtime.Service.on_press
+        ~mono_clock:(Eio.Stdenv.mono_clock env)
+        ~caps ~sw ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env)
+        ~logger:(test_logger env)
         ~stt:(fun _ _ _ -> Ok "synthetic transcript")
         ~deliver:(fun _ _ _ _ -> Ok Pie.History.Pasted)
         ~coordinator ~retry_dir:dir
@@ -2159,8 +2163,10 @@ let test_on_press_construction_does_not_admit
     "idle before construction" false
     (Recording.Coordinator.snapshot coordinator).Recording.Coordinator.active;
   let blueprint () =
-    Pie_test_runtime.Service.on_press ~caps ~sw ~net:(Eio.Stdenv.net env)
-      ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env)
+    Pie_test_runtime.Service.on_press
+      ~mono_clock:(Eio.Stdenv.mono_clock env)
+      ~caps ~sw ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env)
+      ~logger:(test_logger env)
       ~stt:(fun _ _ _ -> Ok "synthetic transcript")
       ~deliver:(fun _ _ _ _ -> Ok Pie.History.Pasted)
       ~coordinator
@@ -2188,8 +2194,10 @@ let test_on_press_execution_admits
   let persist_path = Filename.concat dir "recording-state.json" in
   let coordinator = Recording.Coordinator.create ~caps ~persist_path () in
   let blueprint () =
-    Pie_test_runtime.Service.on_press ~caps ~sw ~net:(Eio.Stdenv.net env)
-      ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env)
+    Pie_test_runtime.Service.on_press
+      ~mono_clock:(Eio.Stdenv.mono_clock env)
+      ~caps ~sw ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env)
+      ~logger:(test_logger env)
       ~stt:(fun _ _ _ -> Ok "synthetic transcript")
       ~deliver:(fun _ _ _ _ -> Ok Pie.History.Pasted)
       ~coordinator ~retry_dir:dir
@@ -2229,8 +2237,9 @@ let test_on_press_busy_and_disabled_at_execution
   let net = Eio.Stdenv.net env in
   let clock = Eio.Stdenv.clock env in
   let press () =
-    Pie_test_runtime.Service.on_press ~caps ~sw ~net ~clock
-      ~logger:(test_logger env)
+    Pie_test_runtime.Service.on_press
+      ~mono_clock:(Eio.Stdenv.mono_clock env)
+      ~caps ~sw ~net ~clock ~logger:(test_logger env)
       ~stt:(fun _ _ _ -> Ok "synthetic transcript")
       ~deliver:(fun _ _ _ _ -> Ok Pie.History.Pasted)
       ~coordinator ~retry_dir:dir
@@ -2302,8 +2311,10 @@ let test_on_press_constructor_failure_releases_without_clearing_other_attempt
     { (openrouter_clip_config ()) with transcription_model = "openrouter/" }
   in
   let blueprint () =
-    Pie_test_runtime.Service.on_press ~caps ~sw ~net:(Eio.Stdenv.net env)
-      ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env)
+    Pie_test_runtime.Service.on_press
+      ~mono_clock:(Eio.Stdenv.mono_clock env)
+      ~caps ~sw ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env)
+      ~logger:(test_logger env)
       ~stt:(fun _ _ _ -> Ok "synthetic transcript")
       ~deliver:(fun _ _ _ _ -> Ok Pie.History.Pasted)
       ~coordinator ~retry_dir:dir ~config "transcribe"
@@ -3287,7 +3298,8 @@ printf '%s\n' '{"id":1,"title":"t","app_id":"app"}'
                  workspace_id = None;
                })
           ~read_selection:(fun () -> Some "first second")
-          ~clock:(Eio.Stdenv.clock env) ~text_entry_rules:paste_rules
+          ~mono_clock:(Eio.Stdenv.mono_clock env)
+          ~text_entry_rules:paste_rules
           ~process_mgr:(Eio.Stdenv.process_mgr env)
           "first\nsecond"
       in
@@ -3400,7 +3412,8 @@ printf '%s\n' '{"id":1,"title":"t","app_id":"app"}'
                  pid = None;
                  workspace_id = None;
                })
-          ~clock:(Eio.Stdenv.clock env) ~text_entry_rules:paste_rules
+          ~mono_clock:(Eio.Stdenv.mono_clock env)
+          ~text_entry_rules:paste_rules
           ~process_mgr:(Eio.Stdenv.process_mgr env)
           "first\nsecond"
       in

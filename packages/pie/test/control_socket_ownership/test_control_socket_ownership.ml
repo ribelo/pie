@@ -144,8 +144,9 @@ let test_stale_socket_recovered
   let fd =
     Ox_caps.Cap_unix.socket ~caps ~cloexec:true Unix.PF_UNIX Unix.SOCK_STREAM 0
   in
-  Unix.bind fd (Unix.ADDR_UNIX socket_path);
-  Unix.close fd;
+  Fun.protect
+    ~finally:(fun () -> Unix.close fd)
+    (fun () -> Unix.bind fd (Unix.ADDR_UNIX socket_path));
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   start_in ~caps ~sw env ~socket_path (coordinator ~caps dir);
@@ -310,7 +311,8 @@ let test_never_newline_expires
       | Result.Error _ -> ())
     (fun () ->
       Eio.Flow.write flow [ Cstruct.of_string "no-newline" ];
-      let started = Ox_caps.Cap_unix.gettimeofday ~caps () in
+      let mono_clock = Eio.Stdenv.mono_clock env in
+      let started = Eio.Time.Mono.now mono_clock in
       let reader = Eio.Buf_read.of_flow ~max_size:65536 flow in
       (* Preserve the exception as data before this test classifies its outcome. *)
       (match
@@ -319,7 +321,11 @@ let test_never_newline_expires
       | Result.Ok _ -> ()
       | Result.Error End_of_file -> ()
       | Result.Error _ -> ());
-      let elapsed = Ox_caps.Cap_unix.gettimeofday ~caps () -. started in
+      let elapsed =
+        Mtime.Span.to_float_ns
+          (Mtime.span started (Eio.Time.Mono.now mono_clock))
+        /. 1e9
+      in
       Alcotest.(check bool)
         "expired within whole-peer budget" true (elapsed < 0.8))
 
@@ -530,56 +536,39 @@ let test_saturated_foreign_listener_not_stale
        ; .. >) () =
   with_temp_dir ~caps @@ fun dir ->
   let socket_path = socket_in dir in
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
   let foreign =
     Ox_caps.Cap_unix.socket ~caps ~cloexec:true Unix.PF_UNIX Unix.SOCK_STREAM 0
   in
+  Eio.Switch.on_release sw (fun () -> Unix.close foreign);
   Unix.bind foreign (Unix.ADDR_UNIX socket_path);
   Unix.listen foreign 1;
-  let fillers =
-    List.init 8 (fun _ ->
-        let c =
-          Ox_caps.Cap_unix.socket ~caps ~cloexec:true Unix.PF_UNIX
-            Unix.SOCK_STREAM 0
-        in
-        Unix.set_nonblock c;
-        (try Unix.connect c (Unix.ADDR_UNIX socket_path) with
-        | Unix.Unix_error ((Unix.EINPROGRESS | Unix.EAGAIN), _, _) -> ()
-        | Unix.Unix_error (Unix.ECONNREFUSED, _, _) -> ()
-        | Unix.Unix_error _ -> ());
-        c)
-  in
-  Fun.protect
-    ~finally:(fun () ->
-      List.iter
-        (fun c ->
-          (* Preserve the exception as data before this test classifies its outcome. *)
-          match try Result.Ok (Unix.close c) with exn -> Result.Error exn with
-          | Result.Ok value -> value
-          | Result.Error _ -> ())
-        fillers;
-      (* Preserve the exception as data before this test classifies its outcome. *)
-      match
-        try Result.Ok (Unix.close foreign) with exn -> Result.Error exn
-      with
-      | Result.Ok value -> value
-      | Result.Error _ -> ())
-    (fun () ->
-      Eio_main.run @@ fun env ->
-      Eio.Switch.run @@ fun sw ->
-      (match start_in ~caps ~sw env ~socket_path (coordinator ~caps dir) with
-      | () -> Alcotest.fail "saturated foreign listener treated as stale"
-      | exception Start_error reason ->
-          let category = category reason in
-          Alcotest.(check bool)
-            "fail closed" true
-            (category = S.err_stale_probe_failed
-            || category = S.err_active_listener));
+  for _ = 1 to 8 do
+    let c =
+      Ox_caps.Cap_unix.socket ~caps ~cloexec:true Unix.PF_UNIX Unix.SOCK_STREAM
+        0
+    in
+    Eio.Switch.on_release sw (fun () -> Unix.close c);
+    Unix.set_nonblock c;
+    try Unix.connect c (Unix.ADDR_UNIX socket_path) with
+    | Unix.Unix_error ((Unix.EINPROGRESS | Unix.EAGAIN), _, _) -> ()
+    | Unix.Unix_error (Unix.ECONNREFUSED, _, _) -> ()
+    | Unix.Unix_error _ -> ()
+  done;
+  (match start_in ~caps ~sw env ~socket_path (coordinator ~caps dir) with
+  | () -> Alcotest.fail "saturated foreign listener treated as stale"
+  | exception Start_error reason ->
+      let category = category reason in
       Alcotest.(check bool)
-        "foreign socket not unlinked" true
-        (Sys.file_exists socket_path);
-      match Unix.lstat socket_path with
-      | { st_kind = Unix.S_SOCK; _ } -> ()
-      | _ -> Alcotest.fail "foreign listener replaced")
+        "fail closed" true
+        (category = S.err_stale_probe_failed || category = S.err_active_listener));
+  Alcotest.(check bool)
+    "foreign socket not unlinked" true
+    (Sys.file_exists socket_path);
+  match Unix.lstat socket_path with
+  | { st_kind = Unix.S_SOCK; _ } -> ()
+  | _ -> Alcotest.fail "foreign listener replaced"
 
 let test_equivalent_path_spellings
     ~(caps :
@@ -710,15 +699,19 @@ let test_cancel_before_peer_deadline
   with_temp_dir ~caps @@ fun dir ->
   let socket_path = socket_in dir in
   let budget = { S.peer_timeout_s = 5.0 } in
-  let started = Ox_caps.Cap_unix.gettimeofday ~caps () in
   Eio_main.run @@ fun env ->
+  let mono_clock = Eio.Stdenv.mono_clock env in
+  let started = Eio.Time.Mono.now mono_clock in
   (try
      Eio.Switch.run @@ fun sw ->
      start_in ~caps ~sw env ~socket_path ~budget (coordinator ~caps dir);
      ignore (connect_partial ~sw env socket_path);
      raise Exit
    with Exit -> ());
-  let elapsed = Ox_caps.Cap_unix.gettimeofday ~caps () -. started in
+  let elapsed =
+    Mtime.Span.to_float_ns (Mtime.span started (Eio.Time.Mono.now mono_clock))
+    /. 1e9
+  in
   Alcotest.(check bool) "settled well before peer budget" true (elapsed < 1.0);
   Alcotest.(check bool)
     "owned socket gone after cancel" false

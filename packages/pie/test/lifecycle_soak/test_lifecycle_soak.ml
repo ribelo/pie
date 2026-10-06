@@ -265,7 +265,7 @@ let drain_until_eof ~clock flow =
     | exception End_of_file -> ()
     | exception Eio.Io _ -> ()
   in
-  Eio.Time.with_timeout_exn clock 2.0 loop
+  Eio.Time.Timeout.run_exn (Eio.Time.Timeout.seconds clock 2.0) loop
 
 let upgrade flow =
   let head = read_http_head flow in
@@ -327,8 +327,8 @@ let session_update =
 
 let run_buffered ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) ~sw ~net
     ~clock ?ca_file ~url () =
-  Pie.Stt.Codex_realtime.run_realtime_session ~caps ~sw ~net ~clock ?ca_file
-    ~url ~access_token:"synthetic-soak-token"
+  Pie.Stt.Codex_realtime.run_realtime_session ~caps ~sw ~net ~mono_clock:clock
+    ?ca_file ~url ~access_token:"synthetic-soak-token"
     ~mode:Pie.Stt.Codex_realtime.Transcription ~session_update
     ~input_sample_rate:16000 pcm
 
@@ -342,8 +342,8 @@ let run_streaming ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) ~sw ~net
       Option.iter (fun resolve -> resolve ()) on_audio_pull;
       Ok (Some pcm))
   in
-  Pie.Stt.Codex_realtime.run_realtime_stream_session ~caps ~sw ~net ~clock
-    ?ca_file ~url ~access_token:"synthetic-soak-token"
+  Pie.Stt.Codex_realtime.run_realtime_stream_session ~caps ~sw ~net
+    ~mono_clock:clock ?ca_file ~url ~access_token:"synthetic-soak-token"
     ~mode:Pie.Stt.Codex_realtime.Transcription ~session_update
     ~input_sample_rate:16000 audio
 
@@ -377,8 +377,8 @@ let settle_op ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) ~sw ~net
   in
   let timed () =
     match
-      Ox.Timeout.timeout ~clock (Ox.Duration.seconds operation_timeout_seconds)
-        (fun () ->
+      Ox.Timeout.timeout_mono ~clock
+        (Ox.Duration.seconds operation_timeout_seconds) (fun () ->
           match body () with
           | Ok text -> Ok text
           | Error (`Stt_error message) -> Error (`Stt_error message))
@@ -540,7 +540,7 @@ let test_repeated_realtime_fd_soak
   log_localhost_addrs ~caps ();
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  let clock = Eio.Stdenv.clock env in
+  let clock = Eio.Stdenv.mono_clock env in
   let net = Eio.Stdenv.net env in
   let jobs = Eio.Stream.create 8 in
   let socket =
@@ -635,8 +635,8 @@ let test_repeated_realtime_fd_soak
   in
   let join_peer job =
     match
-      Ox.Timeout.timeout ~clock (Ox.Duration.seconds peer_join_timeout_seconds)
-        (fun () ->
+      Ox.Timeout.timeout_mono ~clock
+        (Ox.Duration.seconds peer_join_timeout_seconds) (fun () ->
           Eio.Promise.await job.done_;
           Ok ())
     with
@@ -699,7 +699,7 @@ let test_repeated_realtime_fd_soak
   in
   let outcome =
     match
-      Ox.Timeout.timeout ~clock (Ox.Duration.seconds soak_timeout_seconds)
+      Ox.Timeout.timeout_mono ~clock (Ox.Duration.seconds soak_timeout_seconds)
         (fun () ->
           match operation () with
           | Ok () -> Ok ()

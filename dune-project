@@ -40,4 +40,5 @@
    (>= 1.0))
   (cstruct
    (>= 6.0.0))
+  (mtime :with-test)
   (alcotest :with-test)))

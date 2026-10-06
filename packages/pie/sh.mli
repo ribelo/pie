@@ -30,6 +30,24 @@ val run :
     Cancellation safety: unsafe because progress is lost if the subprocess has
     already changed external state; retry can repeat its effects. *)
 
+val capture_output :
+  process_mgr:_ Eio.Process.mgr ->
+  max_size:int ->
+  ?stdin:_ Eio.Flow.source ->
+  ?stderr:_ Eio.Flow.sink ->
+  ?executable:string ->
+  string list ->
+  string
+(** Suspension: may suspend while reading and awaiting the subprocess.
+    Cancellation: propagates cancellation and process failures; external
+    behavior depends on [Eio.Process]. Finalizers: a local switch owns the child
+    and pipe; the child is killed and reaped on failure. Locking: acquires no
+    Pie mutex. Cancellation safety: unsafe because progress is lost when the
+    subprocess has changed external state; retry can repeat its effects. Raises
+    [Eio.Cancel.Cancelled] on cancellation and
+    [Eio.Buf_read.Buffer_limit_exceeded] when the finite [max_size] budget is
+    exceeded. *)
+
 val run_capture :
   process_mgr:_ Eio.Process.mgr ->
   prog:string ->

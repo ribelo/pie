@@ -1,3 +1,6 @@
+let monotonic_seconds () =
+  Mtime.Span.to_float_ns (Mtime_clock.elapsed ()) /. 1e9
+
 let pie_exe =
   Filename.concat (Filename.dirname Sys.executable_name) "../../bin/pie.exe"
 
@@ -52,7 +55,7 @@ let rec drain_select ~(caps : < Ox_caps.Cap.time ; .. >) ~deadline ~stdout_r
     ~stderr_r stdout_buf stderr_buf stdout_open stderr_open =
   if not (stdout_open || stderr_open) then (false, false)
   else
-    let now = Ox_caps.Cap_unix.gettimeofday ~caps () in
+    let now = monotonic_seconds () in
     if now >= deadline then (stdout_open, stderr_open)
     else
       let timeout = min 0.05 (deadline -. now) in
@@ -127,7 +130,7 @@ let run_pie
   close_fd stderr_w;
   let stdout_buf = Buffer.create 256 in
   let stderr_buf = Buffer.create 256 in
-  let deadline = Ox_caps.Cap_unix.gettimeofday ~caps () +. child_deadline_s in
+  let deadline = monotonic_seconds () +. child_deadline_s in
   let rec wait_child stdout_open stderr_open =
     let stdout_open, stderr_open =
       drain_select ~caps ~deadline ~stdout_r ~stderr_r stdout_buf stderr_buf
@@ -135,7 +138,7 @@ let run_pie
     in
     match Unix.waitpid [ Unix.WNOHANG ] pid with
     | 0, _ ->
-        if Ox_caps.Cap_unix.gettimeofday ~caps () >= deadline then (
+        if monotonic_seconds () >= deadline then (
           (try Ox_caps.Cap_unix.kill ~caps pid Sys.sigkill
            with Unix.Unix_error _ -> ());
           snd (Unix.waitpid [] pid))
@@ -228,64 +231,68 @@ let test_startup_notice
 let serve_one ~(caps : < Ox_caps.Cap.fs_write ; Ox_caps.Cap.network ; .. >)
     ~socket_path reply =
   let server = Ox_caps.Cap_unix.socket ~caps Unix.PF_UNIX Unix.SOCK_STREAM 0 in
-  Unix.set_nonblock server;
-  (try Ox_caps.Cap_unix.unlink ~caps socket_path with Unix.Unix_error _ -> ());
-  Unix.bind server (Unix.ADDR_UNIX socket_path);
-  Unix.listen server 1;
-  let error = ref None in
-  let worker =
-    Thread.create
-      (fun () ->
-        let rec accept_loop () =
-          try Unix.accept server
-          with Unix.Unix_error ((Unix.EAGAIN | Unix.EWOULDBLOCK), _, _) ->
-            Thread.delay 0.01;
-            accept_loop ()
-        in
-        (* Preserve the exception as data before this test classifies its outcome. *)
-        match
-          try
-            Result.Ok
-              (let client, _ = accept_loop () in
-               Fun.protect
-                 ~finally:(fun () -> close_fd client)
-                 (fun () ->
-                   Unix.clear_nonblock client;
-                   Unix.setsockopt_float client Unix.SO_RCVTIMEO 2.0;
-                   Unix.setsockopt_float client Unix.SO_SNDTIMEO 2.0;
-                   let buf = Bytes.create 1024 in
-                   let rec read_line acc =
-                     if string_contains acc "\n" then ()
-                     else
-                       match Unix.read client buf 0 (Bytes.length buf) with
-                       | 0 -> ()
-                       | n -> read_line (acc ^ Bytes.sub_string buf 0 n)
-                   in
-                   read_line "";
-                   let payload = Bytes.of_string (reply ^ "\n") in
-                   ignore (Unix.write client payload 0 (Bytes.length payload))))
-          with exn -> Result.Error exn
-        with
-        | Result.Ok value -> value
-        | Result.Error
-            (Unix.Unix_error
-               ( (Unix.EBADF | Unix.EINVAL | Unix.ECONNABORTED | Unix.EINTR),
-                 _,
-                 _ )) ->
-            ()
-        | Result.Error exn -> error := Some exn)
-      ()
-  in
-  (server, worker, error)
+  try
+    Unix.set_nonblock server;
+    (try Ox_caps.Cap_unix.unlink ~caps socket_path
+     with Unix.Unix_error _ -> ());
+    Unix.bind server (Unix.ADDR_UNIX socket_path);
+    Unix.listen server 1;
+    let error = ref None in
+    let worker =
+      Thread.create
+        (fun () ->
+          let rec accept_loop () =
+            try Unix.accept server
+            with Unix.Unix_error ((Unix.EAGAIN | Unix.EWOULDBLOCK), _, _) ->
+              Thread.delay 0.01;
+              accept_loop ()
+          in
+          (* Preserve the exception as data before this test classifies its outcome. *)
+          match
+            try
+              Result.Ok
+                (let client, _ = accept_loop () in
+                 Fun.protect
+                   ~finally:(fun () -> close_fd client)
+                   (fun () ->
+                     Unix.clear_nonblock client;
+                     Unix.setsockopt_float client Unix.SO_RCVTIMEO 2.0;
+                     Unix.setsockopt_float client Unix.SO_SNDTIMEO 2.0;
+                     let buf = Bytes.create 1024 in
+                     let rec read_line acc =
+                       if string_contains acc "\n" then ()
+                       else
+                         match Unix.read client buf 0 (Bytes.length buf) with
+                         | 0 -> ()
+                         | n -> read_line (acc ^ Bytes.sub_string buf 0 n)
+                     in
+                     read_line "";
+                     let payload = Bytes.of_string (reply ^ "\n") in
+                     ignore (Unix.write client payload 0 (Bytes.length payload))))
+            with exn -> Result.Error exn
+          with
+          | Result.Ok value -> value
+          | Result.Error
+              (Unix.Unix_error
+                 ( (Unix.EBADF | Unix.EINVAL | Unix.ECONNABORTED | Unix.EINTR),
+                   _,
+                   _ )) ->
+              ()
+          | Result.Error exn -> error := Some exn)
+        ()
+    in
+    (server, worker, error)
+  with exn ->
+    Unix.close server;
+    raise exn
 
 let join_worker ~(caps : < Ox_caps.Cap.time ; .. >) worker =
-  let deadline = Ox_caps.Cap_unix.gettimeofday ~caps () +. 2.0 in
+  let deadline = monotonic_seconds () +. 2.0 in
   let rec loop () =
     (* Thread.join has no timeout; closing the listen socket unblocks accept. *)
     try Thread.join worker
     with exn ->
-      if Ox_caps.Cap_unix.gettimeofday ~caps () >= deadline then raise exn
-      else loop ()
+      if monotonic_seconds () >= deadline then raise exn else loop ()
   in
   loop ()
 
@@ -643,9 +650,9 @@ let test_harness_unknown_command_unblocks_server
        ; Ox_caps.Cap.tmp
        ; .. >) () =
   with_temp_dir ~caps @@ fun runtime_dir ->
-  let started = Ox_caps.Cap_unix.gettimeofday ~caps () in
+  let started = monotonic_seconds () in
   let run = with_reply ~caps ~runtime_dir armed_status_json [ "nosuchcmd" ] in
-  let elapsed = Ox_caps.Cap_unix.gettimeofday ~caps () -. started in
+  let elapsed = monotonic_seconds () -. started in
   Alcotest.(check bool)
     "finished before child deadline" true
     (elapsed < child_deadline_s);
@@ -669,17 +676,44 @@ let test_subscriber_failed_connect_fds
         Ox_caps.Cap_unix.socket ~caps ~cloexec:true Unix.PF_UNIX
           Unix.SOCK_STREAM 0
       in
-      Unix.bind fd (Unix.ADDR_UNIX (Filename.concat runtime_dir "control.sock"));
-      Some fd)
+      try
+        Unix.bind fd
+          (Unix.ADDR_UNIX (Filename.concat runtime_dir "control.sock"));
+        Some fd
+      with exn ->
+        Unix.close fd;
+        raise exn)
     else None
   in
   Fun.protect ~finally:(fun () -> Option.iter close_fd bound) @@ fun () ->
   let stdout_r, stdout_w = Unix.pipe ~cloexec:true () in
+  let read_open = ref true and write_open = ref true in
+  let close_reader () =
+    if !read_open then (
+      read_open := false;
+      close_fd stdout_r)
+  in
+  let close_writer () =
+    if !write_open then (
+      write_open := false;
+      close_fd stdout_w)
+  in
+  Fun.protect ~finally:(fun () ->
+      close_reader ();
+      close_writer ())
+  @@ fun () ->
   let null =
     Ox_caps.Cap_unix.openfile ~caps "/dev/null"
       [ Unix.O_RDWR; Unix.O_CLOEXEC ]
       0
   in
+  let null_open = ref true in
+  let close_null () =
+    if !null_open then (
+      null_open := false;
+      close_fd null)
+  in
+  Fun.protect ~finally:close_null @@ fun () ->
   let env =
     [|
       "PATH="
@@ -693,20 +727,14 @@ let test_subscriber_failed_connect_fds
     |]
   in
   let pid =
-    match
-      Ox_caps.Cap_unix.create_process_env ~caps pie_exe
-        [| pie_exe; "msg"; "subscribe"; "--interval-ms=1" |]
-        env null stdout_w null
-    with
-    | pid -> pid
-    | exception exn ->
-        List.iter close_fd [ stdout_r; stdout_w; null ];
-        raise exn
+    Ox_caps.Cap_unix.create_process_env ~caps pie_exe
+      [| pie_exe; "msg"; "subscribe"; "--interval-ms=1" |]
+      env null stdout_w null
   in
-  close_fd stdout_w;
-  close_fd null;
+  close_writer ();
+  close_null ();
   Fun.protect ~finally:(fun () ->
-      close_fd stdout_r;
+      close_reader ();
       (try Ox_caps.Cap_unix.kill ~caps pid Sys.sigterm
        with Unix.Unix_error (Unix.ESRCH, _, _) -> ());
       ignore (Unix.waitpid [] pid))

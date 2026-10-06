@@ -1,3 +1,6 @@
+let monotonic_seconds () =
+  Mtime.Span.to_float_ns (Mtime_clock.elapsed ()) /. 1e9
+
 (* Pass-2 correction adapter against a local Responses fixture.
    dict-ldo9 dict-l4zp dict-g52m dict-fk8i dict-bpuh dict-swyn *)
 
@@ -729,11 +732,11 @@ let child_timeout ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) () =
   let elapsed = ref 0. in
   let result, hits, captured =
     with_fixture ~caps ~reply:Hang (fun ~sw ~net ~clock ~logger ->
-        let started = Ox_caps.Cap_unix.gettimeofday ~caps () in
+        let started = monotonic_seconds () in
         let result =
           call ~caps ~sw ~net ~clock ~logger ~timeout:(Ox.Duration.ms 300) ()
         in
-        elapsed := Ox_caps.Cap_unix.gettimeofday ~caps () -. started;
+        elapsed := monotonic_seconds () -. started;
         result)
   in
   if hits <> 1 then

@@ -28,8 +28,14 @@ end
 
 let string_of_mode = function Transcription -> "transcription"
 
-let log_first_token ~clock ~logger ~timer ~operation ~model ~mode text =
-  let at_ms = int_of_float (Eio.Time.now clock *. 1000.) in
+let monotonic_ms mono_clock =
+  Int64.to_int
+    (Int64.unsigned_div
+       (Mtime.to_uint64_ns (Eio.Time.Mono.now mono_clock))
+       1_000_000L)
+
+let log_first_token ~mono_clock ~logger ~timer ~operation ~model ~mode text =
+  let at_ms = monotonic_ms mono_clock in
   match First_token_timer.observe timer ~at_ms text with
   | None -> ()
   | Some ttft_ms ->
@@ -506,7 +512,7 @@ let send_audio_stream session ~mode ~input_sample_rate audio =
       in
       send ()
 
-let connect ~caps ~sw ~net ~clock ?ca_file ~url ~access_token () =
+let connect ~caps ~sw ~net ~mono_clock ?ca_file ~url ~access_token () =
   let ca_file =
     match ca_file with
     | Some _ -> ca_file
@@ -517,14 +523,14 @@ let connect ~caps ~sw ~net ~clock ?ca_file ~url ~access_token () =
     realtime_header_pairs ~session_id access_token
     |> List.filter (fun (key, _) -> key <> "Authorization")
   in
-  Session.connect ~sw ~net ~clock ?ca_file
+  Session.connect ~sw ~net ~clock:mono_clock ?ca_file
     ~api_key:(Ox_observability.Redact.make access_token)
     ~headers ~establishment_timeout:(Ox.Duration.seconds 10) url
   |> Result.map_error (fun error ->
       `Stt_error ("Codex realtime " ^ websocket_message error))
 
-let run_realtime_session ~caps ~sw ~net ~clock ?ca_file ~url ~access_token ~mode
-    ?session_update ~input_sample_rate pcm_bytes =
+let run_realtime_session ~caps ~sw ~net ~mono_clock ?ca_file ~url ~access_token
+    ~mode ?session_update ~input_sample_rate pcm_bytes =
   if Bytes.length pcm_bytes > Dictation_limits.capture_pcm_bytes then
     stt_error "Codex realtime captured audio budget exceeded"
   else if input_sample_rate <= 0 then
@@ -538,7 +544,7 @@ let run_realtime_session ~caps ~sw ~net ~clock ?ca_file ~url ~access_token ~mode
     in
     Eio.Switch.run (fun sw ->
         let* session =
-          connect ~caps ~sw ~net ~clock ?ca_file ~url ~access_token ()
+          connect ~caps ~sw ~net ~mono_clock ?ca_file ~url ~access_token ()
         in
         let* () =
           match session_update with
@@ -604,14 +610,14 @@ let queue_close (queue, mutex, changed, terminal, _) outcome =
       terminal := Some outcome;
       Eio.Condition.broadcast changed)
 
-let run_realtime_stream_session ~caps ~sw ~net ~clock ?ca_file ~url
+let run_realtime_stream_session ~caps ~sw ~net ~mono_clock ?ca_file ~url
     ~access_token ~mode ?session_update ?on_text ~input_sample_rate audio =
   if input_sample_rate <= 0 then
     stt_error "Codex realtime input sample rate must be positive"
   else
     Eio.Switch.run (fun sw ->
         let* session =
-          connect ~caps ~sw ~net ~clock ?ca_file ~url ~access_token ()
+          connect ~caps ~sw ~net ~mono_clock ?ca_file ~url ~access_token ()
         in
         let* () =
           match session_update with
@@ -634,14 +640,16 @@ type stream_handle = {
   cancel_stream : unit -> (unit, error) result;
 }
 
-let with_stream_session ~caps ~sw ~net ~clock ~logger ~url ~access_token ~mode
-    ~operation ~model ?session_update ?(sample_rate = 16000) ~cancel_message use
-    =
+let with_stream_session ~caps ~sw ~net ~mono_clock ~logger ~url ~access_token
+    ~mode ~operation ~model ?session_update ?(sample_rate = 16000)
+    ~cancel_message use =
   let queue = make_pull_queue () in
   let completion, complete = Eio.Promise.create () in
   let captured = ref 0 in
   let timer = First_token_timer.create () in
-  let on_text = log_first_token ~clock ~logger ~timer ~operation ~model ~mode in
+  let on_text =
+    log_first_token ~mono_clock ~logger ~timer ~operation ~model ~mode
+  in
   let offer_chunk chunk =
     let queue_items, mutex, changed, terminal, queued_bytes = queue in
     Eio.Mutex.lock mutex;
@@ -680,8 +688,7 @@ let with_stream_session ~caps ~sw ~net ~clock ~logger ~url ~access_token ~mode
   in
   let pull () = queue_pull queue () in
   let finish_stream () =
-    First_token_timer.start timer
-      ~at_ms:(int_of_float (Eio.Time.now clock *. 1000.));
+    First_token_timer.start timer ~at_ms:(monotonic_ms mono_clock);
     queue_close queue (Ok None);
     Eio.Promise.await completion
   in
@@ -692,8 +699,8 @@ let with_stream_session ~caps ~sw ~net ~clock ~logger ~url ~access_token ~mode
   in
   let background () =
     let result =
-      run_realtime_stream_session ~caps ~sw ~net ~clock ~url ~access_token ~mode
-        ?session_update ~on_text ~input_sample_rate:sample_rate pull
+      run_realtime_stream_session ~caps ~sw ~net ~mono_clock ~url ~access_token
+        ~mode ?session_update ~on_text ~input_sample_rate:sample_rate pull
     in
     Eio.Promise.resolve complete result;
     queue_close queue
@@ -740,19 +747,19 @@ let build_pass1_session_update ?language ?context ~model () =
           ] );
     ]
 
-let with_pass1_stream ~caps ~sw ~net ~clock ~logger ~model ?language ?context
-    ?(sample_rate = 16000) use =
+let with_pass1_stream ~caps ~sw ~net ~mono_clock ~logger ~model ?language
+    ?context ?(sample_rate = 16000) use =
   let* access_token = realtime_access_token ~caps ~client:() () in
-  with_stream_session ~caps ~sw ~net ~clock ~logger
+  with_stream_session ~caps ~sw ~net ~mono_clock ~logger
     ~url:(build_realtime_url ~caps ~mode:Transcription ~model ())
     ~access_token ~mode:Transcription ~operation:"transcribe" ~model
     ~session_update:(build_pass1_session_update ?language ?context ~model ())
     ~sample_rate ~cancel_message:"Codex realtime transcription cancelled" use
 
-let transcribe_pass1 ~caps ~sw ~net ~clock ~model ?language ?context
+let transcribe_pass1 ~caps ~sw ~net ~mono_clock ~model ?language ?context
     ?(sample_rate = 16000) pcm_bytes =
   let* access_token = realtime_access_token ~caps ~client:() () in
-  run_realtime_session ~caps ~sw ~net ~clock
+  run_realtime_session ~caps ~sw ~net ~mono_clock
     ~url:(build_realtime_url ~caps ~mode:Transcription ~model ())
     ~access_token ~mode:Transcription
     ~session_update:(build_pass1_session_update ?language ?context ~model ())

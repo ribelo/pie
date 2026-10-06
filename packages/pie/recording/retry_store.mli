@@ -63,12 +63,27 @@ module Active : sig
 
   module Test_hooks : sig
     val with_fchmod_fail : (unit -> 'a) -> 'a
-    val with_close_fail : (unit -> 'a) -> 'a
+
+    val with_close_fail : sw:Eio.Switch.t -> (unit -> 'a) -> 'a
+    (** Suspension: may suspend when the caller callback suspends. Cancellation:
+        propagates callback exceptions; behavior depends on the caller callback.
+        Finalizers: restores the fault flags; the switch releases untaken
+        replacement descriptors. Locking: acquires no Pie mutex. Cancellation
+        safety: unsafe because progress is lost when the caller callback has
+        committed effects; retry safety depends on that callback. *)
+
     val take_reused_fd : unit -> Unix.file_descr option
     val with_unlink_fail : (unit -> 'a) -> 'a
     val with_emfile : (unit -> 'a) -> 'a
     val with_index_open_fail : (unit -> 'a) -> 'a
     val with_fsync_fail : (unit -> 'a) -> 'a
-    val with_close_and_unlink_fail : (unit -> 'a) -> 'a
+
+    val with_close_and_unlink_fail : sw:Eio.Switch.t -> (unit -> 'a) -> 'a
+    (** Suspension: may suspend when the caller callback suspends. Cancellation:
+        propagates callback exceptions; behavior depends on the caller callback.
+        Finalizers: restores the fault flags; the switch releases untaken
+        replacement descriptors. Locking: acquires no Pie mutex. Cancellation
+        safety: unsafe because progress is lost when the caller callback has
+        committed effects; retry safety depends on that callback. *)
   end
 end

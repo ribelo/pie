@@ -903,15 +903,19 @@ let open_existing ~caps path stats =
           [ Unix.O_RDWR; Unix.O_APPEND; Unix.O_CLOEXEC ]
           0
       in
-      let current = Unix.fstat fd in
-      if
-        stats.st_dev <> current.st_dev
-        || stats.st_ino <> current.st_ino
-        || not (private_reg current)
-      then (
+      try
+        let current = Unix.fstat fd in
+        if
+          stats.st_dev <> current.st_dev
+          || stats.st_ino <> current.st_ino
+          || not (private_reg current)
+        then (
+          close_fd fd;
+          err "history file is not a private regular file")
+        else Ok fd
+      with exn ->
         close_fd fd;
-        err "history file is not a private regular file")
-      else Ok fd
+        raise exn
     with
     | Unix.Unix_error (error, _, _) ->
         err ("history: " ^ Unix.error_message error)

@@ -495,8 +495,8 @@ let report_delivery ~notify ~target_window = function
       notify "Pie" (Desktop.Notification.clipboard_message title);
       History.Clipboard
 
-let inject_and_report ~caps ~clock ~process_mgr ?clipboard_owner ~newline_rules
-    ~text_entry_rules ~target_window _mode text =
+let inject_and_report ~caps ~mono_clock ~process_mgr ?clipboard_owner
+    ~newline_rules ~text_entry_rules ~target_window _mode text =
   let normalized = Input.Text_injection.normalize_text text in
   if String.length normalized = 0 then (
     Desktop.Notification.emit ~caps ~process_mgr No_transcript
@@ -518,8 +518,8 @@ let inject_and_report ~caps ~clock ~process_mgr ?clipboard_owner ~newline_rules
     in
     match
       Input.Text_injection.inject ~caps ?clipboard_owner ~newline_rules
-        ~text_entry_rules ~target_window:injection_window ~clock ~process_mgr
-        normalized
+        ~text_entry_rules ~target_window:injection_window ~mono_clock
+        ~process_mgr normalized
     with
     | Error error ->
         Desktop.Notification.emit ~caps ~process_mgr Delivery_failed
@@ -887,9 +887,9 @@ let attempt_handle owner (handle : Ptt_loop.handle) : Ptt_loop.handle =
 (* Recording is stopped by the attempt settlement, after provider and delivery
    completion, so a press received while the operation still processes is
    rejected instead of admitted as a second attempt. *)
-let production_deliver ~caps ~clock ~process_mgr ?clipboard_owner
+let production_deliver ~caps ~mono_clock ~process_mgr ?clipboard_owner
     (config : Config.Stt.t) mode (target : History.window option) text =
-  inject_and_report ~caps ~clock ~process_mgr ?clipboard_owner
+  inject_and_report ~caps ~mono_clock ~process_mgr ?clipboard_owner
     ~newline_rules:config.newline_rules
     ~text_entry_rules:config.text_entry_rules ~target_window:target mode text
 
@@ -902,7 +902,7 @@ let glossary_prompt (glossary : Glossary.t) =
   if glossary.text = "" then None else Some glossary.text
 
 (* All production two-pass effects live here; tests replace this record. *)
-let production_pipeline ~caps ~sw ~net ~clock ~logger ~process_mgr =
+let production_pipeline ~caps ~sw ~net ~clock ~mono_clock ~logger ~process_mgr =
   let warn message =
     ignore (Ox_observability.Logger.warn logger message ~fields:[])
   in
@@ -930,7 +930,7 @@ let production_pipeline ~caps ~sw ~net ~clock ~logger ~process_mgr =
         Result.map_error ptt_of_stt
           (match model.provider with
           | Config.Stt.Codex_realtime ->
-              Stt.Codex_realtime.transcribe_pass1 ~caps ~sw ~net ~clock
+              Stt.Codex_realtime.transcribe_pass1 ~caps ~sw ~net ~mono_clock
                 ~model:model.model ?language ?context:prompt pcm
           | Openrouter -> (
               match Stt.Openrouter.resolve_api_key ~caps () with
@@ -1086,9 +1086,11 @@ let create_dictation ~logger ~config ?binding pipeline mode =
       | _, None -> Error (`Ptt_error "stt:no-binding-for-mode"))
 
 (* Retained-audio retries use the selected supported pipeline too. *)
-let production_stt ~caps ~sw ~net ~clock ~logger ~process_mgr config mode bytes
-    =
-  let deps = production_pipeline ~caps ~sw ~net ~clock ~logger ~process_mgr in
+let production_stt ~caps ~sw ~net ~clock ~mono_clock ~logger ~process_mgr config
+    mode bytes =
+  let deps =
+    production_pipeline ~caps ~sw ~net ~clock ~mono_clock ~logger ~process_mgr
+  in
   match first_binding config mode with
   | None -> Error (`Ptt_error "stt:no-binding-for-mode")
   | Some binding ->
@@ -1110,8 +1112,8 @@ let make_clip_handle ~owner ~stt ~deliver ~config mode =
     cancel = (fun () -> Ok ());
   }
 
-let make_streaming_handle ~caps ~sw ~net ~clock ~logger ~owner ~config ~stt
-    ~deliver mode =
+let make_streaming_handle ~caps ~sw ~net ~clock ~mono_clock ~logger ~owner
+    ~config ~stt ~deliver mode =
   let model =
     match owner.dictation with
     | None -> (resolved_model_for_mode config mode).model
@@ -1125,7 +1127,7 @@ let make_streaming_handle ~caps ~sw ~net ~clock ~logger ~owner ~config ~stt
             (source_language config (Dictation.binding dictation))
         in
         let context = glossary_prompt (Dictation.glossary dictation) in
-        Stt.Codex_realtime.with_pass1_stream ~caps ~sw ~net ~clock ~logger
+        Stt.Codex_realtime.with_pass1_stream ~caps ~sw ~net ~mono_clock ~logger
           ~model ?language ?context use
     | None -> Error (`Stt_error "dictation context missing")
   in
@@ -1209,8 +1211,8 @@ let make_streaming_handle ~caps ~sw ~net ~clock ~logger ~owner ~config ~stt
                    (make_clip_handle ~owner ~stt ~deliver ~config mode))
           | Error error -> Error (ptt_of_stt error)))
 
-let acquire_and_run ~caps ~sw ~net ~clock ~logger ~owner ~config ~stt ~deliver
-    mode use =
+let acquire_and_run ~caps ~sw ~net ~clock ~mono_clock ~logger ~owner ~config
+    ~stt ~deliver mode use =
   let model_mode =
     match config.Config.Stt.pipeline with
     | Two_pass -> Transcribe
@@ -1228,8 +1230,8 @@ let acquire_and_run ~caps ~sw ~net ~clock ~logger ~owner ~config ~stt ~deliver
              (make_clip_handle ~owner ~stt ~deliver ~config mode))
       in
       let streaming () =
-        make_streaming_handle ~caps ~sw ~net ~clock ~logger ~owner ~config ~stt
-          ~deliver mode
+        make_streaming_handle ~caps ~sw ~net ~clock ~mono_clock ~logger ~owner
+          ~config ~stt ~deliver mode
       in
       let handle =
         match config.pipeline with
@@ -1309,8 +1311,8 @@ let with_failure_retention owner body () =
       owner.failed <- true;
       Printexc.raise_with_backtrace exn backtrace
 
-let on_press ~caps ~sw ~net ~clock ~logger ~coordinator ~config ?store
-    ?retry_dir ?pipeline ?binding ?(on_owner = fun _ -> ())
+let on_press ~caps ~sw ~net ~clock ~mono_clock ~logger ~coordinator ~config
+    ?store ?retry_dir ?pipeline ?binding ?(on_owner = fun _ -> ())
     ?(focused_window = fun () -> None) ~stt ~deliver mode_name =
   let mode = mode_of_name mode_name in
   match
@@ -1362,8 +1364,9 @@ let on_press ~caps ~sw ~net ~clock ~logger ~coordinator ~config ?store
                      run_acquired_attempt ~sw ~attempt
                        ~on_settle:(fun () -> settle_attempt owner)
                        (with_failure_retention owner (fun () ->
-                            acquire_and_run ~caps ~sw ~net ~clock ~logger ~owner
-                              ~config ~stt ~deliver mode use))))))
+                            acquire_and_run ~caps ~sw ~net ~clock ~mono_clock
+                              ~logger ~owner ~config ~stt ~deliver mode use)))))
+      )
 
 (* PIE004: keyboard and RPC presses share one control path. The handler queues
    triggers for the same PTT loop and admission owner the keyboard path uses,
@@ -1593,7 +1596,9 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
     let pipeline =
       match pipeline with
       | Some pipeline -> pipeline
-      | None -> production_pipeline ~caps ~sw ~net ~clock ~logger ~process_mgr
+      | None ->
+          production_pipeline ~caps ~sw ~net ~clock ~mono_clock ~logger
+            ~process_mgr
     in
     let reject_config message =
       Desktop.Notification.emit ~caps ~process_mgr Config_rejected
@@ -1851,8 +1856,8 @@ let run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
             "pie: processing limit reached"
             "Four dictations are still processing. Please wait for one to \
              finish.";
-        on_press ~caps ~sw ~net ~clock ~logger ~coordinator ~config:!current
-          ~pipeline ?binding
+        on_press ~caps ~sw ~net ~clock ~mono_clock ~logger ~coordinator
+          ~config:!current ~pipeline ?binding
           ~focused_window:(fun () ->
             match Niri.focused_window ~process_mgr () with
             | Ok (Some window) ->
@@ -2193,13 +2198,17 @@ let run ~caps ~sw ~fs ~net ~clock ~mono_clock ~logger ~process_mgr ~config
             ignore (Ox_observability.Logger.warn logger message ~fields:[]));
     }
   in
-  let stt = production_stt ~caps ~sw ~net ~clock ~logger ~process_mgr in
+  let stt =
+    production_stt ~caps ~sw ~net ~clock ~mono_clock ~logger ~process_mgr
+  in
   Pulse.Client.with_client ~caps ~net ~clock ~logger @@ fun client ->
   Pulse.Client.with_record_stream client @@ fun info audio ->
   Keyboard.Monitor.with_monitor ~caps ~sw ~net ~clock ~process_mgr
   @@ fun keyboard ->
   let clipboard_owner = Wayland.Clipboard.create ~caps ~sw ~process_mgr () in
-  let deliver = production_deliver ~caps ~clock ~process_mgr ~clipboard_owner in
+  let deliver =
+    production_deliver ~caps ~mono_clock ~process_mgr ~clipboard_owner
+  in
   run_with_inputs ~caps ~sw ~net ~fs ~clock ~logger ~process_mgr ~mono_clock
     ~inputs:{ keyboard; audio; source_name = info.Pulse.Defs.source_name }
     ~config_control ~config_path ~initial_config:config ~stt ~deliver

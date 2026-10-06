@@ -486,9 +486,10 @@ let run_streaming_sender ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >)
   let operation =
     try
       Eio.Time.with_timeout_exn clock 5.0 (fun () ->
-          Codex.run_realtime_stream_session ~caps ~sw ~net ~clock ~url
-            ~access_token:"synthetic-resampling-token" ~mode:Codex.Transcription
-            ~input_sample_rate:from_rate audio)
+          Codex.run_realtime_stream_session
+            ~mono_clock:(Eio.Stdenv.mono_clock env)
+            ~caps ~sw ~net ~url ~access_token:"synthetic-resampling-token"
+            ~mode:Codex.Transcription ~input_sample_rate:from_rate audio)
     with Eio.Time.Timeout -> Error (`Stt_error "timeout")
   in
   match operation with
@@ -526,8 +527,9 @@ let test_buffered_odd_is_stt_error
   Eio.Switch.run @@ fun sw ->
   let odd = Bytes.make 1 '\x00' in
   let run rate =
-    Codex.run_realtime_session ~caps ~sw ~net:(Eio.Stdenv.net env)
-      ~clock:(Eio.Stdenv.clock env) ~url:"ws://127.0.0.1:1"
+    Codex.run_realtime_session
+      ~mono_clock:(Eio.Stdenv.mono_clock env)
+      ~caps ~sw ~net:(Eio.Stdenv.net env) ~url:"ws://127.0.0.1:1"
       ~access_token:"synthetic-resampling-token" ~mode:Codex.Transcription
       ~input_sample_rate:rate odd
   in
@@ -560,8 +562,9 @@ let test_buffered_huge_rate_is_stt_error
   Eio.Switch.run @@ fun sw ->
   let pcm = pcm_of_samples [| 1; 2 |] in
   let operation =
-    Codex.run_realtime_session ~caps ~sw ~net:(Eio.Stdenv.net env)
-      ~clock:(Eio.Stdenv.clock env) ~url:"ws://127.0.0.1:1"
+    Codex.run_realtime_session
+      ~mono_clock:(Eio.Stdenv.mono_clock env)
+      ~caps ~sw ~net:(Eio.Stdenv.net env) ~url:"ws://127.0.0.1:1"
       ~access_token:"synthetic-resampling-token" ~mode:Codex.Transcription
       ~input_sample_rate:max_int pcm
   in
@@ -628,8 +631,9 @@ let test_streaming_nonpositive_rate
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let operation =
-    Codex.run_realtime_stream_session ~caps ~sw ~net:(Eio.Stdenv.net env)
-      ~clock:(Eio.Stdenv.clock env) ~url:"ws://127.0.0.1:1"
+    Codex.run_realtime_stream_session
+      ~mono_clock:(Eio.Stdenv.mono_clock env)
+      ~caps ~sw ~net:(Eio.Stdenv.net env) ~url:"ws://127.0.0.1:1"
       ~access_token:"synthetic-resampling-token" ~mode:Codex.Transcription
       ~input_sample_rate:0
       (audio_of_chunks [ sample_pcm ])

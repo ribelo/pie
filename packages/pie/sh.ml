@@ -30,6 +30,8 @@ let failure_message ~prog exn =
   match exn with
   | Eio.Cancel.Cancelled _ as cancelled -> raise cancelled
   | Eio.Exn.Multiple _ as multiple -> raise multiple
+  | Eio.Buf_read.Buffer_limit_exceeded ->
+      Printf.sprintf "%s failed: output-size-limit" base
   | Eio.Exn.Io (Eio.Process.E (Eio.Process.Child_error status), _) ->
       Printf.sprintf "%s failed: %s" base (exit_category status)
   | Eio.Exn.Io (Eio.Process.E (Eio.Process.Executable_not_found _), _) ->
@@ -61,9 +63,23 @@ let run ~process_mgr ~prog ~args =
     Ok ()
   with exn -> Error (`Subprocess_error (failure_message ~prog exn))
 
+let capture_output ~process_mgr ~max_size ?stdin ?stderr ?executable args =
+  Eio.Switch.run @@ fun sw ->
+  let stdout, writer = Eio.Process.pipe process_mgr ~sw in
+  let child =
+    Eio.Process.spawn ~sw process_mgr ?stdin ~stdout:writer ?stderr ?executable
+      args
+  in
+  Eio.Flow.close writer;
+  let reader = Eio.Buf_read.of_flow stdout ~max_size in
+  let output = Eio.Buf_read.take_all reader in
+  Eio.Flow.close stdout;
+  Eio.Process.await_exn child;
+  output
+
 let run_capture ~process_mgr ~prog ~args =
   try
     Ok
-      (Eio.Process.parse_out process_mgr Eio.Buf_read.take_all
+      (capture_output ~process_mgr ~max_size:Dictation_limits.result_utf8_bytes
          ~stderr:(discarded_stderr ()) (prog :: args))
   with exn -> Error (`Subprocess_error (failure_message ~prog exn))

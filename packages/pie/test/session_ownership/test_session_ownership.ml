@@ -122,7 +122,9 @@ let drain_peer ~clock flow =
   in
   (* Preserve the exception as data before this test classifies its outcome. *)
   match
-    try Result.Ok (Eio.Time.with_timeout_exn clock 0.4 loop)
+    try
+      Result.Ok
+        (Eio.Time.Timeout.run_exn (Eio.Time.Timeout.seconds clock 0.4) loop)
     with exn -> Result.Error exn
   with
   | Result.Ok value -> value
@@ -171,8 +173,8 @@ let session_update =
 
 let run_buffered ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) ~sw ~net
     ~clock ?ca_file ~url () =
-  Pie.Stt.Codex_realtime.run_realtime_session ~caps ~sw ~net ~clock ?ca_file
-    ~url ~access_token:"synthetic-ownership-token"
+  Pie.Stt.Codex_realtime.run_realtime_session ~caps ~sw ~net ~mono_clock:clock
+    ?ca_file ~url ~access_token:"synthetic-ownership-token"
     ~mode:Pie.Stt.Codex_realtime.Transcription ~session_update
     ~input_sample_rate:16000 pcm
 
@@ -186,8 +188,8 @@ let run_streaming ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) ~sw ~net
       Option.iter (fun resolve -> resolve ()) on_audio_pull;
       Ok (Some pcm))
   in
-  Pie.Stt.Codex_realtime.run_realtime_stream_session ~caps ~sw ~net ~clock
-    ?ca_file ~url ~access_token:"synthetic-ownership-token"
+  Pie.Stt.Codex_realtime.run_realtime_stream_session ~caps ~sw ~net
+    ~mono_clock:clock ?ca_file ~url ~access_token:"synthetic-ownership-token"
     ~mode:Pie.Stt.Codex_realtime.Transcription ~session_update
     ~input_sample_rate:16000 audio
 
@@ -243,7 +245,7 @@ let settle ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) ~sw ~net ~clock
         else run_buffered ~caps ~sw ~net ~clock ?ca_file ~url ()
   in
   let timed () =
-    try Eio.Time.with_timeout_exn clock 1.5 body
+    try Eio.Time.Timeout.run_exn (Eio.Time.Timeout.seconds clock 1.5) body
     with Eio.Time.Timeout -> Error (timeout_fail (scenario_name scenario))
   in
   match scenario with
@@ -453,13 +455,13 @@ let warm_timer ~sw clock =
       match
         try
           Result.Ok
-            (Eio.Time.with_timeout_exn clock 120.0 (fun () ->
-                 Eio.Promise.await hold))
+            (Eio.Time.Timeout.run_exn (Eio.Time.Timeout.seconds clock 120.0)
+               (fun () -> Eio.Promise.await hold))
         with exn -> Result.Error exn
       with
       | Result.Ok value -> value
       | Result.Error _ -> ());
-  Eio.Time.sleep clock 0.02;
+  Eio.Time.Mono.sleep clock 0.02;
   hold_u
 
 let test_gates_ws
@@ -467,7 +469,7 @@ let test_gates_ws
     () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  let clock = Eio.Stdenv.clock env in
+  let clock = Eio.Stdenv.mono_clock env in
   let net = Eio.Stdenv.net env in
   let stop_timer = warm_timer ~sw clock in
   let baseline = fd_targets ~caps () in
@@ -486,7 +488,7 @@ let repeat_ws
     ~rounds () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  let clock = Eio.Stdenv.clock env in
+  let clock = Eio.Stdenv.mono_clock env in
   let net = Eio.Stdenv.net env in
   let stop_timer = warm_timer ~sw clock in
   let baseline = fd_targets ~caps () in
@@ -576,7 +578,7 @@ let repeat_wss_in_process
   in
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  let clock = Eio.Stdenv.clock env in
+  let clock = Eio.Stdenv.mono_clock env in
   let net = Eio.Stdenv.net env in
   let stop_timer = warm_timer ~sw clock in
   let baseline = fd_targets ~caps () in
@@ -703,7 +705,7 @@ let test_fd_identity_diagnosis
        ; .. >) () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  let clock = Eio.Stdenv.clock env in
+  let clock = Eio.Stdenv.mono_clock env in
   let net = Eio.Stdenv.net env in
   snap ~caps "after-runtime-switch" "runtime/eventfd/pools";
   let run_held ~join_peer i =

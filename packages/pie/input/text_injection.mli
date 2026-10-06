@@ -89,7 +89,7 @@ val inject :
   ?text_entry_rules:text_entry_rule list ->
   ?target_window:Niri.window_info option ->
   ?read_selection:(unit -> string option) ->
-  clock:_ Eio.Time.clock ->
+  mono_clock:_ Eio.Time.Mono.t ->
   process_mgr:_ Eio.Process.mgr ->
   string ->
   ( result,

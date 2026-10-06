@@ -108,7 +108,7 @@ val run_realtime_session :
   caps:< Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. > ->
   sw:Eio.Switch.t ->
   net:_ Eio.Net.t ->
-  clock:_ Eio.Time.clock ->
+  mono_clock:_ Eio.Time.Mono.t ->
   ?ca_file:string ->
   url:string ->
   access_token:string ->
@@ -137,7 +137,7 @@ val run_realtime_stream_session :
   caps:< Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. > ->
   sw:Eio.Switch.t ->
   net:_ Eio.Net.t ->
-  clock:_ Eio.Time.clock ->
+  mono_clock:_ Eio.Time.Mono.t ->
   ?ca_file:string ->
   url:string ->
   access_token:string ->
@@ -173,7 +173,7 @@ val with_stream_session :
   caps:< Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. > ->
   sw:Eio.Switch.t ->
   net:_ Eio.Net.t ->
-  clock:_ Eio.Time.clock ->
+  mono_clock:_ Eio.Time.Mono.t ->
   logger:Ox_observability.Logger.t ->
   url:string ->
   access_token:string ->
@@ -220,7 +220,7 @@ val with_pass1_stream :
   caps:< Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.time ; .. > ->
   sw:Eio.Switch.t ->
   net:_ Eio.Net.t ->
-  clock:_ Eio.Time.clock ->
+  mono_clock:_ Eio.Time.Mono.t ->
   logger:Ox_observability.Logger.t ->
   model:string ->
   ?language:string ->
@@ -258,7 +258,7 @@ val transcribe_pass1 :
   caps:< Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.time ; .. > ->
   sw:Eio.Switch.t ->
   net:_ Eio.Net.t ->
-  clock:_ Eio.Time.clock ->
+  mono_clock:_ Eio.Time.Mono.t ->
   model:string ->
   ?language:string ->
   ?context:string ->

@@ -1035,8 +1035,10 @@ let run_stream_child
         ({ config with pipeline = Two_pass }, stamp ())
       in
       let stt config mode bytes =
-        (Pie.Assistant.Service.production_stt ~caps ~sw ~net ~clock
-           ~logger:(test_logger env) ~process_mgr config mode bytes
+        (Pie.Assistant.Service.production_stt
+           ~mono_clock:(Eio.Stdenv.mono_clock env)
+           ~caps ~sw ~net ~clock ~logger:(test_logger env) ~process_mgr config
+           mode bytes
           :> (string, Pie.Ptt_loop.error) result)
       in
       let deliver _config _mode _target text =
@@ -1651,8 +1653,9 @@ let test_service_pre_handle_failure_then_fresh_press
         Pie.Recording.Coordinator.create ~caps ~persist_path ()
       in
       let bad =
-        Pie_test_runtime.Service.on_press ~caps ~sw
-          ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env) ~net
+        Pie_test_runtime.Service.on_press
+          ~mono_clock:(Eio.Stdenv.mono_clock env)
+          ~caps ~sw ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env) ~net
           ~coordinator ~retry_dir:dir
           ~config:(base_config ~model:"openrouter/" ())
           ~stt:(fun _ _ _ -> Ok "unused")
@@ -1677,8 +1680,9 @@ let test_service_pre_handle_failure_then_fresh_press
         Ok Pie.History.Pasted
       in
       let good =
-        Pie_test_runtime.Service.on_press ~caps ~sw
-          ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env) ~net
+        Pie_test_runtime.Service.on_press
+          ~mono_clock:(Eio.Stdenv.mono_clock env)
+          ~caps ~sw ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env) ~net
           ~coordinator ~retry_dir:dir ~stt ~deliver ~config:(base_config ())
           "transcribe"
       in
@@ -1747,8 +1751,9 @@ let test_delayed_old_cleanup_preserves_new_same_mode_attempt
       in
       ignore (Pie.Recording.Coordinator.release coordinator first);
       let second =
-        Pie_test_runtime.Service.on_press ~caps ~sw
-          ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env) ~net
+        Pie_test_runtime.Service.on_press
+          ~mono_clock:(Eio.Stdenv.mono_clock env)
+          ~caps ~sw ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env) ~net
           ~coordinator ~retry_dir:dir ~config:(base_config ())
           ~stt:(fun _ _ _ -> Ok "unused")
           ~deliver:(fun _ _ _ _ -> Ok Pie.History.Pasted)
@@ -2752,8 +2757,9 @@ let test_blueprint_on_press_does_not_publish
       let stt _ _ _ = Ok "x" in
       let deliver _ _ _target _ = Ok Pie.History.Pasted in
       let _blueprint =
-        Pie_test_runtime.Service.on_press ~caps ~sw
-          ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env)
+        Pie_test_runtime.Service.on_press
+          ~mono_clock:(Eio.Stdenv.mono_clock env)
+          ~caps ~sw ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env)
           ~net:(Eio.Stdenv.net env) ~coordinator ~retry_dir
           ~config:(base_config ()) ~stt ~deliver "transcribe"
       in
@@ -2913,10 +2919,11 @@ let test_publication_failure_keeps_primary
         ~finally:(fun () -> pub014_restore retry_dir !lock_save)
         (fun () ->
           let press =
-            Pie_test_runtime.Service.on_press ~caps ~sw
-              ~net:(Eio.Stdenv.net env) ~clock ~logger:(test_logger env)
-              ~coordinator ~store ~retry_dir ~config:(base_config ()) ~stt
-              ~deliver "transcribe"
+            Pie_test_runtime.Service.on_press
+              ~mono_clock:(Eio.Stdenv.mono_clock env)
+              ~caps ~sw ~net:(Eio.Stdenv.net env) ~clock
+              ~logger:(test_logger env) ~coordinator ~store ~retry_dir
+              ~config:(base_config ()) ~stt ~deliver "transcribe"
           in
           let finish handle =
             Result.bind (handle.Pie.Ptt_loop.offer loud_pcm) (fun () ->
@@ -3053,9 +3060,10 @@ let test_settlement_exception_releases_fifo
       in
       let run =
         match
-          Pie_test_runtime.Service.on_press ~caps ~sw ~net:(Eio.Stdenv.net env)
-            ~clock:(Eio.Stdenv.clock env) ~logger:(test_logger env)
-            ~coordinator:coord
+          Pie_test_runtime.Service.on_press
+            ~mono_clock:(Eio.Stdenv.mono_clock env)
+            ~caps ~sw ~net:(Eio.Stdenv.net env) ~clock:(Eio.Stdenv.clock env)
+            ~logger:(test_logger env) ~coordinator:coord
             ~config:{ (base_config ()) with pipeline = One_pass }
             ~retry_dir:dir
             ~stt:(fun _ _ _ -> Ok "unused")
@@ -3078,7 +3086,7 @@ let test_settlement_exception_releases_fifo
         (fun () ->
           let exit =
             A.Test_hooks.with_fsync_fail (fun () ->
-                A.Test_hooks.with_close_fail (fun () ->
+                A.Test_hooks.with_close_fail ~sw (fun () ->
                     Ox.Scope.run (fun _ ->
                         run (fun handle ->
                             match handle.Pie.Ptt_loop.offer loud_pcm with

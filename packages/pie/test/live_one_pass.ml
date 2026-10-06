@@ -59,8 +59,8 @@ let main
           | None -> failwith "MP3 replay needs ffmpeg for WAV fallback"
         in
         let pcm =
-          Eio.Process.parse_out process_mgr Eio.Buf_read.take_all
-            ~executable:ffmpeg
+          Pie.Sh.capture_output ~process_mgr
+            ~max_size:Pie.Dictation_limits.capture_pcm_bytes ~executable:ffmpeg
             ~stdin:(Eio.Flow.string_source (Bytes.to_string audio))
             ~stderr:(Pie.Sh.discarded_stderr ())
             [
@@ -106,7 +106,8 @@ let main
             Ox_caps.Cap_stdlib.prerr_endline ~caps
               "private replay evidence write failed")
   in
-  let started = Eio.Time.now clock in
+  let mono_clock = Eio.Stdenv.mono_clock env in
+  let started = Eio.Time.Mono.now mono_clock in
   let report =
     Pie.Stt.Correction.run_with_retry ~caps ~sw ~net:(Eio.Stdenv.net env) ~clock
       ~logger ~model ~prompt_template ~transcript:Pie.Stt.Correction.audio_cue
@@ -115,7 +116,12 @@ let main
       ~reasoning_effort:"low" ~on_response:(on_response ~caps)
       ~timeout:(Ox.Duration.seconds 120) ()
   in
-  let ms = int_of_float ((Eio.Time.now clock -. started) *. 1000.) in
+  let ms =
+    int_of_float
+      (Mtime.Span.to_float_ns
+         (Mtime.span started (Eio.Time.Mono.now mono_clock))
+      /. 1e6)
+  in
   (match report.retry with
   | None -> Ox_caps.Cap_stdlib.printf ~caps "ms=%d retry=false " ms
   | Some retry ->

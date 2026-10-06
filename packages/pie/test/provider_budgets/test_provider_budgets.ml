@@ -50,12 +50,12 @@ let with_listening f =
       ~reporter:(Ox_observability.Logger.Memory.reporter memory)
       ()
   in
-  f ~sw ~net ~clock ~logger ~url ~socket
+  f ~sw ~net ~clock ~mono_clock:(Eio.Stdenv.mono_clock env) ~logger ~url ~socket
 
 let run_offer ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) ~logger ~url
-    ~sw ~net ~clock offer =
+    ~sw ~net ~clock:_ ~mono_clock offer =
   let operation =
-    Codex.with_stream_session ~caps ~sw ~net ~clock ~logger ~url
+    Codex.with_stream_session ~mono_clock ~caps ~sw ~net ~logger ~url
       ~access_token:"synthetic" ~mode:Codex.Transcription ~operation:"budget"
       ~model:"gpt-4o-mini-transcribe"
       ~cancel_message:"Codex realtime transcription cancelled" (fun handle ->
@@ -65,9 +65,9 @@ let run_offer ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) ~logger ~url
 
 let test_queue_minus_one_succeeds
     ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) () =
-  with_listening @@ fun ~sw ~net ~clock ~logger ~url ~socket:_ ->
+  with_listening @@ fun ~sw ~net ~clock ~mono_clock ~logger ~url ~socket:_ ->
   match
-    run_offer ~caps ~logger ~url ~sw ~net ~clock (fun handle ->
+    run_offer ~caps ~logger ~url ~sw ~net ~clock ~mono_clock (fun handle ->
         handle.offer_chunk (pcm (Limits.queue_pcm_bytes - 1)))
   with
   | Ok () -> ()
@@ -75,9 +75,9 @@ let test_queue_minus_one_succeeds
 
 let test_queue_exact_succeeds
     ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) () =
-  with_listening @@ fun ~sw ~net ~clock ~logger ~url ~socket:_ ->
+  with_listening @@ fun ~sw ~net ~clock ~mono_clock ~logger ~url ~socket:_ ->
   match
-    run_offer ~caps ~logger ~url ~sw ~net ~clock (fun handle ->
+    run_offer ~caps ~logger ~url ~sw ~net ~clock ~mono_clock (fun handle ->
         handle.offer_chunk (pcm Limits.queue_pcm_bytes))
   with
   | Ok () -> ()
@@ -85,24 +85,24 @@ let test_queue_exact_succeeds
 
 let test_queue_plus_one_rejected
     ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) () =
-  with_listening @@ fun ~sw ~net ~clock ~logger ~url ~socket:_ ->
+  with_listening @@ fun ~sw ~net ~clock ~mono_clock ~logger ~url ~socket:_ ->
   expect_budget
-    (run_offer ~caps ~logger ~url ~sw ~net ~clock (fun handle ->
+    (run_offer ~caps ~logger ~url ~sw ~net ~clock ~mono_clock (fun handle ->
          handle.offer_chunk (pcm (Limits.queue_pcm_bytes + 1))))
 
 let test_stalled_then_overflow_rejected
     ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) () =
-  with_listening @@ fun ~sw ~net ~clock ~logger ~url ~socket:_ ->
+  with_listening @@ fun ~sw ~net ~clock ~mono_clock ~logger ~url ~socket:_ ->
   expect_budget
-    (run_offer ~caps ~logger ~url ~sw ~net ~clock (fun handle ->
+    (run_offer ~caps ~logger ~url ~sw ~net ~clock ~mono_clock (fun handle ->
          let* () = handle.offer_chunk (pcm Limits.queue_pcm_bytes) in
          handle.offer_chunk (pcm 1)))
 
 let test_cancel_then_offer_fails
     ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) () =
-  with_listening @@ fun ~sw ~net ~clock ~logger ~url ~socket:_ ->
+  with_listening @@ fun ~sw ~net ~clock ~mono_clock ~logger ~url ~socket:_ ->
   match
-    run_offer ~caps ~logger ~url ~sw ~net ~clock (fun handle ->
+    run_offer ~caps ~logger ~url ~sw ~net ~clock ~mono_clock (fun handle ->
         let* () = handle.cancel_stream () in
         handle.offer_chunk (pcm 2))
   with
@@ -116,13 +116,13 @@ let test_cancel_then_offer_fails
 
 let test_two_blueprints_independent
     ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) () =
-  with_listening @@ fun ~sw ~net ~clock ~logger ~url ~socket:_ ->
+  with_listening @@ fun ~sw ~net ~clock ~mono_clock ~logger ~url ~socket:_ ->
   let first =
-    run_offer ~caps ~logger ~url ~sw ~net ~clock (fun handle ->
+    run_offer ~caps ~logger ~url ~sw ~net ~clock ~mono_clock (fun handle ->
         handle.offer_chunk (pcm Limits.queue_pcm_bytes))
   in
   let second =
-    run_offer ~caps ~logger ~url ~sw ~net ~clock (fun handle ->
+    run_offer ~caps ~logger ~url ~sw ~net ~clock ~mono_clock (fun handle ->
         handle.offer_chunk (pcm Limits.queue_pcm_bytes))
   in
   (match first with
@@ -138,8 +138,9 @@ let test_buffered_capture_plus_one
   Eio.Switch.run @@ fun sw ->
   let pcm_bytes = pcm (Limits.capture_pcm_bytes + 1) in
   let operation =
-    Codex.run_realtime_session ~caps ~sw ~net:(Eio.Stdenv.net env)
-      ~clock:(Eio.Stdenv.clock env) ~url:"ws://127.0.0.1:1"
+    Codex.run_realtime_session
+      ~mono_clock:(Eio.Stdenv.mono_clock env)
+      ~caps ~sw ~net:(Eio.Stdenv.net env) ~url:"ws://127.0.0.1:1"
       ~access_token:"synthetic" ~mode:Codex.Transcription
       ~input_sample_rate:16000 pcm_bytes
   in
@@ -159,9 +160,9 @@ let test_openrouter_capture_plus_one ~(caps : < Ox_caps.Cap.env ; .. >) () =
 
 let test_empty_offers_are_noop_until_item_cap
     ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) () =
-  with_listening @@ fun ~sw ~net ~clock ~logger ~url ~socket:_ ->
+  with_listening @@ fun ~sw ~net ~clock ~mono_clock ~logger ~url ~socket:_ ->
   match
-    run_offer ~caps ~logger ~url ~sw ~net ~clock (fun handle ->
+    run_offer ~caps ~logger ~url ~sw ~net ~clock ~mono_clock (fun handle ->
         let rec empties n =
           if n = 0 then Ok ()
           else
@@ -186,9 +187,9 @@ let test_empty_offers_are_noop_until_item_cap
 
 let test_empty_offer_after_cancel_fails
     ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) () =
-  with_listening @@ fun ~sw ~net ~clock ~logger ~url ~socket:_ ->
+  with_listening @@ fun ~sw ~net ~clock ~mono_clock ~logger ~url ~socket:_ ->
   match
-    run_offer ~caps ~logger ~url ~sw ~net ~clock (fun handle ->
+    run_offer ~caps ~logger ~url ~sw ~net ~clock ~mono_clock (fun handle ->
         let* () = handle.cancel_stream () in
         handle.offer_chunk (pcm 0))
   with
@@ -341,7 +342,7 @@ let serve_script ~after_handshake ~after_update ~after_append flow =
 
 let run_buffered ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) ~mode
     ~session_update ~script_handshake ~script_append pcm_bytes =
-  with_listening @@ fun ~sw ~net ~clock ~logger ~url ~socket ->
+  with_listening @@ fun ~sw ~net ~clock ~mono_clock ~logger ~url ~socket ->
   Eio.Fiber.fork ~sw (fun () ->
       (* Preserve the exception as data before this test classifies its outcome. *)
       match
@@ -355,7 +356,7 @@ let run_buffered ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) ~mode
       | Result.Ok value -> value
       | Result.Error _ -> ());
   let operation =
-    Codex.run_realtime_session ~caps ~sw ~net ~clock ~url
+    Codex.run_realtime_session ~mono_clock ~caps ~sw ~net ~url
       ~access_token:"synthetic" ~mode ~session_update ~input_sample_rate:16000
       pcm_bytes
   in
@@ -445,7 +446,7 @@ let test_empty_deltas_do_not_grow
 
 let test_offer_after_provider_failure
     ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) () =
-  with_listening @@ fun ~sw ~net ~clock ~logger ~url ~socket ->
+  with_listening @@ fun ~sw ~net ~clock ~mono_clock ~logger ~url ~socket ->
   Eio.Fiber.fork ~sw (fun () ->
       (* Preserve the exception as data before this test classifies its outcome. *)
       match
@@ -469,7 +470,7 @@ let test_offer_after_provider_failure
       | Result.Ok value -> value
       | Result.Error _ -> ());
   match
-    run_offer ~caps ~logger ~url ~sw ~net ~clock (fun handle ->
+    run_offer ~caps ~logger ~url ~sw ~net ~clock ~mono_clock (fun handle ->
         let rec spin n =
           if n <= 0 then Error (`Stt_error "timeout")
           else
@@ -495,7 +496,7 @@ let test_offer_after_provider_failure
 
 let test_closed_after_success
     ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) () =
-  with_listening @@ fun ~sw ~net ~clock ~logger ~url ~socket ->
+  with_listening @@ fun ~sw ~net ~clock ~mono_clock ~logger ~url ~socket ->
   Eio.Fiber.fork ~sw (fun () ->
       (* Preserve the exception as data before this test classifies its outcome. *)
       match
@@ -510,7 +511,7 @@ let test_closed_after_success
       | Result.Ok value -> value
       | Result.Error _ -> ());
   let operation =
-    Codex.with_stream_session ~caps ~sw ~net ~clock ~logger ~url
+    Codex.with_stream_session ~mono_clock ~caps ~sw ~net ~logger ~url
       ~access_token:"synthetic" ~mode:Codex.Transcription ~operation:"budget"
       ~model:"gpt-4o-mini-transcribe"
       ~session_update:

@@ -13,7 +13,7 @@ type capture = {
 }
 
 type file_io = {
-  open_excl : string -> Unix.file_descr;
+  open_excl : 'a. string -> (Unix.file_descr -> 'a) -> 'a;
   write : Unix.file_descr -> bytes -> unit;
   seek_set : Unix.file_descr -> int -> unit;
   fsync : Unix.file_descr -> unit;
@@ -33,10 +33,16 @@ type candidate = {
 let unix_io ~caps : file_io =
   {
     open_excl =
-      (fun path ->
-        Ox_caps.Cap_unix.openfile ~caps path
-          [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL; Unix.O_CLOEXEC ]
-          0o600);
+      (fun path claim ->
+        let fd =
+          Ox_caps.Cap_unix.openfile ~caps path
+            [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL; Unix.O_CLOEXEC ]
+            0o600
+        in
+        try claim fd
+        with exn ->
+          Unix.close fd;
+          raise exn);
     write =
       (fun fd bytes ->
         let rec loop off =
@@ -105,7 +111,7 @@ let run_io label f =
 
 let max_candidate_attempts = 1024
 
-let open_unique_candidate io output_path =
+let open_unique_candidate io output_path ~rate owned =
   let dir = Filename.dirname output_path in
   let base = Filename.basename output_path in
   let rec loop n =
@@ -116,7 +122,15 @@ let open_unique_candidate io output_path =
         Printf.sprintf ".%s.pie-record.%d.%d" base (Unix.getpid ()) n
       in
       let path = Filename.concat dir name in
-      try Ok (path, io.open_excl path) with
+      try
+        Ok
+          (io.open_excl path (fun fd ->
+               let state =
+                 { path; fd; close_pending = true; data_length = 0; rate }
+               in
+               owned := Some state;
+               state))
+      with
       | Eio.Cancel.Cancelled _ as exn -> raise exn
       | Unix.Unix_error (Unix.EEXIST, _, _) -> loop (n + 1)
       | exn -> Error (io_error "open candidate" exn)
@@ -148,10 +162,7 @@ let cleanup io published owned =
       Error (`Stt_error (a ^ "; " ^ b))
 
 let claim_candidate io output_path ~rate owned =
-  let* path, fd = open_unique_candidate io output_path in
-  let state = { path; fd; close_pending = true; data_length = 0; rate } in
-  owned := Some state;
-  Ok state
+  open_unique_candidate io output_path ~rate owned
 
 let capture_bounded ~clock ~io ~state ~duration_ms capture =
   let rec read_audio () =

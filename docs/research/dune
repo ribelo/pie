@@ -1,3 +1,6 @@
 ; Research evidence (reproducers, experiments): data for readers, never built by dune.
 
-(data_only_dirs *)
+(data_only_dirs
+ 2026-09-29-sigchld-ppoll-race
+ 2026-09-30-dictation-models
+ 2026-10-01-leak-experiment)

@@ -101,12 +101,16 @@ let test_no_inspection_exact_stdin
   | Ok () ->
       (* The final path is published only after cat has consumed all stdin.
          Await that marker within the same former 100ms observation window. *)
-      let clock = Eio.Stdenv.clock env in
-      let deadline = Eio.Time.now clock +. 0.1 in
+      let clock = Eio.Stdenv.mono_clock env in
+      let started = Eio.Time.Mono.now clock in
       let rec await_helper () =
-        if Sys.file_exists stdin_path || Eio.Time.now clock >= deadline then ()
+        let elapsed =
+          Mtime.Span.to_float_ns (Mtime.span started (Eio.Time.Mono.now clock))
+          /. 1e9
+        in
+        if Sys.file_exists stdin_path || elapsed >= 0.1 then ()
         else (
-          Eio.Time.sleep clock 0.005;
+          Eio.Time.Mono.sleep clock 0.005;
           await_helper ())
       in
       await_helper ();
@@ -421,8 +425,8 @@ let run_configured_inject ~(caps : < Ox_caps.Cap.env ; .. >) ?read_selection
   let read_selection =
     Option.value read_selection ~default:(fun () -> Some text)
   in
-  let clock = Option.value clock ~default:(Eio.Stdenv.clock env) in
-  Pie.Input.Text_injection.inject ~caps ~clock ~read_selection
+  let mono_clock = Option.value clock ~default:(Eio.Stdenv.mono_clock env) in
+  Pie.Input.Text_injection.inject ~caps ~mono_clock ~read_selection
     ~clipboard_owner:owner ~text_entry_rules:paste_rules
     ~target_window:
       (Some
@@ -538,16 +542,18 @@ let with_wayland ~(caps : < Ox_caps.Cap.env ; .. >) dir f =
     f
 
 let instant_clock () =
-  let virtual_now = ref 0. in
+  let virtual_now = ref (Mtime.of_uint64_ns 0L) in
   let sleeps = ref [] in
   let module Clock = struct
     type t = unit
-    type time = float
+    type time = Mtime.t
 
     let now () = !virtual_now
 
     let sleep_until () target =
-      sleeps := (target -. !virtual_now) :: !sleeps;
+      sleeps :=
+        (Mtime.Span.to_float_ns (Mtime.span !virtual_now target) /. 1e9)
+        :: !sleeps;
       virtual_now := target
   end in
   (Eio.Resource.T ((), Eio.Time.Pi.clock (module Clock)), sleeps)
@@ -813,7 +819,8 @@ let test_production_wl_paste_confirms_before_key
       ~copy_program:copy ()
   in
   match
-    Pie.Input.Text_injection.inject ~caps ~clock:(Eio.Stdenv.clock env)
+    Pie.Input.Text_injection.inject ~caps
+      ~mono_clock:(Eio.Stdenv.mono_clock env)
       ~clipboard_owner:owner ~text_entry_rules:paste_rules
       ~target_window:
         (Some
@@ -869,9 +876,9 @@ let test_cancelled_confirmation_never_pastes
   let real = Eio.Stdenv.clock env in
   let module Clock = struct
     type t = unit
-    type time = float
+    type time = Mtime.t
 
-    let now () = 0.
+    let now () = Mtime.of_uint64_ns 0L
     let sleep_until () _target = Eio.Fiber.await_cancel ()
   end in
   let fake = Eio.Resource.T ((), Eio.Time.Pi.clock (module Clock)) in
@@ -881,7 +888,8 @@ let test_cancelled_confirmation_never_pastes
       ~copy_program:copy ()
   in
   let run () =
-    Pie.Input.Text_injection.inject ~caps ~clock:fake ~clipboard_owner:owner
+    Pie.Input.Text_injection.inject ~caps ~mono_clock:fake
+      ~clipboard_owner:owner
       ~read_selection:(fun () -> None)
       ~text_entry_rules:paste_rules
       ~target_window:

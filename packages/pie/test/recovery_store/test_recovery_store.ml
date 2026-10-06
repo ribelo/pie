@@ -359,7 +359,7 @@ let test_fchmod_after_open_fails
       | Error (`Retry_store _) -> ()
       | Ok _ -> Alcotest.fail "writer opened after fchmod failure")
 
-let test_close_and_unlink_both_fail
+let test_close_and_unlink_both_fail ~sw
     ~(caps :
        < Ox_caps.Cap.fs_read
        ; Ox_caps.Cap.fs_write
@@ -371,7 +371,7 @@ let test_close_and_unlink_both_fail
       let w = fail_store (A.open_audio_writer store ~mode:Transcribe) in
       fail_store (A.append_audio w even_pcm);
       match
-        A.Test_hooks.with_close_and_unlink_fail (fun () -> A.abort_writer w)
+        A.Test_hooks.with_close_and_unlink_fail ~sw (fun () -> A.abort_writer w)
       with
       | Error (`Retry_store m) ->
           Alcotest.(check bool) "close reported" true (String.length m > 0)
@@ -549,7 +549,7 @@ let test_retire_failure_then_abort_keeps_new
           | _ -> Alcotest.fail "indexed new candidate missing after retire fail"
           ))
 
-let test_close_reuse_abort_leaves_new_fd
+let test_close_reuse_abort_leaves_new_fd ~sw
     ~(caps :
        < Ox_caps.Cap.fs_read
        ; Ox_caps.Cap.fs_write
@@ -560,7 +560,7 @@ let test_close_reuse_abort_leaves_new_fd
       let store = fail_store (A.open_store ~caps ~root) in
       let w = fail_store (A.open_audio_writer store ~mode:Transcribe) in
       fail_store (A.append_audio w even_pcm);
-      (match A.Test_hooks.with_close_fail (fun () -> A.close_writer w) with
+      (match A.Test_hooks.with_close_fail ~sw (fun () -> A.close_writer w) with
       | Error (`Retry_store _) -> ()
       | Ok () -> Alcotest.fail "close succeeded under inject");
       let reused =
@@ -568,17 +568,14 @@ let test_close_reuse_abort_leaves_new_fd
         | Some fd -> fd
         | None -> Alcotest.fail "no reused fd"
       in
-      fail_store (A.abort_writer w);
-      (match Unix.fstat reused with
-      | st -> Alcotest.(check bool) "reused fd live" true (st.st_nlink >= 0)
-      | exception Unix.Unix_error (Unix.EBADF, _, _) ->
-          Alcotest.fail "abort closed reused descriptor");
-      (* Preserve the exception as data before this test classifies its outcome. *)
-      match
-        try Result.Ok (Unix.close reused) with exn -> Result.Error exn
-      with
-      | Result.Ok value -> value
-      | Result.Error _ -> ())
+      Fun.protect
+        ~finally:(fun () -> Unix.close reused)
+        (fun () ->
+          fail_store (A.abort_writer w);
+          match Unix.fstat reused with
+          | st -> Alcotest.(check bool) "reused fd live" true (st.st_nlink >= 0)
+          | exception Unix.Unix_error (Unix.EBADF, _, _) ->
+              Alcotest.fail "abort closed reused descriptor"))
 
 let test_publish_text_error_preserves_rollback
     ~(caps :
@@ -730,6 +727,8 @@ let main
        ; Ox_caps.Cap.time
        ; Ox_caps.Cap.tmp
        ; .. >) =
+  Eio_main.run @@ fun _ ->
+  Eio.Switch.run @@ fun sw ->
   Alcotest.run "recovery_store"
     [
       ( "active",
@@ -760,7 +759,7 @@ let main
           Alcotest.test_case "fchmod failure after exclusive open" `Quick
             (test_fchmod_after_open_fails ~caps);
           Alcotest.test_case "close and unlink both fail" `Quick
-            (test_close_and_unlink_both_fail ~caps);
+            (test_close_and_unlink_both_fail ~sw ~caps);
           Alcotest.test_case "EMFILE is error not no-candidate" `Quick
             (test_emfile_is_error_not_none ~caps);
           Alcotest.test_case "malicious slot symlink spares sentinel" `Quick
@@ -772,7 +771,7 @@ let main
           Alcotest.test_case "retire failure then abort keeps new" `Quick
             (test_retire_failure_then_abort_keeps_new ~caps);
           Alcotest.test_case "close reuse abort leaves new fd" `Quick
-            (test_close_reuse_abort_leaves_new_fd ~caps);
+            (test_close_reuse_abort_leaves_new_fd ~sw ~caps);
           Alcotest.test_case "publish_text error preserves rollback" `Quick
             (test_publish_text_error_preserves_rollback ~caps);
           Alcotest.test_case "active symlink leaves outside unchanged" `Quick

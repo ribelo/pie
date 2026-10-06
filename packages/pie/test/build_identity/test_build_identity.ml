@@ -14,14 +14,17 @@ let identity ~(caps : < Ox_caps.Cap.exec ; Ox_caps.Cap.fork ; .. >) root =
       ^ Filename.quote_command "bash" [ script (); root ])
   in
   let lines = ref [] in
-  (try
-     while true do
-       lines := input_line channel :: !lines
-     done
-   with End_of_file -> ());
-  (match Unix.close_process_in channel with
-  | Unix.WEXITED 0 -> ()
-  | _ -> Alcotest.fail "generator failed");
+  Fun.protect
+    ~finally:(fun () ->
+      match Unix.close_process_in channel with
+      | Unix.WEXITED 0 -> ()
+      | _ -> Alcotest.fail "generator failed")
+    (fun () ->
+      try
+        while true do
+          lines := input_line channel :: !lines
+        done
+      with End_of_file -> ());
   let field name =
     List.find_map
       (fun line ->

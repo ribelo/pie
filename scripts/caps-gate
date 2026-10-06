@@ -20,6 +20,10 @@ if [ -z "$engine" ]; then
   exit 2
 fi
 
+# Inventory queries rebuild volatile generated sources. Keep this validation
+# build's timestamp stable across those queries and compiler rebuilds.
+export PIE_BUILD_IDENTITY_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
 # @check also produces executable modules' fresh typed evidence.
 dune build @install @check
 

@@ -49,11 +49,11 @@ let pipeline ~stt =
 module Service = struct
   include Pie.Assistant.Service
 
-  let on_press ~caps ~sw ~net ~clock ~logger ~coordinator ~config ?store
-      ?retry_dir ?pipeline:deps ?binding ?on_owner ?focused_window ~stt ~deliver
-      mode =
-    Pie.Assistant.Service.on_press ~caps ~sw ~net ~clock ~logger ~coordinator
-      ~config ?store ?retry_dir
+  let on_press ~caps ~sw ~net ~clock ~mono_clock ~logger ~coordinator ~config
+      ?store ?retry_dir ?pipeline:deps ?binding ?on_owner ?focused_window ~stt
+      ~deliver mode =
+    Pie.Assistant.Service.on_press ~caps ~sw ~net ~clock ~mono_clock ~logger
+      ~coordinator ~config ?store ?retry_dir
       ~pipeline:(Option.value deps ~default:(pipeline ~stt))
       ?binding ?on_owner ?focused_window ~stt ~deliver mode
 

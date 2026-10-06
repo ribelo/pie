@@ -386,26 +386,28 @@ let test_rename_fail_does_not_close_sentinel
       0o600
   in
   let closed_after = ref false in
-  let io =
-    {
-      (unix_io ~caps) with
-      close =
-        (fun fd ->
-          (unix_io ~caps).close fd;
-          closed_after := true);
-      rename = (fun _ _ -> failwith "rename boom");
-    }
-  in
-  let result =
-    run ~caps ~output_path:path ~duration_sec:1.
-      ~chunks:[ s16le [ 7; 8 ] ]
-      ~io ()
-  in
-  expect_fail (contains "rename") result;
-  (* sentinel must still be a live fd *)
-  let wrote = Unix.write_substring sentinel "X" 0 1 in
-  Alcotest.(check int) "sentinel still writable" 1 wrote;
-  Unix.close sentinel;
+  Fun.protect
+    ~finally:(fun () -> Unix.close sentinel)
+    (fun () ->
+      let io =
+        {
+          (unix_io ~caps) with
+          close =
+            (fun fd ->
+              (unix_io ~caps).close fd;
+              closed_after := true);
+          rename = (fun _ _ -> failwith "rename boom");
+        }
+      in
+      let result =
+        run ~caps ~output_path:path ~duration_sec:1.
+          ~chunks:[ s16le [ 7; 8 ] ]
+          ~io ()
+      in
+      expect_fail (contains "rename") result;
+      (* sentinel must still be a live fd *)
+      let wrote = Unix.write_substring sentinel "X" 0 1 in
+      Alcotest.(check int) "sentinel still writable" 1 wrote);
   (* Preserve the exception as data before this test classifies its outcome. *)
   (match
      try Result.Ok (Ox_caps.Cap_sys.remove ~caps sentinel_path)
@@ -681,9 +683,16 @@ let test_close_once_construction_does_not_clear_claim
    with
   | Result.Ok value -> value
   | Result.Error _ -> ());
-  let fd = (unix_io ~caps).open_excl cand in
-  let state : Pie.Commands.Record.candidate =
-    { path = cand; fd; close_pending = true; data_length = 0; rate = 16000 }
+  let state =
+    (unix_io ~caps).open_excl cand (fun fd ->
+        ({
+           path = cand;
+           fd;
+           close_pending = true;
+           data_length = 0;
+           rate = 16000;
+         }
+          : Pie.Commands.Record.candidate))
   in
   (match Pie.Commands.Record.close_once (unix_io ~caps) state with
   | Ok () -> ()

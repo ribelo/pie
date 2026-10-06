@@ -372,15 +372,19 @@ let unique_candidate ~(caps : < Ox_caps.Cap.fs_write ; .. >) dir =
           [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL ]
           0o600
       with
-      | fd -> (path, fd)
+      | fd -> (
+          try (path, Unix.out_channel_of_descr fd)
+          with exn ->
+            Unix.close fd;
+            Ox_caps.Cap_unix.unlink ~caps path;
+            raise exn)
       | exception Unix.Unix_error (Unix.EEXIST, _, _) -> loop (n + 1)
   in
   loop 0
 
 let atomic_write ~(caps : < Ox_caps.Cap.fs_write ; .. >) path contents =
   let dir = Filename.dirname path in
-  let cand, fd = unique_candidate ~caps dir in
-  let oc = Unix.out_channel_of_descr fd in
+  let cand, oc = unique_candidate ~caps dir in
   let published = ref false in
   Fun.protect
     ~finally:(fun () ->

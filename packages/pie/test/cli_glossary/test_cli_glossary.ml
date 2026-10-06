@@ -1,3 +1,6 @@
+let monotonic_seconds () =
+  Mtime.Span.to_float_ns (Mtime_clock.elapsed ()) /. 1e9
+
 let pie_exe =
   Filename.concat (Filename.dirname Sys.executable_name) "../../bin/pie.exe"
 
@@ -98,7 +101,7 @@ let rec drain_select ~(caps : < Ox_caps.Cap.time ; .. >) ~deadline ~stdout_r
     ~stderr_r stdout_buf stderr_buf stdout_open stderr_open =
   if not (stdout_open || stderr_open) then (false, false)
   else
-    let now = Ox_caps.Cap_unix.gettimeofday ~caps () in
+    let now = monotonic_seconds () in
     if now >= deadline then (stdout_open, stderr_open)
     else
       let timeout = min 0.05 (deadline -. now) in
@@ -175,7 +178,7 @@ let run_pie
   close_fd stderr_w;
   let stdout_buf = Buffer.create 256 in
   let stderr_buf = Buffer.create 256 in
-  let deadline = Ox_caps.Cap_unix.gettimeofday ~caps () +. child_deadline_s in
+  let deadline = monotonic_seconds () +. child_deadline_s in
   let rec wait_child stdout_open stderr_open =
     let stdout_open, stderr_open =
       drain_select ~caps ~deadline ~stdout_r ~stderr_r stdout_buf stderr_buf
@@ -183,7 +186,7 @@ let run_pie
     in
     match Unix.waitpid [ Unix.WNOHANG ] pid with
     | 0, _ ->
-        if Ox_caps.Cap_unix.gettimeofday ~caps () >= deadline then (
+        if monotonic_seconds () >= deadline then (
           (try Ox_caps.Cap_unix.kill ~caps pid Sys.sigkill
            with Unix.Unix_error _ -> ());
           snd (Unix.waitpid [] pid))

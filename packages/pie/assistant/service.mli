@@ -163,7 +163,7 @@ val report_delivery :
 
 val production_deliver :
   caps:< Ox_caps.Cap.env ; Ox_caps.Cap.stdout ; Ox_caps.Cap.stderr ; .. > ->
-  clock:_ Eio.Time.clock ->
+  mono_clock:_ Eio.Time.Mono.t ->
   process_mgr:_ Eio.Process.mgr ->
   ?clipboard_owner:Wayland.Clipboard.t ->
   Config.Stt.t ->
@@ -195,6 +195,7 @@ val production_stt :
   sw:Eio.Switch.t ->
   net:[> `Generic ] Eio.Net.ty Eio.Resource.t ->
   clock:_ Eio.Time.clock ->
+  mono_clock:_ Eio.Time.Mono.t ->
   logger:Ox_observability.Logger.t ->
   process_mgr:_ Eio.Process.mgr ->
   Config.Stt.t ->
@@ -229,6 +230,7 @@ val on_press :
   sw:Eio.Switch.t ->
   net:[> `Generic ] Eio.Net.ty Eio.Resource.t ->
   clock:_ Eio.Time.clock ->
+  mono_clock:_ Eio.Time.Mono.t ->
   logger:Ox_observability.Logger.t ->
   coordinator:Recording.Coordinator.t ->
   config:Config.Stt.t ->

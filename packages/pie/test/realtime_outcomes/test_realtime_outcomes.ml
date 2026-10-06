@@ -240,9 +240,10 @@ let run_session_with ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.time ; .. >) ?tls
   let result =
     try
       Eio.Time.with_timeout_exn clock 3.0 (fun () ->
-          Codex.run_realtime_session ~caps ~sw ~net ~clock ?ca_file ~url
-            ~access_token:"synthetic" ~mode ?session_update
-            ~input_sample_rate:16000 pcm)
+          Codex.run_realtime_session
+            ~mono_clock:(Eio.Stdenv.mono_clock env)
+            ~caps ~sw ~net ?ca_file ~url ~access_token:"synthetic" ~mode
+            ?session_update ~input_sample_rate:16000 pcm)
     with Eio.Time.Timeout -> Error (`Stt_error "timeout")
   in
   (result, !saw_audio)
@@ -639,9 +640,9 @@ let test_pass1_stream_commits
   let result, request, frames =
     run_peer ~caps ~terminal:On_commit (fun env sw net clock ->
         let logger = pass1_logger env clock in
-        Codex.with_pass1_stream ~caps ~sw ~net ~clock ~logger
-          ~model:"gpt-live-transcribe" ~language:"pl" ~context:"Nema\nPie"
-          (fun handle ->
+        Codex.with_pass1_stream ~mono_clock:(Eio.Stdenv.mono_clock env)
+          ~caps ~sw ~net ~logger ~model:"gpt-live-transcribe" ~language:"pl"
+          ~context:"Nema\nPie" (fun handle ->
             let* () = handle.offer_chunk pcm in
             let* () = handle.offer_chunk pcm in
             handle.finish_stream ()))
@@ -669,8 +670,10 @@ let test_pass1_buffered_sends_all_audio
     ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.time ; .. >)
     () =
   let result, request, frames =
-    run_peer ~caps ~terminal:On_commit (fun _env sw net clock ->
-        Codex.transcribe_pass1 ~caps ~sw ~net ~clock ~model:"gpt-transcribe" pcm)
+    run_peer ~caps ~terminal:On_commit (fun env sw net _clock ->
+        Codex.transcribe_pass1
+          ~mono_clock:(Eio.Stdenv.mono_clock env)
+          ~caps ~sw ~net ~model:"gpt-transcribe" pcm)
   in
   expect_transcript "hello" result;
   Alcotest.(check bool)

@@ -2,5 +2,5 @@
 
 (test
  (name test_cli_glossary)
- (libraries ox_test unix alcotest)
+ (libraries mtime.clock.os ox_test unix alcotest)
  (deps ../../bin/pie.exe))

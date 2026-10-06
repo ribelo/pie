@@ -2,5 +2,5 @@
 
 (test
  (name test_cli_status)
- (libraries ox_test unix threads alcotest yojson)
+ (libraries mtime.clock.os ox_test unix threads alcotest yojson)
  (deps ../../bin/pie.exe))

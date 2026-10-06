@@ -144,13 +144,13 @@ let direct_close ~sw ~net ~clock ~url =
 let pie_buffered
     ~(caps : < Ox_caps.Cap.env ; Ox_caps.Cap.fs_read ; Ox_caps.Cap.time ; .. >)
     ~sw ~net ~clock =
-  Stt.Codex_realtime.transcribe_pass1 ~caps ~sw ~net ~clock
+  Stt.Codex_realtime.transcribe_pass1 ~caps ~sw ~net ~mono_clock:clock
     ~model:"gpt-live-transcribe" ~language:"pl" ~sample_rate:16000
     (Bytes.make 3200 '\000')
 
 let report ~(caps : < Ox_caps.Cap.fs_read ; Ox_caps.Cap.stdout ; .. >) ~clock
     ~label ~index ~held =
-  Eio.Time.sleep clock 0.05;
+  Eio.Time.Mono.sleep clock 0.05;
   let raw = fd_count ~caps () in
   Ox_caps.Cap_stdlib.printf ~caps "%-30s %2d raw=%3d held=%2d adjusted=%3d\n%!"
     label index raw !held
@@ -160,9 +160,11 @@ let run_operation
     ~(caps :
        < Ox_caps.Cap.fs_read ; Ox_caps.Cap.stdout ; Ox_caps.Cap.time ; .. >)
     ~clock ~label ~index ~held operation =
-  let started = Ox_caps.Cap_unix.gettimeofday ~caps () in
+  let started = Eio.Time.Mono.now clock in
   let result = operation () in
-  let elapsed = (Ox_caps.Cap_unix.gettimeofday ~caps () -. started) *. 1000. in
+  let elapsed =
+    Mtime.Span.to_float_ns (Mtime.span started (Eio.Time.Mono.now clock)) /. 1e6
+  in
   report ~caps ~clock ~label ~index ~held;
   Ox_caps.Cap_stdlib.printf ~caps "    %s exit=%s (%.0fms)\n%!" label
     (match result with Ok _ -> "Ok" | Error _ -> "Error")
@@ -178,7 +180,7 @@ let main
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let net = Eio.Stdenv.net env in
-  let clock = Eio.Stdenv.clock env in
+  let clock = Eio.Stdenv.mono_clock env in
   Ox_caps.Cap_unix.putenv ~caps "OPENAI_API_KEY" "test-token";
   let sessions = 12 in
   let direct_control ~caps ~label ~mode ~scoped =
@@ -213,7 +215,7 @@ let main
       in
       run_operation ~caps ~clock ~label ~index ~held operation
     done;
-    Eio.Time.sleep clock 0.1;
+    Eio.Time.Mono.sleep clock 0.1;
     release ()
   in
   pie_control ~caps ~label:"pie-error/long-lived-sw" ~mode:Error_frame
@@ -228,7 +230,7 @@ let main
   for index = 1 to 4 do
     let operation () =
       try
-        Eio.Time.with_timeout_exn clock 0.3 (fun () ->
+        Eio.Time.Timeout.run_exn (Eio.Time.Timeout.seconds clock 0.3) (fun () ->
             pie_buffered ~caps ~sw ~net ~clock)
       with Eio.Time.Timeout -> Error (`Stt_error "local cancel")
     in

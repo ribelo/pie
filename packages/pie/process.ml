@@ -28,7 +28,8 @@ let telemetry ~sw (env : _ Ox_app.Env.t) _config : Ox_app.telemetry =
         "Pie OTLP export failed: %a@." Ox_otel.pp_error error
     in
     match
-      Ox_otel.create ~caps ~sw ~clock:env.base#clock ~http_client ~endpoint
+      Ox_otel.create ~caps ~sw ~clock:env.base#clock
+        ~mono_clock:env.base#mono_clock ~http_client ~endpoint
         ~service_name:"pie" ~ending_budget:(Ox.Duration.seconds 5)
         ~resource:[ ("service.version", "0.1.0") ]
         ~on_error ()

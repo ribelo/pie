@@ -197,8 +197,8 @@ let encode_mp3 ~caps ~process_mgr pcm =
   | Some ffmpeg -> (
       try
         let mp3 =
-          Eio.Process.parse_out process_mgr Eio.Buf_read.take_all
-            ~executable:ffmpeg
+          Sh.capture_output ~process_mgr
+            ~max_size:Dictation_limits.capture_pcm_bytes ~executable:ffmpeg
             ~stdin:(Eio.Flow.string_source (Bytes.to_string pcm))
             ~stderr:(Sh.discarded_stderr ())
             (ffmpeg
@@ -275,8 +275,9 @@ let decode_opus ~caps ~process_mgr path =
   | Some ffmpeg -> (
       try
         let pcm =
-          Eio.Process.parse_out process_mgr Eio.Buf_read.take_all
-            ~executable:ffmpeg ~stderr:(Sh.discarded_stderr ())
+          Sh.capture_output ~process_mgr
+            ~max_size:Dictation_limits.capture_pcm_bytes ~executable:ffmpeg
+            ~stderr:(Sh.discarded_stderr ())
             (ffmpeg
             :: [
                  "-hide_banner";

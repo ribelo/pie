@@ -2,4 +2,13 @@
 
 (test
  (name test_correction)
- (libraries pie alcotest eio_main ox ox_test yojson unix cstruct))
+ (libraries
+  mtime.clock.os
+  pie
+  alcotest
+  eio_main
+  ox
+  ox_test
+  yojson
+  unix
+  cstruct))

@@ -11,6 +11,7 @@ if [ -e "$root/.git" ] && command -v git >/dev/null 2>&1; then
     if [ -n "$status" ] && [ "$commit" != unknown ]; then commit="$commit-dirty"; fi
   fi
 fi
-# Actual rule execution time is intentional, even in Nix development shells.
-built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+# Ordinary builds sample rule execution time, even in Nix development shells.
+# The capability gate samples once for its inventory and compiler rebuilds.
+built_at=${PIE_BUILD_IDENTITY_TIME:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}
 printf '(* Generated at build time. No runtime git or clock access. *)\nlet commit = "%s"\nlet time = "%s"\n' "$commit" "$built_at"

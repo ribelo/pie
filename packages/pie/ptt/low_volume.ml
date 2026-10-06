@@ -30,7 +30,7 @@ let process_chunk t chunk =
     let pending = ref t.pending in
     let low_windows = ref t.low_windows in
     let warned = ref false in
-    let add_sample low high =
+    let add_sample ~low ~high =
       let raw = low lor (high lsl 8) in
       let sample = if raw > 32767 then raw - 65536 else raw in
       let value = float_of_int sample in
@@ -52,11 +52,12 @@ let process_chunk t chunk =
     (match !pending with
     | None -> ()
     | Some low ->
-        add_sample low (Bytes.get_uint8 chunk 0);
+        add_sample ~low ~high:(Bytes.get_uint8 chunk 0);
         pending := None;
         i := 1);
     while !i + 1 < Bytes.length chunk && not !warned do
-      add_sample (Bytes.get_uint8 chunk !i) (Bytes.get_uint8 chunk (!i + 1));
+      add_sample ~low:(Bytes.get_uint8 chunk !i)
+        ~high:(Bytes.get_uint8 chunk (!i + 1));
       i := !i + 2
     done;
     if !i < Bytes.length chunk && not !warned then

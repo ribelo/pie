@@ -210,21 +210,28 @@ let deliver ~copy ~paste ?(confirm = fun _ -> true) ~newline ~focused_window
 let selection_poll_interval = 0.020
 let selection_confirm_bound = 1.0
 
-let await_selection ~clock ~read text =
-  let deadline = Eio.Time.now clock +. selection_confirm_bound in
+let await_selection ~mono_clock ~read text =
+  let started = Eio.Time.Mono.now mono_clock in
+  let elapsed () =
+    Mtime.Span.to_float_ns (Mtime.span started (Eio.Time.Mono.now mono_clock))
+    /. 1e9
+  in
   let rec loop () =
-    if Eio.Time.now clock >= deadline then false
+    if elapsed () >= selection_confirm_bound then false
     else
       match read () with
       | Some got when String.equal got text -> true
       | Some _ | None ->
-          let before = Eio.Time.now clock in
-          let remaining = deadline -. before in
+          let before = Eio.Time.Mono.now mono_clock in
+          let remaining = selection_confirm_bound -. elapsed () in
           if remaining <= 0. then false
           else (
-            Eio.Time.sleep clock (min selection_poll_interval remaining);
+            Eio.Time.Mono.sleep mono_clock
+              (min selection_poll_interval remaining);
             (* A clock that does not advance must not spin. *)
-            if Eio.Time.now clock <= before then false else loop ())
+            if Mtime.compare (Eio.Time.Mono.now mono_clock) before <= 0 then
+              false
+            else loop ())
   in
   loop ()
 
@@ -237,7 +244,7 @@ let read_wl_paste ~process_mgr prog () =
   | Error _ -> None
 
 let inject ~caps ?clipboard_owner ?(newline_rules = []) ?(text_entry_rules = [])
-    ?(target_window = None) ?read_selection ~clock ~process_mgr text =
+    ?(target_window = None) ?read_selection ~mono_clock ~process_mgr text =
   let open Result.Syntax in
   let detected = detect_session ~caps () in
   let session =
@@ -257,12 +264,12 @@ let inject ~caps ?clipboard_owner ?(newline_rules = []) ?(text_entry_rules = [])
   in
   let confirm offered =
     match read_selection with
-    | Some read -> await_selection ~clock ~read offered
+    | Some read -> await_selection ~mono_clock ~read offered
     | None -> (
         match Sh.find_executable ~caps "wl-paste" with
         | None -> false
         | Some prog ->
-            await_selection ~clock
+            await_selection ~mono_clock
               ~read:(read_wl_paste ~process_mgr prog)
               offered)
   in

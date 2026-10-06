@@ -1,12 +1,21 @@
 (* A started native callback owns its resources through physical completion.
    Keep its tiny Ox pool in a protected child switch, and drain before closing
    that switch; cancelling the caller must not race writer cleanup. *)
+let filesystem_concurrency =
+  match Ox.Concurrency.of_int 1 with
+  | Ok bound -> bound
+  | Error `Invalid -> invalid_arg "filesystem concurrency must be positive"
+
 let blocking f =
   Eio.Cancel.protect (fun () ->
       Eio.Switch.run (fun sw ->
           let pool =
             Ox_blocking.Pool.create ~sw ~name:"pie-filesystem"
-              { max_threads = 1; max_queued = 0; shutdown_policy = Drain }
+              {
+                max_threads = filesystem_concurrency;
+                max_queued = 0;
+                shutdown_policy = Drain;
+              }
           in
           Fun.protect
             ~finally:(fun () -> Ox_blocking.Pool.shutdown pool)

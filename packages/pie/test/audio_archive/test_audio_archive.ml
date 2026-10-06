@@ -158,7 +158,7 @@ let test_real_mp3 ~(caps : < Ox_caps.Cap.env ; .. >) () =
     [ "Xing"; "Info" ];
   let errors = Buffer.create 64 in
   let probe =
-    Eio.Process.parse_out process_mgr Eio.Buf_read.take_all
+    Pie.Sh.capture_output ~process_mgr ~max_size:65_536
       ~stdin:(Eio.Flow.string_source mp3)
       ~stderr:(Eio.Flow.buffer_sink errors)
       [
@@ -185,7 +185,8 @@ let test_real_mp3 ~(caps : < Ox_caps.Cap.env ; .. >) () =
   Alcotest.(check int) "mono" 1 (stream |> member "channels" |> to_int);
   let ffmpeg = Option.get (Pie.Recording.Audio_archive.resolve_ffmpeg ~caps) in
   let decoded =
-    Eio.Process.parse_out process_mgr Eio.Buf_read.take_all ~executable:ffmpeg
+    Pie.Sh.capture_output ~process_mgr
+      ~max_size:Pie.Dictation_limits.capture_pcm_bytes ~executable:ffmpeg
       ~stdin:(Eio.Flow.string_source mp3)
       ~stderr:(Eio.Flow.buffer_sink errors)
       [

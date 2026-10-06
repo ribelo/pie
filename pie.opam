@@ -24,6 +24,7 @@ depends: [
   "cmdliner" {>= "1.0"}
   "eio_main" {>= "1.0"}
   "cstruct" {>= "6.0.0"}
+  "mtime" {with-test}
   "alcotest" {with-test}
   "odoc" {with-doc}
 ]
