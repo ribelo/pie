@@ -644,8 +644,13 @@ let test_unconfirmed_selection_stays_on_clipboard
   | Error _ -> Alcotest.fail "unconfirmed selection was reported as a failure"
   | Ok result ->
       Eio.Time.sleep (Eio.Stdenv.clock env) 0.1;
-      let slept = List.rev !sleeps in
+      let slept, hold =
+        match !sleeps with
+        | hold :: polls -> (List.rev polls, hold)
+        | [] -> ([], 0.)
+      in
       let total = List.fold_left ( +. ) 0. slept in
+      Alcotest.(check (float 0.001)) "selection held for 500ms" 0.5 hold;
       Alcotest.(check bool) "polled through the bound" true (!polls > 1);
       Alcotest.(check bool)
         "poll interval is 20ms" true
@@ -851,6 +856,72 @@ let test_production_wl_paste_confirms_before_key
       Alcotest.(check bool)
         "paste key attempted" true
         (result.outcome = Pie.Input.Text_injection.Clipboard_key_attempted)
+
+(* Regression: two dictations finished together while the target window was
+   not focused. The second offer retired the first helper before a clipboard
+   history watcher read it, and the first transcript was lost. *)
+let test_clipboard_only_outlives_quick_successor
+    ~(caps :
+       < Ox_caps.Cap.env
+       ; Ox_caps.Cap.fs_read
+       ; Ox_caps.Cap.fs_write
+       ; Ox_caps.Cap.tmp
+       ; .. >) () =
+  with_temp_dir ~caps @@ fun dir ->
+  let q = Filename.quote in
+  let selection = Filename.concat dir "selection" in
+  let history = Filename.concat dir "history" in
+  ignore (write_exec ~caps dir "wl-paste" ("cat " ^ q selection ^ "\n"));
+  ignore
+    (write_exec ~caps dir "niri"
+       "printf '%s\n' '{\"id\":1,\"title\":\"t\",\"app_id\":\"app\"}'\n");
+  ignore (write_exec ~caps dir "wtype" "exit 0\n");
+  (* Each helper publishes its text, then a watcher reads it from this helper
+     300 ms later. A retired helper never reaches the history. *)
+  let copy =
+    write_exec ~caps dir "wl-copy"
+      ("text=$(cat)\nprintf '%s' \"$text\" > " ^ q selection
+     ^ "\nsleep 0.3\nprintf '%s\\n' \"$text\" >> " ^ q history
+     ^ "\nwhile :; do sleep 0.05; done\n")
+  in
+  with_wayland ~caps dir @@ fun () ->
+  Pie_test_runtime.run ~caps @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let owner =
+    Pie.Wayland.Clipboard.create ~caps ~sw
+      ~process_mgr:(Eio.Stdenv.process_mgr env)
+      ~copy_program:copy ()
+  in
+  let deliver text =
+    match
+      Pie.Input.Text_injection.inject ~caps
+        ~mono_clock:(Eio.Stdenv.mono_clock env)
+        ~clipboard_owner:owner ~text_entry_rules:paste_rules
+        ~target_window:
+          (Some
+             {
+               Pie.Niri.id = 2;
+               title = Some "unfocused";
+               app_id = Some "app";
+               pid = None;
+               workspace_id = None;
+             })
+        ~process_mgr:(Eio.Stdenv.process_mgr env)
+        text
+    with
+    | Error _ -> Alcotest.failf "clipboard delivery of %s failed" text
+    | Ok result ->
+        Alcotest.(check bool)
+          "clipboard outcome" true
+          (result.outcome = Pie.Input.Text_injection.Clipboard_only)
+  in
+  deliver "first";
+  deliver "second";
+  Eio.Time.sleep (Eio.Stdenv.clock env) 0.5;
+  Alcotest.(check string)
+    "history watcher saw both deliveries" "first\nsecond\n"
+    (Ox_caps.Cap_stdlib.In_channel.with_open_text ~caps history
+       In_channel.input_all)
 
 let test_cancelled_confirmation_never_pastes
     ~(caps :
@@ -1099,6 +1170,8 @@ let main
             (test_production_wl_paste_confirms_before_key ~caps);
           Alcotest.test_case "cancelled confirmation never sends paste" `Quick
             (test_cancelled_confirmation_never_pastes ~caps);
+          Alcotest.test_case "clipboard-only outlives a quick successor" `Quick
+            (test_clipboard_only_outlives_quick_successor ~caps);
         ] );
     ]
 

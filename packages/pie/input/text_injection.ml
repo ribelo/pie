@@ -141,8 +141,8 @@ type injection_error =
 (* The clipboard is the destination unless the key-press window is still
    focused and the offered text is the selection. This seam deliberately
    cannot focus a window or type characters. *)
-let deliver ~copy ~paste ?(confirm = fun _ -> true) ~newline ~focused_window
-    ~target_window ~newline_rules text =
+let deliver ~copy ~paste ?(confirm = fun _ -> true) ?(settle = fun () -> ())
+    ~newline ~focused_window ~target_window ~newline_rules text =
   let open Result.Syntax in
   let text = normalize_text text in
   if text = "" then
@@ -157,9 +157,11 @@ let deliver ~copy ~paste ?(confirm = fun _ -> true) ~newline ~focused_window
           target.id = current.id
       | _ -> false
     in
-    if not same_window then
+    if not same_window then (
       let* () = copy text in
-      Ok (text, Clipboard_only)
+      ignore (confirm text : bool);
+      settle ();
+      Ok (text, Clipboard_only))
     else
       let action = newline_action_for_window newline_rules target_window in
       let prepared = prepare_text ~method_:Paste ~newline_action:action text in
@@ -203,12 +205,19 @@ let deliver ~copy ~paste ?(confirm = fun _ -> true) ~newline ~focused_window
       let* () = restored in
       match step with
       | `Pasted -> Ok (prepared, Clipboard_key_attempted)
-      | `Unconfirmed -> Ok (prepared, Clipboard_only)
+      | `Unconfirmed ->
+          settle ();
+          Ok (prepared, Clipboard_only)
 
 (* wl-copy publishes the selection only after stdin EOF and a compositor
    round-trip. Poll until the selection is exactly [text]. *)
 let selection_poll_interval = 0.020
 let selection_confirm_bound = 1.0
+
+(* A clipboard-only delivery is the user's only copy of the text. The next
+   delivery replaces the selection and retires this helper; hold the selection
+   long enough for a clipboard history watcher to read it first. *)
+let clipboard_only_hold = 0.5
 
 let await_selection ~mono_clock ~read text =
   let started = Eio.Time.Mono.now mono_clock in
@@ -281,9 +290,10 @@ let inject ~caps ?clipboard_owner ?(newline_rules = []) ?(text_entry_rules = [])
     (press_newline ~caps ~process_mgr ~backend action
       :> (unit, injection_error) Stdlib.result)
   in
+  let settle () = Eio.Time.Mono.sleep mono_clock clipboard_only_hold in
   let* prepared, outcome =
-    deliver ~copy ~paste ~confirm ~newline ~focused_window ~target_window
-      ~newline_rules text
+    deliver ~copy ~paste ~confirm ~settle ~newline ~focused_window
+      ~target_window ~newline_rules text
   in
   let method_ = entry_method_for_window text_entry_rules target_window in
   Ok { session_type = session; backend; method_; text = prepared; outcome }
